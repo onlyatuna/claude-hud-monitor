@@ -76,11 +76,11 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.aot_act.setChecked(self.hud_window.config.get("always_on_top", True))
         self.aot_act.triggered.connect(self.hud_window._toggle_always_on_top)
 
-        if sys.platform == "win32":
-            self.autostart_act = self.menu.addAction("🚀 開機自動啟動")
-            self.autostart_act.setCheckable(True)
-            self.autostart_act.setChecked(is_autostart_enabled())
-            self.autostart_act.triggered.connect(self._toggle_autostart)
+        # Autostart (Both Windows & macOS supported!)
+        self.autostart_act = self.menu.addAction("🚀 開機自動啟動")
+        self.autostart_act.setCheckable(True)
+        self.autostart_act.setChecked(is_autostart_enabled())
+        self.autostart_act.triggered.connect(self._toggle_autostart)
 
         self.menu.addSeparator()
 

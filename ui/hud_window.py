@@ -207,7 +207,6 @@ class HUDWindow(QWidget):
         self.status_dot.setStyleSheet("color: #38bdf8; font-size: 11px;")
 
         def run():
-            # Fetch all 3 providers in parallel threads
             threads = []
             for pid, provider in PROVIDERS.items():
                 def fetch_one(p=provider):
@@ -245,20 +244,25 @@ class HUDWindow(QWidget):
         self.config.set("click_through", enable)
         self.ghost_label.setVisible(enable)
 
+        # Cross-platform click-through handling
         if sys.platform == "win32" and user32:
             hwnd = int(self.winId())
             style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
             if enable:
                 user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT | WS_EX_LAYERED)
-                if self.tray_icon:
-                    self.tray_icon.showMessage(
-                        "👻 滑鼠穿透模式已啟用",
-                        "點擊將直接穿透 HUD。\n如需調整設定或移動，請按 Alt+Shift+C 或右鍵點擊系統匣圖示取消。",
-                        self.tray_icon.icon(),
-                        4000
-                    )
             else:
                 user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT)
+        else:
+            # macOS / Linux native Qt event pass-through
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enable)
+
+        if enable and self.tray_icon:
+            self.tray_icon.showMessage(
+                "👻 滑鼠穿透模式已啟用",
+                "點擊將直接穿透 HUD。\n如需調整設定或移動，請按 Alt+Shift+C 或右鍵點擊系統匣圖示取消。",
+                self.tray_icon.icon(),
+                4000
+            )
 
         if self.tray_icon:
             self.tray_icon.update_menu_state()
@@ -415,11 +419,11 @@ class HUDWindow(QWidget):
             act.setChecked(cur_int == sec)
             act.triggered.connect(lambda checked, s=sec: self._set_interval(s))
 
-        if sys.platform == "win32":
-            autostart_act = menu.addAction("🚀 開機自動啟動 (Start on Boot)")
-            autostart_act.setCheckable(True)
-            autostart_act.setChecked(is_autostart_enabled())
-            autostart_act.triggered.connect(self._toggle_autostart)
+        # Autostart (cross-platform)
+        autostart_act = menu.addAction("🚀 開機自動啟動 (Start on Boot)")
+        autostart_act.setCheckable(True)
+        autostart_act.setChecked(is_autostart_enabled())
+        autostart_act.triggered.connect(self._toggle_autostart)
 
         menu.addSeparator()
 
