@@ -2,6 +2,9 @@ name: Build Multiplatform Binaries (Windows & macOS)
 
 on:
   push:
+    branches:
+      - main
+      - develop
     tags:
       - 'v*'
   workflow_dispatch:
