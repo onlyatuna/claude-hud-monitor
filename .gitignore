@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+build/
+config.json
+ClaudeHUD.spec
+test_run.log
