@@ -1,0 +1,60 @@
+name: 🐛 Bug Report
+description: Report an issue or unexpected behavior in AI HUD Monitor
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to report an issue!
+  - type: input
+    id: version
+    attributes:
+      label: AI HUD Monitor Version
+      placeholder: e.g., v1.0.0 (or commit hash)
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon M1/M2/M3/M4)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Affected AI Provider
+      options:
+        - All Providers
+        - Claude Code
+        - Google Antigravity (AGY)
+        - OpenAI Codex
+        - Window / UI / Hotkey only
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      placeholder: A clear and concise description of what happened.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open HUD
+        2. Click on ...
+        3. See error ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal Logs / Error Output (if any)
+      render: shell
