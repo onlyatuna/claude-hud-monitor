@@ -1,50 +1,60 @@
-# Claude HUD Monitor (專案規格與開發規劃)
+# 架構與維護規格
 
-## 1. 專案背景與目標
-現有的開源方案（如 `CodeZeno/Claude-Code-Usage-Monitor` 依附於系統工作列、`SlavomirDurej/claude-usage-widget` 為較肥大的 Electron 懸浮窗）缺乏硬體級 HUD（如 NVIDIA Alt+R 效能覆蓋、RivaTuner）的輕量流暢感與直覺美感。
+## 執行流程
 
-本專案旨在打造一個專為開發者設計的 **極簡桌上型 AI 額度監控 HUD**：
-- **極致輕量**：採用 Python + 原生視窗系統（Qt / PySide6），資源佔用極低。
-- **硬體級 HUD 質感**：半透明黑底磨砂玻璃、無邊框、自適應暗黑風格。
-- **直覺操作**：支援滑鼠自由拖曳、八向邊框自由縮放、滑鼠滾輪/右鍵選單調整透明度、視窗永遠置頂。
-- **無感對接**：直接無縫讀取本地 Claude Code 認證（`~/.claude/.credentials.json`），無需手動維護金鑰。
-- **隨手喚出**：支援全域快捷鍵（例如 `Alt+C` 或 `Alt+R`）一鍵顯隱。
-- **獨立運行**：支援開機自啟動，並可直接打包為單一 `.exe`。
+main.py 建立 ConfigManager、HUDWindow、HUDTrayIcon 與 GlobalHotkeyManager。
+HUDWindow 組合視窗與卡片；RefreshController 獨立管理查詢生命週期。
 
----
+```text
+QTimer / 手動刷新 / 休眠恢復
+              ↓
+       RefreshController
+       每服務最多一個 worker
+              ↓
+   Claude / AGY / Codex Provider
+              ↓
+        UsageMetrics
+              ↓ Python queue → Qt timer
+       ProviderCardWidget
+```
 
-## 2. 系統架構設計 (SA 視角)
+## 責任界線
 
-### 2.1 模組劃分
-1. **Core Data Engine (`core/providers/`)**
-   - 採用多 Provider 架構（Claude Code、Antigravity AGY、OpenAI Codex）。
-   - `claude_provider.py`: 讀取本機 Claude Code OAuth Token (`~/.claude/.credentials.json`)。
-   - 偽裝 Claude Code CLI User-Agent (`claude-code/x.x.x`) 請求 Anthropic Usage Endpoint。
-   - 智慧快取與退避機制（避免觸發 HTTP 429）。
-   - 解析 5-Hour 滾動額度、7-Day 總額度、重設時間戳記與費用拆分。
+- core/providers/：傳輸、認證讀取、解析；不碰 Qt widget、不修改憑證。
+- core/providers/base.py：共用資料契約、百分比驗證、錯誤分類、倒數。
+- core/refresh_controller.py：請求序號、退避、最後成功資料與排程；可變狀態由 Qt 主執行緒更新。
+- ui/hud_window.py：視窗、選單、穿透、排版與休眠偵測。
+- ui/provider_card.py：渲染資料，不查網路。
+- core/config_manager.py：設定位置、批次更新、同目錄暫存檔與原子替換。
+- core/diagnostics.py：限制大小的操作紀錄，禁止傳入憑證、原始回應與 CLI stderr。
+- system/hotkey.py、core/autostart.py：平台整合。
 
-2. **UI / HUD Engine (`ui/hud_window.py`)**
-   - 無邊框視窗 (`FramelessWindowHint`)、永遠置頂 (`WindowStaysOnTopHint`)。
-   - 背景半透明（可動態滑桿或滾輪調節 Opacity 20%~100%）。
-   - 邊界偵測實現八向視窗縮放 (Resize Grip)。
-   - 現代化暗黑 HUD 介面：
-     - 5-Hour Session 滾動進度條 + 倒數計時（如 "68% | 重設於 2h 45m"）。
-     - 7-Day Weekly 總額度進度條。
-     - 當日/當週額度消耗速率提示（警示色階：正常藍/綠 -> 警戒黃 -> 耗盡紅）。
+舊 core/anthropic_client.py 已移除，新增 Claude 功能只修改 ClaudeProvider。
 
-3. **系統整合與互動 (`system/`)**
-   - 全域快捷鍵註冊（一鍵喚醒/隱藏）。
-   - Windows 系統匣（Tray Icon）與快捷選單。
-   - 開機自啟動設定（Windows 註冊表 `Run` 機碼寫入/移除）。
-   - 設定檔持久化（記錄視窗位置、大小、透明度、置頂狀態）。
+## 資料契約
 
----
+metric1_val、metric2_val 是 0–100 的已使用比例或 None。None 對應 --；0 為有效讀值。
+兩個窗口均不可用時回傳 schema 錯誤；單窗口可用時允許部分顯示。
+徽章不可填入未證實的方案或模型。沒有重設時間就顯示 --。
+error_code 為診斷分類；error 是使用者可讀訊息，不能包含 token 或原始 payload。
+stale 與 last_success 由協調層管理，最後成功資料不可假裝是最新值。
 
-## 3. 專案里程碑與實作規劃 (PM 視角)
+## 排程不變條件
 
-| 階段 | 任務內容 | 交付產出 |
-| :--- | :--- | :--- |
-| **Phase 0** | 需求訪談、架構定義、環境確認 | 規格書、技術驗證 (POC) |
-| **Phase 1** | 資料擷取引擎 + 核心 HUD 視窗 (MVP) | 可拖曳、半透明、即時顯示配額與倒數 |
-| **Phase 2** | 右鍵選單、邊框縮放、全域快捷鍵、設定持久化 | 完整互動體驗、透明度滑桿、位置記憶 |
-| **Phase 3** | 開機自啟動、系統匣整合、PyInstaller 打包 `.exe` | 獨立免安裝執行檔 + 產出交付 |
+worker 只持有 Python queue，不持有或從背景執行緒呼叫 Qt 物件；主執行緒每 25ms 取回結果。
+每個 Provider 同時最多一個 worker。手動刷新／休眠恢復使舊結果失效，原查詢結束後只補一次新查詢。
+不得以清除布林鎖或 join timeout 假裝取消 worker。關閉後忽略任何晚到結果。
+各服務獨立排程，AGY 慢查詢不阻塞其他服務。CLI 有總時限；urllib timeout 為 I/O timeout，非整體截止時間。
+OS 層呼叫若卡住，該服務等待原查詢退出，不無限產生 worker；這仍是傳輸層的限制。
+
+## 設定與平台
+
+打包設定不得寫入 PyInstaller 解壓目錄。原始碼模式保留專案設定；測試注入暫存路徑。
+排版切換前保存舊尺寸，套用新尺寸時抑制中間事件寫入；移動／縮放延遲 250ms 合併寫入。
+macOS 功能需實機驗證，不以平台模擬視為已驗收。支援狀態以 README 為準。
+
+## 驗證
+
+執行 `python -B -m unittest discover -s tests -v` 與 `python -B main.py --smoke-test`。
+測試使用合成資料，不使用真實帳號或開機啟動設定。
+發布前另做真實服務查詢、Windows 互動與重啟設定保存、macOS 實機驗證。

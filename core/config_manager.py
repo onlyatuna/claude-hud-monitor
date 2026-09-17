@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import tempfile
 import threading
 
 from core.logger import logger
@@ -55,9 +56,9 @@ def get_config_path() -> str:
     return os.path.join(get_user_config_dir(), "config.json")
 
 class ConfigManager:
-    def __init__(self):
+    def __init__(self, path=None):
         self._lock = threading.RLock()
-        self.path = get_config_path()
+        self.path = os.fspath(path) if path is not None else get_config_path()
         self.data = dict(DEFAULT_CONFIG)
         self.load()
 
@@ -73,20 +74,24 @@ class ConfigManager:
 
     def save(self):
         with self._lock:
-            cfg_dir = os.path.dirname(self.path)
-            os.makedirs(cfg_dir, exist_ok=True)
-            temp_path = f"{self.path}.{os.getpid()}.tmp"
+            # Atomic replacement keeps the previous settings intact on write failure.
+            temporary = None
             try:
-                with open(temp_path, "w", encoding="utf-8") as f:
+                directory = os.path.dirname(os.path.abspath(self.path))
+                os.makedirs(directory, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                                 prefix=".config-", suffix=".tmp", delete=False) as f:
+                    temporary = f.name
                     json.dump(self.data, f, indent=2, ensure_ascii=False)
                     f.flush()
                     os.fsync(f.fileno())
-                os.replace(temp_path, self.path)
+                os.replace(temporary, self.path)
             except Exception as e:
                 logger.error(f"[Config] Error saving config to {self.path}: {e}", exc_info=True)
-                if os.path.exists(temp_path):
+            finally:
+                if temporary and os.path.exists(temporary):
                     try:
-                        os.remove(temp_path)
+                        os.unlink(temporary)
                     except OSError:
                         pass
 
@@ -112,3 +117,5 @@ class ConfigManager:
             if changed and auto_save:
                 self.save()
 
+    def update(self, values: dict, auto_save: bool = True):
+        self.set_many(values, auto_save=auto_save)

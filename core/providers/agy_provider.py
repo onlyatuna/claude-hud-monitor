@@ -3,15 +3,20 @@ import os
 import shutil
 import subprocess
 import sys
+import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from core.providers.base import BaseProvider, UsageMetrics
+from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
 from core.logger import logger
 
 class AgyProvider(BaseProvider):
     provider_id = "agy"
     display_name = "AGY"
+
+    def __init__(self, timeout=30):
+        self.timeout = timeout
 
     def _find_agy_binary(self) -> Optional[str]:
         # 1. PATH lookup (check agy, agy.exe, agy.cmd, agy.bat)
@@ -53,18 +58,15 @@ class AgyProvider(BaseProvider):
                 provider_name="Antigravity",
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error="未找到 agy 指令\n請確認已安裝 Antigravity CLI"
+                error="未找到 agy 指令\n請確認已安裝 Antigravity CLI",
+                error_code="cli_not_found"
             )
 
+        started = time.monotonic()
         try:
-            kwargs = {
-                "timeout": 8,
-                "text": True,
-                "encoding": "utf-8",
-                "stderr": subprocess.DEVNULL
-            }
+            kwargs = {"timeout": self.timeout, "text": True, "encoding": "utf-8",
+                      "errors": "replace", "capture_output": True}
             if sys.platform == "win32":
-                # Avoid popping console window
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 # Windows cannot directly execute .cmd or .bat via CreateProcessW without cmd.exe
                 # Protect against cmd.exe quote-stripping when paths contain whitespace
@@ -76,10 +78,17 @@ class AgyProvider(BaseProvider):
             else:
                 cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
 
-            out = subprocess.check_output(cmd, **kwargs)
+            result = subprocess.run(cmd, **kwargs)
+            # Do not persist stdout/stderr: CLI output can contain account data.
+            logging.getLogger(__name__).info(
+                "quota exit=%s elapsed=%.2fs stderr_chars=%s",
+                result.returncode, time.monotonic() - started, len(result.stderr or ""))
+            if result.returncode:
+                return self._failure(now_str, "cli_exit", f"agy 查詢失敗 (exit {result.returncode})")
 
             # Resilient JSON parsing: handle potential prefixes/banners from CLI output
             raw = None
+            out = result.stdout or ""
             out_trimmed = out.strip()
             if out_trimmed.startswith("{") and out_trimmed.endswith("}"):
                 try:
@@ -91,47 +100,36 @@ class AgyProvider(BaseProvider):
                 end_idx = out.rfind("}")
                 if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
                     json_str = out[start_idx:end_idx + 1]
-                    raw = json.loads(json_str)
-                else:
+                    try:
+                        raw = json.loads(json_str)
+                    except Exception:
+                        pass
+            if raw is None:
+                try:
                     raw = json.loads(out)
+                except (ValueError, TypeError, AttributeError, KeyError, OverflowError):
+                    return self._failure(now_str, "schema", "agy 配額格式不相容，請查看相容性文件")
 
             return self._parse_agy_json(raw, now_str)
         except subprocess.TimeoutExpired:
-            logger.warning("[AgyProvider] Subprocess timed out after 8s")
-            return UsageMetrics(
-                provider_name="Antigravity",
-                provider_id=self.provider_id,
-                last_updated_time=now_str,
-                error="agy 配額查詢超時"
-            )
-        except subprocess.CalledProcessError as e:
-            logger.error(f"[AgyProvider] CalledProcessError (code {e.returncode}): {e}")
-            return UsageMetrics(
-                provider_name="Antigravity",
-                provider_id=self.provider_id,
-                last_updated_time=now_str,
-                error=f"指令執行錯誤 (代碼 {e.returncode})"
-            )
-        except Exception as e:
-            logger.error(f"[AgyProvider] Error fetching usage: {e}", exc_info=True)
-            err_msg = str(e).strip().replace("\r", " ").replace("\n", " ")
-            if len(err_msg) > 60:
-                err_msg = err_msg[:57] + "..."
-            return UsageMetrics(
-                provider_name="Antigravity",
-                provider_id=self.provider_id,
-                last_updated_time=now_str,
-                error=f"配額取得失敗: {err_msg}"
-            )
+            logging.getLogger(__name__).warning("quota timeout elapsed=%.2fs", time.monotonic() - started)
+            return self._failure(now_str, "timeout", f"agy 配額查詢超時 ({self.timeout}s)")
+        except OSError:
+            return self._failure(now_str, "cli_start", "無法啟動 agy，請確認安裝與執行權限")
 
+    def _failure(self, now_str, code, message):
+        return UsageMetrics(provider_name="Antigravity", provider_id=self.provider_id,
+                            last_updated_time=now_str, error=message, error_code=code)
+
+    @safe_parse
     def _parse_agy_json(self, raw: dict, now_str: str) -> UsageMetrics:
         groups = raw.get("command", {}).get("data", {}).get("groups", [])
         
-        m1_used_pct = 0.0
+        m1_used_pct = None
         m1_reset_dt = None
-        m2_used_pct = 0.0
+        m2_used_pct = None
         m2_reset_dt = None
-        third_party_rem_pct = 100.0
+        third_party_rem_pct = None
 
         for g in groups:
             g_name = g.get("name", "").lower()
@@ -139,7 +137,9 @@ class AgyProvider(BaseProvider):
                 for b in g.get("buckets", []):
                     b_id = b.get("id", "").lower()
                     b_window = b.get("window", "").lower()
-                    rem_frac = float(b.get("remaining_fraction", 1.0))
+                    rem_frac = percentage(b.get("remaining_fraction"), 1.0)
+                    if rem_frac is None:
+                        continue
                     used_pct = max(0.0, min(100.0, (1.0 - rem_frac) * 100.0))
                     
                     reset_str = b.get("reset_time")
@@ -150,10 +150,10 @@ class AgyProvider(BaseProvider):
                         except Exception:
                             pass
 
-                    if "5h" in b_id or "5h" in b_window:
+                    if ("5h" in b_id or "5h" in b_window) and (m1_used_pct is None or used_pct > m1_used_pct):
                         m1_used_pct = used_pct
                         m1_reset_dt = reset_dt
-                    elif "week" in b_id or "week" in b_window:
+                    elif ("week" in b_id or "week" in b_window) and (m2_used_pct is None or used_pct > m2_used_pct):
                         m2_used_pct = used_pct
                         m2_reset_dt = reset_dt
 
@@ -161,13 +161,15 @@ class AgyProvider(BaseProvider):
                 for b in g.get("buckets", []):
                     b_id = b.get("id", "").lower()
                     if "week" in b_id:
-                        rem_frac = float(b.get("remaining_fraction", 1.0))
-                        third_party_rem_pct = rem_frac * 100.0
+                        rem_frac = percentage(b.get("remaining_fraction"), 1.0)
+                        if rem_frac is None:
+                            continue
+                        remaining = rem_frac * 100.0
+                        third_party_rem_pct = remaining if third_party_rem_pct is None else min(third_party_rem_pct, remaining)
 
-        m1_text = f"{m1_used_pct:.1f}%" if (0 < m1_used_pct < 10) else f"{int(round(m1_used_pct))}%"
-        m2_text = f"{m2_used_pct:.1f}%" if (0 < m2_used_pct < 10) else f"{int(round(m2_used_pct))}%"
-
-        badge1 = f"Claude/GPT: {int(round(third_party_rem_pct))}%"
+        m1_text = percent_text(m1_used_pct)
+        m2_text = percent_text(m2_used_pct)
+        badge1 = f"C/G 剩餘: {percent_text(third_party_rem_pct)}"
         badge2 = "Gemini Models"
 
         return UsageMetrics(
@@ -184,6 +186,5 @@ class AgyProvider(BaseProvider):
             badge1_text=badge1,
             badge2_text=badge2,
             last_updated_time=now_str,
-            error=None
+            error="未取得有效配額資料" if m1_used_pct is None and m2_used_pct is None else None
         )
-

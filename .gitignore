@@ -6,3 +6,6 @@ config.json
 ClaudeHUD.spec
 *.log
 *.zip
+
+.venv/
+*.log.*

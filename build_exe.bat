@@ -4,10 +4,13 @@ echo ========================================================
 echo   Building Claude HUD Monitor into Standalone EXE...
 echo ========================================================
 echo.
-echo Closing any running ClaudeHUD instances...
-taskkill /f /im ClaudeHUD.exe 2>nul
+python -m pip install -r requirements-build.txt
+if errorlevel 1 exit /b 1
+python -B -m unittest discover -s tests -v
+if errorlevel 1 exit /b 1
 
-pyinstaller --noconsole --onefile --name "ClaudeHUD" --icon "assets\app_icon.ico" --add-data "assets;assets" main.py
+python -m PyInstaller --noconsole --onefile --name "ClaudeHUD" --icon "assets\app_icon.ico" --add-data "assets;assets" main.py
+if errorlevel 1 exit /b 1
 echo.
 echo ========================================================
 echo   Build complete! Output is located at dist\ClaudeHUD.exe

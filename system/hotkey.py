@@ -9,6 +9,7 @@ class GlobalHotkeyManager(QObject):
     hotkey_triggered = Signal()
     clickthrough_triggered = Signal()
     hotkey_failed = Signal(str)  # Emitted when hotkey registration fails
+    unavailable = Signal(str)
 
     def __init__(self):
         super().__init__()
@@ -16,6 +17,7 @@ class GlobalHotkeyManager(QObject):
         self._thread_id = None
         self._running = False
         self._ready_event = threading.Event()
+        self._listener = None
         self.toggle_registered = False
         self.clickthrough_registered = False
 
@@ -72,6 +74,7 @@ class GlobalHotkeyManager(QObject):
                 msg = f"Alt+{key_char.upper()} 全域快捷鍵註冊失敗 (Win32 Error: {err})，可能已被其他程式佔用"
                 logger.warning(f"[Hotkey Windows] {msg}")
                 self.hotkey_failed.emit(msg)
+                self.unavailable.emit(f"Alt+{key_char.upper()} 已被占用，請使用系統匣操作")
 
             ok2 = user32.RegisterHotKey(None, HOTKEY_ID_CLICKTHROUGH, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, vk)
             self.clickthrough_registered = bool(ok2)
@@ -80,6 +83,7 @@ class GlobalHotkeyManager(QObject):
                 msg = f"Alt+Shift+{key_char.upper()} 穿透模式快捷鍵註冊失敗 (Win32 Error: {err})，可能已被其他程式佔用"
                 logger.warning(f"[Hotkey Windows] {msg}")
                 self.hotkey_failed.emit(msg)
+                self.unavailable.emit(f"Alt+Shift+{key_char.upper()} 已被占用，請使用系統匣操作")
 
             self._ready_event.set()
 
@@ -112,35 +116,49 @@ class GlobalHotkeyManager(QObject):
         self._ready_event.wait(timeout=1.5)
 
     def _start_macos(self, key_char):
-        # macOS implementation: attempt using pynput if installed, else inform user
         try:
             from pynput import keyboard
-            hotkey_map = {
-                f"<alt>+{key_char.lower()}": self.hotkey_triggered.emit,
-                f"<alt>+<shift>+{key_char.lower()}": self.clickthrough_triggered.emit
-            }
-            self._listener = keyboard.GlobalHotKeys(hotkey_map)
-            self._listener.daemon = True
+            if hasattr(keyboard.Listener, "IS_TRUSTED") and not keyboard.Listener.IS_TRUSTED:
+                msg = "macOS 快捷鍵需要輔助使用／輸入監控權限；可使用系統匣操作"
+                self.hotkey_failed.emit(msg)
+                self.unavailable.emit(msg)
+                return
+            self._mac_keys = set()
+            def on_press(key):
+                token = getattr(key, "vk", None)
+                if token is None:
+                    token = key
+                repeated = token in self._mac_keys
+                self._mac_keys.add(token)
+                alt = any(k in self._mac_keys for k in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r))
+                shift = any(k in self._mac_keys for k in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r))
+                other = any(k in self._mac_keys for k in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r, keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r))
+                if token == 8 and alt and not other and not repeated:
+                    (self.clickthrough_triggered if shift else self.hotkey_triggered).emit()
+            def on_release(key):
+                token = getattr(key, "vk", None)
+                self._mac_keys.discard(key if token is None else token)
+            self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
             self._listener.start()
             self._running = True
             self.toggle_registered = True
             self.clickthrough_registered = True
-            logger.info(f"[Hotkey macOS] Hotkeys registered via pynput for key '{key_char}'.")
-        except ImportError:
-            msg = "macOS 全域快捷鍵需要 pynput 模組支援，請執行 pip install pynput，並確保於系統設定授予輔助使用 (Accessibility) 權限。"
-            logger.warning(f"[Hotkey macOS] {msg}")
+        except (ImportError, OSError, RuntimeError) as e:
+            msg = f"macOS 快捷鍵未啟用: {e}，請檢查 pynput 安裝與系統權限"
             self.hotkey_failed.emit(msg)
-        except Exception as e:
-            msg = f"macOS 快捷鍵監聽啟動失敗: {e}。請確認已開啟輔助使用權限。"
-            logger.error(f"[Hotkey macOS] {msg}", exc_info=True)
-            self.hotkey_failed.emit(msg)
+            self.unavailable.emit(msg)
 
     def stop(self):
         if not self._running:
             return
         self._running = False
+        if self._listener is not None:
+            try:
+                self._listener.stop()
+            except Exception:
+                pass
+            self._listener = None
         if sys.platform == "win32":
-            # Wait briefly if thread is still initializing
             self._ready_event.wait(timeout=0.5)
             if self._thread_id:
                 import ctypes
@@ -149,11 +167,5 @@ class GlobalHotkeyManager(QObject):
                     if ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0):
                         break
                     time.sleep(0.05)
-        elif sys.platform == "darwin" and hasattr(self, "_listener") and self._listener:
-            try:
-                self._listener.stop()
-            except Exception:
-                pass
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=1.0)
-

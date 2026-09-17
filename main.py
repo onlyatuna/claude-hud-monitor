@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, qInstallMessageHandler, QtMsgType
 
 from core.logger import setup_logging, logger
 from core.config_manager import ConfigManager
+from core.diagnostics import configure_logging
 from ui.hud_window import HUDWindow
 from ui.tray_icon import HUDTrayIcon, get_app_icon
 from system.hotkey import GlobalHotkeyManager
@@ -51,6 +52,7 @@ def main():
 
     config = ConfigManager()
     logger.info(f"Loaded config from: {config.path}")
+    configure_logging(config.path)
 
     # Create HUD Window
     hud = HUDWindow(config)
@@ -82,12 +84,16 @@ def main():
             )
 
         hotkey.hotkey_failed.connect(on_hotkey_failed)
+        if hasattr(hotkey, "unavailable"):
+            hotkey.unavailable.connect(on_hotkey_failed)
         hotkey.start(key_char="C")
         logger.info("Hotkey manager started")
 
     def on_exit():
         logger.info("Application shutting down...")
         hotkey.stop()
+        if hasattr(hud, "refresh_controller"):
+            hud.refresh_controller.stop()
 
     app.aboutToQuit.connect(on_exit)
 
@@ -96,4 +102,7 @@ def main():
     sys.exit(exit_code)
 
 if __name__ == "__main__":
+    if "--smoke-test" in sys.argv:
+        from core.smoke_check import run
+        sys.exit(run())
     main()
