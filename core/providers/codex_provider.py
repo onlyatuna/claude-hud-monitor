@@ -5,7 +5,7 @@ import urllib.error
 from datetime import datetime, timezone
 from typing import Optional
 
-from core.providers.base import BaseProvider, UsageMetrics
+from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
 
 class CodexProvider(BaseProvider):
     provider_id = "codex"
@@ -61,27 +61,19 @@ class CodexProvider(BaseProvider):
                 raw_json = json.loads(resp.read().decode("utf-8"))
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
-            if e.code == 401:
-                return UsageMetrics(
-                    provider_name="OpenAI Codex",
-                    provider_id=self.provider_id,
-                    last_updated_time=now_str,
-                    error="Codex 憑證過期，請於終端機執行 codex 重新授權"
-                )
-            return UsageMetrics(
-                provider_name="OpenAI Codex",
-                provider_id=self.provider_id,
-                last_updated_time=now_str,
-                error=f"API 錯誤: HTTP {e.code}"
-            )
-        except Exception as e:
-            return UsageMetrics(
-                provider_name="OpenAI Codex",
-                provider_id=self.provider_id,
-                last_updated_time=now_str,
-                error=f"連線失敗: {str(e)[:30]}"
-            )
+            code = "auth" if e.code == 401 else ("rate_limit" if e.code == 429 else "http")
+            message = "登入憑證已失效，請使用原 CLI 重新登入" if e.code == 401 else f"配額查詢 HTTP {e.code}"
+            return UsageMetrics(provider_name="OpenAI Codex", provider_id=self.provider_id,
+                                last_updated_time=now_str, error=message, error_code=code,
+                                retry_after=retry_delay(e.headers.get("Retry-After")) if e.headers else None)
+        except (ValueError, TypeError):
+            return UsageMetrics(provider_name="OpenAI Codex", provider_id=self.provider_id,
+                                last_updated_time=now_str, error="未取得有效配額資料", error_code="schema")
+        except Exception:
+            return UsageMetrics(provider_name="OpenAI Codex", provider_id=self.provider_id,
+                                last_updated_time=now_str, error="配額連線失敗，將自動重試", error_code="network")
 
+    @safe_parse
     def _parse_response(self, data: dict, now_str: str) -> UsageMetrics:
         # OpenAI WHAM usage schema
         rl = data.get("rate_limit") or {}
@@ -89,34 +81,43 @@ class CodexProvider(BaseProvider):
         secondary = rl.get("secondary_window") or {}
 
         # 5-hour rolling usage percent
-        s_used_pct = float(primary.get("used_percent") or 0.0)
+        s_used_pct = percentage(primary.get("used_percent"))
         s_reset_ts = primary.get("reset_at")
         s_reset_dt = datetime.fromtimestamp(s_reset_ts, tz=timezone.utc) if s_reset_ts else None
 
         # Weekly 7-day rolling usage percent
-        w_used_pct = float(secondary.get("used_percent") or 0.0)
+        w_used_pct = percentage(secondary.get("used_percent"))
         w_reset_ts = secondary.get("reset_at")
         w_reset_dt = datetime.fromtimestamp(w_reset_ts, tz=timezone.utc) if w_reset_ts else None
 
-        # Model and plan
-        plan = data.get("plan_type", "Plus").title()
-        model_usage = data.get("model_usage") or {}
-        models = list(model_usage.keys())
-        model_name = models[0] if models else "gpt-6-astra"
+        # Quota responses do not establish which model is currently running.
+        plan = data.get("plan_type")
+        plan_badge = f"Plan: {plan.title()}" if isinstance(plan, str) and plan else ""
 
         return UsageMetrics(
             provider_name="OpenAI Codex",
             provider_id=self.provider_id,
-            metric1_title="SESSION 5H",
+            metric1_title=self._window_title(primary, "PRIMARY"),
             metric1_val=s_used_pct,
-            metric1_text=f"{s_used_pct:.0f}%",
+            metric1_text=percent_text(s_used_pct),
             metric1_reset=s_reset_dt,
-            metric2_title="WEEKLY 7D",
+            metric2_title=self._window_title(secondary, "SECONDARY"),
             metric2_val=w_used_pct,
-            metric2_text=f"{w_used_pct:.0f}%",
+            metric2_text=percent_text(w_used_pct),
             metric2_reset=w_reset_dt,
-            badge1_text=f"{model_name}",
-            badge2_text=f"Plan: {plan}",
+            badge1_text=plan_badge,
+            badge2_text="",
             last_updated_time=now_str,
-            error=None
+            error="未取得有效配額資料" if s_used_pct is None and w_used_pct is None else None
         )
+
+    @staticmethod
+    def _window_title(window, fallback):
+        seconds = window.get("limit_window_seconds")
+        if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and seconds > 0:
+            if seconds % 86400 == 0:
+                return f"WINDOW {seconds / 86400:g}D"
+            if seconds % 3600 == 0:
+                return f"WINDOW {seconds / 3600:g}H"
+            return f"WINDOW {seconds / 60:g}M"
+        return fallback

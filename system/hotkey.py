@@ -5,12 +5,14 @@ from PySide6.QtCore import QObject, Signal
 class GlobalHotkeyManager(QObject):
     hotkey_triggered = Signal()
     clickthrough_triggered = Signal()
+    unavailable = Signal(str)
 
     def __init__(self):
         super().__init__()
         self._thread = None
         self._thread_id = None
         self._running = False
+        self._listener = None
 
     def start(self, key_char="C"):
         if self._running:
@@ -37,8 +39,10 @@ class GlobalHotkeyManager(QObject):
 
         def message_loop():
             self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
-            user32.RegisterHotKey(None, HOTKEY_ID_TOGGLE, MOD_ALT | MOD_NOREPEAT, vk)
-            user32.RegisterHotKey(None, HOTKEY_ID_CLICKTHROUGH, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, vk)
+            if not user32.RegisterHotKey(None, HOTKEY_ID_TOGGLE, MOD_ALT | MOD_NOREPEAT, vk):
+                self.unavailable.emit("Alt+C 已被占用，請使用系統匣操作")
+            if not user32.RegisterHotKey(None, HOTKEY_ID_CLICKTHROUGH, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, vk):
+                self.unavailable.emit("Alt+Shift+C 已被占用，請使用系統匣操作")
 
             msg = wintypes.MSG()
             try:
@@ -59,14 +63,40 @@ class GlobalHotkeyManager(QObject):
         self._thread.start()
 
     def _start_macos(self, key_char):
-        # On macOS, global hotkeys require macOS System Settings -> Privacy & Security -> Accessibility permissions.
-        # Fallback to in-app or background event loop without crashing.
-        print(f"[Hotkey macOS] Initialized for key '{key_char}'. Note: Global shortcuts require Accessibility permissions.")
+        try:
+            from pynput import keyboard
+            if not keyboard.Listener.IS_TRUSTED:
+                self.unavailable.emit("macOS 快捷鍵需要輔助使用／輸入監控權限；可使用系統匣操作")
+                return
+            self._mac_keys = set()
+            def on_press(key):
+                # Physical C avoids Option+C being translated into another character.
+                token = getattr(key, "vk", None)
+                if token is None:
+                    token = key
+                repeated = token in self._mac_keys
+                self._mac_keys.add(token)
+                alt = any(k in self._mac_keys for k in (keyboard.Key.alt, keyboard.Key.alt_l, keyboard.Key.alt_r))
+                shift = any(k in self._mac_keys for k in (keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r))
+                other = any(k in self._mac_keys for k in (keyboard.Key.ctrl, keyboard.Key.ctrl_l, keyboard.Key.ctrl_r, keyboard.Key.cmd, keyboard.Key.cmd_l, keyboard.Key.cmd_r))
+                if token == 8 and alt and not other and not repeated:
+                    (self.clickthrough_triggered if shift else self.hotkey_triggered).emit()
+            def on_release(key):
+                token = getattr(key, "vk", None)
+                self._mac_keys.discard(key if token is None else token)
+            self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+            self._listener.start()
+            self._running = True
+        except (ImportError, OSError, RuntimeError):
+            self.unavailable.emit("macOS 快捷鍵未啟用，請檢查 pynput 安裝與系統權限")
 
     def stop(self):
         if not self._running:
             return
         self._running = False
+        if self._listener is not None:
+            self._listener.stop()
+            self._listener = None
         if sys.platform == "win32" and self._thread_id:
             import ctypes
             WM_QUIT = 0x0012

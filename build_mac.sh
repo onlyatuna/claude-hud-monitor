@@ -7,10 +7,10 @@ cd "$DIR"
 
 echo "=== Installing dependencies ==="
 python3 -m pip install --upgrade pip
-pip install PySide6 pyinstaller pillow
+python3 -m pip install -r requirements-build.txt
 
 echo "=== Building ClaudeHUD.app for macOS ==="
-pyinstaller --windowed --name "ClaudeHUD" --icon "assets/app_icon.png" --add-data "assets:assets" main.py
+python3 -m PyInstaller --windowed --hidden-import pynput.keyboard._darwin --hidden-import pynput.mouse._darwin --name "ClaudeHUD" --icon "assets/app_icon.png" --add-data "assets:assets" main.py
 
 echo "=== Packing into ZIP ==="
 cd dist

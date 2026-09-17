@@ -1,5 +1,6 @@
 import sys
 import os
+import plistlib
 
 APP_NAME = "ClaudeHUDMonitor"
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -47,23 +48,12 @@ def set_autostart(enable: bool) -> bool:
             os.makedirs(plist_dir, exist_ok=True)
             plist_path = os.path.join(plist_dir, "com.claudehud.plist")
             if enable:
-                target_exe = sys.executable
-                plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.claudehud</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{target_exe}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>"""
-                with open(plist_path, "w", encoding="utf-8") as f:
-                    f.write(plist_content)
+                arguments = [sys.executable]
+                if not getattr(sys, 'frozen', False):
+                    arguments.append(os.path.abspath(sys.argv[0]))
+                with open(plist_path, "wb") as f:
+                    plistlib.dump({"Label": "com.claudehud", "ProgramArguments": arguments,
+                                   "RunAtLoad": True}, f)
             else:
                 if os.path.exists(plist_path):
                     os.remove(plist_path)
