@@ -39,29 +39,6 @@ def get_hud_stylesheet() -> str:
         font-family: 'Consolas', monospace;
     }
     
-    QPushButton.TabBtn {
-        background-color: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 4px;
-        color: #94a3b8;
-        font-size: 9.5px;
-        font-weight: 600;
-        padding: 1px 6px;
-        min-height: 18px;
-        max-height: 18px;
-    }
-    
-    QPushButton.TabBtn:hover {
-        background-color: rgba(255, 255, 255, 0.12);
-        color: #f1f5f9;
-    }
-    
-    QPushButton.TabBtn[active="true"] {
-        background-color: rgba(56, 189, 248, 0.22);
-        border: 1px solid #38bdf8;
-        color: #38bdf8;
-        font-weight: 700;
-    }
     
     QLabel#MetricTitle {
         font-size: 10px;

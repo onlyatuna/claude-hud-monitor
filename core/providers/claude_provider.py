@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
+from core.logger import logger
 
 class ClaudeProvider(BaseProvider):
     provider_id = "claude"
@@ -15,6 +16,9 @@ class ClaudeProvider(BaseProvider):
     USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
     USER_AGENT = "claude-code/0.2.29"
     BETA_HEADER = "oauth-2025-04-20"
+
+    def __init__(self, timeout=10):
+        self.timeout = timeout
 
     def get_access_token(self) -> Optional[str]:
         if not os.path.exists(self.CREDENTIALS_PATH):
@@ -46,7 +50,7 @@ class ClaudeProvider(BaseProvider):
 
         req = urllib.request.Request(self.USAGE_URL, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 if resp.status != 200:
                     return UsageMetrics(
                         provider_name="Claude Code",
@@ -57,6 +61,7 @@ class ClaudeProvider(BaseProvider):
                 raw_json = json.loads(resp.read().decode("utf-8"))
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
+            logger.warning(f"[ClaudeProvider] HTTP error: {e.code}")
             code = "auth" if e.code == 401 else ("rate_limit" if e.code == 429 else "http")
             message = "登入憑證已失效，請使用原 CLI 重新登入" if e.code == 401 else f"配額查詢 HTTP {e.code}"
             return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id,
@@ -65,7 +70,8 @@ class ClaudeProvider(BaseProvider):
         except (ValueError, TypeError):
             return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id,
                                 last_updated_time=now_str, error="未取得有效配額資料", error_code="schema")
-        except Exception:
+        except Exception as e:
+            logger.error(f"[ClaudeProvider] Error fetching usage: {e}", exc_info=True)
             return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id,
                                 last_updated_time=now_str, error="配額連線失敗，將自動重試", error_code="network")
 
