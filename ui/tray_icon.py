@@ -5,16 +5,27 @@ from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 from PySide6.QtCore import Qt
 
 from core.autostart import is_autostart_enabled, set_autostart
+from core.logger import open_log_dir
 
 def get_app_icon() -> QIcon:
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    ico_path = os.path.join(base_dir, "assets", "app_icon.ico")
-    png_path = os.path.join(base_dir, "assets", "app_icon.png")
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        assets_dir = os.path.join(sys._MEIPASS, "assets")
+    else:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        assets_dir = os.path.join(base_dir, "assets")
 
-    if os.path.exists(ico_path):
+    ico_path = os.path.join(assets_dir, "app_icon.ico")
+    png_path = os.path.join(assets_dir, "app_icon.png")
+    icns_path = os.path.join(assets_dir, "app_icon.icns")
+
+    if sys.platform == "win32" and os.path.exists(ico_path):
         return QIcon(ico_path)
+    elif sys.platform == "darwin" and os.path.exists(icns_path):
+        return QIcon(icns_path)
     elif os.path.exists(png_path):
         return QIcon(png_path)
+    elif os.path.exists(ico_path):
+        return QIcon(ico_path)
 
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -82,6 +93,10 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.autostart_act.setChecked(is_autostart_enabled())
         self.autostart_act.triggered.connect(self._toggle_autostart)
 
+        # Open Logs
+        self.logs_act = self.menu.addAction("📂 開啟記錄檔目錄 (Open Logs)")
+        self.logs_act.triggered.connect(open_log_dir)
+
         self.menu.addSeparator()
 
         exit_act = self.menu.addAction("❌ 結束程式 (Exit)")
@@ -95,6 +110,7 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.vert_act.setChecked(cur_layout == "vertical")
         self.clickthrough_act.setChecked(self.hud_window.config.get("click_through", False))
         self.aot_act.setChecked(self.hud_window.config.get("always_on_top", True))
+        self.autostart_act.setChecked(is_autostart_enabled())
 
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -107,4 +123,4 @@ class HUDTrayIcon(QSystemTrayIcon):
             self.hud_window.config.set("autostart", new_val)
         else:
             self.showMessage("開機啟動", "設定失敗，請檢查系統權限")
-        self.autostart_act.setChecked(is_autostart_enabled())
+        self.update_menu_state()

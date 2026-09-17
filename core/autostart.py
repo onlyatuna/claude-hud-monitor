@@ -2,6 +2,8 @@ import sys
 import os
 import plistlib
 
+from core.logger import logger
+
 APP_NAME = "ClaudeHUDMonitor"
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -40,7 +42,7 @@ def set_autostart(enable: bool) -> bool:
                         pass
                 return True
         except Exception as e:
-            print(f"[AutoStart Windows] Error: {e}")
+            logger.error(f"[AutoStart Windows] Error setting autostart: {e}", exc_info=True)
             return False
     elif sys.platform == "darwin":
         try:
@@ -52,13 +54,21 @@ def set_autostart(enable: bool) -> bool:
                 if not getattr(sys, 'frozen', False):
                     arguments.append(os.path.abspath(sys.argv[0]))
                 with open(plist_path, "wb") as f:
-                    plistlib.dump({"Label": "com.claudehud", "ProgramArguments": arguments,
-                                   "RunAtLoad": True}, f)
+                    plistlib.dump({
+                        "Label": "com.claudehud",
+                        "ProgramArguments": arguments,
+                        "RunAtLoad": True
+                    }, f)
             else:
                 if os.path.exists(plist_path):
+                    try:
+                        import subprocess
+                        subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+                    except Exception:
+                        pass
                     os.remove(plist_path)
             return True
         except Exception as e:
-            print(f"[AutoStart macOS] Error: {e}")
+            logger.error(f"[AutoStart macOS] Error setting autostart: {e}", exc_info=True)
             return False
     return False

@@ -6,6 +6,19 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
+from core.logger import logger
+
+def _parse_timestamp(ts) -> Optional[datetime]:
+    if ts is None:
+        return None
+    try:
+        val = float(ts)
+        if val > 1e11:
+            val /= 1000.0
+        return datetime.fromtimestamp(val, tz=timezone.utc)
+    except Exception as e:
+        logger.warning(f"[CodexProvider] Timestamp parse error for '{ts}': {e}")
+        return None
 
 class CodexProvider(BaseProvider):
     provider_id = "codex"
@@ -13,6 +26,9 @@ class CodexProvider(BaseProvider):
 
     AUTH_PATH = os.path.expanduser("~/.codex/auth.json")
     USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+
+    def __init__(self, timeout=8):
+        self.timeout = timeout
 
     def get_auth_data(self) -> Optional[dict]:
         if not os.path.exists(self.AUTH_PATH):
@@ -57,10 +73,11 @@ class CodexProvider(BaseProvider):
 
         req = urllib.request.Request(self.USAGE_URL, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 raw_json = json.loads(resp.read().decode("utf-8"))
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
+            logger.warning(f"[CodexProvider] HTTP error: {e.code}")
             code = "auth" if e.code == 401 else ("rate_limit" if e.code == 429 else "http")
             message = "登入憑證已失效，請使用原 CLI 重新登入" if e.code == 401 else f"配額查詢 HTTP {e.code}"
             return UsageMetrics(provider_name="OpenAI Codex", provider_id=self.provider_id,
@@ -69,7 +86,8 @@ class CodexProvider(BaseProvider):
         except (ValueError, TypeError):
             return UsageMetrics(provider_name="OpenAI Codex", provider_id=self.provider_id,
                                 last_updated_time=now_str, error="未取得有效配額資料", error_code="schema")
-        except Exception:
+        except Exception as e:
+            logger.error(f"[CodexProvider] Error fetching usage: {e}", exc_info=True)
             return UsageMetrics(provider_name="OpenAI Codex", provider_id=self.provider_id,
                                 last_updated_time=now_str, error="配額連線失敗，將自動重試", error_code="network")
 
@@ -83,12 +101,12 @@ class CodexProvider(BaseProvider):
         # 5-hour rolling usage percent
         s_used_pct = percentage(primary.get("used_percent"))
         s_reset_ts = primary.get("reset_at")
-        s_reset_dt = datetime.fromtimestamp(s_reset_ts, tz=timezone.utc) if s_reset_ts else None
+        s_reset_dt = _parse_timestamp(s_reset_ts)
 
         # Weekly 7-day rolling usage percent
         w_used_pct = percentage(secondary.get("used_percent"))
         w_reset_ts = secondary.get("reset_at")
-        w_reset_dt = datetime.fromtimestamp(w_reset_ts, tz=timezone.utc) if w_reset_ts else None
+        w_reset_dt = _parse_timestamp(w_reset_ts)
 
         # Quota responses do not establish which model is currently running.
         plan = data.get("plan_type")

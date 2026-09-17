@@ -1,25 +1,51 @@
 import sys
 import os
-import ctypes
 import time
 from datetime import datetime
-from PySide6.QtCore import Qt, QPoint, QTimer
+from PySide6.QtCore import Qt, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication
 )
-from PySide6.QtGui import QCursor
+from PySide6.QtGui import QCursor, QGuiApplication
 
 from core.providers import PROVIDERS, UsageMetrics
 from core.config_manager import ConfigManager
 from core.refresh_controller import RefreshController
 from core.autostart import is_autostart_enabled, set_autostart
+from core.logger import logger, open_log_dir
 from ui.styles import get_hud_stylesheet
 from ui.provider_card import ProviderCardWidget
 
-user32 = ctypes.windll.user32 if sys.platform == "win32" else None
-GWL_EXSTYLE = -20
-WS_EX_TRANSPARENT = 0x00000020
-WS_EX_LAYERED = 0x00080000
+MIN_HORIZ_W, MIN_HORIZ_H = 540, 125
+DEF_HORIZ_W, DEF_HORIZ_H = 690, 145
+
+MIN_VERT_W, MIN_VERT_H = 250, 320
+DEF_VERT_W, DEF_VERT_H = 280, 410
+
+if sys.platform == "win32":
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    GWL_EXSTYLE = -20
+    WS_EX_TRANSPARENT = 0x00000020
+    WS_EX_LAYERED = 0x00080000
+    SWP_NOSIZE = 0x0001
+    SWP_NOMOVE = 0x0002
+    SWP_NOZORDER = 0x0004
+    SWP_FRAMECHANGED = 0x0020
+
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowLongW.restype = wintypes.LONG
+    user32.SetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.LONG]
+    user32.SetWindowLongW.restype = wintypes.LONG
+    user32.SetWindowPos.argtypes = [
+        wintypes.HWND, wintypes.HWND,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        wintypes.UINT
+    ]
+    user32.SetWindowPos.restype = wintypes.BOOL
+else:
+    user32 = None
 
 class HUDWindow(QWidget):
     RESIZE_MARGIN = 8
@@ -28,6 +54,7 @@ class HUDWindow(QWidget):
         super().__init__()
         self.config = config
         self.tray_icon = tray_icon_ref
+        self.hotkey_manager = None
 
         self._restoring_geometry = True
         self.geometry_timer = QTimer(self)
@@ -35,6 +62,7 @@ class HUDWindow(QWidget):
         self.geometry_timer.setInterval(250)
         self.geometry_timer.timeout.connect(self._persist_geometry)
         self.current_edge = None
+
         self._provider_errors = {}
         self.refresh_controller = RefreshController(
             PROVIDERS if providers is None else providers, config.get("refresh_interval_sec", 60), self)
@@ -54,10 +82,14 @@ class HUDWindow(QWidget):
         self._setup_timers()
 
         if self.config.get("click_through", False):
-            QTimer.singleShot(200, lambda: self.set_click_through(True))
+            # Delay startup click-through to verify hotkeys and prevent lockout
+            QTimer.singleShot(300, self._safe_init_click_through)
 
         # Initial fetch for all providers
         self.refresh_controller.start()
+
+    def set_hotkey_manager(self, hotkey_mgr):
+        self.hotkey_manager = hotkey_mgr
 
     def set_tray_icon(self, tray):
         self.tray_icon = tray
@@ -109,20 +141,31 @@ class HUDWindow(QWidget):
         self.time_label.setObjectName("HeaderStatus")
 
     def _clear_layout(self, layout):
+        keep_widgets = {
+            getattr(self, "status_dot", None),
+            getattr(self, "title_label", None),
+            getattr(self, "ghost_label", None),
+            getattr(self, "layout_toggle_btn", None),
+            getattr(self, "time_label", None),
+            *getattr(self, "cards", {}).values()
+        }
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.setParent(None)
+                if widget not in keep_widgets:
+                    widget.deleteLater()
             sub_layout = item.layout()
             if sub_layout:
                 self._clear_layout(sub_layout)
+                sub_layout.deleteLater()
 
     def _apply_layout_mode(self, mode: str, initial=False):
         if not initial:
             self._persist_geometry()
+            self.config.set("layout_mode", mode)
         self._restoring_geometry = True
-        self.config.set("layout_mode", mode)
         self._clear_layout(self.inner_layout)
 
         # Common Header
@@ -138,11 +181,14 @@ class HUDWindow(QWidget):
 
         if mode == "horizontal":
             # Horizontal: 3 side-by-side columns
-            self.setMinimumSize(540, 125)
-            if not initial:
-                w = self.config.get("horizontal_width", 690)
-                h = self.config.get("horizontal_height", 145)
-                self.resize(w, h)
+            self.setMinimumSize(MIN_HORIZ_W, MIN_HORIZ_H)
+            w = self.config.get("horizontal_width", DEF_HORIZ_W)
+            h = self.config.get("horizontal_height", DEF_HORIZ_H)
+            if w < MIN_HORIZ_W:
+                w = DEF_HORIZ_W
+            if h < MIN_HORIZ_H:
+                h = DEF_HORIZ_H
+            self.resize(w, h)
 
             body_layout = QHBoxLayout()
             body_layout.setSpacing(8)
@@ -160,11 +206,14 @@ class HUDWindow(QWidget):
 
         else:
             # Vertical: 3 stacked rows
-            self.setMinimumSize(250, 320)
-            if not initial:
-                w = self.config.get("vertical_width", 280)
-                h = self.config.get("vertical_height", 410)
-                self.resize(w, h)
+            self.setMinimumSize(MIN_VERT_W, MIN_VERT_H)
+            w = self.config.get("vertical_width", DEF_VERT_W)
+            h = self.config.get("vertical_height", DEF_VERT_H)
+            if w < MIN_VERT_W:
+                w = DEF_VERT_W
+            if h < MIN_VERT_H:
+                h = DEF_VERT_H
+            self.resize(w, h)
 
             provider_ids = ["claude", "agy", "codex"]
             for i, pid in enumerate(provider_ids):
@@ -176,26 +225,78 @@ class HUDWindow(QWidget):
                     self.inner_layout.addWidget(h_div)
 
         if initial:
-            if mode == "horizontal":
-                w = self.config.get("horizontal_width", 690)
-                h = self.config.get("horizontal_height", 145)
-            else:
-                w = self.config.get("vertical_width", 280)
-                h = self.config.get("vertical_height", 410)
-            self.resize(w, h)
-
             x = self.config.get("window_x")
             y = self.config.get("window_y")
-            if x is not None and y is not None:
-                self.move(x, y)
-            else:
-                screen = self.screen().geometry()
-                self.move(screen.width() - w - 40, 50)
+            self._restore_or_default_position(x, y, w, h)
+        else:
+            self._ensure_within_screen(w, h)
 
         self._restoring_geometry = False
         self._save_geometry()
-        if self.tray_icon:
-            self.tray_icon.update_menu_state()
+
+    def _ensure_within_screen(self, w: int, h: int):
+        current_center = self.geometry().center()
+        target_screen = None
+        for screen in QGuiApplication.screens():
+            if screen.availableGeometry().contains(current_center):
+                target_screen = screen
+                break
+        if not target_screen:
+            target_screen = self.screen() or QGuiApplication.primaryScreen()
+
+        if target_screen:
+            avail = target_screen.availableGeometry()
+            cur_x = self.x()
+            cur_y = self.y()
+
+            if cur_x + w > avail.right():
+                cur_x = max(avail.left(), avail.right() - w)
+            if cur_x < avail.left():
+                cur_x = avail.left()
+
+            if cur_y + h > avail.bottom():
+                cur_y = max(avail.top(), avail.bottom() - h)
+            if cur_y < avail.top():
+                cur_y = avail.top()
+
+            self.move(cur_x, cur_y)
+
+    def _restore_or_default_position(self, x, y, w, h):
+        is_visible = False
+        if x is not None and y is not None:
+            candidate_rect = QRect(x, y, w, h)
+            for screen in QGuiApplication.screens():
+                screen_geom = screen.availableGeometry()
+                intersection = screen_geom.intersected(candidate_rect)
+                if intersection.width() >= 50 and intersection.height() >= 30:
+                    is_visible = True
+                    break
+
+        if is_visible:
+            self.move(x, y)
+        else:
+            primary_screen = QGuiApplication.primaryScreen()
+            if primary_screen:
+                screen_geom = primary_screen.availableGeometry()
+                default_x = max(screen_geom.x() + 10, screen_geom.x() + screen_geom.width() - w - 40)
+                default_y = max(screen_geom.y() + 10, screen_geom.y() + 50)
+                self.move(default_x, default_y)
+            else:
+                self.move(100, 100)
+
+    def _safe_init_click_through(self):
+        # Safety check: if hotkey registration failed, prevent user from being permanently locked out
+        if self.hotkey_manager and not self.hotkey_manager.clickthrough_registered:
+            self.config.set("click_through", False)
+            if self.tray_icon:
+                self.tray_icon.showMessage(
+                    "⚠️ 穿透模式已暫停",
+                    "全域快捷鍵註冊失敗，已自動停用啟動時穿透模式以防視窗鎖死。\n您仍可由系統匣右鍵選單手動開啟。",
+                    self.tray_icon.icon(),
+                    5000
+                )
+            return
+        self.set_click_through(True, notify=False)
 
     def toggle_layout_mode(self):
         cur = self.config.get("layout_mode", "horizontal")
@@ -233,26 +334,58 @@ class HUDWindow(QWidget):
             card.update_countdown()
 
     # ================= Click-Through Mode =================
-    def set_click_through(self, enable: bool):
-        self.config.set("click_through", enable)
-        self.ghost_label.setVisible(enable)
-
+    def _apply_native_click_through(self, enable: bool):
         # Cross-platform click-through handling
         if sys.platform == "win32" and user32:
             hwnd = int(self.winId())
             style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
             if enable:
-                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_TRANSPARENT | WS_EX_LAYERED)
+                new_style = style | WS_EX_TRANSPARENT | WS_EX_LAYERED
             else:
-                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT)
+                new_style = style & ~WS_EX_TRANSPARENT
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, new_style)
+            # Instruct DWM to immediately update frame and mouse hit-testing
+            user32.SetWindowPos(
+                hwnd, None, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED
+            )
+        elif sys.platform == "darwin":
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enable)
+            try:
+                import ctypes
+                import ctypes.util
+                objc_path = ctypes.util.find_library('objc')
+                if objc_path:
+                    objc = ctypes.cdll.LoadLibrary(objc_path)
+                    objc.objc_getClass.restype = ctypes.c_void_p
+                    objc.objc_getClass.argtypes = [ctypes.c_char_p]
+                    objc.sel_registerName.restype = ctypes.c_void_p
+                    objc.sel_registerName.argtypes = [ctypes.c_char_p]
+                    objc.objc_msgSend.restype = ctypes.c_void_p
+                    objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+                    view_ptr = ctypes.c_void_p(int(self.winId()))
+                    sel_window = objc.sel_registerName(b"window")
+                    window_ptr = objc.objc_msgSend(view_ptr, sel_window)
+                    if window_ptr:
+                        sel_setIgnoresMouseEvents = objc.sel_registerName(b"setIgnoresMouseEvents:")
+                        msg_send_bool = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool)(objc.objc_msgSend)
+                        msg_send_bool(window_ptr, sel_setIgnoresMouseEvents, enable)
+            except Exception as e:
+                logger.warning(f"[ClickThrough macOS] Failed to set ignoresMouseEvents: {e}")
         else:
-            # macOS / Linux native Qt event pass-through
             visible = self.isVisible()
             self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enable)
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enable)
             if visible:
                 self.show()
 
-        if enable and self.tray_icon:
+    def set_click_through(self, enable: bool, notify: bool = True):
+        self.config.set("click_through", enable)
+        self.ghost_label.setVisible(enable)
+        self._apply_native_click_through(enable)
+
+        if enable and notify and self.tray_icon:
             self.tray_icon.showMessage(
                 "👻 滑鼠穿透模式已啟用",
                 "點擊將直接穿透 HUD。\n如需調整設定或移動，請按 Alt+Shift+C 或右鍵點擊系統匣圖示取消。",
@@ -325,7 +458,7 @@ class HUDWindow(QWidget):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
-        self._save_geometry()
+        self._persist_geometry()
         super().mouseReleaseEvent(event)
 
     def resizeEvent(self, event):
@@ -335,6 +468,10 @@ class HUDWindow(QWidget):
     def moveEvent(self, event):
         super().moveEvent(event)
         self._save_geometry()
+
+    def closeEvent(self, event):
+        self._persist_geometry()
+        super().closeEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -351,8 +488,17 @@ class HUDWindow(QWidget):
         self.geometry_timer.stop()
         pos, size = self.pos(), self.size()
         mode = self.config.get("layout_mode", "horizontal")
-        self.config.update({"window_x": pos.x(), "window_y": pos.y(),
-                            f"{mode}_width": size.width(), f"{mode}_height": size.height()})
+        updates = {
+            "window_x": pos.x(),
+            "window_y": pos.y(),
+        }
+        if mode == "horizontal":
+            updates["horizontal_width"] = max(MIN_HORIZ_W, size.width())
+            updates["horizontal_height"] = max(MIN_HORIZ_H, size.height())
+        else:
+            updates["vertical_width"] = max(MIN_VERT_W, size.width())
+            updates["vertical_height"] = max(MIN_VERT_H, size.height())
+        self.config.set_many(updates)
 
     # ================= Context Menu =================
     def contextMenuEvent(self, event):
@@ -421,6 +567,9 @@ class HUDWindow(QWidget):
 
         menu.addSeparator()
 
+        log_act = menu.addAction("📂 開啟記錄檔目錄 (Open Logs)")
+        log_act.triggered.connect(open_log_dir)
+
         reset_act = menu.addAction("📐 重設預設尺寸與位置")
         reset_act.triggered.connect(self._reset_geometry)
 
@@ -438,7 +587,7 @@ class HUDWindow(QWidget):
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, new_val)
         self.show()
         if self.config.get("click_through", False):
-            self.set_click_through(True)
+            self._apply_native_click_through(True)
         if self.tray_icon:
             self.tray_icon.update_menu_state()
 
@@ -461,16 +610,20 @@ class HUDWindow(QWidget):
             self.config.set("autostart", new_val)
         elif self.tray_icon:
             self.tray_icon.showMessage("開機啟動", "設定失敗，請檢查系統權限")
+        if self.tray_icon:
+            self.tray_icon.update_menu_state()
 
     def _reset_geometry(self):
         mode = self.config.get("layout_mode", "horizontal")
         if mode == "horizontal":
-            self.resize(690, 145)
+            w, h = DEF_HORIZ_W, DEF_HORIZ_H
         else:
-            self.resize(280, 410)
-        screen = self.screen().geometry()
-        self.move(screen.width() - self.width() - 40, 50)
-        self._save_geometry()
+            w, h = DEF_VERT_W, DEF_VERT_H
+        self.resize(w, h)
+        primary_screen = QGuiApplication.primaryScreen()
+        screen_geom = primary_screen.availableGeometry() if primary_screen else self.screen().availableGeometry()
+        self.move(screen_geom.x() + screen_geom.width() - w - 40, screen_geom.y() + 50)
+        self._persist_geometry()
 
     def toggle_visibility(self):
         if self.isVisible():
@@ -484,5 +637,6 @@ class HUDWindow(QWidget):
         self.countdown_timer.stop()
         self.refresh_controller.stop()
         self.close()
-        from PySide6.QtWidgets import QApplication
-        QApplication.instance().quit()
+        app = QApplication.instance()
+        if app:
+            app.quit()
