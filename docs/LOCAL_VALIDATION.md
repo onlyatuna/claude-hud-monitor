@@ -40,3 +40,10 @@ Windows / Python 3.12.2，各查詢一次均成功：Claude 0.44s、Codex 0.62s�
 Windows PyInstaller 單檔測試版可執行離線 smoke-test；原生 Windows 字型的合成資料畫面已檢查。
 本地測試版：dist/local/ClaudeHUD-Local.exe。未提交、未推送、未建立 Tag 或發布。
 中文檔案以 UTF-8 寫入，另有回歸檢查防止錯誤管線編碼造成問號。
+
+## PR #2 首次 CI 失敗與修正
+
+首次遠端執行：Windows 測試、打包與 smoke-test 全部成功；macOS 測試成功，但打包失敗。
+原因：建置依賴遺漏 Pillow，PyInstaller 無法將 assets/app_icon.png 轉為 ICNS。
+修正：Pillow 加入 requirements-build.txt，新增跨平台可執行的實際 PNG → ICNS 轉換測試。
+此記錄不把本地成功視為遠端成功；修正後仍須確認新提交的兩個建置工作結果。
