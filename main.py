@@ -34,9 +34,21 @@ def main():
     # Alt + C -> Toggle HUD Show / Hide
     # Alt + Shift + C -> Toggle Click-Through Ghost Mode
     hotkey = GlobalHotkeyManager()
+    hud.set_hotkey_manager(hotkey)
+
     if config.get("hotkey_enabled", True):
         hotkey.hotkey_triggered.connect(hud.toggle_visibility)
         hotkey.clickthrough_triggered.connect(hud.toggle_click_through)
+
+        def on_hotkey_failed(msg):
+            tray.showMessage(
+                "⚠️ 全域快捷鍵通知",
+                f"{msg}\n您仍可透過系統匣圖示完整操作所有功能。",
+                tray.icon(),
+                5000
+            )
+
+        hotkey.hotkey_failed.connect(on_hotkey_failed)
         hotkey.start(key_char="C")
 
     def on_exit():

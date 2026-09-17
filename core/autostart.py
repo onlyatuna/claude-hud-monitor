@@ -47,7 +47,13 @@ def set_autostart(enable: bool) -> bool:
             os.makedirs(plist_dir, exist_ok=True)
             plist_path = os.path.join(plist_dir, "com.claudehud.plist")
             if enable:
-                target_exe = sys.executable
+                if getattr(sys, 'frozen', False):
+                    args = [sys.executable]
+                else:
+                    script = os.path.abspath(sys.argv[0])
+                    args = [sys.executable, script]
+
+                args_xml = "\n".join(f"        <string>{a}</string>" for a in args)
                 plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -56,7 +62,7 @@ def set_autostart(enable: bool) -> bool:
     <string>com.claudehud</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{target_exe}</string>
+{args_xml}
     </array>
     <key>RunAtLoad</key>
     <true/>

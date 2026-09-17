@@ -7,6 +7,15 @@ from typing import Optional
 
 from core.providers.base import BaseProvider, UsageMetrics
 
+def _parse_iso_datetime(dt_val: Optional[str]) -> Optional[datetime]:
+    if not dt_val:
+        return None
+    try:
+        s = str(dt_val).strip().replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
 class ClaudeProvider(BaseProvider):
     provider_id = "claude"
     display_name = "Claude"
@@ -76,19 +85,8 @@ class ClaudeProvider(BaseProvider):
             elif r.get("key") == "chat":
                 chat_pct = r.get("percent", 0)
 
-        five_h_dt = None
-        if five_hour.get("resets_at"):
-            try:
-                five_h_dt = datetime.fromisoformat(five_hour["resets_at"])
-            except Exception:
-                pass
-
-        seven_d_dt = None
-        if seven_day.get("resets_at"):
-            try:
-                seven_d_dt = datetime.fromisoformat(seven_day["resets_at"])
-            except Exception:
-                pass
+        five_h_dt = _parse_iso_datetime(five_hour.get("resets_at"))
+        seven_d_dt = _parse_iso_datetime(seven_day.get("resets_at"))
 
         s_val = float(five_hour.get("utilization") or 0.0)
         w_val = float(seven_day.get("utilization") or 0.0)

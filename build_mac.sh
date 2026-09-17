@@ -9,8 +9,17 @@ echo "=== Installing dependencies ==="
 python3 -m pip install --upgrade pip
 pip install PySide6 pyinstaller pillow
 
+echo "=== Checking macOS ICNS icon ==="
+if [ ! -f "assets/app_icon.icns" ]; then
+    python3 -c "from PIL import Image; Image.open('assets/app_icon.png').save('assets/app_icon.icns')" 2>/dev/null || true
+fi
+
 echo "=== Building ClaudeHUD.app for macOS ==="
-pyinstaller --windowed --name "ClaudeHUD" --icon "assets/app_icon.png" --add-data "assets:assets" main.py
+ICON_ARG="assets/app_icon.png"
+if [ -f "assets/app_icon.icns" ]; then
+    ICON_ARG="assets/app_icon.icns"
+fi
+pyinstaller --windowed --name "ClaudeHUD" --icon "$ICON_ARG" --add-data "assets:assets" main.py
 
 echo "=== Packing into ZIP ==="
 cd dist

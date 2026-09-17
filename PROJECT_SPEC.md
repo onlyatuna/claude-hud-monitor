@@ -16,8 +16,9 @@
 ## 2. 系統架構設計 (SA 視角)
 
 ### 2.1 模組劃分
-1. **Core Data Engine (`core/anthropic_client.py`)**
-   - 讀取本機 Claude Code OAuth Token (`~/.claude/.credentials.json`)。
+1. **Core Data Engine (`core/providers/`)**
+   - 採用多 Provider 架構（Claude Code、Antigravity AGY、OpenAI Codex）。
+   - `claude_provider.py`: 讀取本機 Claude Code OAuth Token (`~/.claude/.credentials.json`)。
    - 偽裝 Claude Code CLI User-Agent (`claude-code/x.x.x`) 請求 Anthropic Usage Endpoint。
    - 智慧快取與退避機制（避免觸發 HTTP 429）。
    - 解析 5-Hour 滾動額度、7-Day 總額度、重設時間戳記與費用拆分。

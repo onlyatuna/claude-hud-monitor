@@ -3,7 +3,6 @@ import os
 import sys
 
 DEFAULT_CONFIG = {
-    "active_provider": "claude",  # "claude", "agy", "codex"
     "window_x": None,
     "window_y": None,
     "layout_mode": "vertical",  # "vertical" or "horizontal"
@@ -21,12 +20,7 @@ DEFAULT_CONFIG = {
     "autostart": False
 }
 
-def get_config_path() -> str:
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    local_cfg = os.path.join(base_dir, "config.json")
-    if os.path.exists(local_cfg) or os.access(base_dir, os.W_OK):
-        return local_cfg
-    
+def get_user_config_dir() -> str:
     if sys.platform == "win32":
         app_data = os.environ.get("APPDATA", os.path.expanduser("~"))
         cfg_dir = os.path.join(app_data, "ClaudeHUDMonitor")
@@ -36,7 +30,26 @@ def get_config_path() -> str:
         cfg_dir = os.path.expanduser("~/.config/ClaudeHUDMonitor")
 
     os.makedirs(cfg_dir, exist_ok=True)
-    return os.path.join(cfg_dir, "config.json")
+    return cfg_dir
+
+def get_config_path() -> str:
+    # 1. When frozen via PyInstaller (_onefile / _onedir)
+    # sys._MEIPASS is in %TEMP% and wiped on exit! Never write config to _MEIPASS.
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.dirname(sys.executable)
+        portable_cfg = os.path.join(exe_dir, "config.json")
+        # If user explicitly placed a portable config.json next to the executable and it is writable
+        if os.path.exists(portable_cfg) and os.access(portable_cfg, os.W_OK):
+            return portable_cfg
+        return os.path.join(get_user_config_dir(), "config.json")
+
+    # 2. When running from Python source (dev mode)
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    local_cfg = os.path.join(base_dir, "config.json")
+    if os.path.exists(local_cfg) or os.access(base_dir, os.W_OK):
+        return local_cfg
+
+    return os.path.join(get_user_config_dir(), "config.json")
 
 class ConfigManager:
     def __init__(self):
@@ -63,6 +76,14 @@ class ConfigManager:
     def get(self, key, default=None):
         return self.data.get(key, default)
 
-    def set(self, key, value):
+    def set(self, key, value, auto_save: bool = True):
         self.data[key] = value
-        self.save()
+        if auto_save:
+            self.save()
+
+    def set_many(self, kv_pairs: dict, auto_save: bool = True):
+        for k, v in kv_pairs.items():
+            self.data[k] = v
+        if auto_save:
+            self.save()
+

@@ -7,14 +7,24 @@ from PySide6.QtCore import Qt
 from core.autostart import is_autostart_enabled, set_autostart
 
 def get_app_icon() -> QIcon:
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    ico_path = os.path.join(base_dir, "assets", "app_icon.ico")
-    png_path = os.path.join(base_dir, "assets", "app_icon.png")
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        assets_dir = os.path.join(sys._MEIPASS, "assets")
+    else:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        assets_dir = os.path.join(base_dir, "assets")
 
-    if os.path.exists(ico_path):
+    ico_path = os.path.join(assets_dir, "app_icon.ico")
+    png_path = os.path.join(assets_dir, "app_icon.png")
+    icns_path = os.path.join(assets_dir, "app_icon.icns")
+
+    if sys.platform == "win32" and os.path.exists(ico_path):
         return QIcon(ico_path)
+    elif sys.platform == "darwin" and os.path.exists(icns_path):
+        return QIcon(icns_path)
     elif os.path.exists(png_path):
         return QIcon(png_path)
+    elif os.path.exists(ico_path):
+        return QIcon(ico_path)
 
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
