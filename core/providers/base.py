@@ -36,7 +36,10 @@ class BaseProvider:
     def format_countdown(target_dt: Optional[datetime]) -> str:
         if not target_dt:
             return "--"
-        now = datetime.now(timezone.utc)
+        if target_dt.tzinfo is None:
+            now = datetime.now()
+        else:
+            now = datetime.now(timezone.utc)
         diff = target_dt - now
         total_sec = int(diff.total_seconds())
         if total_sec <= 0:

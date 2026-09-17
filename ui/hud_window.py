@@ -2,6 +2,7 @@ import sys
 import os
 import ctypes
 import threading
+import time
 from datetime import datetime
 from PySide6.QtCore import Qt, QPoint, QTimer, Signal, QObject
 from PySide6.QtWidgets import (
@@ -207,23 +208,25 @@ class HUDWindow(QWidget):
         self.status_dot.setStyleSheet("color: #38bdf8; font-size: 11px;")
 
         def run():
-            threads = []
-            for pid, provider in PROVIDERS.items():
-                def fetch_one(p=provider):
-                    try:
-                        metrics = p.fetch_usage()
-                        self.signals.data_fetched.emit(metrics)
-                    except Exception as e:
-                        err = UsageMetrics(provider_id=p.provider_id, error=str(e))
-                        self.signals.data_fetched.emit(err)
+            try:
+                threads = []
+                for pid, provider in PROVIDERS.items():
+                    def fetch_one(p=provider):
+                        try:
+                            metrics = p.fetch_usage()
+                            self.signals.data_fetched.emit(metrics)
+                        except Exception as e:
+                            err = UsageMetrics(provider_id=p.provider_id, error=str(e))
+                            self.signals.data_fetched.emit(err)
 
-                t = threading.Thread(target=fetch_one, daemon=True)
-                threads.append(t)
-                t.start()
+                    t = threading.Thread(target=fetch_one, daemon=True)
+                    threads.append(t)
+                    t.start()
 
-            for t in threads:
-                t.join(timeout=10.0)
-            self.is_fetching = False
+                for t in threads:
+                    t.join(timeout=10.0)
+            finally:
+                self.is_fetching = False
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -236,6 +239,15 @@ class HUDWindow(QWidget):
         self.status_dot.setStyleSheet("color: #10b981; font-size: 11px;")
 
     def _update_all_countdowns(self):
+        # Auto-detect system wake from sleep/suspend
+        cur_ts = time.time()
+        if hasattr(self, "_last_countdown_ts"):
+            gap = cur_ts - self._last_countdown_ts
+            if gap > 15.0:  # System was asleep or suspended for >15 seconds
+                self.is_fetching = False  # Clear any stuck lock
+                self.trigger_async_refresh()
+        self._last_countdown_ts = cur_ts
+
         for card in self.cards.values():
             card.update_countdown()
 
