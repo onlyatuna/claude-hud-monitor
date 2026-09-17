@@ -1,10 +1,9 @@
 import sys
 import os
 import ctypes
-import threading
 import time
 from datetime import datetime
-from PySide6.QtCore import Qt, QPoint, QTimer, Signal, QObject
+from PySide6.QtCore import Qt, QPoint, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame
 )
@@ -12,6 +11,7 @@ from PySide6.QtGui import QCursor
 
 from core.providers import PROVIDERS, UsageMetrics
 from core.config_manager import ConfigManager
+from core.refresh_controller import RefreshController
 from core.autostart import is_autostart_enabled, set_autostart
 from ui.styles import get_hud_stylesheet
 from ui.provider_card import ProviderCardWidget
@@ -21,22 +21,25 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 
-class WorkerSignals(QObject):
-    data_fetched = Signal(UsageMetrics)
-
 class HUDWindow(QWidget):
     RESIZE_MARGIN = 8
 
-    def __init__(self, config: ConfigManager, tray_icon_ref=None):
+    def __init__(self, config: ConfigManager, tray_icon_ref=None, providers=None):
         super().__init__()
         self.config = config
         self.tray_icon = tray_icon_ref
 
-        self.signals = WorkerSignals()
-        self.signals.data_fetched.connect(self._on_data_fetched)
-
+        self._restoring_geometry = True
+        self.geometry_timer = QTimer(self)
+        self.geometry_timer.setSingleShot(True)
+        self.geometry_timer.setInterval(250)
+        self.geometry_timer.timeout.connect(self._persist_geometry)
         self.current_edge = None
-        self.is_fetching = False
+        self._provider_errors = {}
+        self.refresh_controller = RefreshController(
+            PROVIDERS if providers is None else providers, config.get("refresh_interval_sec", 60), self)
+        self.refresh_controller.updated.connect(self._on_data_fetched)
+        self.refresh_controller.busy_changed.connect(self._on_busy_changed)
 
         # Provider Cards
         self.cards = {
@@ -54,7 +57,7 @@ class HUDWindow(QWidget):
             QTimer.singleShot(200, lambda: self.set_click_through(True))
 
         # Initial fetch for all providers
-        self.trigger_async_refresh()
+        self.refresh_controller.start()
 
     def set_tray_icon(self, tray):
         self.tray_icon = tray
@@ -116,6 +119,9 @@ class HUDWindow(QWidget):
                 self._clear_layout(sub_layout)
 
     def _apply_layout_mode(self, mode: str, initial=False):
+        if not initial:
+            self._persist_geometry()
+        self._restoring_geometry = True
         self.config.set("layout_mode", mode)
         self._clear_layout(self.inner_layout)
 
@@ -186,6 +192,11 @@ class HUDWindow(QWidget):
                 screen = self.screen().geometry()
                 self.move(screen.width() - w - 40, 50)
 
+        self._restoring_geometry = False
+        self._save_geometry()
+        if self.tray_icon:
+            self.tray_icon.update_menu_state()
+
     def toggle_layout_mode(self):
         cur = self.config.get("layout_mode", "horizontal")
         new_mode = "vertical" if cur == "horizontal" else "horizontal"
@@ -196,47 +207,18 @@ class HUDWindow(QWidget):
         self.countdown_timer.timeout.connect(self._update_all_countdowns)
         self.countdown_timer.start(1000)
 
-        interval = max(20, self.config.get("refresh_interval_sec", 60)) * 1000
-        self.fetch_timer = QTimer(self)
-        self.fetch_timer.timeout.connect(self.trigger_async_refresh)
-        self.fetch_timer.start(interval)
-
     def trigger_async_refresh(self):
-        if self.is_fetching:
-            return
-        self.is_fetching = True
-        self.status_dot.setStyleSheet("color: #38bdf8; font-size: 11px;")
-
-        def run():
-            try:
-                threads = []
-                for pid, provider in PROVIDERS.items():
-                    def fetch_one(p=provider):
-                        try:
-                            metrics = p.fetch_usage()
-                            self.signals.data_fetched.emit(metrics)
-                        except Exception as e:
-                            err = UsageMetrics(provider_id=p.provider_id, error=str(e))
-                            self.signals.data_fetched.emit(err)
-
-                    t = threading.Thread(target=fetch_one, daemon=True)
-                    threads.append(t)
-                    t.start()
-
-                for t in threads:
-                    t.join(timeout=10.0)
-            finally:
-                self.is_fetching = False
-
-        threading.Thread(target=run, daemon=True).start()
+        self.refresh_controller.refresh()
 
     def _on_data_fetched(self, metrics: UsageMetrics):
         if metrics.provider_id in self.cards:
             self.cards[metrics.provider_id].update_metrics(metrics)
+        self._provider_errors[metrics.provider_id] = bool(metrics.error)
+        self.time_label.setText(datetime.now().strftime("%H:%M:%S"))
 
-        now_str = datetime.now().strftime("%H:%M:%S")
-        self.time_label.setText(now_str)
-        self.status_dot.setStyleSheet("color: #10b981; font-size: 11px;")
+    def _on_busy_changed(self, busy):
+        color = "#38bdf8" if busy else ("#f59e0b" if any(self._provider_errors.values()) else "#10b981")
+        self.status_dot.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     def _update_all_countdowns(self):
         # Auto-detect system wake from sleep/suspend
@@ -244,7 +226,6 @@ class HUDWindow(QWidget):
         if hasattr(self, "_last_countdown_ts"):
             gap = cur_ts - self._last_countdown_ts
             if gap > 15.0:  # System was asleep or suspended for >15 seconds
-                self.is_fetching = False  # Clear any stuck lock
                 self.trigger_async_refresh()
         self._last_countdown_ts = cur_ts
 
@@ -266,7 +247,10 @@ class HUDWindow(QWidget):
                 user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style & ~WS_EX_TRANSPARENT)
         else:
             # macOS / Linux native Qt event pass-through
-            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enable)
+            visible = self.isVisible()
+            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, enable)
+            if visible:
+                self.show()
 
         if enable and self.tray_icon:
             self.tray_icon.showMessage(
@@ -350,9 +334,7 @@ class HUDWindow(QWidget):
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        pos = self.pos()
-        self.config.set("window_x", pos.x())
-        self.config.set("window_y", pos.y())
+        self._save_geometry()
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -360,17 +342,17 @@ class HUDWindow(QWidget):
             event.accept()
 
     def _save_geometry(self):
-        pos = self.pos()
-        size = self.size()
-        self.config.set("window_x", pos.x())
-        self.config.set("window_y", pos.y())
+        if not self._restoring_geometry:
+            self.geometry_timer.start()
+
+    def _persist_geometry(self):
+        if self._restoring_geometry:
+            return
+        self.geometry_timer.stop()
+        pos, size = self.pos(), self.size()
         mode = self.config.get("layout_mode", "horizontal")
-        if mode == "horizontal":
-            self.config.set("horizontal_width", size.width())
-            self.config.set("horizontal_height", size.height())
-        else:
-            self.config.set("vertical_width", size.width())
-            self.config.set("vertical_height", size.height())
+        self.config.update({"window_x": pos.x(), "window_y": pos.y(),
+                            f"{mode}_width": size.width(), f"{mode}_height": size.height()})
 
     # ================= Context Menu =================
     def contextMenuEvent(self, event):
@@ -455,6 +437,10 @@ class HUDWindow(QWidget):
         self.config.set("always_on_top", new_val)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, new_val)
         self.show()
+        if self.config.get("click_through", False):
+            self.set_click_through(True)
+        if self.tray_icon:
+            self.tray_icon.update_menu_state()
 
     def _toggle_lock(self):
         new_val = not self.config.get("locked", False)
@@ -466,13 +452,15 @@ class HUDWindow(QWidget):
 
     def _set_interval(self, seconds: int):
         self.config.set("refresh_interval_sec", seconds)
-        self.fetch_timer.setInterval(seconds * 1000)
+        self.refresh_controller.set_interval(seconds)
 
     def _toggle_autostart(self):
         currently_enabled = is_autostart_enabled()
         new_val = not currently_enabled
-        set_autostart(new_val)
-        self.config.set("autostart", new_val)
+        if set_autostart(new_val):
+            self.config.set("autostart", new_val)
+        elif self.tray_icon:
+            self.tray_icon.showMessage("開機啟動", "設定失敗，請檢查系統權限")
 
     def _reset_geometry(self):
         mode = self.config.get("layout_mode", "horizontal")
@@ -492,7 +480,9 @@ class HUDWindow(QWidget):
             self.activateWindow()
 
     def close_application(self):
+        self._persist_geometry()
         self.countdown_timer.stop()
-        self.fetch_timer.stop()
+        self.refresh_controller.stop()
         self.close()
-        sys.exit(0)
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().quit()

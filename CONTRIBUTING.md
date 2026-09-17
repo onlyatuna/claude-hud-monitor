@@ -95,7 +95,7 @@ We enforce the [Conventional Commits v1.0.0](https://www.conventionalcommits.org
 
 3. **Install dependencies**:
    ```bash
-   pip install -r requirements.txt  # Or: pip install PySide6 pyinstaller pillow
+   python -m pip install -r requirements-build.txt
    ```
 
 4. **Create a topic branch**:
@@ -105,6 +105,7 @@ We enforce the [Conventional Commits v1.0.0](https://www.conventionalcommits.org
 
 5. **Run and verify locally**:
    ```bash
+   python -B -m unittest discover -s tests -v
    python main.py
    ```
 
@@ -112,7 +113,7 @@ We enforce the [Conventional Commits v1.0.0](https://www.conventionalcommits.org
 
 ## 📬 Pull Request (PR) Process
 
-1. Ensure your code passes all local import checks and adheres to the project's styling.
+1. Run `python -B -m unittest discover -s tests -v` locally. Tests must use synthetic data and temporary settings, never real credentials.
 2. Submit your PR targeting the **`develop`** branch (not `main`).
 3. Fill out the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md) completely.
 4. Link the relevant GitHub Issue in your PR description (e.g., `Fixes #12`).
@@ -127,3 +128,10 @@ By contributing to **AI HUD Monitor**, you acknowledge and agree that:
 * Your contributions will be licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
 * Any network-deployed or client-distributed modifications must make their source code available under AGPL-3.0.
 * You hold the necessary rights to submit the code.
+
+## Local validation before release
+
+Keep fixes on a local topic branch until reviewed. Do not push tags or publish during local validation.
+Existing build job names are retained for branch-protection compatibility. The workflow runs regression tests before packaging on PRs and pushes.
+Runtime/build requirements are centralized. macOS-only pynput and its platform dependencies still use version ranges and require macOS validation; this is not a fully hash-locked environment.
+See [architecture](PROJECT_SPEC.md), [provider compatibility](docs/PROVIDERS.md), and [validation record](docs/LOCAL_VALIDATION.md).
