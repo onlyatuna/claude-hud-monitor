@@ -7,6 +7,8 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import Optional
+import urllib.request
+import urllib.error
 
 from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
 from core.logger import logger
@@ -14,18 +16,94 @@ from core.logger import logger
 class AgyProvider(BaseProvider):
     provider_id = "agy"
     display_name = "AGY"
+    API_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
 
     def __init__(self, timeout=30):
         self.timeout = timeout
 
+    def _get_access_token(self) -> Optional[str]:
+        # 1. Windows Credential Manager (Keyring: 'gemini:antigravity')
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                class CREDENTIAL(ctypes.Structure):
+                    _fields_ = [
+                        ('Flags', wintypes.DWORD),
+                        ('Type', wintypes.DWORD),
+                        ('TargetName', wintypes.LPWSTR),
+                        ('Comment', wintypes.LPWSTR),
+                        ('LastWritten', wintypes.FILETIME),
+                        ('CredentialBlobSize', wintypes.DWORD),
+                        ('CredentialBlob', ctypes.POINTER(ctypes.c_byte)),
+                        ('Persist', wintypes.DWORD),
+                        ('AttributeCount', wintypes.DWORD),
+                        ('Attributes', ctypes.c_void_p),
+                        ('TargetAlias', wintypes.LPWSTR),
+                        ('UserName', wintypes.LPWSTR),
+                    ]
+                pcred = ctypes.POINTER(CREDENTIAL)()
+                advapi32 = ctypes.windll.advapi32
+                if advapi32.CredReadW('gemini:antigravity', 1, 0, ctypes.byref(pcred)):
+                    cred = pcred.contents
+                    blob = ctypes.string_at(cred.CredentialBlob, cred.CredentialBlobSize)
+                    advapi32.CredFree(pcred)
+                    data = json.loads(blob.decode('utf-8', errors='ignore'))
+                    token = data.get('token', {}).get('access_token')
+                    if token:
+                        return token
+            except Exception as e:
+                logger.debug(f"[AgyProvider] CredReadW failed: {e}")
+
+        # 2. macOS Keychain ('gemini:antigravity')
+        elif sys.platform == "darwin":
+            try:
+                out = subprocess.check_output(
+                    ['security', 'find-generic-password', '-s', 'gemini:antigravity', '-w'],
+                    text=True, stderr=subprocess.DEVNULL, timeout=3
+                ).strip()
+                data = json.loads(out)
+                token = data.get('token', {}).get('access_token')
+                if token:
+                    return token
+            except Exception as e:
+                logger.debug(f"[AgyProvider] macOS Keychain lookup failed: {e}")
+
+        # 3. Local token file fallback
+        token_path = os.path.expanduser("~/.gemini/antigravity-cli/antigravity-oauth-token")
+        if os.path.exists(token_path):
+            try:
+                with open(token_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    token = data.get("token", {}).get("access_token")
+                    if token:
+                        return token
+            except Exception as e:
+                logger.debug(f"[AgyProvider] Token file read failed: {e}")
+
+        return None
+
+    def _fetch_via_http(self, token: str, now_str: str) -> Optional[UsageMetrics]:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "antigravity/1.2.4"
+        }
+        req = urllib.request.Request(self.API_URL, data=b"{}", headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    raw = json.loads(resp.read().decode("utf-8"))
+                    return self._parse_agy_json(raw, now_str)
+        except Exception as e:
+            logger.debug(f"[AgyProvider] HTTP fetch error: {e}")
+        return None
+
     def _find_agy_binary(self) -> Optional[str]:
-        # 1. PATH lookup (check agy, agy.exe, agy.cmd, agy.bat)
         for name in ("agy", "agy.exe", "agy.cmd", "agy.bat"):
             p = shutil.which(name)
             if p and os.path.exists(p):
                 return p
-        
-        # 2. Windows default AppData
         if sys.platform == "win32":
             local_app = os.environ.get("LOCALAPPDATA", "")
             candidates = [
@@ -37,7 +115,6 @@ class AgyProvider(BaseProvider):
                 if os.path.exists(cand):
                     return cand
         else:
-            # 3. macOS / Linux default paths
             candidates = [
                 os.path.expanduser("~/.local/bin/agy"),
                 "/usr/local/bin/agy",
@@ -50,8 +127,19 @@ class AgyProvider(BaseProvider):
 
     def fetch_usage(self) -> UsageMetrics:
         now_str = datetime.now().strftime("%H:%M:%S")
-        agy_bin = self._find_agy_binary()
 
+        # 1. Primary: Direct in-memory HTTP API (instant, no subprocess, zero window flash)
+        token = self._get_access_token()
+        if token:
+            res = self._fetch_via_http(token, now_str)
+            if res and not res.error:
+                return res
+
+        # 2. Fallback: CLI execution
+        return self._fetch_via_cli(now_str)
+
+    def _fetch_via_cli(self, now_str: str) -> UsageMetrics:
+        agy_bin = self._find_agy_binary()
         if not agy_bin:
             logger.warning("[AgyProvider] Antigravity CLI binary not found")
             return UsageMetrics(
@@ -64,12 +152,20 @@ class AgyProvider(BaseProvider):
 
         started = time.monotonic()
         try:
-            kwargs = {"timeout": self.timeout, "text": True, "encoding": "utf-8",
-                      "errors": "replace", "capture_output": True}
+            kwargs = {
+                "timeout": self.timeout,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+                "capture_output": True,
+                "stdin": subprocess.DEVNULL
+            }
             if sys.platform == "win32":
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                # Windows cannot directly execute .cmd or .bat via CreateProcessW without cmd.exe
-                # Protect against cmd.exe quote-stripping when paths contain whitespace
+                si = subprocess.STARTUPINFO()
+                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                si.wShowWindow = subprocess.SW_HIDE
+                kwargs["startupinfo"] = si
                 if agy_bin.lower().endswith((".cmd", ".bat")):
                     inner_cmd = subprocess.list2cmdline([agy_bin, "--output-format", "json", "--print", "/quota"])
                     cmd = f'cmd.exe /c "{inner_cmd}"'
@@ -79,14 +175,9 @@ class AgyProvider(BaseProvider):
                 cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
 
             result = subprocess.run(cmd, **kwargs)
-            # Do not persist stdout/stderr: CLI output can contain account data.
-            logging.getLogger(__name__).info(
-                "quota exit=%s elapsed=%.2fs stderr_chars=%s",
-                result.returncode, time.monotonic() - started, len(result.stderr or ""))
             if result.returncode:
                 return self._failure(now_str, "cli_exit", f"agy 查詢失敗 (exit {result.returncode})")
 
-            # Resilient JSON parsing: handle potential prefixes/banners from CLI output
             raw = None
             out = result.stdout or ""
             out_trimmed = out.strip()
@@ -112,19 +203,41 @@ class AgyProvider(BaseProvider):
 
             return self._parse_agy_json(raw, now_str)
         except subprocess.TimeoutExpired:
-            logging.getLogger(__name__).warning("quota timeout elapsed=%.2fs", time.monotonic() - started)
             return self._failure(now_str, "timeout", f"agy 配額查詢超時 ({self.timeout}s)")
         except OSError:
             return self._failure(now_str, "cli_start", "無法啟動 agy，請確認安裝與執行權限")
 
     def _failure(self, now_str, code, message):
-        return UsageMetrics(provider_name="Antigravity", provider_id=self.provider_id,
-                            last_updated_time=now_str, error=message, error_code=code)
+        return UsageMetrics(
+            provider_name="Antigravity",
+            provider_id=self.provider_id,
+            last_updated_time=now_str,
+            error=message,
+            error_code=code
+        )
 
     @safe_parse
     def _parse_agy_json(self, raw: dict, now_str: str) -> UsageMetrics:
+        if not isinstance(raw, dict):
+            return self._failure(now_str, "schema", "配額格式不相容")
+
         groups = raw.get("command", {}).get("data", {}).get("groups", [])
-        
+        if not groups and "groups" in raw:
+            groups = raw.get("groups", [])
+
+        if not groups:
+            return UsageMetrics(
+                provider_name="Antigravity",
+                provider_id=self.provider_id,
+                metric1_val=None,
+                metric1_text="--",
+                metric2_val=None,
+                metric2_text="--",
+                last_updated_time=now_str,
+                error="未取得有效配額資料",
+                error_code="schema"
+            )
+
         m1_used_pct = None
         m1_reset_dt = None
         m2_used_pct = None
@@ -132,17 +245,17 @@ class AgyProvider(BaseProvider):
         third_party_rem_pct = None
 
         for g in groups:
-            g_name = g.get("name", "").lower()
+            g_name = (g.get("name") or g.get("displayName") or "").lower()
             if "gemini" in g_name:
                 for b in g.get("buckets", []):
-                    b_id = b.get("id", "").lower()
-                    b_window = b.get("window", "").lower()
-                    rem_frac = percentage(b.get("remaining_fraction"), 1.0)
+                    b_id = (b.get("id") or b.get("bucketId") or "").lower()
+                    b_window = (b.get("window") or "").lower()
+                    rem_frac = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
                     if rem_frac is None:
                         continue
                     used_pct = max(0.0, min(100.0, (1.0 - rem_frac) * 100.0))
-                    
-                    reset_str = b.get("reset_time")
+
+                    reset_str = b.get("reset_time") or b.get("resetTime")
                     reset_dt = None
                     if reset_str:
                         try:
@@ -159,9 +272,9 @@ class AgyProvider(BaseProvider):
 
             elif "claude" in g_name or "gpt" in g_name:
                 for b in g.get("buckets", []):
-                    b_id = b.get("id", "").lower()
+                    b_id = (b.get("id") or b.get("bucketId") or "").lower()
                     if "week" in b_id:
-                        rem_frac = percentage(b.get("remaining_fraction"), 1.0)
+                        rem_frac = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
                         if rem_frac is None:
                             continue
                         remaining = rem_frac * 100.0
