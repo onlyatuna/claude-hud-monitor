@@ -7,24 +7,45 @@ if current_dir not in sys.path:
     sys.path.insert(0, current_dir)
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, qInstallMessageHandler, QtMsgType
 
+from core.logger import setup_logging, logger
 from core.config_manager import ConfigManager
 from ui.hud_window import HUDWindow
 from ui.tray_icon import HUDTrayIcon
 from system.hotkey import GlobalHotkeyManager
 
+def qt_message_handler(mode, context, message):
+    if mode == QtMsgType.QtDebugMsg:
+        logger.debug(f"[Qt] {message}")
+    elif mode == QtMsgType.QtInfoMsg:
+        logger.info(f"[Qt] {message}")
+    elif mode == QtMsgType.QtWarningMsg:
+        logger.warning(f"[Qt] {message}")
+    elif mode == QtMsgType.QtCriticalMsg:
+        logger.error(f"[Qt] {message}")
+    elif mode == QtMsgType.QtFatalMsg:
+        logger.critical(f"[Qt] {message}")
+
 def main():
+    setup_logging()
+    logger.info("=== Claude HUD Monitor starting ===")
+    logger.info(f"Python version: {sys.version}, Platform: {sys.platform}")
+
+    qInstallMessageHandler(qt_message_handler)
+
     # Enable High DPI scaling
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
     config = ConfigManager()
+    logger.info(f"Loaded config from: {config.path}")
 
     # Create HUD Window
     hud = HUDWindow(config)
     hud.show()
+    logger.info("HUD window created and shown")
 
     # Create System Tray Icon
     tray = HUDTrayIcon(hud)
@@ -41,6 +62,7 @@ def main():
         hotkey.clickthrough_triggered.connect(hud.toggle_click_through)
 
         def on_hotkey_failed(msg):
+            logger.warning(f"Hotkey registration issue: {msg}")
             tray.showMessage(
                 "⚠️ 全域快捷鍵通知",
                 f"{msg}\n您仍可透過系統匣圖示完整操作所有功能。",
@@ -50,13 +72,17 @@ def main():
 
         hotkey.hotkey_failed.connect(on_hotkey_failed)
         hotkey.start(key_char="C")
+        logger.info("Hotkey manager started")
 
     def on_exit():
+        logger.info("Application shutting down...")
         hotkey.stop()
 
     app.aboutToQuit.connect(on_exit)
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    logger.info(f"=== Claude HUD Monitor exited with code {exit_code} ===")
+    sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()

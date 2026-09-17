@@ -5,6 +5,7 @@ from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 from PySide6.QtCore import Qt
 
 from core.autostart import is_autostart_enabled, set_autostart
+from core.logger import open_log_dir
 
 def get_app_icon() -> QIcon:
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -91,6 +92,10 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.autostart_act.setCheckable(True)
         self.autostart_act.setChecked(is_autostart_enabled())
         self.autostart_act.triggered.connect(self._toggle_autostart)
+
+        # Open Logs
+        self.logs_act = self.menu.addAction("📂 開啟記錄檔目錄 (Open Logs)")
+        self.logs_act.triggered.connect(open_log_dir)
 
         self.menu.addSeparator()
 

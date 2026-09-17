@@ -2,6 +2,8 @@ import sys
 import threading
 from PySide6.QtCore import QObject, Signal
 
+from core.logger import logger
+
 class GlobalHotkeyManager(QObject):
     hotkey_triggered = Signal()
     clickthrough_triggered = Signal()
@@ -55,7 +57,7 @@ class GlobalHotkeyManager(QObject):
             if not ok1:
                 err = kernel32.GetLastError()
                 msg = f"Alt+{key_char.upper()} 全域快捷鍵註冊失敗 (Win32 Error: {err})，可能已被其他程式佔用"
-                print(f"[Hotkey Windows] {msg}")
+                logger.warning(f"[Hotkey Windows] {msg}")
                 self.hotkey_failed.emit(msg)
 
             ok2 = user32.RegisterHotKey(None, HOTKEY_ID_CLICKTHROUGH, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, vk)
@@ -63,7 +65,7 @@ class GlobalHotkeyManager(QObject):
             if not ok2:
                 err = kernel32.GetLastError()
                 msg = f"Alt+Shift+{key_char.upper()} 穿透模式快捷鍵註冊失敗 (Win32 Error: {err})，可能已被其他程式佔用"
-                print(f"[Hotkey Windows] {msg}")
+                logger.warning(f"[Hotkey Windows] {msg}")
                 self.hotkey_failed.emit(msg)
 
             msg = wintypes.MSG()
@@ -100,14 +102,14 @@ class GlobalHotkeyManager(QObject):
             self._running = True
             self.toggle_registered = True
             self.clickthrough_registered = True
-            print(f"[Hotkey macOS] Hotkeys registered via pynput for key '{key_char}'.")
+            logger.info(f"[Hotkey macOS] Hotkeys registered via pynput for key '{key_char}'.")
         except ImportError:
             msg = "macOS 全域快捷鍵需要 pynput 模組支援，請執行 pip install pynput，並確保於系統設定授予輔助使用 (Accessibility) 權限。"
-            print(f"[Hotkey macOS] {msg}")
+            logger.warning(f"[Hotkey macOS] {msg}")
             self.hotkey_failed.emit(msg)
         except Exception as e:
             msg = f"macOS 快捷鍵監聽啟動失敗: {e}。請確認已開啟輔助使用權限。"
-            print(f"[Hotkey macOS] {msg}")
+            logger.error(f"[Hotkey macOS] {msg}", exc_info=True)
             self.hotkey_failed.emit(msg)
 
     def stop(self):

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Optional
 
 from core.providers.base import BaseProvider, UsageMetrics
+from core.logger import logger
 
 def _parse_iso_datetime(dt_val: Optional[str]) -> Optional[datetime]:
     if not dt_val:
@@ -66,10 +67,15 @@ class ClaudeProvider(BaseProvider):
                 raw_json = json.loads(resp.read().decode("utf-8"))
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
+            logger.warning(f"[ClaudeProvider] HTTP error: {e.code}")
             msg = "憑證過期，請重新登入 claude" if e.code == 401 else f"連線錯誤 HTTP {e.code}"
             return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id, last_updated_time=now_str, error=msg)
         except Exception as e:
-            return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id, last_updated_time=now_str, error=f"連線失敗: {str(e)[:30]}")
+            logger.error(f"[ClaudeProvider] Error fetching usage: {e}", exc_info=True)
+            err_msg = str(e).strip().replace("\r", " ").replace("\n", " ")
+            if len(err_msg) > 60:
+                err_msg = err_msg[:57] + "..."
+            return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id, last_updated_time=now_str, error=f"連線失敗: {err_msg}")
 
     def _parse_response(self, data: dict, now_str: str) -> UsageMetrics:
         five_hour = data.get("five_hour") or {}

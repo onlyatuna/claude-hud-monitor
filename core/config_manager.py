@@ -2,14 +2,16 @@ import json
 import os
 import sys
 
+from core.logger import logger
+
 DEFAULT_CONFIG = {
     "window_x": None,
     "window_y": None,
     "layout_mode": "vertical",  # "vertical" or "horizontal"
-    "vertical_width": 270,
-    "vertical_height": 205,
-    "horizontal_width": 460,
-    "horizontal_height": 110,
+    "vertical_width": 280,
+    "vertical_height": 410,
+    "horizontal_width": 690,
+    "horizontal_height": 145,
     "always_on_top": True,
     "opacity": 0.88,
     "click_through": False,
@@ -64,14 +66,25 @@ class ConfigManager:
                     saved = json.load(f)
                     self.data.update(saved)
             except Exception as e:
-                print(f"[Config] Error loading config: {e}")
+                logger.error(f"[Config] Error loading config from {self.path}: {e}", exc_info=True)
 
     def save(self):
+        cfg_dir = os.path.dirname(self.path)
+        os.makedirs(cfg_dir, exist_ok=True)
+        temp_path = f"{self.path}.{os.getpid()}.tmp"
         try:
-            with open(self.path, "w", encoding="utf-8") as f:
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, indent=2, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temp_path, self.path)
         except Exception as e:
-            print(f"[Config] Error saving config: {e}")
+            logger.error(f"[Config] Error saving config to {self.path}: {e}", exc_info=True)
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def get(self, key, default=None):
         return self.data.get(key, default)

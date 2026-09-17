@@ -1,6 +1,8 @@
 import sys
 import os
 
+from core.logger import logger
+
 APP_NAME = "ClaudeHUDMonitor"
 RUN_KEY_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
@@ -39,7 +41,7 @@ def set_autostart(enable: bool) -> bool:
                         pass
                 return True
         except Exception as e:
-            print(f"[AutoStart Windows] Error: {e}")
+            logger.error(f"[AutoStart Windows] Error setting autostart: {e}", exc_info=True)
             return False
     elif sys.platform == "darwin":
         try:
@@ -75,6 +77,6 @@ def set_autostart(enable: bool) -> bool:
                     os.remove(plist_path)
             return True
         except Exception as e:
-            print(f"[AutoStart macOS] Error: {e}")
+            logger.error(f"[AutoStart macOS] Error setting autostart: {e}", exc_info=True)
             return False
     return False

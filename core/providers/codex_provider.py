@@ -6,6 +6,20 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.providers.base import BaseProvider, UsageMetrics
+from core.logger import logger
+
+def _parse_timestamp(ts) -> Optional[datetime]:
+    if ts is None:
+        return None
+    try:
+        val = float(ts)
+        # 13-digit millisecond timestamp (e.g. > 1e11) handling
+        if val > 1e11:
+            val /= 1000.0
+        return datetime.fromtimestamp(val, tz=timezone.utc)
+    except Exception as e:
+        logger.warning(f"[CodexProvider] Timestamp parse error for '{ts}': {e}")
+        return None
 
 class CodexProvider(BaseProvider):
     provider_id = "codex"
@@ -61,6 +75,7 @@ class CodexProvider(BaseProvider):
                 raw_json = json.loads(resp.read().decode("utf-8"))
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
+            logger.warning(f"[CodexProvider] HTTP error: {e.code}")
             if e.code == 401:
                 return UsageMetrics(
                     provider_name="OpenAI Codex",
@@ -75,11 +90,15 @@ class CodexProvider(BaseProvider):
                 error=f"API 錯誤: HTTP {e.code}"
             )
         except Exception as e:
+            logger.error(f"[CodexProvider] Error fetching usage: {e}", exc_info=True)
+            err_msg = str(e).strip().replace("\r", " ").replace("\n", " ")
+            if len(err_msg) > 60:
+                err_msg = err_msg[:57] + "..."
             return UsageMetrics(
                 provider_name="OpenAI Codex",
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error=f"連線失敗: {str(e)[:30]}"
+                error=f"連線失敗: {err_msg}"
             )
 
     def _parse_response(self, data: dict, now_str: str) -> UsageMetrics:
@@ -91,12 +110,12 @@ class CodexProvider(BaseProvider):
         # 5-hour rolling usage percent
         s_used_pct = float(primary.get("used_percent") or 0.0)
         s_reset_ts = primary.get("reset_at")
-        s_reset_dt = datetime.fromtimestamp(s_reset_ts, tz=timezone.utc) if s_reset_ts else None
+        s_reset_dt = _parse_timestamp(s_reset_ts)
 
         # Weekly 7-day rolling usage percent
         w_used_pct = float(secondary.get("used_percent") or 0.0)
         w_reset_ts = secondary.get("reset_at")
-        w_reset_dt = datetime.fromtimestamp(w_reset_ts, tz=timezone.utc) if w_reset_ts else None
+        w_reset_dt = _parse_timestamp(w_reset_ts)
 
         # Model and plan
         plan = data.get("plan_type", "Plus").title()

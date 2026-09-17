@@ -12,8 +12,15 @@ from PySide6.QtGui import QCursor, QGuiApplication
 from core.providers import PROVIDERS, UsageMetrics
 from core.config_manager import ConfigManager
 from core.autostart import is_autostart_enabled, set_autostart
+from core.logger import logger, open_log_dir
 from ui.styles import get_hud_stylesheet
 from ui.provider_card import ProviderCardWidget
+
+MIN_HORIZ_W, MIN_HORIZ_H = 540, 125
+DEF_HORIZ_W, DEF_HORIZ_H = 690, 145
+
+MIN_VERT_W, MIN_VERT_H = 250, 320
+DEF_VERT_W, DEF_VERT_H = 280, 410
 
 if sys.platform == "win32":
     import ctypes
@@ -140,14 +147,25 @@ class HUDWindow(QWidget):
         self.time_label.setObjectName("HeaderStatus")
 
     def _clear_layout(self, layout):
+        keep_widgets = {
+            getattr(self, "status_dot", None),
+            getattr(self, "title_label", None),
+            getattr(self, "ghost_label", None),
+            getattr(self, "layout_toggle_btn", None),
+            getattr(self, "time_label", None),
+            *getattr(self, "cards", {}).values()
+        }
         while layout.count():
             item = layout.takeAt(0)
             widget = item.widget()
             if widget:
                 widget.setParent(None)
+                if widget not in keep_widgets:
+                    widget.deleteLater()
             sub_layout = item.layout()
             if sub_layout:
                 self._clear_layout(sub_layout)
+                sub_layout.deleteLater()
 
     def _apply_layout_mode(self, mode: str, initial=False):
         self.config.set("layout_mode", mode)
@@ -166,11 +184,14 @@ class HUDWindow(QWidget):
 
         if mode == "horizontal":
             # Horizontal: 3 side-by-side columns
-            self.setMinimumSize(540, 125)
-            if not initial:
-                w = self.config.get("horizontal_width", 690)
-                h = self.config.get("horizontal_height", 145)
-                self.resize(w, h)
+            self.setMinimumSize(MIN_HORIZ_W, MIN_HORIZ_H)
+            w = self.config.get("horizontal_width", DEF_HORIZ_W)
+            h = self.config.get("horizontal_height", DEF_HORIZ_H)
+            if w < MIN_HORIZ_W:
+                w = DEF_HORIZ_W
+            if h < MIN_HORIZ_H:
+                h = DEF_HORIZ_H
+            self.resize(w, h)
 
             body_layout = QHBoxLayout()
             body_layout.setSpacing(8)
@@ -188,11 +209,14 @@ class HUDWindow(QWidget):
 
         else:
             # Vertical: 3 stacked rows
-            self.setMinimumSize(250, 320)
-            if not initial:
-                w = self.config.get("vertical_width", 280)
-                h = self.config.get("vertical_height", 410)
-                self.resize(w, h)
+            self.setMinimumSize(MIN_VERT_W, MIN_VERT_H)
+            w = self.config.get("vertical_width", DEF_VERT_W)
+            h = self.config.get("vertical_height", DEF_VERT_H)
+            if w < MIN_VERT_W:
+                w = DEF_VERT_W
+            if h < MIN_VERT_H:
+                h = DEF_VERT_H
+            self.resize(w, h)
 
             provider_ids = ["claude", "agy", "codex"]
             for i, pid in enumerate(provider_ids):
@@ -204,14 +228,6 @@ class HUDWindow(QWidget):
                     self.inner_layout.addWidget(h_div)
 
         if initial:
-            if mode == "horizontal":
-                w = self.config.get("horizontal_width", 690)
-                h = self.config.get("horizontal_height", 145)
-            else:
-                w = self.config.get("vertical_width", 280)
-                h = self.config.get("vertical_height", 410)
-            self.resize(w, h)
-
             x = self.config.get("window_x")
             y = self.config.get("window_y")
             self._restore_or_default_position(x, y, w, h)
@@ -468,11 +484,11 @@ class HUDWindow(QWidget):
             "window_y": pos.y()
         }
         if mode == "horizontal":
-            updates["horizontal_width"] = size.width()
-            updates["horizontal_height"] = size.height()
+            updates["horizontal_width"] = max(MIN_HORIZ_W, size.width())
+            updates["horizontal_height"] = max(MIN_HORIZ_H, size.height())
         else:
-            updates["vertical_width"] = size.width()
-            updates["vertical_height"] = size.height()
+            updates["vertical_width"] = max(MIN_VERT_W, size.width())
+            updates["vertical_height"] = max(MIN_VERT_H, size.height())
         self.config.set_many(updates)
 
     # ================= Context Menu =================
@@ -541,6 +557,9 @@ class HUDWindow(QWidget):
         autostart_act.triggered.connect(self._toggle_autostart)
 
         menu.addSeparator()
+
+        log_act = menu.addAction("📂 開啟記錄檔目錄 (Open Logs)")
+        log_act.triggered.connect(open_log_dir)
 
         reset_act = menu.addAction("📐 重設預設尺寸與位置")
         reset_act.triggered.connect(self._reset_geometry)

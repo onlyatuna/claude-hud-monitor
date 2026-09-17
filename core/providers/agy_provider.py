@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.providers.base import BaseProvider, UsageMetrics
+from core.logger import logger
 
 class AgyProvider(BaseProvider):
     provider_id = "agy"
@@ -16,17 +17,23 @@ class AgyProvider(BaseProvider):
     SETTINGS_PATH = os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
 
     def _find_agy_binary(self) -> Optional[str]:
-        # 1. PATH lookup
-        p = shutil.which("agy") or shutil.which("agy.exe")
-        if p and os.path.exists(p):
-            return p
+        # 1. PATH lookup (check agy, agy.exe, agy.cmd, agy.bat)
+        for name in ("agy", "agy.exe", "agy.cmd", "agy.bat"):
+            p = shutil.which(name)
+            if p and os.path.exists(p):
+                return p
         
         # 2. Windows default AppData
         if sys.platform == "win32":
             local_app = os.environ.get("LOCALAPPDATA", "")
-            cand = os.path.join(local_app, "agy", "bin", "agy.exe")
-            if os.path.exists(cand):
-                return cand
+            candidates = [
+                os.path.join(local_app, "agy", "bin", "agy.exe"),
+                os.path.join(local_app, "agy", "bin", "agy.cmd"),
+                os.path.join(local_app, "agy", "bin", "agy.bat"),
+            ]
+            for cand in candidates:
+                if os.path.exists(cand):
+                    return cand
         else:
             # 3. macOS / Linux default paths
             candidates = [
@@ -44,6 +51,7 @@ class AgyProvider(BaseProvider):
         agy_bin = self._find_agy_binary()
 
         if not agy_bin:
+            logger.warning("[AgyProvider] Antigravity CLI binary not found")
             return UsageMetrics(
                 provider_name="Antigravity",
                 provider_id=self.provider_id,
@@ -61,24 +69,43 @@ class AgyProvider(BaseProvider):
             if sys.platform == "win32":
                 # Avoid popping console window
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+                # Windows cannot directly execute .cmd or .bat via CreateProcessW without cmd.exe
+                if agy_bin.lower().endswith((".cmd", ".bat")):
+                    cmd = ["cmd.exe", "/c", agy_bin, "--output-format", "json", "--print", "/quota"]
+                else:
+                    cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
+            else:
+                cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
 
-            cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
             out = subprocess.check_output(cmd, **kwargs)
             raw = json.loads(out)
             return self._parse_agy_json(raw, now_str)
         except subprocess.TimeoutExpired:
+            logger.warning("[AgyProvider] Subprocess timed out after 8s")
             return UsageMetrics(
                 provider_name="Antigravity",
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
                 error="agy 配額查詢超時"
             )
-        except Exception as e:
+        except subprocess.CalledProcessError as e:
+            logger.error(f"[AgyProvider] CalledProcessError (code {e.returncode}): {e}")
             return UsageMetrics(
                 provider_name="Antigravity",
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error=f"配額取得失敗: {str(e)[:30]}"
+                error=f"指令執行錯誤 (代碼 {e.returncode})"
+            )
+        except Exception as e:
+            logger.error(f"[AgyProvider] Error fetching usage: {e}", exc_info=True)
+            err_msg = str(e).strip().replace("\r", " ").replace("\n", " ")
+            if len(err_msg) > 60:
+                err_msg = err_msg[:57] + "..."
+            return UsageMetrics(
+                provider_name="Antigravity",
+                provider_id=self.provider_id,
+                last_updated_time=now_str,
+                error=f"配額取得失敗: {err_msg}"
             )
 
     def _parse_agy_json(self, raw: dict, now_str: str) -> UsageMetrics:
