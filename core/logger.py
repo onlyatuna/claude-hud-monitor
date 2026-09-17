@@ -3,6 +3,7 @@ import sys
 import logging
 from logging.handlers import RotatingFileHandler
 import subprocess
+import threading
 
 logger = logging.getLogger("ClaudeHUD")
 
@@ -64,9 +65,21 @@ def setup_logging(level=logging.INFO) -> logging.Logger:
         if issubclass(exc_type, KeyboardInterrupt):
             sys.__excepthook__(exc_type, exc_value, exc_traceback)
             return
-        logger.critical("Unhandled exception:", exc_info=(exc_type, exc_value, exc_traceback))
+        logger.critical("Unhandled exception in main thread:", exc_info=(exc_type, exc_value, exc_traceback))
 
     sys.excepthook = handle_exception
+
+    if hasattr(threading, "excepthook"):
+        def handle_thread_exception(args):
+            if issubclass(args.exc_type, KeyboardInterrupt):
+                return
+            thread_name = args.thread.name if args.thread else "unknown"
+            logger.critical(
+                f"Unhandled exception in background thread '{thread_name}':",
+                exc_info=(args.exc_type, args.exc_value, args.exc_traceback)
+            )
+
+        threading.excepthook = handle_thread_exception
 
     return logger
 

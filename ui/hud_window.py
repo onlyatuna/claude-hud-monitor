@@ -168,7 +168,8 @@ class HUDWindow(QWidget):
                 sub_layout.deleteLater()
 
     def _apply_layout_mode(self, mode: str, initial=False):
-        self.config.set("layout_mode", mode)
+        if not initial:
+            self.config.set("layout_mode", mode)
         self._clear_layout(self.inner_layout)
 
         # Common Header
@@ -231,6 +232,36 @@ class HUDWindow(QWidget):
             x = self.config.get("window_x")
             y = self.config.get("window_y")
             self._restore_or_default_position(x, y, w, h)
+        else:
+            self._ensure_within_screen(w, h)
+
+    def _ensure_within_screen(self, w: int, h: int):
+        current_center = self.geometry().center()
+        target_screen = None
+        for screen in QGuiApplication.screens():
+            if screen.availableGeometry().contains(current_center):
+                target_screen = screen
+                break
+        if not target_screen:
+            target_screen = self.screen() or QGuiApplication.primaryScreen()
+
+        if target_screen:
+            avail = target_screen.availableGeometry()
+            cur_x = self.x()
+            cur_y = self.y()
+
+            if cur_x + w > avail.right():
+                cur_x = max(avail.left(), avail.right() - w)
+            if cur_x < avail.left():
+                cur_x = avail.left()
+
+            if cur_y + h > avail.bottom():
+                cur_y = max(avail.top(), avail.bottom() - h)
+            if cur_y < avail.top():
+                cur_y = avail.top()
+
+            self.move(cur_x, cur_y)
+            self._schedule_save_geometry()
 
     def _restore_or_default_position(self, x, y, w, h):
         is_visible = False
@@ -267,7 +298,7 @@ class HUDWindow(QWidget):
                     5000
                 )
             return
-        self.set_click_through(True)
+        self.set_click_through(True, notify=False)
 
     def toggle_layout_mode(self):
         cur = self.config.get("layout_mode", "horizontal")
@@ -352,10 +383,7 @@ class HUDWindow(QWidget):
             card.update_countdown()
 
     # ================= Click-Through Mode =================
-    def set_click_through(self, enable: bool):
-        self.config.set("click_through", enable)
-        self.ghost_label.setVisible(enable)
-
+    def _apply_native_click_through(self, enable: bool):
         # Cross-platform click-through handling
         if sys.platform == "win32" and user32:
             hwnd = int(self.winId())
@@ -370,11 +398,40 @@ class HUDWindow(QWidget):
                 hwnd, None, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED
             )
+        elif sys.platform == "darwin":
+            self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enable)
+            try:
+                import ctypes
+                import ctypes.util
+                objc_path = ctypes.util.find_library('objc')
+                if objc_path:
+                    objc = ctypes.cdll.LoadLibrary(objc_path)
+                    objc.objc_getClass.restype = ctypes.c_void_p
+                    objc.objc_getClass.argtypes = [ctypes.c_char_p]
+                    objc.sel_registerName.restype = ctypes.c_void_p
+                    objc.sel_registerName.argtypes = [ctypes.c_char_p]
+                    objc.objc_msgSend.restype = ctypes.c_void_p
+                    objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+                    view_ptr = ctypes.c_void_p(int(self.winId()))
+                    sel_window = objc.sel_registerName(b"window")
+                    window_ptr = objc.objc_msgSend(view_ptr, sel_window)
+                    if window_ptr:
+                        sel_setIgnoresMouseEvents = objc.sel_registerName(b"setIgnoresMouseEvents:")
+                        msg_send_bool = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool)(objc.objc_msgSend)
+                        msg_send_bool(window_ptr, sel_setIgnoresMouseEvents, enable)
+            except Exception as e:
+                logger.warning(f"[ClickThrough macOS] Failed to set ignoresMouseEvents: {e}")
         else:
-            # macOS / Linux native Qt event pass-through
+            # Linux native Qt event pass-through
             self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, enable)
 
-        if enable and self.tray_icon:
+    def set_click_through(self, enable: bool, notify: bool = True):
+        self.config.set("click_through", enable)
+        self.ghost_label.setVisible(enable)
+        self._apply_native_click_through(enable)
+
+        if enable and notify and self.tray_icon:
             self.tray_icon.showMessage(
                 "👻 滑鼠穿透模式已啟用",
                 "點擊將直接穿透 HUD。\n如需調整設定或移動，請按 Alt+Shift+C 或右鍵點擊系統匣圖示取消。",
@@ -577,6 +634,10 @@ class HUDWindow(QWidget):
         self.config.set("always_on_top", new_val)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, new_val)
         self.show()
+        if self.config.get("click_through", False):
+            self._apply_native_click_through(True)
+        if self.tray_icon:
+            self.tray_icon.update_menu_state()
 
     def _toggle_lock(self):
         new_val = not self.config.get("locked", False)
@@ -595,6 +656,8 @@ class HUDWindow(QWidget):
         new_val = not currently_enabled
         set_autostart(new_val)
         self.config.set("autostart", new_val)
+        if self.tray_icon:
+            self.tray_icon.update_menu_state()
 
     def _reset_geometry(self):
         mode = self.config.get("layout_mode", "horizontal")

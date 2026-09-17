@@ -43,6 +43,11 @@ class ProviderCardWidget(QWidget):
         self.badge.setObjectName("Badge")
         header.addWidget(self.badge)
 
+        self.badge2 = QLabel("")
+        self.badge2.setObjectName("Badge")
+        self.badge2.setVisible(False)
+        header.addWidget(self.badge2)
+
         layout.addLayout(header)
 
         # 2. Metric 1 (Session 5H)
@@ -114,11 +119,24 @@ class ProviderCardWidget(QWidget):
             self.m2_bar.setValue(0)
             self.m2_sub.setText("")
             self.badge.setText("OFFLINE")
+            self.badge.setVisible(True)
+            self.badge2.setVisible(False)
             return
 
         self.dot.setStyleSheet(f"color: {self.theme['color']}; font-size: 10px;")
         self.m1_sub.setStyleSheet("color: #64748b;")
         self.m2_sub.setStyleSheet("color: #64748b;")
+
+        # Reset sub labels before updating to prevent residual error messages
+        if data.metric1_subtext:
+            self.m1_sub.setText(data.metric1_subtext)
+        elif not data.metric1_reset:
+            self.m1_sub.setText("重設: --")
+
+        if data.metric2_subtext:
+            self.m2_sub.setText(data.metric2_subtext)
+        elif not data.metric2_reset:
+            self.m2_sub.setText("重設: --")
 
         # Metric 1
         self.m1_label.setText(data.metric1_title)
@@ -136,9 +154,24 @@ class ProviderCardWidget(QWidget):
         self.m2_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c2}; }}")
         self.m2_bar.setValue(int(min(100, max(0, data.metric2_val))))
 
-        # Badge
-        b_txt = data.badge1_text or data.badge2_text or "--"
-        self.badge.setText(b_txt)
+        # Badges
+        if data.badge1_text and data.badge2_text:
+            self.badge.setText(data.badge1_text)
+            self.badge.setVisible(True)
+            self.badge2.setText(data.badge2_text)
+            self.badge2.setVisible(True)
+        elif data.badge1_text:
+            self.badge.setText(data.badge1_text)
+            self.badge.setVisible(True)
+            self.badge2.setVisible(False)
+        elif data.badge2_text:
+            self.badge.setText(data.badge2_text)
+            self.badge.setVisible(True)
+            self.badge2.setVisible(False)
+        else:
+            self.badge.setText("--")
+            self.badge.setVisible(True)
+            self.badge2.setVisible(False)
 
         self.update_countdown()
 
@@ -149,6 +182,8 @@ class ProviderCardWidget(QWidget):
         if self.current_metrics.metric1_reset:
             s1 = BaseProvider.format_countdown(self.current_metrics.metric1_reset)
             self.m1_sub.setText(f"重設於: {s1}")
+        elif self.current_metrics.metric1_subtext:
+            self.m1_sub.setText(self.current_metrics.metric1_subtext)
 
         if self.current_metrics.metric2_reset:
             s2 = BaseProvider.format_countdown(self.current_metrics.metric2_reset)

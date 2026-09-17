@@ -13,9 +13,6 @@ class AgyProvider(BaseProvider):
     provider_id = "agy"
     display_name = "AGY"
 
-    TOKEN_PATH = os.path.expanduser("~/.gemini/antigravity-cli/antigravity-oauth-token")
-    SETTINGS_PATH = os.path.expanduser("~/.gemini/antigravity-cli/settings.json")
-
     def _find_agy_binary(self) -> Optional[str]:
         # 1. PATH lookup (check agy, agy.exe, agy.cmd, agy.bat)
         for name in ("agy", "agy.exe", "agy.cmd", "agy.bat"):
@@ -70,15 +67,34 @@ class AgyProvider(BaseProvider):
                 # Avoid popping console window
                 kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 # Windows cannot directly execute .cmd or .bat via CreateProcessW without cmd.exe
+                # Protect against cmd.exe quote-stripping when paths contain whitespace
                 if agy_bin.lower().endswith((".cmd", ".bat")):
-                    cmd = ["cmd.exe", "/c", agy_bin, "--output-format", "json", "--print", "/quota"]
+                    inner_cmd = subprocess.list2cmdline([agy_bin, "--output-format", "json", "--print", "/quota"])
+                    cmd = f'cmd.exe /c "{inner_cmd}"'
                 else:
                     cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
             else:
                 cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
 
             out = subprocess.check_output(cmd, **kwargs)
-            raw = json.loads(out)
+
+            # Resilient JSON parsing: handle potential prefixes/banners from CLI output
+            raw = None
+            out_trimmed = out.strip()
+            if out_trimmed.startswith("{") and out_trimmed.endswith("}"):
+                try:
+                    raw = json.loads(out_trimmed)
+                except Exception:
+                    pass
+            if raw is None:
+                start_idx = out.find("{")
+                end_idx = out.rfind("}")
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    json_str = out[start_idx:end_idx + 1]
+                    raw = json.loads(json_str)
+                else:
+                    raw = json.loads(out)
+
             return self._parse_agy_json(raw, now_str)
         except subprocess.TimeoutExpired:
             logger.warning("[AgyProvider] Subprocess timed out after 8s")

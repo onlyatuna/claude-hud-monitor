@@ -7,7 +7,7 @@ cd "$DIR"
 
 echo "=== Installing dependencies ==="
 python3 -m pip install --upgrade pip
-pip install PySide6 pyinstaller pillow
+pip install -r requirements.txt
 
 echo "=== Checking macOS ICNS icon ==="
 if [ ! -f "assets/app_icon.icns" ]; then

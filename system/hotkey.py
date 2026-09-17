@@ -1,5 +1,6 @@
 import sys
 import threading
+import time
 from PySide6.QtCore import QObject, Signal
 
 from core.logger import logger
@@ -14,6 +15,7 @@ class GlobalHotkeyManager(QObject):
         self._thread = None
         self._thread_id = None
         self._running = False
+        self._ready_event = threading.Event()
         self.toggle_registered = False
         self.clickthrough_registered = False
 
@@ -46,11 +48,22 @@ class GlobalHotkeyManager(QObject):
         user32.UnregisterHotKey.restype = wintypes.BOOL
         user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
         user32.PostThreadMessageW.restype = wintypes.BOOL
+        user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+        user32.GetMessageW.restype = ctypes.c_int
+        user32.PeekMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT, wintypes.UINT]
+        user32.PeekMessageW.restype = wintypes.BOOL
 
         vk = ord(key_char.upper())
 
+        self._ready_event.clear()
+        self._running = True
+
         def message_loop():
             self._thread_id = kernel32.GetCurrentThreadId()
+
+            # Force creation of message queue before signaling ready
+            init_msg = wintypes.MSG()
+            user32.PeekMessageW(ctypes.byref(init_msg), None, 0, 0, 0)  # PM_NOREMOVE = 0
 
             ok1 = user32.RegisterHotKey(None, HOTKEY_ID_TOGGLE, MOD_ALT | MOD_NOREPEAT, vk)
             self.toggle_registered = bool(ok1)
@@ -68,9 +81,18 @@ class GlobalHotkeyManager(QObject):
                 logger.warning(f"[Hotkey Windows] {msg}")
                 self.hotkey_failed.emit(msg)
 
+            self._ready_event.set()
+
             msg = wintypes.MSG()
             try:
-                while self._running and user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+                while self._running:
+                    ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+                    if ret <= 0:
+                        if ret == -1:
+                            err = kernel32.GetLastError()
+                            logger.error(f"[Hotkey Windows] GetMessageW failed with error {err}")
+                        break
+
                     if msg.message == WM_HOTKEY:
                         if msg.wParam == HOTKEY_ID_TOGGLE:
                             self.hotkey_triggered.emit()
@@ -84,9 +106,10 @@ class GlobalHotkeyManager(QObject):
                 if self.clickthrough_registered:
                     user32.UnregisterHotKey(None, HOTKEY_ID_CLICKTHROUGH)
 
-        self._running = True
         self._thread = threading.Thread(target=message_loop, daemon=True)
         self._thread.start()
+        # Synchronously wait for message queue and hotkey registration to complete
+        self._ready_event.wait(timeout=1.5)
 
     def _start_macos(self, key_char):
         # macOS implementation: attempt using pynput if installed, else inform user
@@ -116,10 +139,16 @@ class GlobalHotkeyManager(QObject):
         if not self._running:
             return
         self._running = False
-        if sys.platform == "win32" and self._thread_id:
-            import ctypes
-            WM_QUIT = 0x0012
-            ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
+        if sys.platform == "win32":
+            # Wait briefly if thread is still initializing
+            self._ready_event.wait(timeout=0.5)
+            if self._thread_id:
+                import ctypes
+                WM_QUIT = 0x0012
+                for _ in range(5):
+                    if ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0):
+                        break
+                    time.sleep(0.05)
         elif sys.platform == "darwin" and hasattr(self, "_listener") and self._listener:
             try:
                 self._listener.stop()

@@ -74,6 +74,11 @@ def set_autostart(enable: bool) -> bool:
                     f.write(plist_content)
             else:
                 if os.path.exists(plist_path):
+                    try:
+                        import subprocess
+                        subprocess.run(["launchctl", "unload", plist_path], capture_output=True)
+                    except Exception:
+                        pass
                     os.remove(plist_path)
             return True
         except Exception as e:

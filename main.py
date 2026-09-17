@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, qInstallMessageHandler, QtMsgType
 from core.logger import setup_logging, logger
 from core.config_manager import ConfigManager
 from ui.hud_window import HUDWindow
-from ui.tray_icon import HUDTrayIcon
+from ui.tray_icon import HUDTrayIcon, get_app_icon
 from system.hotkey import GlobalHotkeyManager
 
 def qt_message_handler(mode, context, message):
@@ -32,6 +32,13 @@ def main():
     logger.info("=== Claude HUD Monitor starting ===")
     logger.info(f"Python version: {sys.version}, Platform: {sys.platform}")
 
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ClaudeHUD.Monitor.App")
+        except Exception:
+            pass
+
     qInstallMessageHandler(qt_message_handler)
 
     # Enable High DPI scaling
@@ -39,11 +46,15 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    app_icon = get_app_icon()
+    app.setWindowIcon(app_icon)
+
     config = ConfigManager()
     logger.info(f"Loaded config from: {config.path}")
 
     # Create HUD Window
     hud = HUDWindow(config)
+    hud.setWindowIcon(app_icon)
     hud.show()
     logger.info("HUD window created and shown")
 

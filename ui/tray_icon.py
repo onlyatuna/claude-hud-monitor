@@ -110,6 +110,7 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.vert_act.setChecked(cur_layout == "vertical")
         self.clickthrough_act.setChecked(self.hud_window.config.get("click_through", False))
         self.aot_act.setChecked(self.hud_window.config.get("always_on_top", True))
+        self.autostart_act.setChecked(is_autostart_enabled())
 
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
@@ -120,3 +121,4 @@ class HUDTrayIcon(QSystemTrayIcon):
         new_val = not currently_enabled
         set_autostart(new_val)
         self.hud_window.config.set("autostart", new_val)
+        self.update_menu_state()
