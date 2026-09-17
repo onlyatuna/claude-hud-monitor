@@ -103,5 +103,8 @@ class HUDTrayIcon(QSystemTrayIcon):
     def _toggle_autostart(self):
         currently_enabled = is_autostart_enabled()
         new_val = not currently_enabled
-        set_autostart(new_val)
-        self.hud_window.config.set("autostart", new_val)
+        if set_autostart(new_val):
+            self.hud_window.config.set("autostart", new_val)
+        else:
+            self.showMessage("開機啟動", "設定失敗，請檢查系統權限")
+        self.autostart_act.setChecked(is_autostart_enabled())

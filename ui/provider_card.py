@@ -54,7 +54,7 @@ class ProviderCardWidget(QWidget):
         self.m1_label.setObjectName("MetricTitle")
         m1_hdr.addWidget(self.m1_label)
         m1_hdr.addStretch()
-        self.m1_val = QLabel("0%")
+        self.m1_val = QLabel("--")
         self.m1_val.setObjectName("MetricValue")
         self.m1_val.setStyleSheet("font-size: 14px;")
         m1_hdr.addWidget(self.m1_val)
@@ -81,7 +81,7 @@ class ProviderCardWidget(QWidget):
         self.m2_label.setObjectName("MetricTitle")
         m2_hdr.addWidget(self.m2_label)
         m2_hdr.addStretch()
-        self.m2_val = QLabel("0%")
+        self.m2_val = QLabel("--")
         self.m2_val.setObjectName("MetricValue")
         self.m2_val.setStyleSheet("font-size: 14px;")
         m2_hdr.addWidget(self.m2_val)
@@ -102,7 +102,8 @@ class ProviderCardWidget(QWidget):
     def update_metrics(self, data: UsageMetrics):
         self.current_metrics = data
 
-        if data.error:
+        self.setToolTip(data.error or "")
+        if data.error and not data.stale:
             self.dot.setStyleSheet("color: #ef4444; font-size: 10px;")
             self.m1_val.setText("ERR")
             self.m1_val.setStyleSheet("color: #ef4444; font-size: 13px;")
@@ -123,35 +124,38 @@ class ProviderCardWidget(QWidget):
         # Metric 1
         self.m1_label.setText(data.metric1_title)
         self.m1_val.setText(data.metric1_text)
-        c1 = get_progress_color(data.metric1_val)
+        c1 = get_progress_color(data.metric1_val) if data.metric1_val is not None else "#64748b"
         self.m1_val.setStyleSheet(f"color: {c1}; font-size: 14px;")
         self.m1_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c1}; }}")
-        self.m1_bar.setValue(int(min(100, max(0, data.metric1_val))))
+        self.m1_bar.setValue(int(min(100, max(0, data.metric1_val or 0))))
 
         # Metric 2
         self.m2_label.setText(data.metric2_title)
         self.m2_val.setText(data.metric2_text)
-        c2 = get_progress_color(data.metric2_val)
+        c2 = get_progress_color(data.metric2_val) if data.metric2_val is not None else "#64748b"
         self.m2_val.setStyleSheet(f"color: {c2}; font-size: 14px;")
         self.m2_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c2}; }}")
-        self.m2_bar.setValue(int(min(100, max(0, data.metric2_val))))
+        self.m2_bar.setValue(int(min(100, max(0, data.metric2_val or 0))))
 
         # Badge
         b_txt = data.badge1_text or data.badge2_text or "--"
         self.badge.setText(b_txt)
 
         self.update_countdown()
+        if data.stale:
+            self.dot.setStyleSheet("color: #f59e0b; font-size: 10px;")
+            self.badge.setText("STALE")
 
     def update_countdown(self):
-        if not self.current_metrics or self.current_metrics.error:
+        data = self.current_metrics
+        if not data or (data.error and not data.stale):
             return
-
-        if self.current_metrics.metric1_reset:
-            s1 = BaseProvider.format_countdown(self.current_metrics.metric1_reset)
-            self.m1_sub.setText(f"重設於: {s1}")
-
-        if self.current_metrics.metric2_reset:
-            s2 = BaseProvider.format_countdown(self.current_metrics.metric2_reset)
-            self.m2_sub.setText(f"重設於: {s2}")
-        elif self.current_metrics.metric2_subtext:
-            self.m2_sub.setText(self.current_metrics.metric2_subtext)
+        for index in (1, 2):
+            label = getattr(self, f"m{index}_sub")
+            reset = getattr(data, f"metric{index}_reset")
+            subtext = getattr(data, f"metric{index}_subtext")
+            label.setText(f"重設於: {BaseProvider.format_countdown(reset)}" if reset else (subtext or "重設於: --"))
+        if data.stale:
+            stamp = data.last_success.astimezone().strftime("%m/%d %H:%M:%S") if data.last_success else "--"
+            self.m1_sub.setText(f"舊資料 {stamp}")
+            self.m1_sub.setStyleSheet("color: #f59e0b;")

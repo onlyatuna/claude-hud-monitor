@@ -1,16 +1,17 @@
 import json
 import os
 import sys
+import tempfile
 
 DEFAULT_CONFIG = {
     "active_provider": "claude",  # "claude", "agy", "codex"
     "window_x": None,
     "window_y": None,
     "layout_mode": "vertical",  # "vertical" or "horizontal"
-    "vertical_width": 270,
-    "vertical_height": 205,
-    "horizontal_width": 460,
-    "horizontal_height": 110,
+    "vertical_width": 280,
+    "vertical_height": 410,
+    "horizontal_width": 690,
+    "horizontal_height": 145,
     "always_on_top": True,
     "opacity": 0.88,
     "click_through": False,
@@ -24,7 +25,7 @@ DEFAULT_CONFIG = {
 def get_config_path() -> str:
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     local_cfg = os.path.join(base_dir, "config.json")
-    if os.path.exists(local_cfg) or os.access(base_dir, os.W_OK):
+    if not getattr(sys, "frozen", False) and (os.path.exists(local_cfg) or os.access(base_dir, os.W_OK)):
         return local_cfg
     
     if sys.platform == "win32":
@@ -39,8 +40,8 @@ def get_config_path() -> str:
     return os.path.join(cfg_dir, "config.json")
 
 class ConfigManager:
-    def __init__(self):
-        self.path = get_config_path()
+    def __init__(self, path=None):
+        self.path = os.fspath(path) if path is not None else get_config_path()
         self.data = dict(DEFAULT_CONFIG)
         self.load()
 
@@ -54,15 +55,31 @@ class ConfigManager:
                 print(f"[Config] Error loading config: {e}")
 
     def save(self):
+        # Atomic replacement keeps the previous settings intact on write failure.
+        temporary = None
         try:
-            with open(self.path, "w", encoding="utf-8") as f:
+            directory = os.path.dirname(os.path.abspath(self.path))
+            os.makedirs(directory, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=directory,
+                                             prefix=".config-", suffix=".tmp", delete=False) as f:
+                temporary = f.name
                 json.dump(self.data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            print(f"[Config] Error saving config: {e}")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(temporary, self.path)
+        except OSError as e:
+            print(f"[Config] Error saving config: {type(e).__name__}")
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
 
     def get(self, key, default=None):
         return self.data.get(key, default)
 
+    def update(self, values):
+        if any(self.data.get(key) != value for key, value in values.items()):
+            self.data.update(values)
+            self.save()
+
     def set(self, key, value):
-        self.data[key] = value
-        self.save()
+        self.update({key: value})

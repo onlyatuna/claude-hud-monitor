@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
 from core.config_manager import ConfigManager
+from core.diagnostics import configure_logging
 from ui.hud_window import HUDWindow
 from ui.tray_icon import HUDTrayIcon
 from system.hotkey import GlobalHotkeyManager
@@ -21,6 +22,7 @@ def main():
     app.setQuitOnLastWindowClosed(False)
 
     config = ConfigManager()
+    configure_logging(config.path)
 
     # Create HUD Window
     hud = HUDWindow(config)
@@ -37,14 +39,19 @@ def main():
     if config.get("hotkey_enabled", True):
         hotkey.hotkey_triggered.connect(hud.toggle_visibility)
         hotkey.clickthrough_triggered.connect(hud.toggle_click_through)
+        hotkey.unavailable.connect(lambda message: tray.showMessage("快捷鍵", message))
         hotkey.start(key_char="C")
 
     def on_exit():
         hotkey.stop()
+        hud.refresh_controller.stop()
 
     app.aboutToQuit.connect(on_exit)
 
     sys.exit(app.exec())
 
 if __name__ == "__main__":
+    if "--smoke-test" in sys.argv:
+        from core.smoke_check import run
+        sys.exit(run())
     main()

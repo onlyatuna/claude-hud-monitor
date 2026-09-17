@@ -5,7 +5,7 @@ import urllib.error
 from datetime import datetime
 from typing import Optional
 
-from core.providers.base import BaseProvider, UsageMetrics
+from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
 
 class ClaudeProvider(BaseProvider):
     provider_id = "claude"
@@ -57,24 +57,32 @@ class ClaudeProvider(BaseProvider):
                 raw_json = json.loads(resp.read().decode("utf-8"))
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
-            msg = "憑證過期，請重新登入 claude" if e.code == 401 else f"連線錯誤 HTTP {e.code}"
-            return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id, last_updated_time=now_str, error=msg)
-        except Exception as e:
-            return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id, last_updated_time=now_str, error=f"連線失敗: {str(e)[:30]}")
+            code = "auth" if e.code == 401 else ("rate_limit" if e.code == 429 else "http")
+            message = "登入憑證已失效，請使用原 CLI 重新登入" if e.code == 401 else f"配額查詢 HTTP {e.code}"
+            return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id,
+                                last_updated_time=now_str, error=message, error_code=code,
+                                retry_after=retry_delay(e.headers.get("Retry-After")) if e.headers else None)
+        except (ValueError, TypeError):
+            return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id,
+                                last_updated_time=now_str, error="未取得有效配額資料", error_code="schema")
+        except Exception:
+            return UsageMetrics(provider_name="Claude Code", provider_id=self.provider_id,
+                                last_updated_time=now_str, error="配額連線失敗，將自動重試", error_code="network")
 
+    @safe_parse
     def _parse_response(self, data: dict, now_str: str) -> UsageMetrics:
         five_hour = data.get("five_hour") or {}
         seven_day = data.get("seven_day") or {}
         breakdown = data.get("seven_day_breakdown") or {}
         rows = breakdown.get("rows", [])
 
-        code_pct = 0
-        chat_pct = 0
+        code_pct = None
+        chat_pct = None
         for r in rows:
             if r.get("key") == "claude_code":
-                code_pct = r.get("percent", 0)
+                code_pct = percentage(r.get("percent"))
             elif r.get("key") == "chat":
-                chat_pct = r.get("percent", 0)
+                chat_pct = percentage(r.get("percent"))
 
         five_h_dt = None
         if five_hour.get("resets_at"):
@@ -90,22 +98,22 @@ class ClaudeProvider(BaseProvider):
             except Exception:
                 pass
 
-        s_val = float(five_hour.get("utilization") or 0.0)
-        w_val = float(seven_day.get("utilization") or 0.0)
+        s_val = percentage(five_hour.get("utilization"))
+        w_val = percentage(seven_day.get("utilization"))
 
         return UsageMetrics(
             provider_name="Claude Code",
             provider_id=self.provider_id,
             metric1_title="SESSION 5H",
             metric1_val=s_val,
-            metric1_text=f"{s_val:.0f}%",
+            metric1_text=percent_text(s_val),
             metric1_reset=five_h_dt,
             metric2_title="WEEKLY 7D",
             metric2_val=w_val,
-            metric2_text=f"{w_val:.0f}%",
+            metric2_text=percent_text(w_val),
             metric2_reset=seven_d_dt,
-            badge1_text=f"Code: {code_pct}%",
-            badge2_text=f"Chat: {chat_pct}%",
+            badge1_text=f"Code: {percent_text(code_pct)}",
+            badge2_text=f"Chat: {percent_text(chat_pct)}",
             last_updated_time=now_str,
-            error=None
+            error="未取得有效配額資料" if s_val is None and w_val is None else None
         )
