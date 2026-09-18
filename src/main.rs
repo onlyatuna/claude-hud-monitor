@@ -1,6 +1,6 @@
 // src/main.rs — Entry point for Claude HUD Monitor (Rust/egui port)
 
-#![windows_subsystem = "windows"] // Never show console window on Windows
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod config;
 mod providers;
@@ -130,6 +130,7 @@ fn main() -> eframe::Result {
         native_options,
         Box::new(move |cc| {
             // Configure CJK, Symbols & Monospace fonts
+            #[allow(unused_mut)]
             let mut fonts = egui::FontDefinitions::default();
             #[cfg(target_os = "windows")]
             {

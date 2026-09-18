@@ -37,7 +37,6 @@ pub struct HudApp {
 
     hotkey: Option<HotkeyManager>,
 
-    #[cfg(target_os = "windows")]
     hwnd: isize,
     #[cfg(target_os = "windows")]
     active_resize: Option<ActiveResize>,
@@ -103,7 +102,6 @@ impl HudApp {
             refresh_ctrl,
             last_heartbeat: Instant::now(),
             hotkey,
-            #[cfg(target_os = "windows")]
             hwnd: 0,
             #[cfg(target_os = "windows")]
             active_resize: None,

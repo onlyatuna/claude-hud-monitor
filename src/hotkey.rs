@@ -11,7 +11,9 @@
 // cross-thread GUI calls.
 
 use log::{info, warn};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::thread;
 
