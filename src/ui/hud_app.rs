@@ -799,7 +799,7 @@ fn init_win32_window_frame(hwnd: isize) {
         // 1. Prevent GDI from painting standard white window background brush
         SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
 
-        // 2. Subclass window to absorb WM_ERASEBKGND (0x0014)
+        // 2. Subclass window to absorb WM_ERASEBKGND (0x0014) and WM_NCPAINT (0x0085)
         unsafe extern "system" fn bg_subclass(
             h: isize,
             msg: u32,
@@ -811,6 +811,10 @@ fn init_win32_window_frame(hwnd: isize) {
             if msg == 0x0014 {
                 // WM_ERASEBKGND
                 return 1;
+            }
+            if msg == 0x0085 {
+                // WM_NCPAINT — prevent DWM from painting standard non-client caption elements
+                return 0;
             }
             DefSubclassProc(h, msg, w, l)
         }
@@ -844,10 +848,16 @@ fn init_win32_window_frame(hwnd: isize) {
             4,
         );
 
-        // 5. Ensure WS_THICKFRAME is NOT present to eliminate 8px non-client border offsets
+        // 5. Ensure WS_THICKFRAME and standard caption/minimize/maximize buttons are stripped
+        // to prevent Windows 11 DWM from rendering faint caption ghost buttons in the top right
+        const WS_CAPTION: i32 = 0x00C00000;
+        const WS_SYSMENU: i32 = 0x00080000;
+        const WS_MINIMIZEBOX: i32 = 0x00020000;
+        const WS_MAXIMIZEBOX: i32 = 0x00010000;
+        let unwanted = WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
         let style = GetWindowLongW(hwnd, GWL_STYLE);
-        if (style & WS_THICKFRAME) != 0 {
-            SetWindowLongW(hwnd, GWL_STYLE, style & !WS_THICKFRAME);
+        if (style & unwanted) != 0 {
+            SetWindowLongW(hwnd, GWL_STYLE, style & !unwanted);
             SetWindowPos(
                 hwnd,
                 0,
