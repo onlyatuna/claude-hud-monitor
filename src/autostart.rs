@@ -4,7 +4,7 @@
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use log::error;
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(target_os = "windows")]
 const APP_NAME: &str = "ClaudeHUDMonitor";
 
 /// Check if autostart is enabled for the current platform.
