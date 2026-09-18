@@ -57,9 +57,8 @@ fn windows_set(enable: bool) -> bool {
                     .unwrap_or_default();
                 key.set_value(APP_NAME, &exe).map_err(|e| error!("[AutoStart] {e}")).is_ok()
             } else {
-                key.delete_value(APP_NAME)
-                    .or_else(|_| Ok::<_, ()>(()))
-                    .is_ok()
+                let _ = key.delete_value(APP_NAME);
+                true
             }
         }
         Err(e) => {

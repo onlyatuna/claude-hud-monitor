@@ -1,6 +1,5 @@
-// src/main.rs — Entry point for Claude HUD Monitor (Rust/egui port)
-
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#![allow(clippy::upper_case_acronyms)]
 
 mod config;
 mod providers;
@@ -139,7 +138,7 @@ fn main() -> eframe::Result {
                 if let Ok(bytes) = std::fs::read(segoe_path) {
                     fonts.font_data.insert(
                         "segoe_ui".to_owned(),
-                        egui::FontData::from_owned(bytes).into(),
+                        egui::FontData::from_owned(bytes),
                     );
                     fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "segoe_ui".to_owned());
                 }
@@ -149,7 +148,7 @@ fn main() -> eframe::Result {
                 if let Ok(bytes) = std::fs::read(font_path) {
                     fonts.font_data.insert(
                         "microsoft_jhenghei".to_owned(),
-                        egui::FontData::from_owned(bytes).into(),
+                        egui::FontData::from_owned(bytes),
                     );
                     fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().push("microsoft_jhenghei".to_owned());
                     fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().push("microsoft_jhenghei".to_owned());
@@ -160,7 +159,7 @@ fn main() -> eframe::Result {
                 if let Ok(bytes) = std::fs::read(segui_sym) {
                     fonts.font_data.insert(
                         "segoe_ui_symbol".to_owned(),
-                        egui::FontData::from_owned(bytes).into(),
+                        egui::FontData::from_owned(bytes),
                     );
                     fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().push("segoe_ui_symbol".to_owned());
                     fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().push("segoe_ui_symbol".to_owned());
@@ -171,7 +170,7 @@ fn main() -> eframe::Result {
                 if let Ok(bytes) = std::fs::read(consolas_path) {
                     fonts.font_data.insert(
                         "consolas".to_owned(),
-                        egui::FontData::from_owned(bytes).into(),
+                        egui::FontData::from_owned(bytes),
                     );
                     fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "consolas".to_owned());
                 }

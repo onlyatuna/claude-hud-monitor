@@ -223,16 +223,16 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
                     .and_then(|s| DateTime::parse_from_rfc3339(&s.replace('Z', "+00:00")).ok())
                     .map(|dt| dt.with_timezone(&Utc));
 
-                if b_id.contains("5h") || b_window.contains("5h") {
-                    if m1_used_pct.map_or(true, |cur| used_pct > cur) {
-                        m1_used_pct = Some(used_pct);
-                        m1_reset_dt = reset_dt;
-                    }
-                } else if b_id.contains("week") || b_window.contains("week") {
-                    if m2_used_pct.map_or(true, |cur| used_pct > cur) {
-                        m2_used_pct = Some(used_pct);
-                        m2_reset_dt = reset_dt;
-                    }
+                if (b_id.contains("5h") || b_window.contains("5h"))
+                    && m1_used_pct.is_none_or(|cur| used_pct > cur)
+                {
+                    m1_used_pct = Some(used_pct);
+                    m1_reset_dt = reset_dt;
+                } else if (b_id.contains("week") || b_window.contains("week"))
+                    && m2_used_pct.is_none_or(|cur| used_pct > cur)
+                {
+                    m2_used_pct = Some(used_pct);
+                    m2_reset_dt = reset_dt;
                 }
             }
         } else if g_name.contains("claude") || g_name.contains("gpt") {

@@ -281,7 +281,7 @@ impl eframe::App for HudApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count = self.frame_count.wrapping_add(1);
         #[cfg(target_os = "windows")]
-        if self.frame_count == 5 || (self.frame_count > 5 && self.frame_count % 60 == 0) {
+        if self.frame_count == 5 || (self.frame_count > 5 && self.frame_count.is_multiple_of(60)) {
             trim_working_set();
         }
 
@@ -502,17 +502,17 @@ impl eframe::App for HudApp {
 
                     if let Some(dir) = hovered_resize_edge {
                         set_resize_cursor(ctx, dir);
-                        if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
-                            if self.hwnd != 0 {
-                                if let (Some(cur_pos), Some(rect)) = (get_cursor_screen_pos(), get_window_rect(self.hwnd)) {
-                                    set_mouse_capture(self.hwnd);
-                                    self.active_resize = Some(ActiveResize {
-                                        direction: dir,
-                                        start_cursor: cur_pos,
-                                        start_rect: rect,
-                                    });
-                                    ctx.request_repaint();
-                                }
+                        if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+                            && self.hwnd != 0
+                        {
+                            if let (Some(cur_pos), Some(rect)) = (get_cursor_screen_pos(), get_window_rect(self.hwnd)) {
+                                set_mouse_capture(self.hwnd);
+                                self.active_resize = Some(ActiveResize {
+                                    direction: dir,
+                                    start_cursor: cur_pos,
+                                    start_rect: rect,
+                                });
+                                ctx.request_repaint();
                             }
                         }
                     }
@@ -590,18 +590,18 @@ impl eframe::App for HudApp {
                 let is_hovered = ctx.input(|i| i.pointer.hover_pos()).map(|p| outer_rect.contains(p)).unwrap_or(false);
 
                 // Native smooth DWM drag-to-move immediately upon left mouse button pressed
-                if is_hovered && hovered_resize_edge.is_none() && !is_resizing && !mouse_over_toggle && !is_locked && !is_clickthrough {
-                    if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
-                        #[cfg(target_os = "windows")]
-                        if self.hwnd != 0 {
-                            native_drag_window(self.hwnd);
-                            let ppp = ctx.pixels_per_point();
-                            sync_window_position(self.hwnd, &self.config, ppp);
-                            ctx.request_repaint();
-                        }
-                        #[cfg(not(target_os = "windows"))]
-                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                if is_hovered && hovered_resize_edge.is_none() && !is_resizing && !mouse_over_toggle && !is_locked && !is_clickthrough
+                    && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
+                {
+                    #[cfg(target_os = "windows")]
+                    if self.hwnd != 0 {
+                        native_drag_window(self.hwnd);
+                        let ppp = ctx.pixels_per_point();
+                        sync_window_position(self.hwnd, &self.config, ppp);
+                        ctx.request_repaint();
                     }
+                    #[cfg(not(target_os = "windows"))]
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
 
                 if !is_clickthrough && drag_interact.double_clicked() {

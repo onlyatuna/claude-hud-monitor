@@ -183,7 +183,7 @@ fn render_badges_right_to_left(ui: &mut Ui, d: Option<&UsageMetrics>) {
             badge_label(ui, b1);
         }
         else {
-            let short = b1.split(':').last().unwrap_or(b1).trim();
+            let short = b1.split(':').next_back().unwrap_or(b1).trim();
             badge_label(ui, short);
         }
     } else if !b1.is_empty() {

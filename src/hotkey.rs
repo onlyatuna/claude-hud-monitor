@@ -63,12 +63,12 @@ impl HotkeyManager {
                 .name("hotkey-win32".to_owned())
                 .spawn(move || windows_hotkey_loop(t_flag, c_flag, tid_clone))
                 .map_err(|e| format!("Failed to start hotkey thread: {e}"))?;
-            return Ok(Self {
+            Ok(Self {
                 toggle_flag,
                 clickthrough_flag: ct_flag,
                 thread_id,
                 _thread: Some(handle),
-            });
+            })
         }
 
         #[cfg(not(target_os = "windows"))]

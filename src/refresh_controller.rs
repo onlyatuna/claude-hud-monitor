@@ -79,7 +79,7 @@ impl RefreshController {
         for id in ids {
             let state = self.states.get(&id).unwrap();
             let should_launch = !state.running
-                && state.due.map_or(true, |due| now >= due);
+                && state.due.is_none_or(|due| now >= due);
             if should_launch {
                 if let Some(provider) = providers.get(&id) {
                     self.launch(&id, Arc::clone(provider));
@@ -143,14 +143,9 @@ impl RefreshController {
         providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
     ) -> Vec<UsageMetrics> {
         let mut updates = Vec::new();
-        loop {
-            match self.result_rx.try_recv() {
-                Ok(item) => {
-                    if let Some(result) = self.complete(item, providers) {
-                        updates.push(result);
-                    }
-                }
-                Err(_) => break,
+        while let Ok(item) = self.result_rx.try_recv() {
+            if let Some(result) = self.complete(item, providers) {
+                updates.push(result);
             }
         }
         updates
