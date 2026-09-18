@@ -1,0 +1,51 @@
+name: CI
+
+# Run on every PR and direct push to main/master
+on:
+  push:
+    branches: [main, master, dev]
+    paths-ignore: ['**.md', '.gitignore']
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  check:
+    name: Check & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libx11-dev libxrandr-dev \
+            libxcursor-dev libxi-dev libgl1-mesa-dev pkg-config
+
+      - name: Check (cargo check)
+        run: cargo check --all-features
+
+      - name: Lint (clippy)
+        run: cargo clippy -- -D warnings
+        continue-on-error: true   # advisory only
+
+      - name: Format (rustfmt)
+        run: cargo fmt --check
+        continue-on-error: true   # advisory only
+
+      - name: Build debug
+        run: cargo build

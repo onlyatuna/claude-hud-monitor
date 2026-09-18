@@ -1,0 +1,1238 @@
+// src/ui/hud_app.rs — Main egui HUD window application
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use egui::{Color32, RichText};
+use log::info;
+
+use crate::config::{Config, ConfigManager};
+use crate::hotkey::HotkeyManager;
+use crate::providers::{ClaudeProvider, AgyProvider, CodexProvider, Provider, UsageMetrics, PROVIDER_IDS};
+use crate::refresh_controller::RefreshController;
+use super::native_menu::{self, MenuAction};
+use super::provider_card::render_provider_card;
+use super::styles::{
+    apply_hud_visuals, BG_DARK, BORDER_COLOR, TEXT_MUTED, TEXT_SECONDARY,
+    COLOR_GREEN, COLOR_BLUE, COLOR_AMBER,
+};
+
+#[cfg(target_os = "windows")]
+#[derive(Clone, Copy, Debug)]
+struct ActiveResize {
+    direction: egui::viewport::ResizeDirection,
+    start_cursor: egui::Pos2,
+    start_rect: [i32; 4], // left, top, width, height (physical pixels)
+}
+
+pub struct HudApp {
+    config: Arc<Mutex<Config>>,
+    metrics: HashMap<String, UsageMetrics>,
+    providers_arc: HashMap<String, Arc<dyn Provider + Send + Sync>>,
+    refresh_ctrl: Arc<Mutex<RefreshController>>,
+
+    /// Last heartbeat for sleep-resume detection
+    last_heartbeat: Instant,
+
+    hotkey: Option<HotkeyManager>,
+
+    #[cfg(target_os = "windows")]
+    hwnd: isize,
+    #[cfg(target_os = "windows")]
+    active_resize: Option<ActiveResize>,
+
+    is_visible: bool,
+    toggle_btn_rect: egui::Rect,
+    tray_attempts: u32,
+    frame_count: u32,
+
+    // Ghost icon texture handle
+    ghost_texture: Option<egui::TextureHandle>,
+    // Tray icon kept alive (Windows/macOS)
+    #[cfg(not(target_os = "linux"))]
+    _tray: Option<tray_icon::TrayIcon>,
+}
+
+impl HudApp {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        config: Arc<Mutex<Config>>,
+        _providers: Vec<Box<dyn Provider + Send>>,
+        refresh_ctrl: Arc<Mutex<RefreshController>>,
+    ) -> Self {
+        apply_hud_visuals(&cc.egui_ctx);
+
+        // Build Arc-wrapped providers and register them with the controller
+        let providers_arc: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::from([
+            ("claude".to_owned(), Arc::new(ClaudeProvider::new()) as Arc<dyn Provider + Send + Sync>),
+            ("agy".to_owned(),    Arc::new(AgyProvider::new())    as Arc<dyn Provider + Send + Sync>),
+            ("codex".to_owned(),  Arc::new(CodexProvider::new())  as Arc<dyn Provider + Send + Sync>),
+        ]);
+
+        {
+            let mut ctrl = refresh_ctrl.lock().unwrap();
+            for (id, provider) in &providers_arc {
+                ctrl.states.insert(id.clone(), Default::default());
+                ctrl.launch(id, Arc::clone(provider));
+            }
+        }
+
+        // Hotkey manager
+        let hotkey_enabled = config.lock().unwrap().hotkey_enabled;
+        let hotkey = if hotkey_enabled {
+            match HotkeyManager::start() {
+                Ok(hk) => Some(hk),
+                Err(e) => {
+                    log::warn!("[HudApp] Hotkey registration failed: {}", e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Tray icon is built lazily in update() when the event loop is active
+        #[cfg(not(target_os = "linux"))]
+        let _tray = None;
+
+        Self {
+            config,
+            metrics: HashMap::new(),
+            providers_arc,
+            refresh_ctrl,
+            last_heartbeat: Instant::now(),
+            hotkey,
+            #[cfg(target_os = "windows")]
+            hwnd: 0,
+            #[cfg(target_os = "windows")]
+            active_resize: None,
+            is_visible: true,
+            toggle_btn_rect: egui::Rect::NOTHING,
+            tray_attempts: 0,
+            frame_count: 0,
+            ghost_texture: None,
+            #[cfg(not(target_os = "linux"))]
+            _tray,
+        }
+    }
+
+    /// Toggle layout between horizontal and vertical, updating window size immediately
+    pub fn toggle_layout(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "windows")]
+        {
+            self.active_resize = None;
+        }
+        let mut cfg = self.config.lock().unwrap();
+        let new_mode = if cfg.layout_mode == "horizontal" {
+            "vertical"
+        } else {
+            "horizontal"
+        };
+        cfg.layout_mode = new_mode.to_owned();
+
+        let (w, h, min_w, min_h) = if new_mode == "horizontal" {
+            (
+                (cfg.horizontal_width as f32).max(540.0),
+                (cfg.horizontal_height as f32).max(130.0),
+                540.0,
+                130.0,
+            )
+        } else {
+            (
+                (cfg.vertical_width as f32).max(250.0),
+                (cfg.vertical_height as f32).max(320.0),
+                250.0,
+                320.0,
+            )
+        };
+
+        ConfigManager::save(&cfg);
+        drop(cfg);
+
+        #[cfg(target_os = "windows")]
+        if self.hwnd != 0 {
+            if let Some([left, top, _, _]) = get_window_rect(self.hwnd) {
+                let ppp = ctx.pixels_per_point();
+                let phys_w = (w * ppp).round() as i32;
+                let phys_h = (h * ppp).round() as i32;
+                set_window_rect(self.hwnd, left, top, phys_w, phys_h);
+            }
+        }
+
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(min_w, min_h)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+    }
+
+    /// Handle menu actions dispatched from the native Win32 context menu
+    pub fn handle_menu_action(&mut self, action: MenuAction, ctx: &egui::Context) {
+        match action {
+            MenuAction::RefreshAll => {
+                self.refresh_ctrl.lock().unwrap().refresh(&self.providers_arc);
+            }
+            MenuAction::SetLayoutHorizontal => {
+                let cur = self.config.lock().unwrap().layout_mode.clone();
+                if cur != "horizontal" {
+                    self.toggle_layout(ctx);
+                }
+            }
+            MenuAction::SetLayoutVertical => {
+                let cur = self.config.lock().unwrap().layout_mode.clone();
+                if cur != "vertical" {
+                    self.toggle_layout(ctx);
+                }
+            }
+            MenuAction::ToggleClickThrough => {
+                let mut cfg = self.config.lock().unwrap();
+                cfg.click_through = !cfg.click_through;
+                let ct = cfg.click_through;
+                ConfigManager::save(&cfg);
+                drop(cfg);
+                ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
+                #[cfg(target_os = "windows")]
+                apply_win32_click_through(self.hwnd, ct);
+            }
+            MenuAction::ToggleAlwaysOnTop => {
+                let mut cfg = self.config.lock().unwrap();
+                cfg.always_on_top = !cfg.always_on_top;
+                let aot = cfg.always_on_top;
+                ConfigManager::save(&cfg);
+                let level = if aot {
+                    egui::viewport::WindowLevel::AlwaysOnTop
+                } else {
+                    egui::viewport::WindowLevel::Normal
+                };
+                ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+            }
+            MenuAction::ToggleLock => {
+                let mut cfg = self.config.lock().unwrap();
+                cfg.locked = !cfg.locked;
+                ConfigManager::save(&cfg);
+            }
+            MenuAction::SetOpacity(pct) => {
+                let mut cfg = self.config.lock().unwrap();
+                cfg.opacity = pct as f32 / 100.0;
+                ConfigManager::save(&cfg);
+            }
+            MenuAction::SetInterval(sec) => {
+                let mut cfg = self.config.lock().unwrap();
+                cfg.refresh_interval_sec = sec;
+                ConfigManager::save(&cfg);
+                self.refresh_ctrl.lock().unwrap().set_interval(sec);
+            }
+            MenuAction::ToggleAutostart => {
+                let cur = crate::autostart::is_autostart_enabled();
+                if crate::autostart::set_autostart(!cur) {
+                    self.config.lock().unwrap().autostart = !cur;
+                    ConfigManager::save(&self.config.lock().unwrap());
+                }
+            }
+            MenuAction::ResetGeometry => {
+                let mode = self.config.lock().unwrap().layout_mode.clone();
+                let (w, h) = if mode == "horizontal" {
+                    (690.0, 152.0)
+                } else {
+                    (280.0, 410.0)
+                };
+                {
+                    let mut cfg = self.config.lock().unwrap();
+                    if mode == "horizontal" {
+                        cfg.horizontal_width = 690;
+                        cfg.horizontal_height = 152;
+                    } else {
+                        cfg.vertical_width = 280;
+                        cfg.vertical_height = 410;
+                    }
+                    cfg.window_x = Some(400);
+                    cfg.window_y = Some(50);
+                    ConfigManager::save(&cfg);
+                }
+                #[cfg(target_os = "windows")]
+                if self.hwnd != 0 {
+                    let ppp = ctx.pixels_per_point();
+                    let phys_x = (400.0 * ppp).round() as i32;
+                    let phys_y = (50.0 * ppp).round() as i32;
+                    let phys_w = (w * ppp).round() as i32;
+                    let phys_h = (h * ppp).round() as i32;
+                    set_window_rect(self.hwnd, phys_x, phys_y, phys_w, phys_h);
+                }
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(400.0, 50.0)));
+            }
+            MenuAction::OpenLogs => {
+                crate::logger::open_log_dir();
+            }
+            MenuAction::ToggleHide => {
+                self.is_visible = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                #[cfg(target_os = "windows")]
+                trim_working_set();
+            }
+            MenuAction::Exit => {
+                std::process::exit(0);
+            }
+        }
+    }
+}
+
+impl eframe::App for HudApp {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0] // transparent window margin
+    }
+
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.frame_count = self.frame_count.wrapping_add(1);
+        #[cfg(target_os = "windows")]
+        if self.frame_count == 5 || (self.frame_count > 5 && self.frame_count % 60 == 0) {
+            trim_working_set();
+        }
+
+        // Drain worker results
+        let updates = {
+            let mut ctrl = self.refresh_ctrl.lock().unwrap();
+            ctrl.drain_results(&self.providers_arc)
+        };
+        for m in updates {
+            self.metrics.insert(m.provider_id.clone(), m);
+        }
+
+        // Poll for scheduled refreshes
+        {
+            let mut ctrl = self.refresh_ctrl.lock().unwrap();
+            ctrl.poll(&self.providers_arc);
+        }
+
+        // Sleep-resume detection
+        let now = Instant::now();
+        if now.duration_since(self.last_heartbeat) > Duration::from_secs(15) {
+            info!("[HudApp] Wake from sleep detected, triggering refresh");
+            let mut ctrl = self.refresh_ctrl.lock().unwrap();
+            ctrl.refresh(&self.providers_arc);
+        }
+        self.last_heartbeat = now;
+
+        // Hotkey polling
+        if let Some(hk) = &self.hotkey {
+            if hk.poll_toggle() {
+                self.is_visible = !self.is_visible;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.is_visible));
+                if self.is_visible {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
+            if hk.poll_clickthrough() {
+                let mut cfg = self.config.lock().unwrap();
+                cfg.click_through = !cfg.click_through;
+                let ct = cfg.click_through;
+                ConfigManager::save(&cfg);
+                drop(cfg);
+                ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
+                #[cfg(target_os = "windows")]
+                apply_win32_click_through(self.hwnd, ct);
+            }
+        }
+
+        // One-shot: apply stored click_through on first rendered frame (frame_count==2 means
+        // hwnd is also initialised above). Only fire once via the flag.
+        if self.frame_count == 2 {
+            let ct = self.config.lock().unwrap().click_through;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
+            #[cfg(target_os = "windows")]
+            apply_win32_click_through(self.hwnd, ct);
+        }
+
+        #[cfg(target_os = "windows")]
+        if self.hwnd == 0 {
+            self.hwnd = get_window_hwnd();
+            if self.hwnd != 0 {
+                init_win32_window_frame(self.hwnd);
+            }
+        }
+
+        // Lazy tray icon initialization — attempt exactly once when the window handle is ready.
+        // If Shell_NotifyIcon fails (e.g. Explorer not yet ready), tray-icon's built-in
+        // TaskbarCreated broadcast handler will automatically re-register the icon.
+        #[cfg(not(target_os = "linux"))]
+        if self._tray.is_none() && self.tray_attempts == 0 {
+            #[cfg(target_os = "windows")]
+            let ready = self.hwnd != 0;
+            #[cfg(not(target_os = "windows"))]
+            let ready = true;
+
+            if ready {
+                self.tray_attempts = 1;
+                self._tray = build_tray_icon();
+            }
+        }
+
+        // System tray event polling
+        #[cfg(not(target_os = "linux"))]
+        while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+            match event {
+                tray_icon::TrayIconEvent::Click { button: tray_icon::MouseButton::Left, button_state: tray_icon::MouseButtonState::Up, .. } => {
+                    self.is_visible = !self.is_visible;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.is_visible));
+                    if self.is_visible {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
+                }
+                tray_icon::TrayIconEvent::Click { button: tray_icon::MouseButton::Right, button_state: tray_icon::MouseButtonState::Up, .. } => {
+                    let cfg = self.config.lock().unwrap().clone();
+                    let is_as = crate::autostart::is_autostart_enabled();
+                    if let Some(action) = native_menu::show_native_context_menu(self.hwnd, &cfg, is_as) {
+                        self.handle_menu_action(action, ctx);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let layout_mode = self.config.lock().unwrap().layout_mode.clone();
+        let is_locked = self.config.lock().unwrap().locked;
+        let is_clickthrough = self.config.lock().unwrap().click_through;
+
+        // ══════════════════════════════════════════════════════════════
+        // Real-Time Smooth Drag-to-Resize Engine
+        // ══════════════════════════════════════════════════════════════
+        let screen_rect = ctx.screen_rect();
+        const RESIZE_MARGIN: f32 = 8.0;
+
+        let mut hovered_resize_edge = None;
+
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(resize) = self.active_resize {
+                // Keep the resize cursor active during the entire drag
+                set_resize_cursor(ctx, resize.direction);
+                hovered_resize_edge = Some(resize.direction);
+
+                if !is_lbutton_down() {
+                    // Drag finished: release mouse capture and persist geometry
+                    self.active_resize = None;
+                    if self.hwnd != 0 {
+                        release_mouse_capture();
+                        let ppp = ctx.pixels_per_point();
+                        sync_window_geometry(self.hwnd, &self.config, ppp);
+                    }
+                    ctx.request_repaint();
+                } else if self.hwnd != 0 {
+                    if let Some(cur_pos) = get_cursor_screen_pos() {
+                        let dx = (cur_pos.x - resize.start_cursor.x).round() as i32;
+                        let dy = (cur_pos.y - resize.start_cursor.y).round() as i32;
+
+                        let x0 = resize.start_rect[0];
+                        let y0 = resize.start_rect[1];
+                        let w0 = resize.start_rect[2];
+                        let h0 = resize.start_rect[3];
+
+                        let ppp = ctx.pixels_per_point();
+                        let (min_w, min_h) = if layout_mode == "horizontal" {
+                            ((540.0 * ppp).round() as i32, (130.0 * ppp).round() as i32)
+                        } else {
+                            ((250.0 * ppp).round() as i32, (320.0 * ppp).round() as i32)
+                        };
+
+                        let mut new_x = x0;
+                        let mut new_y = y0;
+                        let mut new_w = w0;
+                        let mut new_h = h0;
+
+                        use egui::viewport::ResizeDirection::*;
+                        match resize.direction {
+                            East => {
+                                new_w = (w0 + dx).max(min_w);
+                            }
+                            West => {
+                                new_w = (w0 - dx).max(min_w);
+                                new_x = x0 + (w0 - new_w);
+                            }
+                            South => {
+                                new_h = (h0 + dy).max(min_h);
+                            }
+                            North => {
+                                new_h = (h0 - dy).max(min_h);
+                                new_y = y0 + (h0 - new_h);
+                            }
+                            SouthEast => {
+                                new_w = (w0 + dx).max(min_w);
+                                new_h = (h0 + dy).max(min_h);
+                            }
+                            SouthWest => {
+                                new_w = (w0 - dx).max(min_w);
+                                new_x = x0 + (w0 - new_w);
+                                new_h = (h0 + dy).max(min_h);
+                            }
+                            NorthEast => {
+                                new_w = (w0 + dx).max(min_w);
+                                new_x = x0;
+                                new_h = (h0 - dy).max(min_h);
+                                new_y = y0 + (h0 - new_h);
+                            }
+                            NorthWest => {
+                                new_w = (w0 - dx).max(min_w);
+                                new_x = x0 + (w0 - new_w);
+                                new_h = (h0 - dy).max(min_h);
+                                new_y = y0 + (h0 - new_h);
+                            }
+                        }
+
+                        let cur_rect = get_window_rect(self.hwnd);
+                        if cur_rect != Some([new_x, new_y, new_w, new_h]) {
+                            set_window_rect(self.hwnd, new_x, new_y, new_w, new_h);
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+            } else if !is_locked && !is_clickthrough {
+                if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                    let left = pos.x <= screen_rect.left() + RESIZE_MARGIN;
+                    let right = pos.x >= screen_rect.right() - RESIZE_MARGIN;
+                    let top = pos.y <= screen_rect.top() + RESIZE_MARGIN;
+                    let bottom = pos.y >= screen_rect.bottom() - RESIZE_MARGIN;
+
+                    hovered_resize_edge = match (top, bottom, left, right) {
+                        (true, _, true, _) => Some(egui::viewport::ResizeDirection::NorthWest),
+                        (true, _, _, true) => Some(egui::viewport::ResizeDirection::NorthEast),
+                        (_, true, true, _) => Some(egui::viewport::ResizeDirection::SouthWest),
+                        (_, true, _, true) => Some(egui::viewport::ResizeDirection::SouthEast),
+                        (true, _, _, _) => Some(egui::viewport::ResizeDirection::North),
+                        (_, true, _, _) => Some(egui::viewport::ResizeDirection::South),
+                        (_, _, true, _) => Some(egui::viewport::ResizeDirection::West),
+                        (_, _, _, true) => Some(egui::viewport::ResizeDirection::East),
+                        _ => None,
+                    };
+
+                    if let Some(dir) = hovered_resize_edge {
+                        set_resize_cursor(ctx, dir);
+                        if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+                            if self.hwnd != 0 {
+                                if let (Some(cur_pos), Some(rect)) = (get_cursor_screen_pos(), get_window_rect(self.hwnd)) {
+                                    set_mouse_capture(self.hwnd);
+                                    self.active_resize = Some(ActiveResize {
+                                        direction: dir,
+                                        start_cursor: cur_pos,
+                                        start_rect: rect,
+                                    });
+                                    ctx.request_repaint();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        if !is_locked && !is_clickthrough {
+            if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                let left = pos.x <= screen_rect.left() + RESIZE_MARGIN;
+                let right = pos.x >= screen_rect.right() - RESIZE_MARGIN;
+                let top = pos.y <= screen_rect.top() + RESIZE_MARGIN;
+                let bottom = pos.y >= screen_rect.bottom() - RESIZE_MARGIN;
+
+                hovered_resize_edge = match (top, bottom, left, right) {
+                    (true, _, true, _) => Some(egui::viewport::ResizeDirection::NorthWest),
+                    (true, _, _, true) => Some(egui::viewport::ResizeDirection::NorthEast),
+                    (_, true, true, _) => Some(egui::viewport::ResizeDirection::SouthWest),
+                    (_, true, _, true) => Some(egui::viewport::ResizeDirection::SouthEast),
+                    (true, _, _, _) => Some(egui::viewport::ResizeDirection::North),
+                    (_, true, _, _) => Some(egui::viewport::ResizeDirection::South),
+                    (_, _, true, _) => Some(egui::viewport::ResizeDirection::West),
+                    (_, _, _, true) => Some(egui::viewport::ResizeDirection::East),
+                    _ => None,
+                };
+
+                if let Some(dir) = hovered_resize_edge {
+                    set_resize_cursor(ctx, dir);
+                    if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
+                    }
+                }
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // Main Central Panel (Frameless HUD Container matching get_hud_stylesheet)
+        // ══════════════════════════════════════════════════════════════
+        let hud_frame = egui::Frame::none()
+            .fill(BG_DARK)
+            .rounding(9.0)
+            .stroke(egui::Stroke::new(1.0_f32, BORDER_COLOR))
+            .inner_margin(egui::Margin { left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 });
+
+        egui::CentralPanel::default()
+            .frame(hud_frame)
+            .show(ctx, |ui| {
+                let outer_rect = ui.max_rect();
+
+                let is_resizing = {
+                    #[cfg(target_os = "windows")]
+                    { self.active_resize.is_some() }
+                    #[cfg(not(target_os = "windows"))]
+                    { false }
+                };
+
+                // Window dragging, double click to refresh, right-click native menu
+                let sense = if is_clickthrough {
+                    egui::Sense::hover()
+                } else {
+                    egui::Sense::click_and_drag()
+                };
+                let drag_interact = ui.interact(
+                    outer_rect,
+                    egui::Id::new("hud_main_area"),
+                    sense,
+                );
+
+                let mouse_over_toggle = if self.toggle_btn_rect.is_positive() {
+                    ctx.input(|i| i.pointer.hover_pos()).map(|p| self.toggle_btn_rect.contains(p)).unwrap_or(false)
+                } else {
+                    false
+                };
+
+                let is_hovered = ctx.input(|i| i.pointer.hover_pos()).map(|p| outer_rect.contains(p)).unwrap_or(false);
+
+                // Native smooth DWM drag-to-move immediately upon left mouse button pressed
+                if is_hovered && hovered_resize_edge.is_none() && !is_resizing && !mouse_over_toggle && !is_locked && !is_clickthrough {
+                    if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary)) {
+                        #[cfg(target_os = "windows")]
+                        if self.hwnd != 0 {
+                            native_drag_window(self.hwnd);
+                            let ppp = ctx.pixels_per_point();
+                            sync_window_position(self.hwnd, &self.config, ppp);
+                            ctx.request_repaint();
+                        }
+                        #[cfg(not(target_os = "windows"))]
+                        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    }
+                }
+
+                if !is_clickthrough && drag_interact.double_clicked() {
+                    self.refresh_ctrl.lock().unwrap().refresh(&self.providers_arc);
+                }
+
+                // Native Win32 Context Menu on Right Click (floats outside window, never clipped)
+                if !is_clickthrough && drag_interact.secondary_clicked() {
+                    let cfg = self.config.lock().unwrap().clone();
+                    let is_as = crate::autostart::is_autostart_enabled();
+                    if let Some(action) = native_menu::show_native_context_menu(self.hwnd, &cfg, is_as) {
+                        self.handle_menu_action(action, ctx);
+                    }
+                }
+
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 3.0); // inner_layout.setSpacing(3)
+
+                // 1. Common Header
+                self.render_header(ui, ctx);
+
+                // 2. Body Layout (Horizontal 3-column or Vertical 3-row)
+                if layout_mode == "horizontal" {
+                    self.render_horizontal_cards(ui);
+                } else {
+                    self.render_vertical_cards(ui);
+                }
+            });
+
+        // Request repaint every second for live countdown timer
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+}
+
+fn set_resize_cursor(ctx: &egui::Context, dir: egui::viewport::ResizeDirection) {
+    let cursor = match dir {
+        egui::viewport::ResizeDirection::North | egui::viewport::ResizeDirection::South => {
+            egui::CursorIcon::ResizeVertical
+        }
+        egui::viewport::ResizeDirection::East | egui::viewport::ResizeDirection::West => {
+            egui::CursorIcon::ResizeHorizontal
+        }
+        egui::viewport::ResizeDirection::NorthWest | egui::viewport::ResizeDirection::SouthEast => {
+            egui::CursorIcon::ResizeNwSe
+        }
+        egui::viewport::ResizeDirection::NorthEast | egui::viewport::ResizeDirection::SouthWest => {
+            egui::CursorIcon::ResizeNeSw
+        }
+    };
+    ctx.set_cursor_icon(cursor);
+}
+
+#[cfg(target_os = "windows")]
+fn get_window_hwnd() -> isize {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+        fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcessId() -> u32;
+    }
+
+    let title: Vec<u16> = OsStr::new("AI Agent HUD Monitor\0").encode_wide().collect();
+    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if hwnd != 0 {
+        let mut proc_id = 0u32;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, &mut proc_id);
+            if proc_id == GetCurrentProcessId() {
+                return hwnd;
+            }
+        }
+    }
+    0
+}
+
+#[cfg(target_os = "windows")]
+fn init_win32_window_frame(hwnd: isize) {
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct MARGINS {
+        cxLeftWidth: i32,
+        cxRightWidth: i32,
+        cyTopHeight: i32,
+        cyBottomHeight: i32,
+    }
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetWindowLongW(hWnd: isize, nIndex: i32) -> i32;
+        fn SetWindowLongW(hWnd: isize, nIndex: i32, dwNewLong: i32) -> i32;
+        fn SetClassLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+        fn SetWindowPos(
+            hWnd: isize,
+            hWndInsertAfter: isize,
+            X: i32,
+            Y: i32,
+            cx: i32,
+            cy: i32,
+            uFlags: u32,
+        ) -> i32;
+    }
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmExtendFrameIntoClientArea(hWnd: isize, pMarInset: *const MARGINS) -> i32;
+        fn DwmSetWindowAttribute(
+            hWnd: isize,
+            dwAttribute: u32,
+            pvAttribute: *const std::ffi::c_void,
+            cbAttribute: u32,
+        ) -> i32;
+    }
+    #[link(name = "comctl32")]
+    extern "system" {
+        fn SetWindowSubclass(
+            hWnd: isize,
+            pfnSubclass: unsafe extern "system" fn(isize, u32, usize, isize, usize, usize) -> isize,
+            uIdSubclass: usize,
+            dwRefData: usize,
+        ) -> i32;
+        fn DefSubclassProc(hWnd: isize, uMsg: u32, wParam: usize, lParam: isize) -> isize;
+    }
+
+    const GWL_STYLE: i32 = -16;
+    const WS_THICKFRAME: i32 = 0x00040000;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const GCLP_HBRBACKGROUND: i32 = -10;
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_DONOTROUND: u32 = 1;
+
+    unsafe {
+        // 1. Prevent GDI from painting standard white window background brush
+        SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
+
+        // 2. Subclass window to absorb WM_ERASEBKGND (0x0014)
+        unsafe extern "system" fn bg_subclass(
+            h: isize,
+            msg: u32,
+            w: usize,
+            l: isize,
+            _id: usize,
+            _data: usize,
+        ) -> isize {
+            if msg == 0x0014 { // WM_ERASEBKGND
+                return 1;
+            }
+            DefSubclassProc(h, msg, w, l)
+        }
+        let _ = SetWindowSubclass(hwnd, bg_subclass, 1001, 0);
+
+        // 3. Extend DWM frame into client area for per-pixel alpha composition
+        let margins = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
+        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+        // 4. Disable Windows 11 DWM default outer window rounding (we render sleek 9.0 rounding in egui)
+        let corner_pref = DWMWCP_DONOTROUND;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner_pref as *const _ as *const _,
+            4,
+        );
+
+        // 5. Disable Windows 11 DWM default 1px outer rectangular border (eliminates outer frame around rounded corners)
+        const DWMWA_BORDER_COLOR: u32 = 34;
+        const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_BORDER_COLOR,
+            &DWMWA_COLOR_NONE as *const _ as *const _,
+            4,
+        );
+
+        // 5. Ensure WS_THICKFRAME is NOT present to eliminate 8px non-client border offsets
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        if (style & WS_THICKFRAME) != 0 {
+            SetWindowLongW(hwnd, GWL_STYLE, style & !WS_THICKFRAME);
+            SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED,
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn native_drag_window(hwnd: isize) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn ReleaseCapture() -> i32;
+        fn SendMessageW(hWnd: isize, Msg: u32, wParam: usize, lParam: isize) -> isize;
+    }
+    const WM_SYSCOMMAND: u32 = 0x0112;
+    const SC_MOVE: usize = 0xF010;
+    const HTCAPTION: usize = 2;
+
+    unsafe {
+        ReleaseCapture();
+        SendMessageW(hwnd, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_lbutton_down() -> bool {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetAsyncKeyState(vKey: i32) -> i16;
+        fn GetSystemMetrics(nIndex: i32) -> i32;
+    }
+    const SM_SWAPBUTTON: i32 = 23;
+    let vkey = unsafe {
+        if GetSystemMetrics(SM_SWAPBUTTON) != 0 {
+            0x02 // VK_RBUTTON
+        } else {
+            0x01 // VK_LBUTTON
+        }
+    };
+    unsafe { (GetAsyncKeyState(vkey) as u16 & 0x8000) != 0 }
+}
+
+#[cfg(target_os = "windows")]
+fn get_cursor_screen_pos() -> Option<egui::Pos2> {
+    #[repr(C)]
+    struct POINT {
+        x: i32,
+        y: i32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetCursorPos(lpPoint: *mut POINT) -> i32;
+    }
+    let mut pt = POINT { x: 0, y: 0 };
+    unsafe {
+        if GetCursorPos(&mut pt) != 0 {
+            Some(egui::pos2(pt.x as f32, pt.y as f32))
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_window_rect(hwnd: isize) -> Option<[i32; 4]> {
+    #[repr(C)]
+    struct RECT {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetWindowRect(hWnd: isize, lpRect: *mut RECT) -> i32;
+    }
+    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    unsafe {
+        if GetWindowRect(hwnd, &mut r) != 0 {
+            Some([r.left, r.top, r.right - r.left, r.bottom - r.top])
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_window_rect(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetWindowPos(
+            hWnd: isize,
+            hWndInsertAfter: isize,
+            X: i32,
+            Y: i32,
+            cx: i32,
+            cy: i32,
+            uFlags: u32,
+        ) -> i32;
+    }
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    const SWP_NOCOPYBITS: u32 = 0x0100;
+    unsafe {
+        SetWindowPos(hwnd, 0, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn set_mouse_capture(hwnd: isize) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn SetCapture(hWnd: isize) -> isize;
+    }
+    unsafe {
+        SetCapture(hwnd);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn release_mouse_capture() {
+    #[link(name = "user32")]
+    extern "system" {
+        fn ReleaseCapture() -> i32;
+    }
+    unsafe {
+        ReleaseCapture();
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn sync_window_position(hwnd: isize, config: &Arc<Mutex<Config>>, ppp: f32) {
+    if let Some([left, top, _, _]) = get_window_rect(hwnd) {
+        let mut cfg = config.lock().unwrap();
+        cfg.window_x = Some((left as f32 / ppp).round() as i32);
+        cfg.window_y = Some((top as f32 / ppp).round() as i32);
+        ConfigManager::save(&cfg);
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn sync_window_geometry(hwnd: isize, config: &Arc<Mutex<Config>>, ppp: f32) {
+    if let Some([left, top, width, height]) = get_window_rect(hwnd) {
+        let logical_w = (width as f32 / ppp).round() as u32;
+        let logical_h = (height as f32 / ppp).round() as u32;
+
+        let mut cfg = config.lock().unwrap();
+        cfg.window_x = Some((left as f32 / ppp).round() as i32);
+        cfg.window_y = Some((top as f32 / ppp).round() as i32);
+        if cfg.layout_mode == "horizontal" {
+            cfg.horizontal_width = logical_w.max(540);
+            cfg.horizontal_height = logical_h.max(125);
+        } else {
+            cfg.vertical_width = logical_w.max(250);
+            cfg.vertical_height = logical_h.max(320);
+        }
+        ConfigManager::save(&cfg);
+    }
+}
+
+/// Directly applies or removes WS_EX_TRANSPARENT on the HUD window.
+/// More reliable than egui's deferred ViewportCommand::MousePassthrough.
+#[cfg(target_os = "windows")]
+fn apply_win32_click_through(hwnd: isize, enable: bool) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetWindowLongW(hWnd: isize, nIndex: i32) -> i32;
+        fn SetWindowLongW(hWnd: isize, nIndex: i32, dwNewLong: i32) -> i32;
+        fn SetWindowPos(hWnd: isize, hWndInsertAfter: isize, X: i32, Y: i32,
+                        cx: i32, cy: i32, uFlags: u32) -> i32;
+    }
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_TRANSPARENT: i32 = 0x00000020;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+    if hwnd == 0 { return; }
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let new_style = if enable {
+            style | WS_EX_TRANSPARENT
+        } else {
+            style & !WS_EX_TRANSPARENT
+        };
+        if new_style != style {
+            SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
+            SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+        }
+    }
+}
+
+
+
+impl HudApp {
+    fn render_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let header_h = 16.0;
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), header_h),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.set_height(header_h);
+                ui.spacing_mut().item_spacing = egui::vec2(5.0, 0.0);
+
+                // 1. Status Dot (vector drawn circle, perfectly centered with text)
+                let busy = self.refresh_ctrl.lock().unwrap().is_busy();
+                let has_error = self.metrics.values().any(|m| m.error.is_some());
+                let dot_color = if busy {
+                    COLOR_BLUE
+                } else if has_error {
+                    COLOR_AMBER
+                } else {
+                    COLOR_GREEN
+                };
+                let dot_radius = 3.5;
+                let (dot_rect, _) = ui.allocate_exact_size(
+                    egui::vec2(dot_radius * 2.0, header_h),
+                    egui::Sense::hover(),
+                );
+
+                // 2. Responsive Title Label (QLabel#HeaderTitle: font-size 10.5px, font-weight 800, color #94a3b8)
+                let rem_w = ui.available_width();
+                let title_text = if rem_w < 140.0 {
+                    "HUD"
+                } else if rem_w < 185.0 {
+                    "AI AGENT HUD"
+                } else {
+                    "AI AGENT HUD (3-IN-1)"
+                };
+                let title_resp = ui.label(
+                    RichText::new(title_text)
+                        .color(TEXT_SECONDARY)
+                        .size(10.5)
+                        .strong(),
+                );
+                let dot_center = egui::pos2(
+                    dot_rect.center().x,
+                    title_resp.rect.center().y - 0.5,
+                );
+                ui.painter().circle_filled(dot_center, dot_radius, dot_color);
+
+                // 3. Ghost icon if click-through is active (True color 3D emoji matching Python)
+                if self.config.lock().unwrap().click_through {
+                    if self.ghost_texture.is_none() {
+                        self.ghost_texture = Some(ctx.load_texture(
+                            "ghost_icon",
+                            load_ghost_image(),
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                    if let Some(tex) = &self.ghost_texture {
+                        ui.add(
+                            egui::Image::new(tex)
+                                .fit_to_exact_size(egui::vec2(14.0, 14.0))
+                        ).on_hover_text("滑鼠穿透中 (Alt+Shift+C 解除)");
+                    }
+                }
+
+                // 4. Layout Toggle Button "⇄" (QPushButton#LayoutToggleBtn matching Python)
+                let toggle_btn = ui.add(
+                    egui::Button::new(
+                        RichText::new("⇄")
+                            .size(10.5)
+                            .color(TEXT_SECONDARY),
+                    )
+                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 15))
+                    .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 25)))
+                    .rounding(4.0)
+                    .min_size(egui::vec2(20.0, 16.0)),
+                ).on_hover_text("切換 橫向三欄並排 / 直式三層堆疊 佈局");
+
+                self.toggle_btn_rect = toggle_btn.rect.expand(2.0);
+
+                if toggle_btn.clicked() {
+                    self.toggle_layout(ctx);
+                }
+
+                // 5. Live Monospace Clock on the far right (QLabel#HeaderStatus: font-size 9.5px, color #64748b)
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.set_height(header_h);
+                    let time_str = chrono::Local::now().format("%H:%M:%S").to_string();
+                    ui.label(
+                        RichText::new(time_str)
+                            .color(TEXT_MUTED)
+                            .monospace()
+                            .size(9.5),
+                    );
+                });
+            },
+        );
+    }
+
+    fn render_vertical_cards(&self, ui: &mut egui::Ui) {
+        let avail_h = ui.available_height();
+        let total_cards = PROVIDER_IDS.len();
+        // 2 dividers with 3.0 padding top/bottom + 1.0 line = 7.0 per divider (total 14.0)
+        let div_spacing = 3.0;
+        let total_div_h = (total_cards as f32 - 1.0) * (div_spacing * 2.0 + 1.0);
+        let card_h = ((avail_h - total_div_h) / total_cards as f32).max(92.0);
+
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+        for (i, &id) in PROVIDER_IDS.iter().enumerate() {
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), card_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    render_provider_card(ui, id, self.metrics.get(id), card_h);
+                },
+            );
+
+            if i < total_cards - 1 {
+                ui.add_space(div_spacing);
+                // h_div: background-color: rgba(255, 255, 255, 0.08); max-height: 1px;
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+                ui.painter().rect_filled(
+                    rect,
+                    0.0,
+                    Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+                );
+                ui.add_space(div_spacing);
+            }
+        }
+    }
+
+    fn render_horizontal_cards(&self, ui: &mut egui::Ui) {
+        let total_cards = PROVIDER_IDS.len(); // 3
+        let spacing = 8.0; // body_layout.setSpacing(8)
+        let total_w = ui.available_width();
+        let avail_h = ui.available_height();
+        let total_divider_spacing = (total_cards as f32 - 1.0) * (spacing * 2.0 + 1.0); // 34.0
+        let cards_avail_w = (total_w - total_divider_spacing).max(300.0);
+
+        // Perfectly balanced equal column widths (1:1:1 ratio across all 3 providers)
+        let base_w = (cards_avail_w / total_cards as f32).floor();
+        let rem = cards_avail_w - (base_w * total_cards as f32);
+        let card_widths = [base_w, base_w + rem, base_w];
+
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            for (i, &id) in PROVIDER_IDS.iter().enumerate() {
+                let card_w = card_widths[i];
+                ui.allocate_ui_with_layout(
+                    egui::vec2(card_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        ui.set_width(card_w);
+                        ui.set_max_width(card_w);
+                        render_provider_card(ui, id, self.metrics.get(id), avail_h);
+                    },
+                );
+
+                if i < total_cards - 1 {
+                    ui.add_space(spacing);
+                    // QFrame#Divider: background-color: rgba(255, 255, 255, 0.12); width: 1px;
+                    // Pixel-snapped vertical line segment matching card vertical bounds
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(1.0, avail_h),
+                        egui::Sense::hover(),
+                    );
+                    let x = rect.center().x.round();
+                    let y_top = rect.top() + 4.0;
+                    let y_bot = rect.bottom() - 4.0;
+                    ui.painter().line_segment(
+                        [egui::pos2(x, y_top), egui::pos2(x, y_bot)],
+                        egui::Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 30)),
+                    );
+                    ui.add_space(spacing);
+                }
+            }
+        });
+    }
+}
+
+/// Build system tray icon (Windows / macOS)
+#[cfg(not(target_os = "linux"))]
+fn build_tray_icon() -> Option<tray_icon::TrayIcon> {
+    let icon = load_tray_icon_image();
+    match tray_icon::TrayIconBuilder::new()
+        .with_tooltip("AI HUD Monitor (3-in-1)")
+        .with_icon(icon)
+        .build()
+    {
+        Ok(t) => {
+            info!("[Tray] System tray icon created");
+            Some(t)
+        }
+        Err(e) => {
+            log::warn!("[Tray] Failed to create tray icon: {e}");
+            None
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn load_tray_icon_image() -> tray_icon::Icon {
+    // 1. Embedded PNG byte buffer resized to 32x32 for Windows tray
+    const ICON_PNG_BYTES: &[u8] = include_bytes!("../../assets/app_icon.png");
+    if let Ok(img) = image::load_from_memory(ICON_PNG_BYTES) {
+        let resized = img.resize_exact(32, 32, image::imageops::FilterType::Lanczos3);
+        let rgba = resized.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        if let Ok(icon) = tray_icon::Icon::from_rgba(rgba.into_raw(), w, h) {
+            return icon;
+        }
+    }
+
+    // 2. Fallback
+    tray_icon::Icon::from_rgba(vec![56, 189, 248, 255], 1, 1).unwrap()
+}
+
+/// Load embedded color ghost emoji texture (matches Windows 3D Fluent emoji)
+fn load_ghost_image() -> egui::ColorImage {
+    const GHOST_PNG_BYTES: &[u8] = include_bytes!("../../assets/ghost.png");
+    if let Ok(img) = image::load_from_memory(GHOST_PNG_BYTES) {
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba)
+    } else {
+        egui::ColorImage::new([1, 1], egui::Color32::WHITE)
+    }
+}
+
+/// Trims unreferenced physical memory pages back to the Windows OS
+#[cfg(target_os = "windows")]
+pub fn trim_working_set() {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentProcess() -> isize;
+        fn SetProcessWorkingSetSize(hProcess: isize, dwMinimumWorkingSetSize: usize, dwMaximumWorkingSetSize: usize) -> i32;
+    }
+    unsafe {
+        SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
+}
