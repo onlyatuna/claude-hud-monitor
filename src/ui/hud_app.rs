@@ -43,6 +43,7 @@ pub struct HudApp {
 
     is_visible: bool,
     toggle_btn_rect: egui::Rect,
+    #[cfg(not(target_os = "linux"))]
     tray_attempts: u32,
     frame_count: u32,
 
@@ -107,6 +108,7 @@ impl HudApp {
             active_resize: None,
             is_visible: true,
             toggle_btn_rect: egui::Rect::NOTHING,
+            #[cfg(not(target_os = "linux"))]
             tray_attempts: 0,
             frame_count: 0,
             ghost_texture: None,

@@ -1,8 +1,10 @@
 // src/autostart.rs — Platform autostart management
 // Mirrors Python core/autostart.py
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use log::error;
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const APP_NAME: &str = "ClaudeHUDMonitor";
 
 /// Check if autostart is enabled for the current platform.
@@ -18,12 +20,12 @@ pub fn is_autostart_enabled() -> bool {
 }
 
 /// Enable or disable autostart. Returns true on success.
-pub fn set_autostart(enable: bool) -> bool {
+pub fn set_autostart(_enable: bool) -> bool {
     #[cfg(target_os = "windows")]
-    return windows_set(enable);
+    return windows_set(_enable);
 
     #[cfg(target_os = "macos")]
-    return macos_set(enable);
+    return macos_set(_enable);
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     false
