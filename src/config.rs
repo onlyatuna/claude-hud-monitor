@@ -7,10 +7,10 @@
 //
 // Atomic save: write temp file → fsync → rename (same as Python version).
 
-use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use std::fs;
 use log::{error, info};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -46,15 +46,33 @@ pub struct Config {
     pub autostart: bool,
 }
 
-fn default_layout_mode() -> String { "vertical".to_owned() }
-fn default_vertical_width() -> u32 { 280 }
-fn default_vertical_height() -> u32 { 410 }
-fn default_horizontal_width() -> u32 { 690 }
-fn default_horizontal_height() -> u32 { 152 }
-fn default_true() -> bool { true }
-fn default_opacity() -> f32 { 0.88 }
-fn default_refresh_interval() -> u64 { 60 }
-fn default_hotkey() -> String { "Alt+C".to_owned() }
+fn default_layout_mode() -> String {
+    "vertical".to_owned()
+}
+fn default_vertical_width() -> u32 {
+    280
+}
+fn default_vertical_height() -> u32 {
+    410
+}
+fn default_horizontal_width() -> u32 {
+    690
+}
+fn default_horizontal_height() -> u32 {
+    152
+}
+fn default_true() -> bool {
+    true
+}
+fn default_opacity() -> f32 {
+    0.88
+}
+fn default_refresh_interval() -> u64 {
+    60
+}
+fn default_hotkey() -> String {
+    "Alt+C".to_owned()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -91,7 +109,10 @@ impl ConfigManager {
         }
         #[cfg(target_os = "macos")]
         {
-            dirs_home().join("Library").join("Application Support").join("ClaudeHUDMonitor")
+            dirs_home()
+                .join("Library")
+                .join("Application Support")
+                .join("ClaudeHUDMonitor")
         }
         #[cfg(not(any(target_os = "windows", target_os = "macos")))]
         {

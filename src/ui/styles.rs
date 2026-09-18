@@ -30,31 +30,31 @@ pub const COLOR_PURPLE: Color32 = Color32::from_rgb(0xa8, 0x55, 0xf7);
 pub fn provider_color(id: &str) -> Color32 {
     match id {
         "claude" => COLOR_BLUE,
-        "agy"    => COLOR_GREEN,
-        "codex"  => COLOR_PURPLE,
-        _        => COLOR_BLUE,
+        "agy" => COLOR_GREEN,
+        "codex" => COLOR_PURPLE,
+        _ => COLOR_BLUE,
     }
 }
 
 pub fn provider_name(id: &str) -> &'static str {
     match id {
         "claude" => "CLAUDE CODE",
-        "agy"    => "ANTIGRAVITY",
-        "codex"  => "OPENAI CODEX",
-        _        => "UNKNOWN",
+        "agy" => "ANTIGRAVITY",
+        "codex" => "OPENAI CODEX",
+        _ => "UNKNOWN",
     }
 }
 
 /// Progress bar color (mirrors get_progress_color in Python ui/styles.py)
 pub fn progress_color(percent: f64) -> Color32 {
     if percent >= 90.0 {
-        COLOR_RED       // #ef4444
+        COLOR_RED // #ef4444
     } else if percent >= 75.0 {
-        COLOR_AMBER     // #f59e0b
+        COLOR_AMBER // #f59e0b
     } else if percent >= 50.0 {
         Color32::from_rgb(0x3b, 0x82, 0xf6) // #3b82f6 (Blue)
     } else {
-        COLOR_GREEN     // #10b981 (Green)
+        COLOR_GREEN // #10b981 (Green)
     }
 }
 
@@ -69,7 +69,8 @@ pub fn apply_hud_visuals(ctx: &egui::Context) {
 
     // Layout toggle button styles (matching QPushButton#LayoutToggleBtn)
     visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-    visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(30, 30, 30, 30));
+    visuals.widgets.inactive.bg_stroke =
+        egui::Stroke::new(1.0_f32, Color32::from_rgba_premultiplied(30, 30, 30, 30));
     visuals.widgets.inactive.rounding = egui::Rounding::same(4.0);
 
     visuals.widgets.hovered.bg_fill = Color32::from_rgba_premultiplied(30, 30, 30, 30);

@@ -1,20 +1,20 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 #![allow(clippy::upper_case_acronyms)]
 
+mod autostart;
 mod config;
+mod hotkey;
+mod logger;
 mod providers;
 mod refresh_controller;
 mod ui;
-mod hotkey;
-mod autostart;
-mod logger;
 
-use std::sync::{Arc, Mutex};
 use eframe::egui;
 use log::info;
+use std::sync::{Arc, Mutex};
 
 use config::ConfigManager;
-use providers::{ClaudeProvider, AgyProvider, CodexProvider};
+use providers::{AgyProvider, ClaudeProvider, CodexProvider};
 use refresh_controller::RefreshController;
 use ui::HudApp;
 
@@ -27,16 +27,23 @@ fn main() -> eframe::Result {
     {
         #[link(name = "kernel32")]
         extern "system" {
-            fn CreateMutexW(lpMutexAttributes: *const std::ffi::c_void, bInitialOwner: i32, lpName: *const u16) -> isize;
+            fn CreateMutexW(
+                lpMutexAttributes: *const std::ffi::c_void,
+                bInitialOwner: i32,
+                lpName: *const u16,
+            ) -> isize;
             fn GetLastError() -> u32;
         }
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
 
-        let mutex_name: Vec<u16> = OsStr::new("Local\\ClaudeHUDMonitorSingleInstanceMutex\0").encode_wide().collect();
+        let mutex_name: Vec<u16> = OsStr::new("Local\\ClaudeHUDMonitorSingleInstanceMutex\0")
+            .encode_wide()
+            .collect();
         unsafe {
             let _handle = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
-            if GetLastError() == 183 { // ERROR_ALREADY_EXISTS
+            if GetLastError() == 183 {
+                // ERROR_ALREADY_EXISTS
                 log::warn!("[SingleInstance] Another instance is already running. Exiting.");
                 return Ok(());
             }
@@ -52,7 +59,10 @@ fn main() -> eframe::Result {
     }
 
     let config = Arc::new(Mutex::new(ConfigManager::load()));
-    info!("Config loaded from: {}", ConfigManager::config_path().display());
+    info!(
+        "Config loaded from: {}",
+        ConfigManager::config_path().display()
+    );
 
     // Build providers
     let providers: Vec<Box<dyn providers::Provider + Send>> = vec![
@@ -136,11 +146,14 @@ fn main() -> eframe::Result {
                 // 1. Segoe UI for sleek Latin UI typography
                 let segoe_path = "C:\\Windows\\Fonts\\segoeui.ttf";
                 if let Ok(bytes) = std::fs::read(segoe_path) {
-                    fonts.font_data.insert(
-                        "segoe_ui".to_owned(),
-                        egui::FontData::from_owned(bytes),
-                    );
-                    fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "segoe_ui".to_owned());
+                    fonts
+                        .font_data
+                        .insert("segoe_ui".to_owned(), egui::FontData::from_owned(bytes));
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Proportional)
+                        .unwrap()
+                        .insert(0, "segoe_ui".to_owned());
                 }
 
                 // 2. Microsoft JhengHei for crisp Chinese rendering
@@ -150,8 +163,16 @@ fn main() -> eframe::Result {
                         "microsoft_jhenghei".to_owned(),
                         egui::FontData::from_owned(bytes),
                     );
-                    fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().push("microsoft_jhenghei".to_owned());
-                    fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().push("microsoft_jhenghei".to_owned());
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Proportional)
+                        .unwrap()
+                        .push("microsoft_jhenghei".to_owned());
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Monospace)
+                        .unwrap()
+                        .push("microsoft_jhenghei".to_owned());
                 }
 
                 // 3. Segoe UI Symbol for UI icons: ⇄, 👻, ●, etc.
@@ -161,18 +182,29 @@ fn main() -> eframe::Result {
                         "segoe_ui_symbol".to_owned(),
                         egui::FontData::from_owned(bytes),
                     );
-                    fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().push("segoe_ui_symbol".to_owned());
-                    fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().push("segoe_ui_symbol".to_owned());
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Proportional)
+                        .unwrap()
+                        .push("segoe_ui_symbol".to_owned());
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Monospace)
+                        .unwrap()
+                        .push("segoe_ui_symbol".to_owned());
                 }
 
                 // 4. Consolas for monospace numbers
                 let consolas_path = "C:\\Windows\\Fonts\\consola.ttf";
                 if let Ok(bytes) = std::fs::read(consolas_path) {
-                    fonts.font_data.insert(
-                        "consolas".to_owned(),
-                        egui::FontData::from_owned(bytes),
-                    );
-                    fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "consolas".to_owned());
+                    fonts
+                        .font_data
+                        .insert("consolas".to_owned(), egui::FontData::from_owned(bytes));
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Monospace)
+                        .unwrap()
+                        .insert(0, "consolas".to_owned());
                 }
             }
             cc.egui_ctx.set_fonts(fonts);

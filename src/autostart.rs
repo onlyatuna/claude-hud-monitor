@@ -57,7 +57,9 @@ fn windows_set(enable: bool) -> bool {
                 let exe = std::env::current_exe()
                     .map(|p| format!("\"{}\"", p.display()))
                     .unwrap_or_default();
-                key.set_value(APP_NAME, &exe).map_err(|e| error!("[AutoStart] {e}")).is_ok()
+                key.set_value(APP_NAME, &exe)
+                    .map_err(|e| error!("[AutoStart] {e}"))
+                    .is_ok()
             } else {
                 let _ = key.delete_value(APP_NAME);
                 true
@@ -105,7 +107,9 @@ fn macos_set(enable: bool) -> bool {
         if let Some(dir) = plist_path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
-        std::fs::write(&plist_path, plist_content).map_err(|e| error!("[AutoStart] {e}")).is_ok()
+        std::fs::write(&plist_path, plist_content)
+            .map_err(|e| error!("[AutoStart] {e}"))
+            .is_ok()
     } else {
         if plist_path.exists() {
             let _ = std::process::Command::new("launchctl")

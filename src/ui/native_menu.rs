@@ -14,7 +14,7 @@ pub enum MenuAction {
     ToggleClickThrough,
     ToggleAlwaysOnTop,
     ToggleLock,
-    SetOpacity(u32), // 100, 90, 80, 70, 50, 30
+    SetOpacity(u32),  // 100, 90, 80, 70, 50, 30
     SetInterval(u64), // 30, 60, 120, 300
     ToggleAutostart,
     OpenLogs,
@@ -66,7 +66,12 @@ extern "system" {
     fn GetForegroundWindow() -> isize;
     fn SetForegroundWindow(hWnd: isize) -> i32;
     fn PostMessageW(hWnd: isize, Msg: u32, wParam: usize, lParam: isize) -> i32;
-    fn SetMenuItemInfoW(hMenu: isize, item: u32, fByPosition: i32, lpmii: *const MENUITEMINFOW) -> i32;
+    fn SetMenuItemInfoW(
+        hMenu: isize,
+        item: u32,
+        fByPosition: i32,
+        lpmii: *const MENUITEMINFOW,
+    ) -> i32;
     fn GetSystemMetrics(nIndex: i32) -> i32;
 }
 
@@ -77,12 +82,19 @@ extern "system" {
 }
 
 #[cfg(target_os = "windows")]
-pub fn show_native_context_menu(hwnd: isize, config: &Config, is_autostart: bool) -> Option<MenuAction> {
+pub fn show_native_context_menu(
+    hwnd: isize,
+    config: &Config,
+    is_autostart: bool,
+) -> Option<MenuAction> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
     fn to_wide(s: &str) -> Vec<u16> {
-        OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+        OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     }
 
     const TPM_RETURNCMD: u32 = 0x0100;
@@ -96,7 +108,11 @@ pub fn show_native_context_menu(hwnd: isize, config: &Config, is_autostart: bool
     const MF_UNCHECKED: u32 = 0x00000000;
 
     unsafe {
-        let target_hwnd = if hwnd != 0 { hwnd } else { GetForegroundWindow() };
+        let target_hwnd = if hwnd != 0 {
+            hwnd
+        } else {
+            GetForegroundWindow()
+        };
         if target_hwnd != 0 {
             SetForegroundWindow(target_hwnd);
             enable_win32_dark_mode(target_hwnd);
@@ -149,19 +165,34 @@ pub fn show_native_context_menu(hwnd: isize, config: &Config, is_autostart: bool
         attach_icon(root, 2, true, ICON_LAYOUT, cx, cy, &mut bitmaps);
 
         // 3. Click-through
-        let flag_ct = MF_STRING | if config.click_through { MF_CHECKED } else { MF_UNCHECKED };
+        let flag_ct = MF_STRING
+            | if config.click_through {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
         let t_ct = to_wide("滑鼠點擊穿透 (Alt+Shift+C)");
         AppendMenuW(root, flag_ct, 1004, t_ct.as_ptr());
         attach_icon(root, 1004, false, ICON_GHOST, cx, cy, &mut bitmaps);
 
         // 4. Always on Top
-        let flag_aot = MF_STRING | if config.always_on_top { MF_CHECKED } else { MF_UNCHECKED };
+        let flag_aot = MF_STRING
+            | if config.always_on_top {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
         let t_aot = to_wide("視窗永遠置頂 (Always on Top)");
         AppendMenuW(root, flag_aot, 1005, t_aot.as_ptr());
         attach_icon(root, 1005, false, ICON_PIN, cx, cy, &mut bitmaps);
 
         // 5. Lock position
-        let flag_lock = MF_STRING | if config.locked { MF_CHECKED } else { MF_UNCHECKED };
+        let flag_lock = MF_STRING
+            | if config.locked {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
         let t_lock = to_wide("鎖定視窗位置 (Lock Drag)");
         AppendMenuW(root, flag_lock, 1006, t_lock.as_ptr());
         attach_icon(root, 1006, false, ICON_LOCK, cx, cy, &mut bitmaps);
@@ -171,7 +202,12 @@ pub fn show_native_context_menu(hwnd: isize, config: &Config, is_autostart: bool
         let cur_op = (config.opacity * 100.0).round() as u32;
         let op_values = [100u32, 90, 80, 70, 50, 30];
         for (i, &val) in op_values.iter().enumerate() {
-            let flag = MF_STRING | if (cur_op as i32 - val as i32).abs() < 5 { MF_CHECKED } else { MF_UNCHECKED };
+            let flag = MF_STRING
+                | if (cur_op as i32 - val as i32).abs() < 5 {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                };
             let t = to_wide(&format!("{}%", val));
             AppendMenuW(op_sub, flag, 1100 + i, t.as_ptr());
         }
@@ -183,7 +219,12 @@ pub fn show_native_context_menu(hwnd: isize, config: &Config, is_autostart: bool
         let int_sub = CreatePopupMenu();
         let int_values = [30u64, 60, 120, 300];
         for (i, &sec) in int_values.iter().enumerate() {
-            let flag = MF_STRING | if config.refresh_interval_sec == sec { MF_CHECKED } else { MF_UNCHECKED };
+            let flag = MF_STRING
+                | if config.refresh_interval_sec == sec {
+                    MF_CHECKED
+                } else {
+                    MF_UNCHECKED
+                };
             let t = to_wide(&format!("{} 秒", sec));
             AppendMenuW(int_sub, flag, 1200 + i, t.as_ptr());
         }
@@ -192,7 +233,12 @@ pub fn show_native_context_menu(hwnd: isize, config: &Config, is_autostart: bool
         attach_icon(root, 7, true, ICON_TIMER, cx, cy, &mut bitmaps);
 
         // 8. Autostart
-        let flag_as = MF_STRING | if is_autostart { MF_CHECKED } else { MF_UNCHECKED };
+        let flag_as = MF_STRING
+            | if is_autostart {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
         let t_as = to_wide("開機自動啟動 (Start on Boot)");
         AppendMenuW(root, flag_as, 1007, t_as.as_ptr());
         attach_icon(root, 1007, false, ICON_ROCKET, cx, cy, &mut bitmaps);
@@ -435,9 +481,9 @@ fn create_menu_pargb_bitmap(png_bytes: &[u8], cx: u32, cy: u32) -> Option<isize>
             let pg = ((g * a + 127) / 255) as u8;
             let pb = ((b * a + 127) / 255) as u8;
 
-            dest[i * 4] = pb;         // Blue
-            dest[i * 4 + 1] = pg;     // Green
-            dest[i * 4 + 2] = pr;     // Red
+            dest[i * 4] = pb; // Blue
+            dest[i * 4 + 1] = pg; // Green
+            dest[i * 4 + 2] = pr; // Red
             dest[i * 4 + 3] = a as u8; // Alpha
         }
     }
@@ -468,6 +514,10 @@ fn attach_icon(
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn show_native_context_menu(_hwnd: isize, _config: &Config, _is_autostart: bool) -> Option<MenuAction> {
+pub fn show_native_context_menu(
+    _hwnd: isize,
+    _config: &Config,
+    _is_autostart: bool,
+) -> Option<MenuAction> {
     None
 }

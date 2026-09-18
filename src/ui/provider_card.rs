@@ -1,15 +1,20 @@
 // src/ui/provider_card.rs — Provider metric card rendering matching PySide6 ProviderCardWidget
 
-use crate::providers::base::{UsageMetrics, format_countdown};
 use super::styles::{
-    provider_color, provider_name, progress_color,
-    TEXT_SECONDARY, TEXT_MUTED, COLOR_RED, COLOR_AMBER, TRACK_BG,
+    progress_color, provider_color, provider_name, COLOR_AMBER, COLOR_RED, TEXT_MUTED,
+    TEXT_SECONDARY, TRACK_BG,
 };
-use egui::{Color32, RichText, Ui};
+use crate::providers::base::{format_countdown, UsageMetrics};
 use chrono::Local;
+use egui::{Color32, RichText, Ui};
 
 /// Render one provider card (mirrors PySide6 ProviderCardWidget)
-pub fn render_provider_card(ui: &mut Ui, id: &str, data: Option<&UsageMetrics>, target_height: f32) {
+pub fn render_provider_card(
+    ui: &mut Ui,
+    id: &str,
+    data: Option<&UsageMetrics>,
+    target_height: f32,
+) {
     let accent = provider_color(id);
     let title = provider_name(id);
 
@@ -22,7 +27,12 @@ pub fn render_provider_card(ui: &mut Ui, id: &str, data: Option<&UsageMetrics>, 
 
     // Card frame with margins (5, top, 5, bottom)
     egui::Frame::none()
-        .inner_margin(egui::Margin { left: 5.0, right: 5.0, top: top_bottom_margin, bottom: top_bottom_margin })
+        .inner_margin(egui::Margin {
+            left: 5.0,
+            right: 5.0,
+            top: top_bottom_margin,
+            bottom: top_bottom_margin,
+        })
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, item_spacing);
 
@@ -41,17 +51,11 @@ pub fn render_provider_card(ui: &mut Ui, id: &str, data: Option<&UsageMetrics>, 
                         egui::vec2(dot_radius * 2.0, header_h),
                         egui::Sense::hover(),
                     );
-                    let title_resp = ui.label(
-                        RichText::new(title)
-                            .color(accent)
-                            .size(10.0)
-                            .strong(),
-                    );
+                    let title_resp =
+                        ui.label(RichText::new(title).color(accent).size(10.0).strong());
                     let dot = dot_color(id, data);
-                    let dot_center = egui::pos2(
-                        dot_rect.center().x,
-                        title_resp.rect.center().y - 0.5,
-                    );
+                    let dot_center =
+                        egui::pos2(dot_rect.center().x, title_resp.rect.center().y - 0.5);
                     ui.painter().circle_filled(dot_center, dot_radius, dot);
 
                     // Right-aligned badges with exact matching vertical center
@@ -92,8 +96,13 @@ pub fn render_provider_card(ui: &mut Ui, id: &str, data: Option<&UsageMetrics>, 
                     );
 
                     if d.stale {
-                        let stamp = d.last_success
-                            .map(|dt| dt.with_timezone(&Local).format("%m/%d %H:%M:%S").to_string())
+                        let stamp = d
+                            .last_success
+                            .map(|dt| {
+                                dt.with_timezone(&Local)
+                                    .format("%m/%d %H:%M:%S")
+                                    .to_string()
+                            })
                             .unwrap_or_else(|| "--".to_owned());
                         ui.label(
                             RichText::new(format!("舊資料 {}", stamp))
@@ -114,7 +123,9 @@ fn default_metric_titles(id: &str) -> (&'static str, &'static str) {
 }
 
 fn dot_color(id: &str, data: Option<&UsageMetrics>) -> Color32 {
-    let Some(d) = data else { return TEXT_MUTED; };
+    let Some(d) = data else {
+        return TEXT_MUTED;
+    };
     if d.error.is_some() && !d.stale {
         COLOR_RED
     } else if d.stale {
@@ -125,7 +136,10 @@ fn dot_color(id: &str, data: Option<&UsageMetrics>) -> Color32 {
 }
 
 fn estimate_badge_w(text: &str) -> f32 {
-    let char_w: f32 = text.chars().map(|c| if c as u32 > 0x2E80 { 10.0 } else { 5.6 }).sum();
+    let char_w: f32 = text
+        .chars()
+        .map(|c| if c as u32 > 0x2E80 { 10.0 } else { 5.6 })
+        .sum();
     char_w + 10.0 // 4px padding each side + 2px border
 }
 
@@ -178,11 +192,9 @@ fn render_badges_right_to_left(ui: &mut Ui, d: Option<&UsageMetrics>) {
         // Do NOT overlap provider title! Show primary badge only:
         else if w_compact_b1 <= avail {
             badge_label(ui, &compact_b1);
-        }
-        else if w_full_b1 <= avail {
+        } else if w_full_b1 <= avail {
             badge_label(ui, b1);
-        }
-        else {
+        } else {
             let short = b1.split(':').next_back().unwrap_or(b1).trim();
             badge_label(ui, short);
         }
@@ -205,9 +217,17 @@ fn badge_label(ui: &mut Ui, text: &str) {
     }
     let frame = egui::Frame::none()
         .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 15))
-        .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 20)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 20),
+        ))
         .rounding(3.0)
-        .inner_margin(egui::Margin { left: 4.0, right: 4.0, top: 1.0, bottom: 1.0 });
+        .inner_margin(egui::Margin {
+            left: 4.0,
+            right: 4.0,
+            top: 1.0,
+            bottom: 1.0,
+        });
 
     frame.show(ui, |ui| {
         ui.label(
@@ -231,10 +251,21 @@ fn render_error_state(ui: &mut Ui, d: &UsageMetrics, row_spacing: f32) {
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.set_height(row_h);
-                ui.label(RichText::new("SESSION 5H").color(TEXT_SECONDARY).size(9.5).strong());
+                ui.label(
+                    RichText::new("SESSION 5H")
+                        .color(TEXT_SECONDARY)
+                        .size(9.5)
+                        .strong(),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.set_height(row_h);
-                    ui.label(RichText::new("ERR").color(COLOR_RED).size(14.5).strong().monospace());
+                    ui.label(
+                        RichText::new("ERR")
+                            .color(COLOR_RED)
+                            .size(14.5)
+                            .strong()
+                            .monospace(),
+                    );
                 });
             },
         );
@@ -251,7 +282,12 @@ fn render_error_state(ui: &mut Ui, d: &UsageMetrics, row_spacing: f32) {
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.set_height(row_h);
-                ui.label(RichText::new("WEEKLY 7D").color(TEXT_SECONDARY).size(9.5).strong());
+                ui.label(
+                    RichText::new("WEEKLY 7D")
+                        .color(TEXT_SECONDARY)
+                        .size(9.5)
+                        .strong(),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.set_height(row_h);
                     ui.label(RichText::new("--").color(TEXT_MUTED).size(14.5).monospace());
@@ -282,7 +318,12 @@ fn render_metric_row(
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 ui.set_height(row_h);
-                ui.label(RichText::new(title).color(TEXT_SECONDARY).size(9.5).strong());
+                ui.label(
+                    RichText::new(title)
+                        .color(TEXT_SECONDARY)
+                        .size(9.5)
+                        .strong(),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.set_height(row_h);
                     let color = val.map(progress_color).unwrap_or(TEXT_MUTED);
@@ -323,11 +364,7 @@ fn custom_progress_bar(ui: &mut Ui, fraction: f32, color: Color32) {
     let painter = ui.painter();
 
     // Background track (subtle translucent white rgba(255, 255, 255, 0.08))
-    painter.rect_filled(
-        rect,
-        2.5,
-        TRACK_BG,
-    );
+    painter.rect_filled(rect, 2.5, TRACK_BG);
 
     // Progress chunk
     let fill_w = (rect.width() * fraction.clamp(0.0, 1.0)).max(0.0);

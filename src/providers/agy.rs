@@ -4,7 +4,7 @@
 // Parses Gemini 5h / Weekly 7d buckets from the JSON output.
 // Mirrors Python core/providers/agy_provider.py
 
-use super::base::{percentage, percent_text, now_str, Provider, UsageMetrics};
+use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
 use chrono::{DateTime, Utc};
 use log::{info, warn};
 use serde_json::Value;
@@ -25,7 +25,11 @@ impl AgyProvider {
         #[cfg(target_os = "windows")]
         {
             let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            for suffix in &["agy\\bin\\agy.exe", "agy\\bin\\agy.cmd", "agy\\bin\\agy.bat"] {
+            for suffix in &[
+                "agy\\bin\\agy.exe",
+                "agy\\bin\\agy.cmd",
+                "agy\\bin\\agy.bat",
+            ] {
                 let candidate = format!("{}\\{}", local, suffix);
                 if std::path::Path::new(&candidate).is_file() {
                     return Some(candidate);
@@ -99,10 +103,12 @@ impl AgyProvider {
         };
 
         cmd.stdin(std::process::Stdio::null())
-           .stdout(std::process::Stdio::piped())
-           .stderr(std::process::Stdio::piped());
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(|e| format!("無法啟動 agy，請確認安裝與執行權限: {e}"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("無法啟動 agy，請確認安裝與執行權限: {e}"))?;
 
         let timeout = std::time::Duration::from_secs(timeout_secs.max(5));
         let exit_status = loop {
@@ -129,10 +135,17 @@ impl AgyProvider {
         }
 
         let elapsed = started.elapsed().as_secs_f64();
-        info!("quota exit={} elapsed={:.2}s", exit_status.code().unwrap_or(-1), elapsed);
+        info!(
+            "quota exit={} elapsed={:.2}s",
+            exit_status.code().unwrap_or(-1),
+            elapsed
+        );
 
         if !exit_status.success() {
-            return Err(format!("agy 查詢失敗 (exit {})", exit_status.code().unwrap_or(-1)));
+            return Err(format!(
+                "agy 查詢失敗 (exit {})",
+                exit_status.code().unwrap_or(-1)
+            ));
         }
 
         Ok(String::from_utf8_lossy(&stdout_bytes).to_string())
@@ -140,8 +153,12 @@ impl AgyProvider {
 }
 
 impl Provider for AgyProvider {
-    fn provider_id(&self) -> &str { "agy" }
-    fn display_name(&self) -> &str { "Antigravity" }
+    fn provider_id(&self) -> &str {
+        "agy"
+    }
+    fn display_name(&self) -> &str {
+        "Antigravity"
+    }
 
     fn fetch_usage(&self) -> UsageMetrics {
         let now = now_str();
@@ -149,9 +166,10 @@ impl Provider for AgyProvider {
         let Some(bin) = Self::find_agy_binary() else {
             warn!("[AgyProvider] Antigravity CLI binary not found");
             return UsageMetrics::error_result(
-                "agy", "Antigravity",
+                "agy",
+                "Antigravity",
                 "未找到 agy 指令\n請確認已安裝 Antigravity CLI",
-                "cli_not_found"
+                "cli_not_found",
             );
         };
 
@@ -168,7 +186,12 @@ impl Provider for AgyProvider {
         // Resilient JSON extraction (handle CLI banners/prefixes)
         let raw: Option<Value> = try_parse_json(&stdout);
         let Some(raw) = raw else {
-            return UsageMetrics::error_result("agy", "Antigravity", "agy 配額格式不相容，請查看相容性文件", "schema");
+            return UsageMetrics::error_result(
+                "agy",
+                "Antigravity",
+                "agy 配額格式不相容，請查看相容性文件",
+                "schema",
+            );
         };
 
         parse_agy_json(raw, &now)
@@ -205,15 +228,34 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
     let mut third_party_rem_pct: Option<f64> = None;
 
     for g in &groups {
-        let g_name = g.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+        let g_name = g
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
 
         if g_name.contains("gemini") {
-            let buckets = g.get("buckets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let buckets = g
+                .get("buckets")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             for b in &buckets {
-                let b_id = b.get("id").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-                let b_window = b.get("window").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
-                let rem_frac = percentage(b.get("remaining_fraction").and_then(|v| v.as_f64()), 1.0);
-                let Some(rem_frac) = rem_frac else { continue; };
+                let b_id = b
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let b_window = b
+                    .get("window")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                let rem_frac =
+                    percentage(b.get("remaining_fraction").and_then(|v| v.as_f64()), 1.0);
+                let Some(rem_frac) = rem_frac else {
+                    continue;
+                };
                 let used_pct = (1.0 - rem_frac) * 100.0;
                 let used_pct = used_pct.clamp(0.0, 100.0);
 
@@ -236,15 +278,25 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
                 }
             }
         } else if g_name.contains("claude") || g_name.contains("gpt") {
-            let buckets = g.get("buckets").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+            let buckets = g
+                .get("buckets")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
             for b in &buckets {
-                let b_id = b.get("id").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+                let b_id = b
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 if b_id.contains("week") {
-                    let rem_frac = percentage(b.get("remaining_fraction").and_then(|v| v.as_f64()), 1.0);
+                    let rem_frac =
+                        percentage(b.get("remaining_fraction").and_then(|v| v.as_f64()), 1.0);
                     if let Some(rem_frac) = rem_frac {
                         let remaining = rem_frac * 100.0;
-                        third_party_rem_pct = Some(third_party_rem_pct
-                            .map_or(remaining, |cur: f64| cur.min(remaining)));
+                        third_party_rem_pct = Some(
+                            third_party_rem_pct.map_or(remaining, |cur: f64| cur.min(remaining)),
+                        );
                     }
                 }
             }
@@ -278,4 +330,3 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
         ..Default::default()
     }
 }
-

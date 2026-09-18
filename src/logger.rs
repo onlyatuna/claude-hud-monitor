@@ -95,7 +95,11 @@ pub fn log_dir() -> PathBuf {
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_owned());
-        PathBuf::from(home).join(".local").join("share").join("ClaudeHUDMonitor").join("logs")
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("ClaudeHUDMonitor")
+            .join("logs")
     }
 }
 

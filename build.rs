@@ -6,7 +6,10 @@ fn main() {
         let mut res = winres::WindowsResource::new();
         res.set_icon("assets/app_icon.ico");
         res.set("ProductName", "Claude HUD Monitor");
-        res.set("FileDescription", "AI Agent HUD Monitor (Claude / Antigravity / OpenAI Codex)");
+        res.set(
+            "FileDescription",
+            "AI Agent HUD Monitor (Claude / Antigravity / OpenAI Codex)",
+        );
         res.set("LegalCopyright", "Copyright (c) 2026");
         res.set_manifest(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">

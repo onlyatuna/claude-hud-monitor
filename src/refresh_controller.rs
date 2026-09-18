@@ -12,7 +12,7 @@ use crate::providers::{Provider, UsageMetrics};
 use chrono::Utc;
 use log::warn;
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Sender, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -78,8 +78,7 @@ impl RefreshController {
         let ids: Vec<String> = self.states.keys().cloned().collect();
         for id in ids {
             let state = self.states.get(&id).unwrap();
-            let should_launch = !state.running
-                && state.due.is_none_or(|due| now >= due);
+            let should_launch = !state.running && state.due.is_none_or(|due| now >= due);
             if should_launch {
                 if let Some(provider) = providers.get(&id) {
                     self.launch(&id, Arc::clone(provider));
@@ -172,18 +171,21 @@ impl RefreshController {
 
         if let Some(ref err) = result.error.clone() {
             state.failures += 1;
-            let delay_secs = u64::min(900, (self.interval.as_secs() as f64
-                * 2f64.powi((state.failures as i32 - 1).min(4))) as u64);
-            let delay = Duration::from_secs_f64(
-                if let Some(ra) = result.retry_after {
-                    (delay_secs as f64).max(ra)
-                } else {
-                    delay_secs as f64
-                }
+            let delay_secs = u64::min(
+                900,
+                (self.interval.as_secs() as f64 * 2f64.powi((state.failures as i32 - 1).min(4)))
+                    as u64,
             );
+            let delay = Duration::from_secs_f64(if let Some(ra) = result.retry_after {
+                (delay_secs as f64).max(ra)
+            } else {
+                delay_secs as f64
+            });
             warn!(
                 "provider={} error={} retry={:.1}s",
-                item.provider_id, result.error_code, delay.as_secs_f64()
+                item.provider_id,
+                result.error_code,
+                delay.as_secs_f64()
             );
             state.due = Some(now + delay);
 

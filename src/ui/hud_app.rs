@@ -7,16 +7,18 @@ use std::time::{Duration, Instant};
 use egui::{Color32, RichText};
 use log::info;
 
-use crate::config::{Config, ConfigManager};
-use crate::hotkey::HotkeyManager;
-use crate::providers::{ClaudeProvider, AgyProvider, CodexProvider, Provider, UsageMetrics, PROVIDER_IDS};
-use crate::refresh_controller::RefreshController;
 use super::native_menu::{self, MenuAction};
 use super::provider_card::render_provider_card;
 use super::styles::{
-    apply_hud_visuals, BG_DARK, BORDER_COLOR, TEXT_MUTED, TEXT_SECONDARY,
-    COLOR_GREEN, COLOR_BLUE, COLOR_AMBER,
+    apply_hud_visuals, BG_DARK, BORDER_COLOR, COLOR_AMBER, COLOR_BLUE, COLOR_GREEN, TEXT_MUTED,
+    TEXT_SECONDARY,
 };
+use crate::config::{Config, ConfigManager};
+use crate::hotkey::HotkeyManager;
+use crate::providers::{
+    AgyProvider, ClaudeProvider, CodexProvider, Provider, UsageMetrics, PROVIDER_IDS,
+};
+use crate::refresh_controller::RefreshController;
 
 #[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug)]
@@ -65,9 +67,18 @@ impl HudApp {
 
         // Build Arc-wrapped providers and register them with the controller
         let providers_arc: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::from([
-            ("claude".to_owned(), Arc::new(ClaudeProvider::new()) as Arc<dyn Provider + Send + Sync>),
-            ("agy".to_owned(),    Arc::new(AgyProvider::new())    as Arc<dyn Provider + Send + Sync>),
-            ("codex".to_owned(),  Arc::new(CodexProvider::new())  as Arc<dyn Provider + Send + Sync>),
+            (
+                "claude".to_owned(),
+                Arc::new(ClaudeProvider::new()) as Arc<dyn Provider + Send + Sync>,
+            ),
+            (
+                "agy".to_owned(),
+                Arc::new(AgyProvider::new()) as Arc<dyn Provider + Send + Sync>,
+            ),
+            (
+                "codex".to_owned(),
+                Arc::new(CodexProvider::new()) as Arc<dyn Provider + Send + Sync>,
+            ),
         ]);
 
         {
@@ -160,7 +171,9 @@ impl HudApp {
             }
         }
 
-        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(min_w, min_h)));
+        ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
+            min_w, min_h,
+        )));
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
     }
 
@@ -168,7 +181,10 @@ impl HudApp {
     pub fn handle_menu_action(&mut self, action: MenuAction, ctx: &egui::Context) {
         match action {
             MenuAction::RefreshAll => {
-                self.refresh_ctrl.lock().unwrap().refresh(&self.providers_arc);
+                self.refresh_ctrl
+                    .lock()
+                    .unwrap()
+                    .refresh(&self.providers_arc);
             }
             MenuAction::SetLayoutHorizontal => {
                 let cur = self.config.lock().unwrap().layout_mode.clone();
@@ -257,7 +273,9 @@ impl HudApp {
                     set_window_rect(self.hwnd, phys_x, phys_y, phys_w, phys_h);
                 }
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
-                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(400.0, 50.0)));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
+                    400.0, 50.0,
+                )));
             }
             MenuAction::OpenLogs => {
                 crate::logger::open_log_dir();
@@ -369,17 +387,27 @@ impl eframe::App for HudApp {
         #[cfg(not(target_os = "linux"))]
         while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
             match event {
-                tray_icon::TrayIconEvent::Click { button: tray_icon::MouseButton::Left, button_state: tray_icon::MouseButtonState::Up, .. } => {
+                tray_icon::TrayIconEvent::Click {
+                    button: tray_icon::MouseButton::Left,
+                    button_state: tray_icon::MouseButtonState::Up,
+                    ..
+                } => {
                     self.is_visible = !self.is_visible;
                     ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.is_visible));
                     if self.is_visible {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                     }
                 }
-                tray_icon::TrayIconEvent::Click { button: tray_icon::MouseButton::Right, button_state: tray_icon::MouseButtonState::Up, .. } => {
+                tray_icon::TrayIconEvent::Click {
+                    button: tray_icon::MouseButton::Right,
+                    button_state: tray_icon::MouseButtonState::Up,
+                    ..
+                } => {
                     let cfg = self.config.lock().unwrap().clone();
                     let is_as = crate::autostart::is_autostart_enabled();
-                    if let Some(action) = native_menu::show_native_context_menu(self.hwnd, &cfg, is_as) {
+                    if let Some(action) =
+                        native_menu::show_native_context_menu(self.hwnd, &cfg, is_as)
+                    {
                         self.handle_menu_action(action, ctx);
                     }
                 }
@@ -507,7 +535,9 @@ impl eframe::App for HudApp {
                         if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
                             && self.hwnd != 0
                         {
-                            if let (Some(cur_pos), Some(rect)) = (get_cursor_screen_pos(), get_window_rect(self.hwnd)) {
+                            if let (Some(cur_pos), Some(rect)) =
+                                (get_cursor_screen_pos(), get_window_rect(self.hwnd))
+                            {
                                 set_mouse_capture(self.hwnd);
                                 self.active_resize = Some(ActiveResize {
                                     direction: dir,
@@ -557,7 +587,12 @@ impl eframe::App for HudApp {
             .fill(BG_DARK)
             .rounding(9.0)
             .stroke(egui::Stroke::new(1.0_f32, BORDER_COLOR))
-            .inner_margin(egui::Margin { left: 10.0, right: 10.0, top: 5.0, bottom: 5.0 });
+            .inner_margin(egui::Margin {
+                left: 10.0,
+                right: 10.0,
+                top: 5.0,
+                bottom: 5.0,
+            });
 
         egui::CentralPanel::default()
             .frame(hud_frame)
@@ -566,9 +601,13 @@ impl eframe::App for HudApp {
 
                 let is_resizing = {
                     #[cfg(target_os = "windows")]
-                    { self.active_resize.is_some() }
+                    {
+                        self.active_resize.is_some()
+                    }
                     #[cfg(not(target_os = "windows"))]
-                    { false }
+                    {
+                        false
+                    }
                 };
 
                 // Window dragging, double click to refresh, right-click native menu
@@ -577,22 +616,28 @@ impl eframe::App for HudApp {
                 } else {
                     egui::Sense::click_and_drag()
                 };
-                let drag_interact = ui.interact(
-                    outer_rect,
-                    egui::Id::new("hud_main_area"),
-                    sense,
-                );
+                let drag_interact = ui.interact(outer_rect, egui::Id::new("hud_main_area"), sense);
 
                 let mouse_over_toggle = if self.toggle_btn_rect.is_positive() {
-                    ctx.input(|i| i.pointer.hover_pos()).map(|p| self.toggle_btn_rect.contains(p)).unwrap_or(false)
+                    ctx.input(|i| i.pointer.hover_pos())
+                        .map(|p| self.toggle_btn_rect.contains(p))
+                        .unwrap_or(false)
                 } else {
                     false
                 };
 
-                let is_hovered = ctx.input(|i| i.pointer.hover_pos()).map(|p| outer_rect.contains(p)).unwrap_or(false);
+                let is_hovered = ctx
+                    .input(|i| i.pointer.hover_pos())
+                    .map(|p| outer_rect.contains(p))
+                    .unwrap_or(false);
 
                 // Native smooth DWM drag-to-move immediately upon left mouse button pressed
-                if is_hovered && hovered_resize_edge.is_none() && !is_resizing && !mouse_over_toggle && !is_locked && !is_clickthrough
+                if is_hovered
+                    && hovered_resize_edge.is_none()
+                    && !is_resizing
+                    && !mouse_over_toggle
+                    && !is_locked
+                    && !is_clickthrough
                     && ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
                 {
                     #[cfg(target_os = "windows")]
@@ -607,14 +652,19 @@ impl eframe::App for HudApp {
                 }
 
                 if !is_clickthrough && drag_interact.double_clicked() {
-                    self.refresh_ctrl.lock().unwrap().refresh(&self.providers_arc);
+                    self.refresh_ctrl
+                        .lock()
+                        .unwrap()
+                        .refresh(&self.providers_arc);
                 }
 
                 // Native Win32 Context Menu on Right Click (floats outside window, never clipped)
                 if !is_clickthrough && drag_interact.secondary_clicked() {
                     let cfg = self.config.lock().unwrap().clone();
                     let is_as = crate::autostart::is_autostart_enabled();
-                    if let Some(action) = native_menu::show_native_context_menu(self.hwnd, &cfg, is_as) {
+                    if let Some(action) =
+                        native_menu::show_native_context_menu(self.hwnd, &cfg, is_as)
+                    {
                         self.handle_menu_action(action, ctx);
                     }
                 }
@@ -638,20 +688,19 @@ impl eframe::App for HudApp {
 }
 
 fn set_resize_cursor(ctx: &egui::Context, dir: egui::viewport::ResizeDirection) {
-    let cursor = match dir {
-        egui::viewport::ResizeDirection::North | egui::viewport::ResizeDirection::South => {
-            egui::CursorIcon::ResizeVertical
-        }
-        egui::viewport::ResizeDirection::East | egui::viewport::ResizeDirection::West => {
-            egui::CursorIcon::ResizeHorizontal
-        }
-        egui::viewport::ResizeDirection::NorthWest | egui::viewport::ResizeDirection::SouthEast => {
-            egui::CursorIcon::ResizeNwSe
-        }
-        egui::viewport::ResizeDirection::NorthEast | egui::viewport::ResizeDirection::SouthWest => {
-            egui::CursorIcon::ResizeNeSw
-        }
-    };
+    let cursor =
+        match dir {
+            egui::viewport::ResizeDirection::North | egui::viewport::ResizeDirection::South => {
+                egui::CursorIcon::ResizeVertical
+            }
+            egui::viewport::ResizeDirection::East | egui::viewport::ResizeDirection::West => {
+                egui::CursorIcon::ResizeHorizontal
+            }
+            egui::viewport::ResizeDirection::NorthWest
+            | egui::viewport::ResizeDirection::SouthEast => egui::CursorIcon::ResizeNwSe,
+            egui::viewport::ResizeDirection::NorthEast
+            | egui::viewport::ResizeDirection::SouthWest => egui::CursorIcon::ResizeNeSw,
+        };
     ctx.set_cursor_icon(cursor);
 }
 
@@ -754,7 +803,8 @@ fn init_win32_window_frame(hwnd: isize) {
             _id: usize,
             _data: usize,
         ) -> isize {
-            if msg == 0x0014 { // WM_ERASEBKGND
+            if msg == 0x0014 {
+                // WM_ERASEBKGND
                 return 1;
             }
             DefSubclassProc(h, msg, w, l)
@@ -875,7 +925,12 @@ fn get_window_rect(hwnd: isize) -> Option<[i32; 4]> {
     extern "system" {
         fn GetWindowRect(hWnd: isize, lpRect: *mut RECT) -> i32;
     }
-    let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut r = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     unsafe {
         if GetWindowRect(hwnd, &mut r) != 0 {
             Some([r.left, r.top, r.right - r.left, r.bottom - r.top])
@@ -903,7 +958,15 @@ fn set_window_rect(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
     const SWP_NOACTIVATE: u32 = 0x0010;
     const SWP_NOCOPYBITS: u32 = 0x0100;
     unsafe {
-        SetWindowPos(hwnd, 0, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS);
+        SetWindowPos(
+            hwnd,
+            0,
+            x,
+            y,
+            w,
+            h,
+            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
+        );
     }
 }
 
@@ -967,8 +1030,15 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
     extern "system" {
         fn GetWindowLongW(hWnd: isize, nIndex: i32) -> i32;
         fn SetWindowLongW(hWnd: isize, nIndex: i32, dwNewLong: i32) -> i32;
-        fn SetWindowPos(hWnd: isize, hWndInsertAfter: isize, X: i32, Y: i32,
-                        cx: i32, cy: i32, uFlags: u32) -> i32;
+        fn SetWindowPos(
+            hWnd: isize,
+            hWndInsertAfter: isize,
+            X: i32,
+            Y: i32,
+            cx: i32,
+            cy: i32,
+            uFlags: u32,
+        ) -> i32;
     }
     const GWL_EXSTYLE: i32 = -20;
     const WS_EX_TRANSPARENT: i32 = 0x00000020;
@@ -977,7 +1047,9 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
     const SWP_NOZORDER: u32 = 0x0004;
     const SWP_FRAMECHANGED: u32 = 0x0020;
     const SWP_NOACTIVATE: u32 = 0x0010;
-    if hwnd == 0 { return; }
+    if hwnd == 0 {
+        return;
+    }
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         let new_style = if enable {
@@ -987,13 +1059,18 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
         };
         if new_style != style {
             SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
-            SetWindowPos(hwnd, 0, 0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE);
+            SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
         }
     }
 }
-
-
 
 impl HudApp {
     fn render_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
@@ -1036,11 +1113,9 @@ impl HudApp {
                         .size(10.5)
                         .strong(),
                 );
-                let dot_center = egui::pos2(
-                    dot_rect.center().x,
-                    title_resp.rect.center().y - 0.5,
-                );
-                ui.painter().circle_filled(dot_center, dot_radius, dot_color);
+                let dot_center = egui::pos2(dot_rect.center().x, title_resp.rect.center().y - 0.5);
+                ui.painter()
+                    .circle_filled(dot_center, dot_radius, dot_color);
 
                 // 3. Ghost icon if click-through is active (True color 3D emoji matching Python)
                 if self.config.lock().unwrap().click_through {
@@ -1052,25 +1127,24 @@ impl HudApp {
                         ));
                     }
                     if let Some(tex) = &self.ghost_texture {
-                        ui.add(
-                            egui::Image::new(tex)
-                                .fit_to_exact_size(egui::vec2(14.0, 14.0))
-                        ).on_hover_text("滑鼠穿透中 (Alt+Shift+C 解除)");
+                        ui.add(egui::Image::new(tex).fit_to_exact_size(egui::vec2(14.0, 14.0)))
+                            .on_hover_text("滑鼠穿透中 (Alt+Shift+C 解除)");
                     }
                 }
 
                 // 4. Layout Toggle Button "⇄" (QPushButton#LayoutToggleBtn matching Python)
-                let toggle_btn = ui.add(
-                    egui::Button::new(
-                        RichText::new("⇄")
-                            .size(10.5)
-                            .color(TEXT_SECONDARY),
+                let toggle_btn = ui
+                    .add(
+                        egui::Button::new(RichText::new("⇄").size(10.5).color(TEXT_SECONDARY))
+                            .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 15))
+                            .stroke(egui::Stroke::new(
+                                1.0_f32,
+                                Color32::from_rgba_unmultiplied(255, 255, 255, 25),
+                            ))
+                            .rounding(4.0)
+                            .min_size(egui::vec2(20.0, 16.0)),
                     )
-                    .fill(Color32::from_rgba_unmultiplied(255, 255, 255, 15))
-                    .stroke(egui::Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 25)))
-                    .rounding(4.0)
-                    .min_size(egui::vec2(20.0, 16.0)),
-                ).on_hover_text("切換 橫向三欄並排 / 直式三層堆疊 佈局");
+                    .on_hover_text("切換 橫向三欄並排 / 直式三層堆疊 佈局");
 
                 self.toggle_btn_rect = toggle_btn.rect.expand(2.0);
 
@@ -1115,7 +1189,10 @@ impl HudApp {
             if i < total_cards - 1 {
                 ui.add_space(div_spacing);
                 // h_div: background-color: rgba(255, 255, 255, 0.08); max-height: 1px;
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 1.0),
+                    egui::Sense::hover(),
+                );
                 ui.painter().rect_filled(
                     rect,
                     0.0,
@@ -1157,16 +1234,17 @@ impl HudApp {
                     ui.add_space(spacing);
                     // QFrame#Divider: background-color: rgba(255, 255, 255, 0.12); width: 1px;
                     // Pixel-snapped vertical line segment matching card vertical bounds
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(1.0, avail_h),
-                        egui::Sense::hover(),
-                    );
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(1.0, avail_h), egui::Sense::hover());
                     let x = rect.center().x.round();
                     let y_top = rect.top() + 4.0;
                     let y_bot = rect.bottom() - 4.0;
                     ui.painter().line_segment(
                         [egui::pos2(x, y_top), egui::pos2(x, y_bot)],
-                        egui::Stroke::new(1.0_f32, Color32::from_rgba_unmultiplied(255, 255, 255, 30)),
+                        egui::Stroke::new(
+                            1.0_f32,
+                            Color32::from_rgba_unmultiplied(255, 255, 255, 30),
+                        ),
                     );
                     ui.add_space(spacing);
                 }
@@ -1230,7 +1308,11 @@ pub fn trim_working_set() {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetCurrentProcess() -> isize;
-        fn SetProcessWorkingSetSize(hProcess: isize, dwMinimumWorkingSetSize: usize, dwMaximumWorkingSetSize: usize) -> i32;
+        fn SetProcessWorkingSetSize(
+            hProcess: isize,
+            dwMinimumWorkingSetSize: usize,
+            dwMaximumWorkingSetSize: usize,
+        ) -> i32;
     }
     unsafe {
         SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);

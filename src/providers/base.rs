@@ -58,7 +58,12 @@ pub struct UsageMetrics {
 }
 
 impl UsageMetrics {
-    pub fn error_result(provider_id: &str, provider_name: &str, error: &str, error_code: &str) -> Self {
+    pub fn error_result(
+        provider_id: &str,
+        provider_name: &str,
+        error: &str,
+        error_code: &str,
+    ) -> Self {
         Self {
             provider_id: provider_id.to_owned(),
             provider_name: provider_name.to_owned(),

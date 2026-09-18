@@ -11,9 +11,9 @@
 // cross-thread GUI calls.
 
 use log::{info, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "windows")]
 use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -33,7 +33,12 @@ impl Drop for HotkeyManager {
             if tid != 0 {
                 #[link(name = "user32")]
                 extern "system" {
-                    fn PostThreadMessageW(idThread: u32, Msg: u32, wParam: usize, lParam: isize) -> i32;
+                    fn PostThreadMessageW(
+                        idThread: u32,
+                        Msg: u32,
+                        wParam: usize,
+                        lParam: isize,
+                    ) -> i32;
                 }
                 const WM_QUIT: u32 = 0x0012;
                 unsafe {
@@ -84,18 +89,26 @@ impl HotkeyManager {
 
     /// Returns true and clears the flag if a toggle event is pending.
     pub fn poll_toggle(&self) -> bool {
-        self.toggle_flag.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+        self.toggle_flag
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
     }
 
     /// Returns true and clears the flag if a click-through event is pending.
     pub fn poll_clickthrough(&self) -> bool {
-        self.clickthrough_flag.compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+        self.clickthrough_flag
+            .compare_exchange(true, false, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
     }
 }
 
 /// Windows-specific Win32 RegisterHotKey message loop.
 #[cfg(target_os = "windows")]
-fn windows_hotkey_loop(toggle_flag: Arc<AtomicBool>, ct_flag: Arc<AtomicBool>, thread_id: Arc<AtomicU32>) {
+fn windows_hotkey_loop(
+    toggle_flag: Arc<AtomicBool>,
+    ct_flag: Arc<AtomicBool>,
+    thread_id: Arc<AtomicU32>,
+) {
     use std::mem::MaybeUninit;
 
     #[link(name = "kernel32")]
@@ -125,7 +138,12 @@ fn windows_hotkey_loop(toggle_flag: Arc<AtomicBool>, ct_flag: Arc<AtomicBool>, t
             info!("[Hotkey] Alt+C registered");
         }
 
-        let ok2 = RegisterHotKey(0, HOTKEY_ID_CLICKTHROUGH, MOD_ALT | MOD_SHIFT | MOD_NOREPEAT, VK_C);
+        let ok2 = RegisterHotKey(
+            0,
+            HOTKEY_ID_CLICKTHROUGH,
+            MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+            VK_C,
+        );
         if ok2 == 0 {
             warn!("[Hotkey] Alt+Shift+C registration failed");
         } else {
@@ -134,7 +152,9 @@ fn windows_hotkey_loop(toggle_flag: Arc<AtomicBool>, ct_flag: Arc<AtomicBool>, t
 
         loop {
             let ret = GetMessageW(&mut msg, 0, 0, 0);
-            if ret <= 0 { break; }
+            if ret <= 0 {
+                break;
+            }
             if msg.message == WM_HOTKEY {
                 if msg.wParam == HOTKEY_ID_TOGGLE as usize {
                     toggle_flag.store(true, Ordering::SeqCst);
@@ -155,7 +175,10 @@ fn windows_hotkey_loop(toggle_flag: Arc<AtomicBool>, ct_flag: Arc<AtomicBool>, t
 // ── Win32 FFI declarations ────────────────────────────────────────────────────
 #[cfg(target_os = "windows")]
 #[repr(C)]
-struct POINT { x: i32, y: i32 }
+struct POINT {
+    x: i32,
+    y: i32,
+}
 
 #[cfg(target_os = "windows")]
 #[repr(C)]
@@ -174,5 +197,11 @@ extern "system" {
     fn RegisterHotKey(hWnd: usize, id: i32, fsModifiers: u32, vk: u32) -> i32;
     fn UnregisterHotKey(hWnd: usize, id: i32) -> i32;
     fn GetMessageW(lpMsg: *mut MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
-    fn PeekMessageW(lpMsg: *mut MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32, wRemoveMsg: u32) -> i32;
+    fn PeekMessageW(
+        lpMsg: *mut MSG,
+        hWnd: usize,
+        wMsgFilterMin: u32,
+        wMsgFilterMax: u32,
+        wRemoveMsg: u32,
+    ) -> i32;
 }

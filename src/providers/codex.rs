@@ -4,8 +4,8 @@
 // Calls https://chatgpt.com/backend-api/wham/usage
 // Mirrors Python core/providers/codex_provider.py
 
-use super::base::{percentage, percent_text, now_str, Provider, UsageMetrics};
-use chrono::{DateTime, Utc, TimeZone};
+use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
+use chrono::{DateTime, TimeZone, Utc};
 use log::error;
 use serde_json::Value;
 use std::fs;
@@ -73,16 +73,21 @@ fn window_title(window: &Value, fallback: &str) -> String {
 }
 
 impl Provider for CodexProvider {
-    fn provider_id(&self) -> &str { "codex" }
-    fn display_name(&self) -> &str { "OpenAI Codex" }
+    fn provider_id(&self) -> &str {
+        "codex"
+    }
+    fn display_name(&self) -> &str {
+        "OpenAI Codex"
+    }
 
     fn fetch_usage(&self) -> UsageMetrics {
         let now = now_str();
         let Some(auth_data) = self.get_auth_data() else {
             return UsageMetrics::error_result(
-                "codex", "OpenAI Codex",
+                "codex",
+                "OpenAI Codex",
                 "未找到 Codex 授權檔 (~/.codex/auth.json)\n請執行 codex 登入",
-                ""
+                "",
             );
         };
 
@@ -91,15 +96,20 @@ impl Provider for CodexProvider {
             Some(t) => t.to_owned(),
             None => {
                 return UsageMetrics::error_result(
-                    "codex", "OpenAI Codex",
+                    "codex",
+                    "OpenAI Codex",
                     "未找到 access_token\n請於終端機執行 codex 登入",
-                    ""
+                    "",
                 );
             }
         };
-        let account_id = tokens.get("account_id").and_then(|v| v.as_str()).map(|s| s.to_owned());
+        let account_id = tokens
+            .get("account_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_owned());
 
-        let mut req = self.client
+        let mut req = self
+            .client
             .get(USAGE_URL)
             .header("Authorization", format!("Bearer {}", access_token))
             .header("User-Agent", USER_AGENT)
@@ -146,19 +156,30 @@ impl Provider for CodexProvider {
                 }
                 if !status.is_success() {
                     return UsageMetrics::error_result(
-                        "codex", "OpenAI Codex",
+                        "codex",
+                        "OpenAI Codex",
                         &format!("API 回應異常: HTTP {}", status.as_u16()),
-                        "http"
+                        "http",
                     );
                 }
                 match resp.json::<Value>() {
                     Ok(json) => parse_codex_response(json, &now),
-                    Err(_) => UsageMetrics::error_result("codex", "OpenAI Codex", "未取得有效配額資料", "schema"),
+                    Err(_) => UsageMetrics::error_result(
+                        "codex",
+                        "OpenAI Codex",
+                        "未取得有效配額資料",
+                        "schema",
+                    ),
                 }
             }
             Err(e) => {
                 error!("[CodexProvider] Request error: {e}");
-                UsageMetrics::error_result("codex", "OpenAI Codex", "配額連線失敗，將自動重試", "network")
+                UsageMetrics::error_result(
+                    "codex",
+                    "OpenAI Codex",
+                    "配額連線失敗，將自動重試",
+                    "network",
+                )
             }
         }
     }
@@ -172,13 +193,22 @@ fn parse_codex_response(data: Value, now_str: &str) -> UsageMetrics {
     let s_used_pct = percentage(primary.get("used_percent").and_then(|v| v.as_f64()), 100.0);
     let s_reset_dt = parse_timestamp(primary.get("reset_at"));
 
-    let w_used_pct = percentage(secondary.get("used_percent").and_then(|v| v.as_f64()), 100.0);
+    let w_used_pct = percentage(
+        secondary.get("used_percent").and_then(|v| v.as_f64()),
+        100.0,
+    );
     let w_reset_dt = parse_timestamp(secondary.get("reset_at"));
 
     let plan = data.get("plan_type").and_then(|v| v.as_str()).unwrap_or("");
     let plan_badge = if !plan.is_empty() {
         let mut c = plan.chars();
-        format!("Plan: {}", c.next().map(|ch| ch.to_uppercase().to_string()).unwrap_or_default() + c.as_str())
+        format!(
+            "Plan: {}",
+            c.next()
+                .map(|ch| ch.to_uppercase().to_string())
+                .unwrap_or_default()
+                + c.as_str()
+        )
     } else {
         String::new()
     };
@@ -211,5 +241,10 @@ fn parse_codex_response(data: Value, now_str: &str) -> UsageMetrics {
 }
 
 fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<f64> {
-    headers.get("Retry-After")?.to_str().ok()?.parse::<f64>().ok()
+    headers
+        .get("Retry-After")?
+        .to_str()
+        .ok()?
+        .parse::<f64>()
+        .ok()
 }
