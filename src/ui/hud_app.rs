@@ -229,6 +229,7 @@ impl HudApp {
                 let mut cfg = self.config.lock().unwrap();
                 cfg.opacity = pct as f32 / 100.0;
                 ConfigManager::save(&cfg);
+                ctx.request_repaint();
             }
             MenuAction::SetInterval(sec) => {
                 let mut cfg = self.config.lock().unwrap();
@@ -583,10 +584,13 @@ impl eframe::App for HudApp {
         // ══════════════════════════════════════════════════════════════
         // Main Central Panel (Frameless HUD Container matching get_hud_stylesheet)
         // ══════════════════════════════════════════════════════════════
+        let opacity = self.config.lock().unwrap().opacity.clamp(0.1, 1.0);
+
         let hud_frame = egui::Frame::none()
             .fill(BG_DARK)
             .rounding(9.0)
             .stroke(egui::Stroke::new(1.0_f32, BORDER_COLOR))
+            .multiply_with_opacity(opacity)
             .inner_margin(egui::Margin {
                 left: 10.0,
                 right: 10.0,
@@ -597,6 +601,7 @@ impl eframe::App for HudApp {
         egui::CentralPanel::default()
             .frame(hud_frame)
             .show(ctx, |ui| {
+                ui.multiply_opacity(opacity);
                 let outer_rect = ui.max_rect();
 
                 let is_resizing = {
