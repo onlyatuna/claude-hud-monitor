@@ -4,6 +4,7 @@
 // Uses TrackPopupMenuEx to create a true OS-level popup menu that floats freely outside the window.
 
 use crate::config::Config;
+use eframe::egui;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -628,4 +629,144 @@ pub fn show_native_context_menu(
     _is_autostart: bool,
 ) -> Option<MenuAction> {
     None
+}
+
+/// Cross-platform egui context menu rendering fallback (used on macOS/Linux or embedded menus)
+#[allow(dead_code)]
+pub fn render_context_menu_items(
+    ui: &mut egui::Ui,
+    cfg: &Config,
+    is_autostart: bool,
+) -> Option<MenuAction> {
+    let mut selected: Option<MenuAction> = None;
+
+    if ui.button("🔄 立即重新整理").clicked() {
+        selected = Some(MenuAction::RefreshAll);
+        ui.close_menu();
+    }
+    ui.separator();
+
+    ui.menu_button("📐 佈局模式", |ui| {
+        let is_horiz = cfg.layout_mode == "horizontal";
+        let is_vert = cfg.layout_mode == "vertical";
+        let horiz_label = if is_horiz {
+            "✔ 水平排列 (Horizontal)"
+        } else {
+            "   水平排列 (Horizontal)"
+        };
+        let vert_label = if is_vert {
+            "✔ 垂直排列 (Vertical)"
+        } else {
+            "   垂直排列 (Vertical)"
+        };
+
+        if ui.button(horiz_label).clicked() {
+            selected = Some(MenuAction::SetLayoutHorizontal);
+            ui.close_menu();
+        }
+        if ui.button(vert_label).clicked() {
+            selected = Some(MenuAction::SetLayoutVertical);
+            ui.close_menu();
+        }
+    });
+
+    let aot_label = if cfg.always_on_top {
+        "✔ 置頂顯示"
+    } else {
+        "   置頂顯示"
+    };
+    if ui.button(aot_label).clicked() {
+        selected = Some(MenuAction::ToggleAlwaysOnTop);
+        ui.close_menu();
+    }
+
+    let ct_label = if cfg.click_through {
+        "✔ 點擊穿透 (Ghost)"
+    } else {
+        "   點擊穿透 (Ghost)"
+    };
+    if ui.button(ct_label).clicked() {
+        selected = Some(MenuAction::ToggleClickThrough);
+        ui.close_menu();
+    }
+
+    let lock_label = if cfg.locked {
+        "✔ 鎖定視窗位置"
+    } else {
+        "   鎖定視窗位置"
+    };
+    if ui.button(lock_label).clicked() {
+        selected = Some(MenuAction::ToggleLock);
+        ui.close_menu();
+    }
+
+    ui.separator();
+
+    ui.menu_button("🌫 不透明度", |ui| {
+        let op = (cfg.opacity * 100.0).round() as u32;
+        let levels = [100, 90, 80, 70, 50, 30];
+        for lvl in levels {
+            let label = if (op as i32 - lvl as i32).abs() <= 5 {
+                format!("✔ {}%", lvl)
+            } else {
+                format!("   {}%", lvl)
+            };
+            if ui.button(label).clicked() {
+                selected = Some(MenuAction::SetOpacity(lvl));
+                ui.close_menu();
+            }
+        }
+    });
+
+    ui.menu_button("⏱ 更新頻率", |ui| {
+        let cur_int = cfg.refresh_interval_sec;
+        let intervals = [
+            (30, "30 秒"),
+            (60, "60 秒 (預設)"),
+            (120, "2 分鐘"),
+            (300, "5 分鐘"),
+        ];
+        for (sec, text) in intervals {
+            let label = if cur_int == sec {
+                format!("✔ {}", text)
+            } else {
+                format!("   {}", text)
+            };
+            if ui.button(label).clicked() {
+                selected = Some(MenuAction::SetInterval(sec));
+                ui.close_menu();
+            }
+        }
+    });
+
+    let as_label = if is_autostart {
+        "✔ 開機自動啟動"
+    } else {
+        "   開機自動啟動"
+    };
+    if ui.button(as_label).clicked() {
+        selected = Some(MenuAction::ToggleAutostart);
+        ui.close_menu();
+    }
+
+    ui.separator();
+
+    if ui.button("📏 重設視窗大小").clicked() {
+        selected = Some(MenuAction::ResetGeometry);
+        ui.close_menu();
+    }
+
+    if ui.button("📂 開啟記錄檔目錄").clicked() {
+        selected = Some(MenuAction::OpenLogs);
+        ui.close_menu();
+    }
+
+    ui.separator();
+
+    if ui.button("❌ 結束程式").clicked() {
+        selected = Some(MenuAction::Exit);
+        ui.close_menu();
+    }
+
+    selected
 }

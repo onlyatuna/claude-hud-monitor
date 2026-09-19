@@ -93,6 +93,7 @@ impl HudApp {
 
         {
             let mut ctrl = refresh_ctrl.lock().unwrap();
+            ctrl.set_egui_ctx(cc.egui_ctx.clone());
             for (id, provider) in &providers_arc {
                 ctrl.states.insert(id.clone(), Default::default());
                 ctrl.launch(id, Arc::clone(provider));
@@ -328,6 +329,7 @@ impl eframe::App for HudApp {
             if let Some(hk) = &self.hotkey {
                 hk.set_context(ctx.clone());
             }
+            self.refresh_ctrl.lock().unwrap().set_egui_ctx(ctx.clone());
         }
         #[cfg(target_os = "windows")]
         if self.frame_count == 10 {
@@ -695,7 +697,8 @@ impl eframe::App for HudApp {
                         .refresh(&self.providers_arc);
                 }
 
-                // Native Win32 Context Menu on Right Click (floats outside window, never clipped)
+                // Context Menu on Right Click
+                #[cfg(target_os = "windows")]
                 if !is_clickthrough && drag_interact.secondary_clicked() {
                     let cfg = self.config.lock().unwrap().clone();
                     let is_as = crate::autostart::is_autostart_enabled();
@@ -704,6 +707,21 @@ impl eframe::App for HudApp {
                     {
                         self.handle_menu_action(action, ctx);
                     }
+                }
+
+                #[cfg(not(target_os = "windows"))]
+                let mut egui_menu_action: Option<native_menu::MenuAction> = None;
+                #[cfg(not(target_os = "windows"))]
+                if !is_clickthrough {
+                    let cfg = self.config.lock().unwrap().clone();
+                    let is_as = crate::autostart::is_autostart_enabled();
+                    drag_interact.context_menu(|ui| {
+                        egui_menu_action = native_menu::render_context_menu_items(ui, &cfg, is_as);
+                    });
+                }
+                #[cfg(not(target_os = "windows"))]
+                if let Some(action) = egui_menu_action {
+                    self.handle_menu_action(action, ctx);
                 }
 
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 3.0); // inner_layout.setSpacing(3)
@@ -751,28 +769,60 @@ fn get_window_hwnd() -> isize {
             lParam: isize,
         ) -> i32;
         fn GetParent(hWnd: isize) -> isize;
+        fn GetWindowTextW(hWnd: isize, lpString: *mut u16, nMaxCount: i32) -> i32;
+        fn IsWindowVisible(hWnd: isize) -> i32;
     }
     #[link(name = "kernel32")]
     extern "system" {
         fn GetCurrentThreadId() -> u32;
     }
 
-    unsafe extern "system" fn enum_proc(hwnd: isize, lparam: isize) -> i32 {
-        if GetParent(hwnd) == 0 {
-            let out = lparam as *mut isize;
-            *out = hwnd;
-            0 // Stop enumerating
-        } else {
-            1 // Continue
-        }
+    struct HwndSearch {
+        target_hwnd: isize,
+        visible_hwnd: isize,
+        fallback_hwnd: isize,
     }
 
-    let mut found_hwnd: isize = 0;
+    unsafe extern "system" fn enum_proc(hwnd: isize, lparam: isize) -> i32 {
+        if GetParent(hwnd) == 0 {
+            let mut title = [0u16; 128];
+            let len = GetWindowTextW(hwnd, title.as_mut_ptr(), 128);
+            let search = &mut *(lparam as *mut HwndSearch);
+            if len > 0 {
+                let title_str = String::from_utf16_lossy(&title[..len as usize]);
+                if title_str.contains("AI Agent HUD")
+                    || title_str.contains("Claude")
+                    || title_str.contains("HUD")
+                {
+                    search.target_hwnd = hwnd;
+                    return 0; // Target found, stop enumerating
+                }
+            }
+            if search.visible_hwnd == 0 && IsWindowVisible(hwnd) != 0 {
+                search.visible_hwnd = hwnd;
+            } else if search.fallback_hwnd == 0 {
+                search.fallback_hwnd = hwnd;
+            }
+        }
+        1 // Continue
+    }
+
+    let mut search = HwndSearch {
+        target_hwnd: 0,
+        visible_hwnd: 0,
+        fallback_hwnd: 0,
+    };
     unsafe {
         let tid = GetCurrentThreadId();
-        EnumThreadWindows(tid, enum_proc, &mut found_hwnd as *mut isize as isize);
+        EnumThreadWindows(tid, enum_proc, &mut search as *mut HwndSearch as isize);
     }
-    found_hwnd
+    if search.target_hwnd != 0 {
+        search.target_hwnd
+    } else if search.visible_hwnd != 0 {
+        search.visible_hwnd
+    } else {
+        search.fallback_hwnd
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -861,6 +911,26 @@ fn init_win32_window_frame(hwnd: isize) {
             if msg == 0x0014 {
                 // WM_ERASEBKGND
                 return 1;
+            }
+            if msg == 0x0082 {
+                // WM_NCDESTROY: clean up subclass per Win32 Common Controls best practices
+                #[link(name = "comctl32")]
+                extern "system" {
+                    fn RemoveWindowSubclass(
+                        hWnd: isize,
+                        pfnSubclass: unsafe extern "system" fn(
+                            isize,
+                            u32,
+                            usize,
+                            isize,
+                            usize,
+                            usize,
+                        ) -> isize,
+                        uIdSubclass: usize,
+                    ) -> i32;
+                }
+                RemoveWindowSubclass(h, bg_subclass, 1001);
+                return DefSubclassProc(h, msg, w, l);
             }
             DefSubclassProc(h, msg, w, l)
         }
@@ -1088,6 +1158,7 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
     }
     const GWL_EXSTYLE: i32 = -20;
     const WS_EX_TRANSPARENT: i32 = 0x00000020;
+    const WS_EX_LAYERED: i32 = 0x00080000;
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOSIZE: u32 = 0x0001;
     const SWP_NOZORDER: u32 = 0x0004;
@@ -1099,7 +1170,7 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
         let new_style = if enable {
-            style | WS_EX_TRANSPARENT
+            style | WS_EX_TRANSPARENT | WS_EX_LAYERED
         } else {
             style & !WS_EX_TRANSPARENT
         };

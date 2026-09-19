@@ -42,6 +42,7 @@ pub struct RefreshController {
     pub states: HashMap<String, ProviderState>,
     result_tx: Sender<WorkerResult>,
     pub result_rx: Receiver<WorkerResult>,
+    egui_ctx: Option<egui::Context>,
 }
 
 impl RefreshController {
@@ -52,7 +53,13 @@ impl RefreshController {
             states: HashMap::new(),
             result_tx: tx,
             result_rx: rx,
+            egui_ctx: None,
         }
+    }
+
+    /// Store egui Context to immediately request repaint when workers complete.
+    pub fn set_egui_ctx(&mut self, ctx: egui::Context) {
+        self.egui_ctx = Some(ctx);
     }
 
     /// Returns true if any provider worker is currently running.
@@ -122,6 +129,7 @@ impl RefreshController {
 
         let tx = self.result_tx.clone();
         let id_owned = id.to_owned();
+        let ctx_opt = self.egui_ctx.clone();
         thread::Builder::new()
             .name(format!("quota-{}", id))
             .spawn(move || {
@@ -156,6 +164,9 @@ impl RefreshController {
                     generation,
                     metrics,
                 });
+                if let Some(ctx) = ctx_opt {
+                    ctx.request_repaint();
+                }
             })
             .expect("failed to spawn quota worker");
     }

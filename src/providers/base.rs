@@ -9,10 +9,11 @@
 use chrono::{DateTime, Local, Utc};
 
 /// A validated percentage in [0.0, 100.0].  Returns None for invalid/unavailable values.
+/// Allows a 1e-6 epsilon for floating-point calculation inaccuracies and clamps to [0.0, max].
 pub fn percentage(value: Option<f64>, max: f64) -> Option<f64> {
     let v = value?;
-    if v.is_finite() && v >= 0.0 && v <= max {
-        Some(v)
+    if v.is_finite() && v >= -1e-6 && v <= (max + 1e-6) {
+        Some(v.clamp(0.0, max))
     } else {
         None
     }
@@ -143,6 +144,8 @@ mod tests {
         assert_eq!(percentage(Some(50.0), 100.0), Some(50.0));
         assert_eq!(percentage(Some(0.0), 100.0), Some(0.0));
         assert_eq!(percentage(Some(100.0), 100.0), Some(100.0));
+        assert_eq!(percentage(Some(1.0000000000000002), 1.0), Some(1.0));
+        assert_eq!(percentage(Some(-0.0000001), 1.0), Some(0.0));
         assert_eq!(percentage(Some(-1.0), 100.0), None);
         assert_eq!(percentage(Some(105.0), 100.0), None);
         assert_eq!(percentage(Some(f64::NAN), 100.0), None);

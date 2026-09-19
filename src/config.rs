@@ -156,6 +156,18 @@ impl ConfigManager {
         if cfg.refresh_interval_sec < 20 {
             cfg.refresh_interval_sec = default_refresh_interval();
         }
+        // Multi-monitor disconnect safety check: if coordinates are out of reasonable bounds
+        // (e.g. unplugged secondary monitor leaving window at -9999 or 15000), reset to None.
+        if let Some(x) = cfg.window_x {
+            if !(-5000..=10000).contains(&x) {
+                cfg.window_x = None;
+            }
+        }
+        if let Some(y) = cfg.window_y {
+            if !(-5000..=10000).contains(&y) {
+                cfg.window_y = None;
+            }
+        }
     }
 
     /// Load config from disk, falling back to defaults on any error.
@@ -288,5 +300,24 @@ mod tests {
         };
         ConfigManager::sanitize(&mut cfg_clamp2);
         assert_eq!(cfg_clamp2.opacity, 0.1);
+
+        // Test multi-monitor coordinate out-of-bounds reset
+        let mut cfg_coords = Config {
+            window_x: Some(-99999),
+            window_y: Some(50000),
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg_coords);
+        assert_eq!(cfg_coords.window_x, None);
+        assert_eq!(cfg_coords.window_y, None);
+
+        let mut cfg_valid_coords = Config {
+            window_x: Some(-1920),
+            window_y: Some(100),
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg_valid_coords);
+        assert_eq!(cfg_valid_coords.window_x, Some(-1920));
+        assert_eq!(cfg_valid_coords.window_y, Some(100));
     }
 }
