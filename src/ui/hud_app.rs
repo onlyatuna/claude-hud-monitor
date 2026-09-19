@@ -227,6 +227,18 @@ impl HudApp {
             }
             MenuAction::ToggleClickThrough => {
                 let mut cfg = self.config.lock().unwrap();
+                if !cfg.click_through && !cfg.hotkey_enabled {
+                    log::info!(
+                        "[HudApp] Enabling hotkeys because ghost mode requires keyboard toggle"
+                    );
+                    cfg.hotkey_enabled = true;
+                    if self.hotkey.is_none() {
+                        if let Ok(hk) = HotkeyManager::start(&cfg.hotkey) {
+                            hk.set_context(ctx.clone());
+                            self.hotkey = Some(hk);
+                        }
+                    }
+                }
                 cfg.click_through = !cfg.click_through;
                 let ct = cfg.click_through;
                 ConfigManager::save(&cfg);
@@ -392,7 +404,20 @@ impl eframe::App for HudApp {
         // One-shot: apply stored click_through on first rendered frame (frame_count==2 means
         // hwnd is also initialised above). Only fire once via the flag.
         if self.frame_count == 2 {
-            let ct = self.config.lock().unwrap().click_through;
+            let mut cfg = self.config.lock().unwrap();
+            if cfg.click_through && !cfg.hotkey_enabled {
+                log::info!("[HudApp] Restoring hotkeys because click-through is enabled in config");
+                cfg.hotkey_enabled = true;
+                if self.hotkey.is_none() {
+                    if let Ok(hk) = HotkeyManager::start(&cfg.hotkey) {
+                        hk.set_context(ctx.clone());
+                        self.hotkey = Some(hk);
+                    }
+                }
+                ConfigManager::save(&cfg);
+            }
+            let ct = cfg.click_through;
+            drop(cfg);
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
             #[cfg(target_os = "windows")]
             apply_win32_click_through(self.hwnd, ct);
@@ -882,6 +907,19 @@ fn init_win32_window_frame(hwnd: isize) {
             if msg_id != 0 {
                 WAKE_MSG.store(msg_id, Ordering::Relaxed);
             }
+        }
+        if msg_id != 0 {
+            #[link(name = "user32")]
+            extern "system" {
+                fn ChangeWindowMessageFilterEx(
+                    hWnd: isize,
+                    message: u32,
+                    action: u32,
+                    pChangeFilterStruct: *mut std::ffi::c_void,
+                ) -> i32;
+            }
+            const MSGFLT_ALLOW: u32 = 1;
+            ChangeWindowMessageFilterEx(hwnd, msg_id, MSGFLT_ALLOW, std::ptr::null_mut());
         }
 
         // 1. Prevent GDI from painting standard white window background brush

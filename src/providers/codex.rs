@@ -51,16 +51,22 @@ impl CodexProvider {
 fn parse_timestamp(ts: Option<&Value>) -> Option<DateTime<Utc>> {
     let ts = ts?;
     if let Some(val) = ts.as_f64() {
+        if !val.is_finite() || val <= 0.0 || val > 1e14 {
+            return None;
+        }
         let val = if val > 1e11 { val / 1000.0 } else { val };
         let secs = val as i64;
-        let nanos = ((val - secs as f64) * 1e9) as u32;
+        let nanos = (((val - secs as f64) * 1e9) as u32).min(999_999_999);
         return Utc.timestamp_opt(secs, nanos).single();
     }
     if let Some(s) = ts.as_str() {
         if let Ok(val) = s.parse::<f64>() {
+            if !val.is_finite() || val <= 0.0 || val > 1e14 {
+                return None;
+            }
             let val = if val > 1e11 { val / 1000.0 } else { val };
             let secs = val as i64;
-            let nanos = ((val - secs as f64) * 1e9) as u32;
+            let nanos = (((val - secs as f64) * 1e9) as u32).min(999_999_999);
             return Utc.timestamp_opt(secs, nanos).single();
         }
         if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
@@ -316,8 +322,12 @@ mod tests {
         let dt4 = parse_timestamp(Some(&ts_iso)).unwrap();
         assert_eq!(dt4.timestamp(), 1893456000);
 
-        // Invalid / null
+        // Invalid / null / NaN / negative / extreme
         assert!(parse_timestamp(None).is_none());
         assert!(parse_timestamp(Some(&json!("invalid"))).is_none());
+        assert!(parse_timestamp(Some(&json!(-100))).is_none());
+        assert!(parse_timestamp(Some(&json!(0))).is_none());
+        assert!(parse_timestamp(Some(&json!(1e18))).is_none());
+        assert!(parse_timestamp(Some(&json!("-500"))).is_none());
     }
 }
