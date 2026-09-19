@@ -78,7 +78,7 @@ fn parse_timestamp(ts: Option<&Value>) -> Option<DateTime<Utc>> {
 
 fn window_title(window: &Value, fallback: &str) -> String {
     if let Some(secs) = window.get("limit_window_seconds").and_then(|v| v.as_f64()) {
-        if secs > 0.0 {
+        if secs.is_finite() && secs > 0.0 {
             if secs % 86400.0 == 0.0 {
                 return format!("WINDOW {}D", secs / 86400.0);
             }
@@ -329,5 +329,29 @@ mod tests {
         assert!(parse_timestamp(Some(&json!(0))).is_none());
         assert!(parse_timestamp(Some(&json!(1e18))).is_none());
         assert!(parse_timestamp(Some(&json!("-500"))).is_none());
+    }
+
+    #[test]
+    fn test_window_title() {
+        use serde_json::json;
+
+        // Days (86400s)
+        let w_days = json!({ "limit_window_seconds": 86400 });
+        assert_eq!(window_title(&w_days, "FALLBACK"), "WINDOW 1D");
+
+        // Hours (7200s)
+        let w_hours = json!({ "limit_window_seconds": 7200 });
+        assert_eq!(window_title(&w_hours, "FALLBACK"), "WINDOW 2H");
+
+        // Minutes (1800s)
+        let w_mins = json!({ "limit_window_seconds": 1800 });
+        assert_eq!(window_title(&w_mins, "FALLBACK"), "WINDOW 30M");
+
+        // Infinity / NaN / 0 / negative fallback
+        let w_inf = json!({ "limit_window_seconds": f64::INFINITY });
+        assert_eq!(window_title(&w_inf, "FALLBACK"), "FALLBACK");
+
+        let w_neg = json!({ "limit_window_seconds": -500 });
+        assert_eq!(window_title(&w_neg, "FALLBACK"), "FALLBACK");
     }
 }

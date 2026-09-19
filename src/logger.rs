@@ -41,6 +41,7 @@ impl log::Log for DualLogger {
                     if *size + bytes.len() as u64 > MAX_LOG_SIZE {
                         // Drop existing open file before renaming (essential on Windows)
                         *lock = None;
+                        let _ = std::fs::remove_file(&self.backup_path);
                         let _ = std::fs::rename(&self.log_path, &self.backup_path);
                         *lock = OpenOptions::new()
                             .create(true)
@@ -78,6 +79,7 @@ pub fn setup_logging() {
     // 2MB log rotation at startup
     let initial_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
     if initial_size > 2 * 1024 * 1024 {
+        let _ = std::fs::remove_file(&backup_path);
         let _ = std::fs::rename(&log_path, &backup_path);
     }
     let current_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);

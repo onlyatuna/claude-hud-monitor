@@ -164,6 +164,24 @@ impl HotkeyManager {
 }
 
 /// Windows-specific Win32 RegisterHotKey message loop.
+/// Computes modifiers for the secondary click-through hotkey such that it never conflicts
+/// with the primary hotkey even when Shift, Ctrl, or Alt are already present.
+pub fn compute_ct_mods(mods: u32) -> u32 {
+    const MOD_ALT: u32 = 0x0001;
+    const MOD_CONTROL: u32 = 0x0002;
+    const MOD_SHIFT: u32 = 0x0004;
+
+    if (mods & MOD_SHIFT) == 0 {
+        mods | MOD_SHIFT
+    } else if (mods & MOD_CONTROL) == 0 {
+        mods | MOD_CONTROL
+    } else if (mods & MOD_ALT) == 0 {
+        mods | MOD_ALT
+    } else {
+        mods ^ MOD_SHIFT // If all are selected, invert Shift
+    }
+}
+
 #[cfg(target_os = "windows")]
 fn windows_hotkey_loop(
     toggle_flag: Arc<AtomicBool>,
@@ -175,6 +193,20 @@ fn windows_hotkey_loop(
 ) {
     use std::mem::MaybeUninit;
 
+    #[link(name = "user32")]
+    extern "system" {
+        fn RegisterHotKey(hWnd: isize, id: i32, fsModifiers: u32, vk: u32) -> i32;
+        fn UnregisterHotKey(hWnd: isize, id: i32) -> i32;
+        fn GetMessageW(lpMsg: *mut MSG, hWnd: isize, wMsgFilterMin: u32, wMsgFilterMax: u32)
+            -> i32;
+        fn PeekMessageW(
+            lpMsg: *mut MSG,
+            hWnd: isize,
+            wMsgFilterMin: u32,
+            wMsgFilterMax: u32,
+            wRemoveMsg: u32,
+        ) -> i32;
+    }
     #[link(name = "kernel32")]
     extern "system" {
         fn GetCurrentThreadId() -> u32;
@@ -182,16 +214,15 @@ fn windows_hotkey_loop(
 
     const WM_HOTKEY: u32 = 0x0312;
     const WM_QUIT: u32 = 0x0012;
-    const MOD_SHIFT: u32 = 0x0004;
     const MOD_NOREPEAT: u32 = 0x4000;
     const HOTKEY_ID_TOGGLE: i32 = 9527;
     const HOTKEY_ID_CLICKTHROUGH: i32 = 9528;
 
-    // Force message queue creation and store Thread ID
+    // Force message queue creation before publishing Thread ID to eliminate race condition on fast exit
     unsafe {
-        thread_id.store(GetCurrentThreadId(), Ordering::SeqCst);
         let mut msg: MSG = MaybeUninit::zeroed().assume_init();
-        PeekMessageW(&mut msg, 0, 0, 0, 0); // PM_NOREMOVE=0
+        PeekMessageW(&mut msg, 0, 0, 0, 0); // PM_NOREMOVE=0 creates thread message queue
+        thread_id.store(GetCurrentThreadId(), Ordering::SeqCst);
 
         let ok1 = RegisterHotKey(0, HOTKEY_ID_TOGGLE, mods | MOD_NOREPEAT, vk);
         if ok1 == 0 {
@@ -206,17 +237,19 @@ fn windows_hotkey_loop(
             );
         }
 
-        // Secondary hotkey: toggle click-through (add Shift)
-        let ct_mods = if (mods & MOD_SHIFT) != 0 {
-            mods | 0x0002 // If shift already present, add Ctrl
-        } else {
-            mods | MOD_SHIFT
-        };
+        // Secondary hotkey: toggle click-through (distinct non-conflicting modifier)
+        let ct_mods = compute_ct_mods(mods);
         let ok2 = RegisterHotKey(0, HOTKEY_ID_CLICKTHROUGH, ct_mods | MOD_NOREPEAT, vk);
         if ok2 == 0 {
-            warn!("[Hotkey] Click-through hotkey registration failed");
+            warn!(
+                "[Hotkey] Click-through hotkey registration failed (ct_mods={:#x}, vk={:#x})",
+                ct_mods, vk
+            );
         } else {
-            info!("[Hotkey] Click-through hotkey registered");
+            info!(
+                "[Hotkey] Click-through hotkey registered (ct_mods={:#x}, vk={:#x})",
+                ct_mods, vk
+            );
         }
 
         loop {
@@ -271,20 +304,6 @@ struct MSG {
     pt: POINT,
 }
 
-#[cfg(target_os = "windows")]
-extern "system" {
-    fn RegisterHotKey(hWnd: usize, id: i32, fsModifiers: u32, vk: u32) -> i32;
-    fn UnregisterHotKey(hWnd: usize, id: i32) -> i32;
-    fn GetMessageW(lpMsg: *mut MSG, hWnd: usize, wMsgFilterMin: u32, wMsgFilterMax: u32) -> i32;
-    fn PeekMessageW(
-        lpMsg: *mut MSG,
-        hWnd: usize,
-        wMsgFilterMin: u32,
-        wMsgFilterMax: u32,
-        wRemoveMsg: u32,
-    ) -> i32;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +333,37 @@ mod tests {
         let (m4, k4) = parse_hotkey("InvalidKeyString");
         assert_eq!(m4, MOD_ALT);
         assert_eq!(k4, b'C' as u32);
+    }
+
+    #[test]
+    fn test_compute_ct_mods() {
+        const MOD_ALT: u32 = 0x0001;
+        const MOD_CONTROL: u32 = 0x0002;
+        const MOD_SHIFT: u32 = 0x0004;
+
+        // 1. When Shift is absent, Shift is added
+        assert_eq!(compute_ct_mods(MOD_ALT), MOD_ALT | MOD_SHIFT);
+        assert_eq!(compute_ct_mods(MOD_CONTROL), MOD_CONTROL | MOD_SHIFT);
+
+        // 2. When Shift is present, Control is added
+        assert_eq!(
+            compute_ct_mods(MOD_SHIFT | MOD_ALT),
+            MOD_SHIFT | MOD_ALT | MOD_CONTROL
+        );
+
+        // 3. When Shift and Control are present, Alt is added (crucial fix for Ctrl+Shift+C)
+        assert_eq!(
+            compute_ct_mods(MOD_CONTROL | MOD_SHIFT),
+            MOD_CONTROL | MOD_SHIFT | MOD_ALT
+        );
+        assert_ne!(
+            compute_ct_mods(MOD_CONTROL | MOD_SHIFT),
+            MOD_CONTROL | MOD_SHIFT
+        );
+
+        // 4. When all three are present, Shift is toggled off
+        let all = MOD_ALT | MOD_CONTROL | MOD_SHIFT;
+        assert_eq!(compute_ct_mods(all), MOD_ALT | MOD_CONTROL);
+        assert_ne!(compute_ct_mods(all), all);
     }
 }

@@ -156,6 +156,9 @@ impl ConfigManager {
         if cfg.refresh_interval_sec < 20 {
             cfg.refresh_interval_sec = default_refresh_interval();
         }
+        if cfg.layout_mode != "horizontal" && cfg.layout_mode != "vertical" {
+            cfg.layout_mode = default_layout_mode();
+        }
         // Multi-monitor disconnect safety check: if coordinates are out of reasonable bounds
         // (e.g. unplugged secondary monitor leaving window at -9999 or 15000), reset to None.
         if let Some(x) = cfg.window_x {
@@ -314,10 +317,12 @@ mod tests {
         let mut cfg_valid_coords = Config {
             window_x: Some(-1920),
             window_y: Some(100),
+            layout_mode: "invalid_mode_string".to_string(),
             ..Default::default()
         };
         ConfigManager::sanitize(&mut cfg_valid_coords);
         assert_eq!(cfg_valid_coords.window_x, Some(-1920));
         assert_eq!(cfg_valid_coords.window_y, Some(100));
+        assert_eq!(cfg_valid_coords.layout_mode, "vertical");
     }
 }
