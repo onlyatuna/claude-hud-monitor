@@ -671,6 +671,7 @@ fn attach_icon(
 }
 
 #[cfg(not(target_os = "windows"))]
+#[allow(dead_code)]
 pub fn show_native_context_menu(
     _hwnd: isize,
     _config: &Config,
