@@ -16,7 +16,15 @@ pub fn render_provider_card(
     target_height: f32,
 ) {
     let accent = provider_color(id);
-    let title = provider_name(id);
+    let title: &str = if let Some(m) = data {
+        if !m.provider_name.is_empty() {
+            &m.provider_name
+        } else {
+            provider_name(id)
+        }
+    } else {
+        provider_name(id)
+    };
 
     // Balanced vertical layout matching Qt QVBoxLayout
     // Base content: 16 (hdr) + 33 (m1) + 33 (m2) = 82px.

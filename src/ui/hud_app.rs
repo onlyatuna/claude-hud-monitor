@@ -79,7 +79,8 @@ impl HudApp {
         let providers_arc: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::from([
             (
                 "claude".to_owned(),
-                Arc::new(ClaudeProvider::new()) as Arc<dyn Provider + Send + Sync>,
+                Arc::new(ClaudeProvider::with_config(Some(Arc::clone(&config))))
+                    as Arc<dyn Provider + Send + Sync>,
             ),
             (
                 "agy".to_owned(),
@@ -275,6 +276,18 @@ impl HudApp {
                 cfg.refresh_interval_sec = sec;
                 ConfigManager::save(&cfg);
                 self.refresh_ctrl.lock().unwrap().set_interval(sec);
+            }
+            MenuAction::SetClaudeProfile(profile_id) => {
+                {
+                    let mut cfg = self.config.lock().unwrap();
+                    cfg.claude_profile = profile_id;
+                    ConfigManager::save(&cfg);
+                }
+                self.refresh_ctrl
+                    .lock()
+                    .unwrap()
+                    .refresh(&self.providers_arc);
+                ctx.request_repaint();
             }
             MenuAction::ToggleAutostart => {
                 let cur = crate::autostart::is_autostart_enabled();

@@ -5,52 +5,284 @@
 // Mirrors Python core/providers/claude_provider.py
 
 use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
+use crate::config::Config;
 use chrono::{DateTime, Utc};
 use log::error;
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const USER_AGENT: &str = "claude-code/0.2.29";
 const BETA_HEADER: &str = "oauth-2025-04-20";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaudeProfile {
+    pub id: String,           // "default", "claude01", "claude-01", etc.
+    pub display_name: String, // "預設帳號 (~/.claude)", "claude01 (~/.claude01)"
+    pub short_name: String,   // "預設", "claude01"
+    pub dir_path: PathBuf,
+    pub credentials_path: PathBuf,
+    pub last_activity: Option<std::time::SystemTime>,
+}
+
+pub fn dirs_home() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("."))
+    }
+}
+
+fn get_last_activity(dir: &Path) -> Option<std::time::SystemTime> {
+    let cred = dir.join(".credentials.json");
+    let hist = dir.join("history.jsonl");
+
+    let cred_mtime = fs::metadata(&cred).and_then(|m| m.modified()).ok();
+    let hist_mtime = fs::metadata(&hist).and_then(|m| m.modified()).ok();
+
+    match (cred_mtime, hist_mtime) {
+        (Some(c), Some(h)) => Some(c.max(h)),
+        (Some(c), None) => Some(c),
+        (None, Some(h)) => Some(h),
+        (None, None) => None,
+    }
+}
+
+/// Auto-discover valid Claude account directories:
+/// - `$HOME/.claude*` (e.g. `.claude`, `.claude01`, `.claude-01`, `.claude_01`)
+/// - `$CLAUDE_CONFIG_DIR` if set
+///
+/// Default `~/.claude` is always included.
+pub fn discover_profiles() -> Vec<ClaudeProfile> {
+    let home = dirs_home();
+    let mut profiles = Vec::new();
+    let mut seen_paths = std::collections::HashSet::new();
+
+    // 1. Scan $HOME for entries starting with ".claude"
+    if let Ok(entries) = fs::read_dir(&home) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let lower_name = file_name.to_lowercase();
+            if lower_name.starts_with(".claude") {
+                let cred_path = path.join(".credentials.json");
+                let is_default = file_name == ".claude";
+                // For default ~/.claude, include even if credentials don't exist yet
+                // For other profiles, require .credentials.json
+                if is_default || cred_path.exists() {
+                    let norm_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                    if seen_paths.insert(norm_path) {
+                        let (id, short_name, display_name) = if is_default {
+                            (
+                                "default".to_string(),
+                                "預設".to_string(),
+                                "預設帳號 (~/.claude)".to_string(),
+                            )
+                        } else {
+                            let raw = file_name.strip_prefix('.').unwrap_or(&file_name);
+                            (
+                                raw.to_string(),
+                                raw.to_string(),
+                                format!("{} (~/{})", raw, file_name),
+                            )
+                        };
+                        let last_activity = get_last_activity(&path);
+                        profiles.push(ClaudeProfile {
+                            id,
+                            display_name,
+                            short_name,
+                            dir_path: path,
+                            credentials_path: cred_path,
+                            last_activity,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Check CLAUDE_CONFIG_DIR environment variable
+    if let Ok(env_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        let path = PathBuf::from(env_dir);
+        if path.is_dir() {
+            let cred_path = path.join(".credentials.json");
+            if cred_path.exists() {
+                let norm_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if seen_paths.insert(norm_path) {
+                    let folder_name = path
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "env".to_string());
+                    let raw = folder_name.strip_prefix('.').unwrap_or(&folder_name);
+                    let last_activity = get_last_activity(&path);
+                    profiles.push(ClaudeProfile {
+                        id: raw.to_string(),
+                        display_name: format!("{} ({})", raw, path.display()),
+                        short_name: raw.to_string(),
+                        dir_path: path,
+                        credentials_path: cred_path,
+                        last_activity,
+                    });
+                }
+            }
+        }
+    }
+
+    // 3. Ensure default ~/.claude is included
+    let default_dir = home.join(".claude");
+    let norm_default = default_dir
+        .canonicalize()
+        .unwrap_or_else(|_| default_dir.clone());
+    if seen_paths.insert(norm_default) {
+        let cred_path = default_dir.join(".credentials.json");
+        let last_activity = get_last_activity(&default_dir);
+        profiles.push(ClaudeProfile {
+            id: "default".to_string(),
+            display_name: "預設帳號 (~/.claude)".to_string(),
+            short_name: "預設".to_string(),
+            dir_path: default_dir,
+            credentials_path: cred_path,
+            last_activity,
+        });
+    }
+
+    // 4. Sort: "default" first, then other accounts alphabetically by id
+    profiles.sort_by(|a, b| {
+        if a.id == "default" {
+            std::cmp::Ordering::Less
+        } else if b.id == "default" {
+            std::cmp::Ordering::Greater
+        } else {
+            a.id.to_lowercase().cmp(&b.id.to_lowercase())
+        }
+    });
+
+    profiles
+}
+
+/// Resolve the active profile based on preference ("auto" or profile id).
+/// Returns (ClaudeProfile, is_auto).
+pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
+    let profiles = discover_profiles();
+    let pref_trimmed = preference.trim();
+
+    if pref_trimmed.is_empty() || pref_trimmed.eq_ignore_ascii_case("auto") {
+        // Smart auto: pick the profile with credentials that has the newest activity
+        let candidates: Vec<&ClaudeProfile> = profiles
+            .iter()
+            .filter(|p| p.credentials_path.exists())
+            .collect();
+
+        if let Some(best) = candidates.iter().max_by_key(|p| p.last_activity) {
+            return ((*best).clone(), true);
+        }
+
+        if let Some(first) = profiles.first() {
+            return (first.clone(), true);
+        }
+
+        let home = dirs_home();
+        let def_dir = home.join(".claude");
+        return (
+            ClaudeProfile {
+                id: "default".to_string(),
+                display_name: "預設帳號 (~/.claude)".to_string(),
+                short_name: "預設".to_string(),
+                dir_path: def_dir.clone(),
+                credentials_path: def_dir.join(".credentials.json"),
+                last_activity: None,
+            },
+            true,
+        );
+    }
+
+    // Explicit profile requested
+    let matched = profiles.iter().find(|p| {
+        p.id.eq_ignore_ascii_case(pref_trimmed)
+            || p.short_name.eq_ignore_ascii_case(pref_trimmed)
+            || (pref_trimmed.starts_with('.') && p.id.eq_ignore_ascii_case(&pref_trimmed[1..]))
+            || (pref_trimmed == ".claude" && p.id == "default")
+    });
+
+    if let Some(p) = matched {
+        return (p.clone(), false);
+    }
+
+    // Fallback if configured profile directory is not in discovered list
+    let home = dirs_home();
+    let fallback_dir = if pref_trimmed.starts_with('.') {
+        home.join(pref_trimmed)
+    } else {
+        home.join(format!(".{}", pref_trimmed))
+    };
+    let cred_path = fallback_dir.join(".credentials.json");
+    let last_activity = get_last_activity(&fallback_dir);
+    let fallback_name = fallback_dir
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| pref_trimmed.to_string());
+    (
+        ClaudeProfile {
+            id: pref_trimmed.to_string(),
+            display_name: format!("{} (~/{})", pref_trimmed, fallback_name),
+            short_name: pref_trimmed.trim_start_matches('.').to_string(),
+            dir_path: fallback_dir,
+            credentials_path: cred_path,
+            last_activity,
+        },
+        false,
+    )
+}
+
+fn get_access_token(credentials_path: &Path) -> Option<String> {
+    if !credentials_path.exists() {
+        return None;
+    }
+    let text = fs::read_to_string(credentials_path).ok()?;
+    let json: Value = serde_json::from_str(&text).ok()?;
+    json["claudeAiOauth"]["accessToken"]
+        .as_str()
+        .map(|s| s.to_owned())
+}
+
 pub struct ClaudeProvider {
     #[allow(dead_code)]
     timeout: Duration,
     client: reqwest::blocking::Client,
+    config: Option<Arc<Mutex<Config>>>,
 }
 
 impl ClaudeProvider {
+    #[allow(dead_code)]
     pub fn new() -> Self {
+        Self::with_config(None)
+    }
+
+    pub fn with_config(config: Option<Arc<Mutex<Config>>>) -> Self {
         let timeout = Duration::from_secs(10);
         let client = reqwest::blocking::Client::builder()
             .timeout(timeout)
             .build()
             .unwrap_or_default();
-        Self { timeout, client }
-    }
-
-    fn credentials_path() -> PathBuf {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".to_owned());
-        PathBuf::from(home)
-            .join(".claude")
-            .join(".credentials.json")
-    }
-
-    fn get_access_token(&self) -> Option<String> {
-        let path = Self::credentials_path();
-        if !path.exists() {
-            return None;
+        Self {
+            timeout,
+            client,
+            config,
         }
-        let text = fs::read_to_string(&path).ok()?;
-        let json: Value = serde_json::from_str(&text).ok()?;
-        json["claudeAiOauth"]["accessToken"]
-            .as_str()
-            .map(|s| s.to_owned())
     }
 }
 
@@ -64,13 +296,36 @@ impl Provider for ClaudeProvider {
 
     fn fetch_usage(&self) -> UsageMetrics {
         let now = now_str();
-        let Some(token) = self.get_access_token() else {
-            return UsageMetrics::error_result(
-                "claude",
-                "Claude Code",
-                "未找到 Claude 登入憑證\n請於終端機執行 claude 登入",
-                "",
-            );
+        let preference = self
+            .config
+            .as_ref()
+            .and_then(|c| c.lock().ok())
+            .map(|c| c.claude_profile.clone())
+            .unwrap_or_else(|| "auto".to_string());
+
+        let (active_profile, is_auto) = resolve_active_profile(&preference);
+        let display_title = if is_auto {
+            if active_profile.id == "default" {
+                "CLAUDE CODE".to_string()
+            } else {
+                format!("CLAUDE [{}]", active_profile.short_name)
+            }
+        } else if active_profile.id == "default" {
+            "CLAUDE CODE".to_string()
+        } else {
+            format!("CLAUDE ({})", active_profile.short_name)
+        };
+
+        let Some(token) = get_access_token(&active_profile.credentials_path) else {
+            let error_msg = if active_profile.id == "default" {
+                "未找到 Claude 登入憑證\n請於終端機執行 claude 登入".to_string()
+            } else {
+                format!(
+                    "未找到帳號 [{}] 登入憑證\n請使用 {} 登入或檢查目錄",
+                    active_profile.short_name, active_profile.short_name
+                )
+            };
+            return UsageMetrics::error_result("claude", &display_title, &error_msg, "");
         };
 
         let result = self
@@ -89,7 +344,7 @@ impl Provider for ClaudeProvider {
                     let retry = parse_retry_after(resp.headers());
                     return UsageMetrics {
                         provider_id: "claude".to_owned(),
-                        provider_name: "Claude Code".to_owned(),
+                        provider_name: display_title,
                         metric1_title: "SESSION 5H".to_owned(),
                         metric1_text: "--".to_owned(),
                         metric2_title: "WEEKLY 7D".to_owned(),
@@ -105,7 +360,7 @@ impl Provider for ClaudeProvider {
                     let retry = parse_retry_after(resp.headers());
                     return UsageMetrics {
                         provider_id: "claude".to_owned(),
-                        provider_name: "Claude Code".to_owned(),
+                        provider_name: display_title,
                         metric1_title: "SESSION 5H".to_owned(),
                         metric1_text: "--".to_owned(),
                         metric2_title: "WEEKLY 7D".to_owned(),
@@ -120,16 +375,20 @@ impl Provider for ClaudeProvider {
                 if !status.is_success() {
                     return UsageMetrics::error_result(
                         "claude",
-                        "Claude Code",
+                        &display_title,
                         &format!("API 回應異常: HTTP {}", status.as_u16()),
                         "http",
                     );
                 }
                 match resp.json::<Value>() {
-                    Ok(json) => parse_claude_response(json, &now),
+                    Ok(json) => {
+                        let mut metrics = parse_claude_response(json, &now);
+                        metrics.provider_name = display_title;
+                        metrics
+                    }
                     Err(_) => UsageMetrics::error_result(
                         "claude",
-                        "Claude Code",
+                        &display_title,
                         "未取得有效配額資料",
                         "schema",
                     ),
@@ -139,7 +398,7 @@ impl Provider for ClaudeProvider {
                 error!("[ClaudeProvider] Request error: {e}");
                 UsageMetrics::error_result(
                     "claude",
-                    "Claude Code",
+                    &display_title,
                     "配額連線失敗，將自動重試",
                     "network",
                 )
@@ -254,5 +513,25 @@ mod tests {
         assert_eq!(metrics.badge1_text, "Code: 50%");
         assert_eq!(metrics.badge2_text, "Chat: 14%");
         assert!(metrics.error.is_none());
+    }
+
+    #[test]
+    fn test_resolve_active_profile() {
+        let (def_prof, is_auto) = resolve_active_profile("auto");
+        assert!(is_auto);
+        assert_eq!(def_prof.id, "default");
+
+        let (explicit_prof, is_auto2) = resolve_active_profile("claude01");
+        assert!(!is_auto2);
+        assert_eq!(explicit_prof.id, "claude01");
+        assert_eq!(explicit_prof.short_name, "claude01");
+
+        let (dot_prof, is_auto3) = resolve_active_profile(".claude-02");
+        assert!(!is_auto3);
+        assert_eq!(dot_prof.short_name, "claude-02");
+
+        let (default_alias, is_auto4) = resolve_active_profile(".claude");
+        assert!(!is_auto4);
+        assert_eq!(default_alias.id, "default");
     }
 }

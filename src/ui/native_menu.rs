@@ -7,7 +7,7 @@ use crate::config::Config;
 use eframe::egui;
 
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuAction {
     RefreshAll,
     SetLayoutHorizontal,
@@ -17,6 +17,7 @@ pub enum MenuAction {
     ToggleLock,
     SetOpacity(u32),  // 100, 90, 80, 70, 50, 30
     SetInterval(u64), // 30, 60, 120, 300
+    SetClaudeProfile(String),
     ToggleAutostart,
     OpenLogs,
     ResetGeometry,
@@ -128,6 +129,7 @@ pub fn show_native_context_menu(
             enable_win32_dark_mode(target_hwnd);
         }
 
+        const ICON_CLAUDE: &[u8] = include_bytes!("../../assets/app_icon.png");
         const ICON_REFRESH: &[u8] = include_bytes!("../../assets/menu/menu_refresh.png");
         const ICON_LAYOUT: &[u8] = include_bytes!("../../assets/menu/menu_layout.png");
         const ICON_LAPTOP: &[u8] = include_bytes!("../../assets/menu/menu_laptop.png");
@@ -155,6 +157,43 @@ pub fn show_native_context_menu(
         let text = to_wide("立即重新整理所有 AI (Refresh All)");
         AppendMenuW(root, MF_STRING, 1001, text.as_ptr());
         attach_icon(root, 1001, false, ICON_REFRESH, false, cx, cy, &mut bitmaps);
+
+        AppendMenuW(root, MF_SEPARATOR, 0, std::ptr::null());
+
+        // Claude Accounts Submenu
+        let claude_sub = CreatePopupMenu();
+        let profiles = crate::providers::claude::discover_profiles();
+        let is_auto = config.claude_profile == "auto";
+
+        let (active_prof, _) =
+            crate::providers::claude::resolve_active_profile(&config.claude_profile);
+        let auto_prefix = if is_auto { "✓ " } else { "    " };
+        let auto_title = if is_auto && active_prof.id != "default" {
+            format!(
+                "{}🎯 智慧自動追蹤 (目前: {})",
+                auto_prefix, active_prof.short_name
+            )
+        } else {
+            format!("{}🎯 智慧自動追蹤 (最近活躍)", auto_prefix)
+        };
+        let t_auto = to_wide(&auto_title);
+        AppendMenuW(claude_sub, MF_STRING, 1300, t_auto.as_ptr());
+
+        AppendMenuW(claude_sub, MF_SEPARATOR, 0, std::ptr::null());
+
+        for (i, p) in profiles.iter().take(40).enumerate() {
+            let is_selected = !is_auto
+                && (config.claude_profile == p.id
+                    || (config.claude_profile == ".claude" && p.id == "default"));
+            let prefix = if is_selected { "✓ " } else { "    " };
+            let label = format!("{}{}", prefix, p.display_name);
+            let t_p = to_wide(&label);
+            AppendMenuW(claude_sub, MF_STRING, 1301 + i, t_p.as_ptr());
+        }
+
+        let t_claude = to_wide("Claude 帳號 (Claude Account)");
+        AppendMenuW(root, MF_POPUP, claude_sub as usize, t_claude.as_ptr());
+        attach_icon(root, 2, true, ICON_CLAUDE, false, cx, cy, &mut bitmaps);
 
         AppendMenuW(root, MF_SEPARATOR, 0, std::ptr::null());
 
@@ -188,7 +227,7 @@ pub fn show_native_context_menu(
 
         let t_layout = to_wide("顯示佈局 (Layout)");
         AppendMenuW(root, MF_POPUP, layout_sub as usize, t_layout.as_ptr());
-        attach_icon(root, 2, true, ICON_LAYOUT, false, cx, cy, &mut bitmaps);
+        attach_icon(root, 4, true, ICON_LAYOUT, false, cx, cy, &mut bitmaps);
 
         // 3. Click-through
         let t_ct = to_wide("滑鼠點擊穿透 (Alt+Shift+C)");
@@ -244,7 +283,7 @@ pub fn show_native_context_menu(
 
         let t_op = to_wide("視窗透明度 (Opacity)");
         AppendMenuW(root, MF_POPUP, op_sub as usize, t_op.as_ptr());
-        attach_icon(root, 6, true, ICON_OPACITY, false, cx, cy, &mut bitmaps);
+        attach_icon(root, 8, true, ICON_OPACITY, false, cx, cy, &mut bitmaps);
 
         // 7. Interval Submenu
         let int_sub = CreatePopupMenu();
@@ -261,7 +300,7 @@ pub fn show_native_context_menu(
 
         let t_int = to_wide("更新頻率 (Interval)");
         AppendMenuW(root, MF_POPUP, int_sub as usize, t_int.as_ptr());
-        attach_icon(root, 7, true, ICON_TIMER, false, cx, cy, &mut bitmaps);
+        attach_icon(root, 9, true, ICON_TIMER, false, cx, cy, &mut bitmaps);
 
         // 8. Autostart
         let t_as = to_wide("開機自動啟動 (Start on Boot)");
@@ -333,6 +372,15 @@ pub fn show_native_context_menu(
             1009 => Some(MenuAction::OpenLogs),
             1010 => Some(MenuAction::Exit),
             1011 => Some(MenuAction::ToggleHide),
+            1300 => Some(MenuAction::SetClaudeProfile("auto".into())),
+            c if (1301..1350).contains(&c) => {
+                let idx = (c - 1301) as usize;
+                if idx < profiles.len() {
+                    Some(MenuAction::SetClaudeProfile(profiles[idx].id.clone()))
+                } else {
+                    None
+                }
+            }
             c if (1100..1110).contains(&c) => {
                 let idx = (c - 1100) as usize;
                 if idx < op_values.len() {
@@ -644,6 +692,46 @@ pub fn render_context_menu_items(
         selected = Some(MenuAction::RefreshAll);
         ui.close_menu();
     }
+    ui.separator();
+
+    let profiles = crate::providers::claude::discover_profiles();
+    let is_auto = cfg.claude_profile == "auto";
+    let (active_prof, _) = crate::providers::claude::resolve_active_profile(&cfg.claude_profile);
+
+    ui.menu_button("👤 Claude 帳號", |ui| {
+        let auto_label = if is_auto {
+            if active_prof.id != "default" {
+                format!("✔ 🎯 智慧自動追蹤 (目前: {})", active_prof.short_name)
+            } else {
+                "✔ 🎯 智慧自動追蹤 (最近活躍)".to_string()
+            }
+        } else {
+            "   🎯 智慧自動追蹤 (最近活躍)".to_string()
+        };
+
+        if ui.button(auto_label).clicked() {
+            selected = Some(MenuAction::SetClaudeProfile("auto".to_string()));
+            ui.close_menu();
+        }
+
+        ui.separator();
+
+        for p in &profiles {
+            let is_sel = !is_auto
+                && (cfg.claude_profile == p.id
+                    || (cfg.claude_profile == ".claude" && p.id == "default"));
+            let label = if is_sel {
+                format!("✔ {}", p.display_name)
+            } else {
+                format!("   {}", p.display_name)
+            };
+            if ui.button(label).clicked() {
+                selected = Some(MenuAction::SetClaudeProfile(p.id.clone()));
+                ui.close_menu();
+            }
+        }
+    });
+
     ui.separator();
 
     ui.menu_button("📐 佈局模式", |ui| {
