@@ -9,18 +9,143 @@ use chrono::{DateTime, Utc};
 use log::{info, warn};
 use serde_json::Value;
 use std::process::Command;
-use std::time::Instant;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+use ureq::OrAnyStatus;
+
+const QUOTA_URL: &str =
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+const QUOTA_URL_FALLBACK: &str =
+    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
+const USER_AGENT: &str = "antigravity/1.0";
+
+static AGY_BINARY: OnceLock<Option<String>> = OnceLock::new();
+
+#[cfg(target_os = "windows")]
+mod os_cred {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
+    #[repr(C)]
+    struct CREDENTIALW {
+        flags: u32,
+        r#type: u32,
+        target_name: *mut u16,
+        comment: *mut u16,
+        last_written: [u32; 2],
+        credential_blob_size: u32,
+        credential_blob: *mut u8,
+        persist: u32,
+        attribute_count: u32,
+        attributes: *mut std::ffi::c_void,
+        target_alias: *mut u16,
+        user_name: *mut u16,
+    }
+
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn CredReadW(
+            target_name: *const u16,
+            r#type: u32,
+            flags: u32,
+            credential: *mut *mut CREDENTIALW,
+        ) -> i32;
+        fn CredFree(buffer: *mut std::ffi::c_void);
+    }
+
+    pub fn get_gemini_token() -> Option<String> {
+        let target: Vec<u16> = OsStr::new("gemini:antigravity\0").encode_wide().collect();
+        let mut cred_ptr: *mut CREDENTIALW = std::ptr::null_mut();
+        // CRED_TYPE_GENERIC = 1
+        let res = unsafe { CredReadW(target.as_ptr(), 1, 0, &mut cred_ptr) };
+        if res == 0 || cred_ptr.is_null() {
+            return None;
+        }
+
+        let slice = unsafe {
+            std::slice::from_raw_parts(
+                (*cred_ptr).credential_blob,
+                (*cred_ptr).credential_blob_size as usize,
+            )
+        };
+        let text = String::from_utf8_lossy(slice).to_string();
+        unsafe {
+            CredFree(cred_ptr as *mut std::ffi::c_void);
+        }
+
+        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+        json.get("token")?
+            .get("access_token")?
+            .as_str()
+            .map(|s| s.to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod os_cred {
+    use std::process::Command;
+
+    pub fn get_gemini_token() -> Option<String> {
+        let output = Command::new("security")
+            .args([
+                "find-generic-password",
+                "-s",
+                "gemini",
+                "-a",
+                "antigravity",
+                "-w",
+            ])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+        json.get("token")?
+            .get("access_token")?
+            .as_str()
+            .map(|s| s.to_string())
+    }
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+mod os_cred {
+    use std::process::Command;
+
+    pub fn get_gemini_token() -> Option<String> {
+        let output = Command::new("secret-tool")
+            .args(["lookup", "service", "gemini", "account", "antigravity"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+        json.get("token")?
+            .get("access_token")?
+            .as_str()
+            .map(|s| s.to_string())
+    }
+}
 
 pub struct AgyProvider {
     timeout_secs: u64,
+    client: ureq::Agent,
 }
 
 impl AgyProvider {
     pub fn new() -> Self {
-        Self { timeout_secs: 30 }
+        let timeout = Duration::from_secs(8);
+        let client = ureq::AgentBuilder::new().timeout(timeout).build();
+        Self {
+            timeout_secs: 30,
+            client,
+        }
     }
 
-    fn find_agy_binary() -> Option<String> {
+    fn find_agy_binary_uncached() -> Option<String> {
         // 1. Windows default AppData directly on filesystem (instant, zero process execution)
         #[cfg(target_os = "windows")]
         {
@@ -75,6 +200,12 @@ impl AgyProvider {
         None
     }
 
+    fn find_agy_binary() -> Option<String> {
+        AGY_BINARY
+            .get_or_init(Self::find_agy_binary_uncached)
+            .clone()
+    }
+
     fn run_agy(bin: &str, timeout_secs: u64) -> Result<String, String> {
         let started = Instant::now();
 
@@ -112,6 +243,7 @@ impl AgyProvider {
             c
         };
 
+        cmd.current_dir(std::env::temp_dir());
         cmd.stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -148,7 +280,7 @@ impl AgyProvider {
                         let _ = stderr_thread.join();
                         return Err(format!("agy 執行逾時 (超過 {} 秒)", timeout_secs));
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
                 Err(e) => {
                     let _ = child.kill();
@@ -186,19 +318,46 @@ impl AgyProvider {
 
         Ok(String::from_utf8_lossy(&stdout_bytes).to_string())
     }
-}
 
-impl Provider for AgyProvider {
-    fn provider_id(&self) -> &str {
-        "agy"
+    fn fetch_usage_api(&self, token: &str, now: &str) -> Result<UsageMetrics, String> {
+        for url in &[QUOTA_URL, QUOTA_URL_FALLBACK] {
+            let res = self
+                .client
+                .post(url)
+                .set("Authorization", &format!("Bearer {}", token))
+                .set("Content-Type", "application/json")
+                .set("User-Agent", USER_AGENT)
+                .send_string("{}")
+                .or_any_status();
+
+            match res {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status == 200 {
+                        let json: Value = resp
+                            .into_json()
+                            .map_err(|e| format!("API JSON 解析失敗: {e}"))?;
+                        let metrics = parse_agy_json(json, now);
+                        if metrics.metric1_val.is_some() || metrics.metric2_val.is_some() {
+                            return Ok(metrics);
+                        } else {
+                            return Err("API 回傳中未找到有效配額項目".to_string());
+                        }
+                    } else if status == 401 {
+                        return Err("Token 已失效 (HTTP 401 Unauthorized)".to_string());
+                    } else {
+                        log::debug!("[AgyProvider] {} 回應 HTTP {}", url, status);
+                    }
+                }
+                Err(e) => {
+                    log::debug!("[AgyProvider] {} 連線失敗: {}", url, e);
+                }
+            }
+        }
+        Err("所有配額 API 連線均未成功".to_string())
     }
-    fn display_name(&self) -> &str {
-        "Antigravity"
-    }
 
-    fn fetch_usage(&self) -> UsageMetrics {
-        let now = now_str();
-
+    fn fetch_usage_cli(&self, now: &str) -> UsageMetrics {
         let Some(bin) = Self::find_agy_binary() else {
             warn!("[AgyProvider] Antigravity CLI binary not found");
             return UsageMetrics::error_result(
@@ -230,7 +389,41 @@ impl Provider for AgyProvider {
             );
         };
 
-        parse_agy_json(raw, &now)
+        parse_agy_json(raw, now)
+    }
+}
+
+impl Provider for AgyProvider {
+    fn provider_id(&self) -> &str {
+        "agy"
+    }
+    fn display_name(&self) -> &str {
+        "Antigravity"
+    }
+
+    fn fetch_usage(&self) -> UsageMetrics {
+        let now = now_str();
+
+        // 1. Fast path: Direct CloudCode API call (~200ms vs ~4000ms)
+        if let Some(token) = os_cred::get_gemini_token() {
+            match self.fetch_usage_api(&token, &now) {
+                Ok(metrics) => {
+                    info!("[AgyProvider] Direct API fetch succeeded (fast path)");
+                    return metrics;
+                }
+                Err(err) => {
+                    warn!(
+                        "[AgyProvider] Direct API fetch failed ({}), falling back to CLI subprocess",
+                        err
+                    );
+                }
+            }
+        } else {
+            info!("[AgyProvider] No cached OAuth token in keyring, using CLI subprocess");
+        }
+
+        // 2. Fallback path: CLI subprocess (refreshes tokens and updates keyring)
+        self.fetch_usage_cli(&now)
     }
 }
 
@@ -253,6 +446,7 @@ fn try_parse_json(text: &str) -> Option<Value> {
 fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
     let groups = raw
         .pointer("/command/data/groups")
+        .or_else(|| raw.get("groups"))
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
@@ -266,6 +460,7 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
     for g in &groups {
         let g_name = g
             .get("name")
+            .or_else(|| g.get("displayName"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_lowercase();
@@ -279,6 +474,7 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
             for b in &buckets {
                 let b_id = b
                     .get("id")
+                    .or_else(|| b.get("bucketId"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_lowercase();
@@ -327,6 +523,7 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
             for b in &buckets {
                 let b_id = b
                     .get("id")
+                    .or_else(|| b.get("bucketId"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_lowercase();
@@ -449,5 +646,87 @@ mod tests {
         // Badge has 92%
         assert!(m.badge1_text.contains("92%"));
         assert!(m.error.is_none());
+    }
+
+    #[test]
+    fn test_parse_agy_api_json() {
+        let api_json = serde_json::json!({
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {
+                            "bucketId": "gemini-weekly",
+                            "window": "weekly",
+                            "remainingFraction": 0.25,
+                            "resetTime": "2030-01-07T00:00:00Z"
+                        },
+                        {
+                            "bucketId": "gemini-5h",
+                            "window": "5h",
+                            "remainingFraction": 0.90,
+                            "resetTime": "2030-01-01T05:00:00Z"
+                        }
+                    ]
+                },
+                {
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        {
+                            "bucketId": "3p-weekly",
+                            "window": "weekly",
+                            "remainingFraction": 0.70
+                        }
+                    ]
+                }
+            ]
+        });
+
+        let m = parse_agy_json(api_json, "12:00:00");
+        assert_eq!(m.provider_id, "agy");
+        assert_eq!(m.provider_name, "Antigravity");
+        // 5h used = (1.0 - 0.90) * 100 = 10.0%
+        assert!((m.metric1_val.unwrap() - 10.0).abs() < 0.1);
+        assert_eq!(m.metric1_text, "10%");
+        // Weekly used = (1.0 - 0.25) * 100 = 75.0%
+        assert!((m.metric2_val.unwrap() - 75.0).abs() < 0.1);
+        assert_eq!(m.metric2_text, "75%");
+        // Badge has 70%
+        assert!(m.badge1_text.contains("70%"));
+        assert!(m.error.is_none());
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_os_cred_token() {
+        // Just verify it doesn't crash or panic
+        let tok = os_cred::get_gemini_token();
+        println!("Gemini token discovered: {}", tok.is_some());
+    }
+
+    #[test]
+    fn test_fetch_usage_live_benchmark() {
+        let provider = AgyProvider::new();
+        let start = std::time::Instant::now();
+        let metrics = provider.fetch_usage();
+        let elapsed = start.elapsed();
+        eprintln!("Live agy fetch took: {:.2?}", elapsed);
+        if metrics.error_code == "cli_not_found" {
+            eprintln!("Skipping live assertion: agy not installed in this environment (e.g. CI)");
+            return;
+        }
+        eprintln!("Provider error: {:?}", metrics.error);
+        eprintln!(
+            "Metric 1: {} = {}",
+            metrics.metric1_title, metrics.metric1_text
+        );
+        eprintln!(
+            "Metric 2: {} = {}",
+            metrics.metric2_title, metrics.metric2_text
+        );
+        eprintln!("Badge 1: {}", metrics.badge1_text);
+        assert!(metrics.error.is_none());
+        // Must be fast!
+        assert!(elapsed < std::time::Duration::from_secs(3));
     }
 }

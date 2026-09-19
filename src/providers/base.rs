@@ -39,13 +39,11 @@ pub struct UsageMetrics {
     pub metric1_val: Option<f64>,
     pub metric1_text: String,
     pub metric1_reset: Option<DateTime<Utc>>,
-    pub metric1_subtext: String,
 
     pub metric2_title: String,
     pub metric2_val: Option<f64>,
     pub metric2_text: String,
     pub metric2_reset: Option<DateTime<Utc>>,
-    pub metric2_subtext: String,
 
     pub badge1_text: String,
     pub badge2_text: String,
@@ -112,19 +110,6 @@ pub fn format_countdown(target: Option<DateTime<Utc>>) -> String {
     }
 }
 
-#[allow(dead_code)]
-pub fn progress_color_rgb(percent: f64) -> (u8, u8, u8) {
-    if percent >= 90.0 {
-        (0xef, 0x44, 0x44) // Red
-    } else if percent >= 75.0 {
-        (0xf5, 0x9e, 0x0b) // Amber
-    } else if percent >= 50.0 {
-        (0x3b, 0x82, 0xf6) // Blue
-    } else {
-        (0x10, 0xb9, 0x81) // Green
-    }
-}
-
 /// Provider trait — one implementation per AI service.
 #[allow(dead_code)]
 pub trait Provider {
@@ -183,13 +168,5 @@ mod tests {
         let future_mins = Utc::now() + Duration::minutes(45);
         let res_mins = format_countdown(Some(future_mins));
         assert!(res_mins.contains("45m") || res_mins.contains("44m"));
-    }
-
-    #[test]
-    fn test_progress_color_rgb() {
-        assert_eq!(progress_color_rgb(95.0), (0xef, 0x44, 0x44)); // Red
-        assert_eq!(progress_color_rgb(80.0), (0xf5, 0x9e, 0x0b)); // Amber
-        assert_eq!(progress_color_rgb(60.0), (0x3b, 0x82, 0xf6)); // Blue
-        assert_eq!(progress_color_rgb(20.0), (0x10, 0xb9, 0x81)); // Green
     }
 }

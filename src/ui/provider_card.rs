@@ -7,6 +7,9 @@ use super::styles::{
 use crate::providers::base::{format_countdown, UsageMetrics};
 use chrono::Local;
 use egui::{Color32, RichText, Ui};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static LAYOUT_OVERFLOW_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Render one provider card (mirrors PySide6 ProviderCardWidget)
 pub fn render_provider_card(
@@ -34,7 +37,7 @@ pub fn render_provider_card(
     let top_bottom_margin = (2.0 + extra * 0.04).clamp(1.5, 4.0);
 
     // Card frame with margins (5, top, 5, bottom)
-    egui::Frame::none()
+    let card_response = egui::Frame::none()
         .inner_margin(egui::Margin {
             left: 5.0,
             right: 5.0,
@@ -120,7 +123,33 @@ pub fn render_provider_card(
                     }
                 }
             }
+
+            let content_bottom = ui.min_rect().bottom();
+            let clip_bottom = ui.clip_rect().bottom();
+            if content_bottom > clip_bottom + 0.5
+                && !LAYOUT_OVERFLOW_LOGGED.swap(true, Ordering::Relaxed)
+            {
+                log::warn!(
+                    "[Layout] provider={} content_overflow content_bottom={:.1} clip_bottom={:.1} target_height={:.1}",
+                    id,
+                    content_bottom,
+                    clip_bottom,
+                    target_height
+                );
+            }
         });
+
+    if card_response.response.rect.bottom() > ui.clip_rect().bottom() + 0.5
+        && !LAYOUT_OVERFLOW_LOGGED.swap(true, Ordering::Relaxed)
+    {
+        log::warn!(
+            "[Layout] provider={} card_overflow card_bottom={:.1} clip_bottom={:.1} target_height={:.1}",
+            id,
+            card_response.response.rect.bottom(),
+            ui.clip_rect().bottom(),
+            target_height
+        );
+    }
 }
 
 fn default_metric_titles(id: &str) -> (&'static str, &'static str) {

@@ -14,8 +14,9 @@ use super::styles::{
     TEXT_SECONDARY,
 };
 use crate::config::{
-    Config, ConfigManager, MIN_HORIZONTAL_HEIGHT, MIN_HORIZONTAL_WIDTH, MIN_VERTICAL_HEIGHT,
-    MIN_VERTICAL_WIDTH,
+    Config, ConfigManager, DEFAULT_VERTICAL_HEIGHT, HUD_BODY_SPACING, MIN_HORIZONTAL_HEIGHT,
+    MIN_HORIZONTAL_WIDTH, MIN_VERTICAL_HEIGHT, MIN_VERTICAL_WIDTH, VERTICAL_CARD_MIN_HEIGHT,
+    VERTICAL_DIVIDER_LINE_HEIGHT, VERTICAL_DIVIDER_SPACING,
 };
 use crate::hotkey::HotkeyManager;
 use crate::providers::{
@@ -60,6 +61,8 @@ pub struct HudApp {
     #[cfg(not(target_os = "linux"))]
     tray_attempts: usize,
     frame_count: u64,
+    last_poll_time: Instant,
+    last_repaint: Instant,
 
     // Ghost icon texture handle
     ghost_texture: Option<egui::TextureHandle>,
@@ -139,9 +142,19 @@ impl HudApp {
             #[cfg(not(target_os = "linux"))]
             tray_attempts: 0,
             frame_count: 0,
+            last_poll_time: Instant::now(),
+            last_repaint: Instant::now(),
             ghost_texture: None,
             #[cfg(not(target_os = "linux"))]
             _tray,
+        }
+    }
+
+    fn request_repaint_coalesced(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        if now.duration_since(self.last_repaint) >= Duration::from_millis(33) {
+            self.last_repaint = now;
+            ctx.request_repaint();
         }
     }
 
@@ -198,9 +211,13 @@ impl HudApp {
     pub fn toggle_visibility(&mut self, ctx: &egui::Context) {
         self.is_visible = !self.is_visible;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.is_visible));
+        #[cfg(target_os = "windows")]
+        if self.hwnd != 0 {
+            apply_no_native_titlebar(self.hwnd);
+        }
         if self.is_visible {
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            ctx.request_repaint();
+            self.request_repaint_coalesced(ctx);
         } else {
             #[cfg(target_os = "windows")]
             trim_working_set();
@@ -246,9 +263,13 @@ impl HudApp {
                 let ct = cfg.click_through;
                 ConfigManager::save(&cfg);
                 drop(cfg);
+                #[cfg(not(target_os = "windows"))]
                 ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
                 #[cfg(target_os = "windows")]
-                apply_win32_click_through(self.hwnd, ct);
+                {
+                    apply_win32_click_through(self.hwnd, ct);
+                    apply_no_native_titlebar(self.hwnd);
+                }
             }
             MenuAction::ToggleAlwaysOnTop => {
                 let mut cfg = self.config.lock().unwrap();
@@ -303,7 +324,7 @@ impl HudApp {
                 let (w, h) = if mode == "horizontal" {
                     (690.0, 152.0)
                 } else {
-                    (280.0, 410.0)
+                    (280.0, DEFAULT_VERTICAL_HEIGHT as f32)
                 };
                 {
                     let mut cfg = self.config.lock().unwrap();
@@ -312,7 +333,7 @@ impl HudApp {
                         cfg.horizontal_height = 152;
                     } else {
                         cfg.vertical_width = 280;
-                        cfg.vertical_height = 410;
+                        cfg.vertical_height = DEFAULT_VERTICAL_HEIGHT;
                     }
                     cfg.window_x = Some(400);
                     cfg.window_y = Some(50);
@@ -368,7 +389,7 @@ impl eframe::App for HudApp {
             self.is_visible = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            ctx.request_repaint();
+            self.request_repaint_coalesced(ctx);
         }
 
         // Drain worker results
@@ -380,14 +401,15 @@ impl eframe::App for HudApp {
             self.metrics.insert(m.provider_id.clone(), m);
         }
 
-        // Poll for scheduled refreshes
-        {
+        // Poll for scheduled refreshes at a reduced cadence to avoid per-frame scheduler churn.
+        let now = Instant::now();
+        if now.duration_since(self.last_poll_time) >= Duration::from_millis(250) {
             let mut ctrl = self.refresh_ctrl.lock().unwrap();
             ctrl.poll(&self.providers_arc);
+            self.last_poll_time = now;
         }
 
         // Sleep-resume detection
-        let now = Instant::now();
         if now.duration_since(self.last_heartbeat) > Duration::from_secs(15) {
             info!("[HudApp] Wake from sleep detected, triggering refresh");
             let mut ctrl = self.refresh_ctrl.lock().unwrap();
@@ -411,9 +433,13 @@ impl eframe::App for HudApp {
             let ct = cfg.click_through;
             ConfigManager::save(&cfg);
             drop(cfg);
+            #[cfg(not(target_os = "windows"))]
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
             #[cfg(target_os = "windows")]
-            apply_win32_click_through(self.hwnd, ct);
+            {
+                apply_win32_click_through(self.hwnd, ct);
+                apply_no_native_titlebar(self.hwnd);
+            }
         }
 
         // One-shot: apply stored click_through on first rendered frame (frame_count==2 means
@@ -433,9 +459,13 @@ impl eframe::App for HudApp {
             }
             let ct = cfg.click_through;
             drop(cfg);
+            #[cfg(not(target_os = "windows"))]
             ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
             #[cfg(target_os = "windows")]
-            apply_win32_click_through(self.hwnd, ct);
+            {
+                apply_win32_click_through(self.hwnd, ct);
+                apply_no_native_titlebar(self.hwnd);
+            }
         }
 
         #[cfg(target_os = "windows")]
@@ -486,7 +516,7 @@ impl eframe::App for HudApp {
                     let is_as = crate::autostart::is_autostart_enabled();
                     #[cfg(target_os = "windows")]
                     let hwnd = self.hwnd;
-                    #[cfg(target_os = "macos")]
+                    #[cfg(not(target_os = "windows"))]
                     let hwnd = 0;
                     if let Some(action) = native_menu::show_native_context_menu(hwnd, &cfg, is_as) {
                         self.handle_menu_action(action, ctx);
@@ -496,9 +526,10 @@ impl eframe::App for HudApp {
             }
         }
 
-        let layout_mode = self.config.lock().unwrap().layout_mode.clone();
-        let is_locked = self.config.lock().unwrap().locked;
-        let is_clickthrough = self.config.lock().unwrap().click_through;
+        let (layout_mode, is_locked, is_clickthrough) = {
+            let cfg = self.config.lock().unwrap();
+            (cfg.layout_mode.clone(), cfg.locked, cfg.click_through)
+        };
 
         // ══════════════════════════════════════════════════════════════
         // Real-Time Smooth Drag-to-Resize Engine
@@ -536,9 +567,15 @@ impl eframe::App for HudApp {
 
                         let ppp = ctx.pixels_per_point();
                         let (min_w, min_h) = if layout_mode == "horizontal" {
-                            ((540.0 * ppp).round() as i32, (130.0 * ppp).round() as i32)
+                            (
+                                (MIN_HORIZONTAL_WIDTH as f32 * ppp).round() as i32,
+                                (MIN_HORIZONTAL_HEIGHT as f32 * ppp).round() as i32,
+                            )
                         } else {
-                            ((250.0 * ppp).round() as i32, (320.0 * ppp).round() as i32)
+                            (
+                                (MIN_VERTICAL_WIDTH as f32 * ppp).round() as i32,
+                                (MIN_VERTICAL_HEIGHT as f32 * ppp).round() as i32,
+                            )
                         };
 
                         let mut new_x = x0;
@@ -590,7 +627,7 @@ impl eframe::App for HudApp {
                             set_window_rect(self.hwnd, new_x, new_y, new_w, new_h);
                         }
                     }
-                    ctx.request_repaint();
+                    self.request_repaint_coalesced(ctx);
                 }
             } else if !is_locked && !is_clickthrough {
                 if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
@@ -616,17 +653,7 @@ impl eframe::App for HudApp {
                         if ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary))
                             && self.hwnd != 0
                         {
-                            if let (Some(cur_pos), Some(rect)) =
-                                (get_cursor_screen_pos(), get_window_rect(self.hwnd))
-                            {
-                                set_mouse_capture(self.hwnd);
-                                self.active_resize = Some(ActiveResize {
-                                    direction: dir,
-                                    start_cursor: cur_pos,
-                                    start_rect: rect,
-                                });
-                                ctx.request_repaint();
-                            }
+                            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(dir));
                         }
                     }
                 }
@@ -665,11 +692,22 @@ impl eframe::App for HudApp {
         // Main Central Panel (Frameless HUD Container matching get_hud_stylesheet)
         // ══════════════════════════════════════════════════════════════
         let opacity = self.config.lock().unwrap().opacity.clamp(0.1, 1.0);
+        let show_hover_border = ctx
+            .input(|input| input.pointer.hover_pos())
+            .map(|pos| ctx.screen_rect().contains(pos))
+            .unwrap_or(false);
 
         let hud_frame = egui::Frame::none()
             .fill(BG_DARK)
             .rounding(9.0)
-            .stroke(egui::Stroke::new(1.0_f32, BORDER_COLOR))
+            .stroke(egui::Stroke::new(
+                1.0_f32,
+                if show_hover_border {
+                    BORDER_COLOR
+                } else {
+                    Color32::TRANSPARENT
+                },
+            ))
             .multiply_with_opacity(opacity)
             .inner_margin(egui::Margin {
                 left: 10.0,
@@ -770,7 +808,7 @@ impl eframe::App for HudApp {
                     self.handle_menu_action(action, ctx);
                 }
 
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 3.0); // inner_layout.setSpacing(3)
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, HUD_BODY_SPACING as f32);
 
                 // 1. Common Header
                 self.render_header(ui, ctx);
@@ -877,11 +915,22 @@ fn strip_native_titlebar_bits(style: i32) -> i32 {
     const WS_SYSMENU: i32 = 0x00080000;
     const WS_MINIMIZEBOX: i32 = 0x00020000;
     const WS_MAXIMIZEBOX: i32 = 0x00010000;
-    style & !(WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
+    const WS_THICKFRAME: i32 = 0x00040000;
+    const WS_BORDER: i32 = 0x00800000;
+    const WS_DLGFRAME: i32 = 0x00400000;
+
+    style
+        & !(WS_CAPTION
+            | WS_SYSMENU
+            | WS_MINIMIZEBOX
+            | WS_MAXIMIZEBOX
+            | WS_THICKFRAME
+            | WS_BORDER
+            | WS_DLGFRAME)
 }
 
 #[cfg(target_os = "windows")]
-fn apply_no_native_titlebar(hwnd: isize) {
+fn apply_frameless_window_style(hwnd: isize) {
     #[link(name = "user32")]
     extern "system" {
         fn GetWindowLongW(hWnd: isize, nIndex: i32) -> i32;
@@ -896,12 +945,51 @@ fn apply_no_native_titlebar(hwnd: isize) {
             uFlags: u32,
         ) -> i32;
     }
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmExtendFrameIntoClientArea(hWnd: isize, pMarInset: *const std::ffi::c_void) -> i32;
+        fn DwmSetWindowAttribute(
+            hWnd: isize,
+            dwAttribute: u32,
+            pvAttribute: *const std::ffi::c_void,
+            cbAttribute: u32,
+        ) -> i32;
+    }
+
     const GWL_STYLE: i32 = -16;
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_POPUP: i32 = 0x80000000u32 as i32;
+    const WS_VISIBLE: i32 = 0x10000000;
+    const WS_CAPTION: i32 = 0x00C00000;
+    const WS_SYSMENU: i32 = 0x00080000;
+    const WS_THICKFRAME: i32 = 0x00040000;
+    const WS_MINIMIZEBOX: i32 = 0x00020000;
+    const WS_MAXIMIZEBOX: i32 = 0x00010000;
+    const WS_BORDER: i32 = 0x00800000;
+    const WS_DLGFRAME: i32 = 0x00400000;
+    const WS_EX_WINDOWEDGE: i32 = 0x00000100;
+    const WS_EX_CLIENTEDGE: i32 = 0x00000200;
+    const WS_EX_DLGMODALFRAME: i32 = 0x00000001;
+    const WS_EX_STATICEDGE: i32 = 0x00020000;
+    const WS_EX_LAYERED: i32 = 0x00080000;
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOSIZE: u32 = 0x0001;
     const SWP_NOZORDER: u32 = 0x0004;
     const SWP_FRAMECHANGED: u32 = 0x0020;
     const SWP_NOACTIVATE: u32 = 0x0010;
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_DONOTROUND: u32 = 1;
+    const DWMWA_BORDER_COLOR: u32 = 34;
+    const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
+
+    #[repr(C)]
+    #[allow(non_snake_case)]
+    struct MARGINS {
+        cxLeftWidth: i32,
+        cxRightWidth: i32,
+        cyTopHeight: i32,
+        cyBottomHeight: i32,
+    }
 
     if hwnd == 0 {
         return;
@@ -910,8 +998,52 @@ fn apply_no_native_titlebar(hwnd: isize) {
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_STYLE);
         let stripped = strip_native_titlebar_bits(style);
-        if stripped != style {
-            SetWindowLongW(hwnd, GWL_STYLE, stripped);
+        let mut rebuilt_style = (stripped | WS_POPUP | WS_VISIBLE)
+            & !(WS_CAPTION
+                | WS_SYSMENU
+                | WS_THICKFRAME
+                | WS_MINIMIZEBOX
+                | WS_MAXIMIZEBOX
+                | WS_BORDER
+                | WS_DLGFRAME);
+        rebuilt_style |= WS_POPUP;
+        if rebuilt_style != style {
+            SetWindowLongW(hwnd, GWL_STYLE, rebuilt_style);
+        }
+
+        let exstyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let rebuilt_exstyle = (exstyle
+            & !(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE))
+            | WS_EX_LAYERED;
+        if rebuilt_exstyle != exstyle {
+            SetWindowLongW(hwnd, GWL_EXSTYLE, rebuilt_exstyle);
+        }
+
+        let margins = MARGINS {
+            cxLeftWidth: -1,
+            cxRightWidth: -1,
+            cyTopHeight: -1,
+            cyBottomHeight: -1,
+        };
+        if rebuilt_style != style || rebuilt_exstyle != exstyle {
+            let _ =
+                DwmExtendFrameIntoClientArea(hwnd, &margins as *const _ as *const std::ffi::c_void);
+
+            let corner_pref = DWMWCP_DONOTROUND;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner_pref as *const _ as *const std::ffi::c_void,
+                4,
+            );
+
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                &DWMWA_COLOR_NONE as *const _ as *const std::ffi::c_void,
+                4,
+            );
+
             let _ = SetWindowPos(
                 hwnd,
                 0,
@@ -926,18 +1058,14 @@ fn apply_no_native_titlebar(hwnd: isize) {
 }
 
 #[cfg(target_os = "windows")]
+fn apply_no_native_titlebar(hwnd: isize) {
+    apply_frameless_window_style(hwnd);
+}
+
+#[cfg(target_os = "windows")]
 fn init_win32_window_frame(hwnd: isize) {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
-
-    #[repr(C)]
-    #[allow(non_snake_case)]
-    struct MARGINS {
-        cxLeftWidth: i32,
-        cxRightWidth: i32,
-        cyTopHeight: i32,
-        cyBottomHeight: i32,
-    }
 
     #[link(name = "user32")]
     extern "system" {
@@ -945,16 +1073,6 @@ fn init_win32_window_frame(hwnd: isize) {
         fn SetWindowLongW(hWnd: isize, nIndex: i32, dwNewLong: i32) -> i32;
         fn SetClassLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
         fn RegisterWindowMessageW(lpString: *const u16) -> u32;
-    }
-    #[link(name = "dwmapi")]
-    extern "system" {
-        fn DwmExtendFrameIntoClientArea(hWnd: isize, pMarInset: *const MARGINS) -> i32;
-        fn DwmSetWindowAttribute(
-            hWnd: isize,
-            dwAttribute: u32,
-            pvAttribute: *const std::ffi::c_void,
-            cbAttribute: u32,
-        ) -> i32;
     }
     #[link(name = "comctl32")]
     extern "system" {
@@ -970,8 +1088,6 @@ fn init_win32_window_frame(hwnd: isize) {
     const GWL_EXSTYLE: i32 = -20;
     const WS_EX_TOOLWINDOW: i32 = 0x00000080;
     const GCLP_HBRBACKGROUND: i32 = -10;
-    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
-    const DWMWCP_DONOTROUND: u32 = 1;
 
     unsafe {
         apply_no_native_titlebar(hwnd);
@@ -1027,6 +1143,20 @@ fn init_win32_window_frame(hwnd: isize) {
                 // WM_ERASEBKGND
                 return 1;
             }
+            if msg == 0x0005 {
+                // WM_SIZE: keep the native transparent window corners rounded after resize.
+                apply_window_region(h);
+            }
+            if msg == 0x0086 {
+                // WM_NCACTIVATE: the frameless HUD has no non-client state to repaint.
+                log::debug!("[Win32Frame] WM_NCACTIVATE intercepted active={}", w != 0);
+                return 0;
+            }
+            if msg == 0x0085 {
+                // WM_NCPAINT: suppress transient DWM non-client frame painting.
+                log::debug!("[Win32Frame] WM_NCPAINT intercepted");
+                return 0;
+            }
             if msg == 0x0082 {
                 // WM_NCDESTROY: clean up subclass per Win32 Common Controls best practices
                 #[link(name = "comctl32")]
@@ -1050,36 +1180,9 @@ fn init_win32_window_frame(hwnd: isize) {
             DefSubclassProc(h, msg, w, l)
         }
         let _ = SetWindowSubclass(hwnd, bg_subclass, 1001, 0);
+        apply_window_region(hwnd);
 
-        // 3. Extend DWM frame into client area for per-pixel alpha composition
-        let margins = MARGINS {
-            cxLeftWidth: -1,
-            cxRightWidth: -1,
-            cyTopHeight: -1,
-            cyBottomHeight: -1,
-        };
-        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-        // 4. Disable Windows 11 DWM default outer window rounding (we render sleek 9.0 rounding in egui)
-        let corner_pref = DWMWCP_DONOTROUND;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_WINDOW_CORNER_PREFERENCE,
-            &corner_pref as *const _ as *const _,
-            4,
-        );
-
-        // 5. Disable Windows 11 DWM default 1px outer rectangular border (eliminates outer frame around rounded corners)
-        const DWMWA_BORDER_COLOR: u32 = 34;
-        const DWMWA_COLOR_NONE: u32 = 0xFFFFFFFE;
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWA_BORDER_COLOR,
-            &DWMWA_COLOR_NONE as *const _ as *const _,
-            4,
-        );
-
-        // 6. Set WS_EX_TOOLWINDOW matching Python Qt.WindowType.Tool (floating overlay)
+        // Set WS_EX_TOOLWINDOW matching Python Qt.WindowType.Tool (floating overlay).
         let exstyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
         if (exstyle & WS_EX_TOOLWINDOW) == 0 {
             SetWindowLongW(hwnd, GWL_EXSTYLE, exstyle | WS_EX_TOOLWINDOW);
@@ -1187,28 +1290,65 @@ fn set_window_rect(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
     }
     const SWP_NOZORDER: u32 = 0x0004;
     const SWP_NOACTIVATE: u32 = 0x0010;
-    const SWP_NOCOPYBITS: u32 = 0x0100;
     unsafe {
-        SetWindowPos(
-            hwnd,
-            0,
-            x,
-            y,
-            w,
-            h,
-            SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOCOPYBITS,
-        );
+        SetWindowPos(hwnd, 0, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
     }
+    apply_window_region(hwnd);
 }
 
 #[cfg(target_os = "windows")]
-fn set_mouse_capture(hwnd: isize) {
+fn apply_window_region(hwnd: isize) {
+    #[repr(C)]
+    struct RECT {
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+    }
+
     #[link(name = "user32")]
     extern "system" {
-        fn SetCapture(hWnd: isize) -> isize;
+        fn GetClientRect(hWnd: isize, lpRect: *mut RECT) -> i32;
+        fn GetDpiForWindow(hWnd: isize) -> u32;
+        fn CreateRoundRectRgn(
+            nLeftRect: i32,
+            nTopRect: i32,
+            nRightRect: i32,
+            nBottomRect: i32,
+            nWidthEllipse: i32,
+            nHeightEllipse: i32,
+        ) -> isize;
+        fn SetWindowRgn(hWnd: isize, hRgn: isize, bRedraw: i32) -> i32;
     }
+
+    if hwnd == 0 {
+        return;
+    }
+
     unsafe {
-        SetCapture(hwnd);
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetClientRect(hwnd, &mut rect) == 0 {
+            return;
+        }
+
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+        if width <= 0 || height <= 0 {
+            return;
+        }
+
+        let dpi = GetDpiForWindow(hwnd).max(96) as f32;
+        let diameter = (18.0 * dpi / 96.0).round() as i32;
+        let region = CreateRoundRectRgn(-1, -1, width + 2, height + 2, diameter, diameter);
+        if region != 0 {
+            // SetWindowRgn takes ownership of the region handle on success.
+            let _ = SetWindowRgn(hwnd, region, 1);
+        }
     }
 }
 
@@ -1274,6 +1414,10 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
     const GWL_EXSTYLE: i32 = -20;
     const WS_EX_TRANSPARENT: i32 = 0x00000020;
     const WS_EX_LAYERED: i32 = 0x00080000;
+    const WS_EX_WINDOWEDGE: i32 = 0x00000100;
+    const WS_EX_CLIENTEDGE: i32 = 0x00000200;
+    const WS_EX_DLGMODALFRAME: i32 = 0x00000001;
+    const WS_EX_STATICEDGE: i32 = 0x00020000;
     const SWP_NOMOVE: u32 = 0x0002;
     const SWP_NOSIZE: u32 = 0x0001;
     const SWP_NOZORDER: u32 = 0x0004;
@@ -1284,11 +1428,13 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
     }
     unsafe {
         let style = GetWindowLongW(hwnd, GWL_EXSTYLE);
-        let new_style = if enable {
+        let mut new_style = if enable {
             style | WS_EX_TRANSPARENT | WS_EX_LAYERED
         } else {
             style & !WS_EX_TRANSPARENT
         };
+        new_style &=
+            !(WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE | WS_EX_DLGMODALFRAME | WS_EX_STATICEDGE);
         if new_style != style {
             SetWindowLongW(hwnd, GWL_EXSTYLE, new_style);
             SetWindowPos(
@@ -1423,9 +1569,11 @@ impl HudApp {
         let avail_h = ui.available_height();
         let total_cards = PROVIDER_IDS.len();
         // 2 dividers with 3.0 padding top/bottom + 1.0 line = 7.0 per divider (total 14.0)
-        let div_spacing = 3.0;
-        let total_div_h = (total_cards as f32 - 1.0) * (div_spacing * 2.0 + 1.0);
-        let card_h = ((avail_h - total_div_h) / total_cards as f32).max(92.0);
+        let div_spacing = VERTICAL_DIVIDER_SPACING as f32;
+        let total_div_h =
+            (total_cards as f32 - 1.0) * (div_spacing * 2.0 + VERTICAL_DIVIDER_LINE_HEIGHT as f32);
+        let card_h =
+            ((avail_h - total_div_h) / total_cards as f32).max(VERTICAL_CARD_MIN_HEIGHT as f32);
 
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
 
@@ -1442,7 +1590,7 @@ impl HudApp {
                 ui.add_space(div_spacing);
                 // h_div: background-color: rgba(255, 255, 255, 0.08); max-height: 1px;
                 let (rect, _) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), 1.0),
+                    egui::vec2(ui.available_width(), VERTICAL_DIVIDER_LINE_HEIGHT as f32),
                     egui::Sense::hover(),
                 );
                 ui.painter().rect_filled(

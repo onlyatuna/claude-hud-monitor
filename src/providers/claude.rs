@@ -13,6 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use ureq::OrAnyStatus;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const USER_AGENT: &str = "claude-code/0.2.29";
@@ -260,9 +261,7 @@ fn get_access_token(credentials_path: &Path) -> Option<String> {
 }
 
 pub struct ClaudeProvider {
-    #[allow(dead_code)]
-    timeout: Duration,
-    client: reqwest::blocking::Client,
+    client: ureq::Agent,
     config: Option<Arc<Mutex<Config>>>,
 }
 
@@ -274,15 +273,8 @@ impl ClaudeProvider {
 
     pub fn with_config(config: Option<Arc<Mutex<Config>>>) -> Self {
         let timeout = Duration::from_secs(10);
-        let client = reqwest::blocking::Client::builder()
-            .timeout(timeout)
-            .build()
-            .unwrap_or_default();
-        Self {
-            timeout,
-            client,
-            config,
-        }
+        let client = ureq::AgentBuilder::new().timeout(timeout).build();
+        Self { client, config }
     }
 }
 
@@ -331,17 +323,18 @@ impl Provider for ClaudeProvider {
         let result = self
             .client
             .get(USAGE_URL)
-            .header("Authorization", format!("Bearer {}", token))
-            .header("User-Agent", USER_AGENT)
-            .header("anthropic-beta", BETA_HEADER)
-            .header("Accept", "application/json")
-            .send();
+            .set("Authorization", &format!("Bearer {}", token))
+            .set("User-Agent", USER_AGENT)
+            .set("anthropic-beta", BETA_HEADER)
+            .set("Accept", "application/json")
+            .call()
+            .or_any_status();
 
         match result {
             Ok(resp) => {
                 let status = resp.status();
                 if status == 401 {
-                    let retry = parse_retry_after(resp.headers());
+                    let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "claude".to_owned(),
                         provider_name: display_title,
@@ -357,7 +350,7 @@ impl Provider for ClaudeProvider {
                     };
                 }
                 if status == 429 {
-                    let retry = parse_retry_after(resp.headers());
+                    let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "claude".to_owned(),
                         provider_name: display_title,
@@ -366,21 +359,21 @@ impl Provider for ClaudeProvider {
                         metric2_title: "WEEKLY 7D".to_owned(),
                         metric2_text: "--".to_owned(),
                         last_updated_time: now,
-                        error: Some(format!("配額查詢 HTTP {}", status.as_u16())),
+                        error: Some(format!("配額查詢 HTTP {}", status)),
                         error_code: "rate_limit".to_owned(),
                         retry_after: retry,
                         ..Default::default()
                     };
                 }
-                if !status.is_success() {
+                if !(200..300).contains(&status) {
                     return UsageMetrics::error_result(
                         "claude",
                         &display_title,
-                        &format!("API 回應異常: HTTP {}", status.as_u16()),
+                        &format!("API 回應異常: HTTP {}", status),
                         "http",
                     );
                 }
-                match resp.json::<Value>() {
+                match resp.into_json::<Value>() {
                     Ok(json) => {
                         let mut metrics = parse_claude_response(json, &now);
                         metrics.provider_name = display_title;
@@ -472,13 +465,8 @@ fn parse_iso_datetime(s: Option<&str>) -> Option<DateTime<Utc>> {
     })
 }
 
-fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<f64> {
-    headers
-        .get("Retry-After")?
-        .to_str()
-        .ok()?
-        .parse::<f64>()
-        .ok()
+fn parse_retry_after(resp: &ureq::Response) -> Option<f64> {
+    resp.header("Retry-After")?.parse::<f64>().ok()
 }
 
 #[cfg(test)]

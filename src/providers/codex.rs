@@ -11,24 +11,20 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
+use ureq::OrAnyStatus;
 
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const USER_AGENT: &str = "codex-cli/0.154.0";
 
 pub struct CodexProvider {
-    #[allow(dead_code)]
-    timeout: Duration,
-    client: reqwest::blocking::Client,
+    client: ureq::Agent,
 }
 
 impl CodexProvider {
     pub fn new() -> Self {
         let timeout = Duration::from_secs(8);
-        let client = reqwest::blocking::Client::builder()
-            .timeout(timeout)
-            .build()
-            .unwrap_or_default();
-        Self { timeout, client }
+        let client = ureq::AgentBuilder::new().timeout(timeout).build();
+        Self { client }
     }
 
     fn auth_path() -> PathBuf {
@@ -130,19 +126,19 @@ impl Provider for CodexProvider {
         let mut req = self
             .client
             .get(USAGE_URL)
-            .header("Authorization", format!("Bearer {}", access_token))
-            .header("User-Agent", USER_AGENT)
-            .header("Accept", "application/json");
+            .set("Authorization", &format!("Bearer {}", access_token))
+            .set("User-Agent", USER_AGENT)
+            .set("Accept", "application/json");
 
         if let Some(acct) = &account_id {
-            req = req.header("ChatGPT-Account-Id", acct);
+            req = req.set("ChatGPT-Account-Id", acct);
         }
 
-        match req.send() {
+        match req.call().or_any_status() {
             Ok(resp) => {
                 let status = resp.status();
                 if status == 401 {
-                    let retry = parse_retry_after(resp.headers());
+                    let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "codex".to_owned(),
                         provider_name: "OpenAI Codex".to_owned(),
@@ -158,7 +154,7 @@ impl Provider for CodexProvider {
                     };
                 }
                 if status == 429 {
-                    let retry = parse_retry_after(resp.headers());
+                    let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "codex".to_owned(),
                         provider_name: "OpenAI Codex".to_owned(),
@@ -167,21 +163,21 @@ impl Provider for CodexProvider {
                         metric2_title: "SECONDARY".to_owned(),
                         metric2_text: "--".to_owned(),
                         last_updated_time: now,
-                        error: Some(format!("配額查詢 HTTP {}", status.as_u16())),
+                        error: Some(format!("配額查詢 HTTP {}", status)),
                         error_code: "rate_limit".to_owned(),
                         retry_after: retry,
                         ..Default::default()
                     };
                 }
-                if !status.is_success() {
+                if !(200..300).contains(&status) {
                     return UsageMetrics::error_result(
                         "codex",
                         "OpenAI Codex",
-                        &format!("API 回應異常: HTTP {}", status.as_u16()),
+                        &format!("API 回應異常: HTTP {}", status),
                         "http",
                     );
                 }
-                match resp.json::<Value>() {
+                match resp.into_json::<Value>() {
                     Ok(json) => parse_codex_response(json, &now),
                     Err(_) => UsageMetrics::error_result(
                         "codex",
@@ -259,13 +255,8 @@ fn parse_codex_response(data: Value, now_str: &str) -> UsageMetrics {
     }
 }
 
-fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<f64> {
-    headers
-        .get("Retry-After")?
-        .to_str()
-        .ok()?
-        .parse::<f64>()
-        .ok()
+fn parse_retry_after(resp: &ureq::Response) -> Option<f64> {
+    resp.header("Retry-After")?.parse::<f64>().ok()
 }
 
 #[cfg(test)]

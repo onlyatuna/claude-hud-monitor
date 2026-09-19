@@ -51,12 +51,29 @@ pub struct Config {
 pub const MIN_HORIZONTAL_WIDTH: u32 = 540;
 pub const MIN_HORIZONTAL_HEIGHT: u32 = 130;
 pub const MIN_VERTICAL_WIDTH: u32 = 250;
-pub const MIN_VERTICAL_HEIGHT: u32 = 320;
+
+pub const HUD_HEADER_HEIGHT: u32 = 16;
+pub const HUD_BODY_SPACING: u32 = 3;
+pub const HUD_FRAME_VERTICAL_MARGIN: u32 = 10;
+pub const VERTICAL_CARD_MIN_HEIGHT: u32 = 104;
+pub const VERTICAL_DIVIDER_SPACING: u32 = 3;
+pub const VERTICAL_DIVIDER_LINE_HEIGHT: u32 = 1;
+
+pub const fn vertical_layout_min_height() -> u32 {
+    HUD_FRAME_VERTICAL_MARGIN
+        + HUD_HEADER_HEIGHT
+        + HUD_BODY_SPACING
+        + VERTICAL_CARD_MIN_HEIGHT * 3
+        + VERTICAL_DIVIDER_SPACING * 4
+        + VERTICAL_DIVIDER_LINE_HEIGHT * 2
+}
+
+pub const MIN_VERTICAL_HEIGHT: u32 = vertical_layout_min_height();
 
 pub const DEFAULT_HORIZONTAL_WIDTH: u32 = 690;
 pub const DEFAULT_HORIZONTAL_HEIGHT: u32 = 152;
 pub const DEFAULT_VERTICAL_WIDTH: u32 = 280;
-pub const DEFAULT_VERTICAL_HEIGHT: u32 = 410;
+pub const DEFAULT_VERTICAL_HEIGHT: u32 = MIN_VERTICAL_HEIGHT + 40;
 
 fn default_layout_mode() -> String {
     "vertical".to_owned()
@@ -243,7 +260,7 @@ mod tests {
         let cfg = Config::default();
         assert_eq!(cfg.layout_mode, "vertical");
         assert_eq!(cfg.vertical_width, 280);
-        assert_eq!(cfg.vertical_height, 410);
+        assert_eq!(cfg.vertical_height, DEFAULT_VERTICAL_HEIGHT);
         assert_eq!(cfg.horizontal_width, 690);
         assert_eq!(cfg.horizontal_height, 152);
         assert!(cfg.always_on_top);

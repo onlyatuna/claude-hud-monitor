@@ -66,17 +66,6 @@ impl RefreshController {
     pub fn is_busy(&self) -> bool {
         self.states.values().any(|s| s.running)
     }
-    /// Register a provider and launch its first fetch.
-    #[allow(dead_code)]
-    pub fn register_and_launch(
-        &mut self,
-        provider: Box<dyn Provider + Send>,
-        arc_provider: Arc<dyn Provider + Send + Sync>,
-    ) {
-        let id = provider.provider_id().to_owned();
-        self.states.insert(id.clone(), ProviderState::default());
-        self.launch(&id, arc_provider);
-    }
 
     /// Call regularly (e.g. every 1 second) from the UI thread to trigger
     /// scheduled refreshes and check for due providers.
@@ -133,6 +122,7 @@ impl RefreshController {
         thread::Builder::new()
             .name(format!("quota-{}", id))
             .spawn(move || {
+                let started = Instant::now();
                 let metrics_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     provider.fetch_usage()
                 }));
@@ -159,6 +149,32 @@ impl RefreshController {
                         }
                     }
                 };
+                let elapsed = started.elapsed();
+                let elapsed_ms = elapsed.as_secs_f64() * 1000.0;
+                if elapsed > Duration::from_millis(2000) {
+                    warn!(
+                        "provider={} slow_fetch elapsed_ms={:.1} status={}",
+                        id_owned,
+                        elapsed_ms,
+                        if metrics.error.is_some() {
+                            "error"
+                        } else {
+                            "ok"
+                        }
+                    );
+                } else {
+                    log::info!(
+                        "provider={} fetch_ms={:.1} status={}",
+                        id_owned,
+                        elapsed_ms,
+                        if metrics.error.is_some() {
+                            "error"
+                        } else {
+                            "ok"
+                        }
+                    );
+                }
+
                 let _ = tx.send(WorkerResult {
                     provider_id: id_owned,
                     generation,

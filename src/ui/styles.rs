@@ -14,8 +14,6 @@ pub const TEXT_PRIMARY: Color32 = Color32::from_rgb(0xe2, 0xe8, 0xf0);
 pub const TEXT_SECONDARY: Color32 = Color32::from_rgb(0x94, 0xa3, 0xb8);
 // SubDetail, HeaderStatus: color: #64748b;
 pub const TEXT_MUTED: Color32 = Color32::from_rgb(0x64, 0x74, 0x8b);
-#[allow(dead_code)]
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0x64, 0x74, 0x8b);
 // Progress bar track: rgba(255, 255, 255, 0.08) -> alpha ~14
 pub const TRACK_BG: Color32 = Color32::from_rgba_premultiplied(14, 14, 14, 14);
 
