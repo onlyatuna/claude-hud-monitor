@@ -55,6 +55,7 @@ impl Drop for HotkeyManager {
 }
 
 /// Parses a hotkey string like "Alt+C", "Ctrl+Shift+H", "F10" into (fsModifiers, vkCode).
+#[cfg(target_os = "windows")]
 pub fn parse_hotkey(s: &str) -> (u32, u32) {
     let mut mods = 0u32;
     let mut vk = 0u32;
@@ -110,6 +111,8 @@ impl HotkeyManager {
 
         #[cfg(target_os = "windows")]
         let (mods, vk) = parse_hotkey(hotkey_str);
+        #[cfg(not(target_os = "windows"))]
+        let _ = hotkey_str;
 
         #[cfg(target_os = "windows")]
         {
@@ -168,6 +171,7 @@ impl HotkeyManager {
 /// Windows-specific Win32 RegisterHotKey message loop.
 /// Computes modifiers for the secondary click-through hotkey such that it never conflicts
 /// with the primary hotkey even when Shift, Ctrl, or Alt are already present.
+#[cfg(target_os = "windows")]
 pub fn compute_ct_mods(mods: u32) -> u32 {
     const MOD_ALT: u32 = 0x0001;
     const MOD_CONTROL: u32 = 0x0002;
