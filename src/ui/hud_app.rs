@@ -484,9 +484,11 @@ impl eframe::App for HudApp {
                 } => {
                     let cfg = self.config.lock().unwrap().clone();
                     let is_as = crate::autostart::is_autostart_enabled();
-                    if let Some(action) =
-                        native_menu::show_native_context_menu(self.hwnd, &cfg, is_as)
-                    {
+                    #[cfg(target_os = "windows")]
+                    let hwnd = self.hwnd;
+                    #[cfg(target_os = "macos")]
+                    let hwnd = 0;
+                    if let Some(action) = native_menu::show_native_context_menu(hwnd, &cfg, is_as) {
                         self.handle_menu_action(action, ctx);
                     }
                 }
