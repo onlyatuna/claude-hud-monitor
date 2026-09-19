@@ -1,6 +1,5 @@
 import json
 import os
-import shutil
 import subprocess
 import sys
 import logging
@@ -10,16 +9,23 @@ from typing import Optional
 import urllib.request
 import urllib.error
 
-from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
+from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse
 from core.logger import logger
 
 class AgyProvider(BaseProvider):
     provider_id = "agy"
     display_name = "AGY"
-    API_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+    API_URLS = (
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+    )
+    API_URL = API_URLS[0]
+    HTTP_TIMEOUT = 8
 
     def __init__(self, timeout=30):
         self.timeout = timeout
+        self._agy_binary = None
+        self._agy_binary_checked = False
 
     def _get_access_token(self) -> Optional[str]:
         # 1. Windows Credential Manager (Keyring: 'gemini:antigravity')
@@ -59,7 +65,7 @@ class AgyProvider(BaseProvider):
         elif sys.platform == "darwin":
             try:
                 out = subprocess.check_output(
-                    ['security', 'find-generic-password', '-s', 'gemini:antigravity', '-w'],
+                    ['security', 'find-generic-password', '-s', 'gemini', '-a', 'antigravity', '-w'],
                     text=True, stderr=subprocess.DEVNULL, timeout=3
                 ).strip()
                 data = json.loads(out)
@@ -89,21 +95,29 @@ class AgyProvider(BaseProvider):
             "Content-Type": "application/json",
             "User-Agent": "antigravity/1.2.4"
         }
-        req = urllib.request.Request(self.API_URL, data=b"{}", headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                if resp.status == 200:
-                    raw = json.loads(resp.read().decode("utf-8"))
-                    return self._parse_agy_json(raw, now_str)
-        except Exception as e:
-            logger.debug(f"[AgyProvider] HTTP fetch error: {e}")
+        for url in self.API_URLS:
+            req = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=self.HTTP_TIMEOUT) as resp:
+                    if resp.status != 200:
+                        logger.debug(f"[AgyProvider] {url} returned HTTP {resp.status}")
+                        continue
+                    result = self._parse_agy_json(json.loads(resp.read().decode("utf-8")), now_str)
+                    if not result.error:
+                        return result
+                    logger.debug(f"[AgyProvider] {url} returned no usable quota data")
+            except urllib.error.HTTPError as e:
+                logger.debug(f"[AgyProvider] {url} returned HTTP {e.code}")
+                if e.code == 401:
+                    return None
+            except Exception as e:
+                logger.debug(f"[AgyProvider] {url} HTTP fetch error: {e}")
         return None
 
     def _find_agy_binary(self) -> Optional[str]:
-        for name in ("agy", "agy.exe", "agy.cmd", "agy.bat"):
-            p = shutil.which(name)
-            if p and os.path.exists(p):
-                return p
+        if self._agy_binary_checked:
+            return self._agy_binary
+
         if sys.platform == "win32":
             local_app = os.environ.get("LOCALAPPDATA", "")
             candidates = [
@@ -112,8 +126,9 @@ class AgyProvider(BaseProvider):
                 os.path.join(local_app, "agy", "bin", "agy.bat"),
             ]
             for cand in candidates:
-                if os.path.exists(cand):
-                    return cand
+                if os.path.isfile(cand):
+                    self._agy_binary = cand
+                    break
         else:
             candidates = [
                 os.path.expanduser("~/.local/bin/agy"),
@@ -121,9 +136,23 @@ class AgyProvider(BaseProvider):
                 os.path.expanduser("~/bin/agy")
             ]
             for cand in candidates:
-                if os.path.exists(cand):
-                    return cand
-        return None
+                if os.path.isfile(cand):
+                    self._agy_binary = cand
+                    break
+
+        if self._agy_binary is None:
+            for directory in os.get_exec_path():
+                names = ("agy.exe", "agy.cmd", "agy.bat") if sys.platform == "win32" else ("agy",)
+                for name in names:
+                    cand = os.path.join(directory, name)
+                    if os.path.isfile(cand):
+                        self._agy_binary = cand
+                        break
+                if self._agy_binary is not None:
+                    break
+
+        self._agy_binary_checked = True
+        return self._agy_binary
 
     def fetch_usage(self) -> UsageMetrics:
         now_str = datetime.now().strftime("%H:%M:%S")

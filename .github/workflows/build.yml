@@ -34,7 +34,8 @@ jobs:
 
       - name: Build Windows Standalone EXE
         run: |
-          pyinstaller --noconsole --onefile --name "ClaudeHUD-Windows" --icon "assets/app_icon.ico" --add-data "assets;assets" main.py
+          pyinstaller --noconfirm --clean ClaudeHUD.spec
+          if (Test-Path "dist/ClaudeHUD.exe") { Copy-Item "dist/ClaudeHUD.exe" "dist/ClaudeHUD-Windows.exe" }
 
       - name: Check packaged Windows app offline
         run: python -c "import subprocess; subprocess.run(['dist/ClaudeHUD-Windows.exe', '--smoke-test'], check=True, timeout=45)"
@@ -67,12 +68,15 @@ jobs:
 
       - name: Build macOS App Bundle
         run: |
-          pyinstaller --windowed --target-architecture arm64 --hidden-import pynput.keyboard._darwin --hidden-import pynput.mouse._darwin --name "ClaudeHUD" --icon "assets/app_icon.png" --add-data "assets:assets" main.py
-          cd dist
-          zip -r ClaudeHUD-macOS-arm64.zip ClaudeHUD.app
+          pyinstaller --noconfirm --clean ClaudeHUD.spec
 
       - name: Check packaged macOS app offline
         run: python -c "import subprocess; subprocess.run(['dist/ClaudeHUD.app/Contents/MacOS/ClaudeHUD', '--smoke-test'], check=True, timeout=45)"
+
+      - name: Package macOS App into ZIP
+        run: |
+          cd dist
+          zip -r ClaudeHUD-macOS-arm64.zip ClaudeHUD.app
 
       - name: Upload macOS Artifact
         uses: actions/upload-artifact@v4

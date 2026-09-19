@@ -9,7 +9,7 @@ if errorlevel 1 exit /b 1
 python -B -m unittest discover -s tests -v
 if errorlevel 1 exit /b 1
 
-python -m PyInstaller --noconsole --onefile --name "ClaudeHUD" --icon "assets\app_icon.ico" --add-data "assets;assets" main.py
+python -m PyInstaller --noconfirm --clean ClaudeHUD.spec
 if errorlevel 1 exit /b 1
 echo.
 echo ========================================================

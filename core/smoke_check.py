@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def run():
-    os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
     from PySide6.QtWidgets import QApplication
     from core.config_manager import ConfigManager, get_config_path
     from core.providers.base import UsageMetrics
