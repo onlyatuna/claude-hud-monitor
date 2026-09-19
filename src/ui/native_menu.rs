@@ -670,7 +670,7 @@ fn attach_icon(
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
 pub fn show_native_context_menu(
     _hwnd: isize,
     _config: &Config,

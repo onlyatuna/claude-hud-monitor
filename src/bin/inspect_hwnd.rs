@@ -66,13 +66,17 @@ fn main() {
             if Process32FirstW(snap, &mut pe) != 0 {
                 loop {
                     let exe = String::from_utf16_lossy(
-                        &pe.sz_exe_file[..pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260)]
-                    ).to_lowercase();
+                        &pe.sz_exe_file
+                            [..pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260)],
+                    )
+                    .to_lowercase();
                     if exe.contains("claude-hud") {
                         println!("Found process: {} (PID={})", exe, pe.th32_process_id);
                         target_pids.push(pe.th32_process_id);
                     }
-                    if Process32NextW(snap, &mut pe) == 0 { break; }
+                    if Process32NextW(snap, &mut pe) == 0 {
+                        break;
+                    }
                 }
             }
             CloseHandle(snap);
@@ -95,7 +99,7 @@ fn main() {
                 let mut buf = [0u16; 256];
                 let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 256);
                 let title = String::from_utf16_lossy(&buf[..len as usize]);
-                let style = GetWindowLongW(hwnd, -16);   // GWL_STYLE
+                let style = GetWindowLongW(hwnd, -16); // GWL_STYLE
                 let exstyle = GetWindowLongW(hwnd, -20); // GWL_EXSTYLE
                 let visible = IsWindowVisible(hwnd) != 0;
                 println!(
@@ -103,12 +107,12 @@ fn main() {
                     hwnd as u64, pid, visible, style as u32, exstyle as u32, title
                 );
                 // Decode key style bits
-                let has_caption   = (style & 0x00C00000u32 as i32) != 0;
-                let has_sysmenu   = (style & 0x00080000) != 0;
-                let has_popup     = (style & 0x80000000u32 as i32) != 0;
-                let has_minbox    = (style & 0x00020000) != 0;
-                let has_maxbox    = (style & 0x00010000) != 0;
-                let has_toolwin   = (exstyle & 0x00000080) != 0;
+                let has_caption = (style & 0x00C00000u32 as i32) != 0;
+                let has_sysmenu = (style & 0x00080000) != 0;
+                let has_popup = (style & 0x80000000u32 as i32) != 0;
+                let has_minbox = (style & 0x00020000) != 0;
+                let has_maxbox = (style & 0x00010000) != 0;
+                let has_toolwin = (exstyle & 0x00000080) != 0;
                 println!(
                     "  WS_POPUP={} WS_CAPTION={} WS_SYSMENU={} WS_MINIMIZEBOX={} WS_MAXIMIZEBOX={} WS_EX_TOOLWINDOW={}",
                     has_popup, has_caption, has_sysmenu, has_minbox, has_maxbox, has_toolwin

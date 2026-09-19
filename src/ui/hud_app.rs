@@ -52,6 +52,7 @@ pub struct HudApp {
     hotkey: Option<HotkeyManager>,
     #[cfg(target_os = "windows")]
     active_resize: Option<ActiveResize>,
+    #[cfg(target_os = "windows")]
     hwnd: isize,
 
     is_visible: bool,
@@ -129,9 +130,10 @@ impl HudApp {
             refresh_ctrl,
             last_heartbeat: Instant::now(),
             hotkey,
-            hwnd: 0,
             #[cfg(target_os = "windows")]
             active_resize: None,
+            #[cfg(target_os = "windows")]
+            hwnd: 0,
             is_visible: true,
             toggle_btn_rect: egui::Rect::NOTHING,
             #[cfg(not(target_os = "linux"))]
@@ -1312,7 +1314,10 @@ mod tests {
         let style = 0x16CB0000;
         let stripped = super::strip_native_titlebar_bits(style);
 
-        assert_eq!(stripped & (WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX), 0);
+        assert_eq!(
+            stripped & (WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX),
+            0
+        );
         assert_ne!(style, stripped);
     }
 }
