@@ -443,6 +443,10 @@ impl eframe::App for HudApp {
                 init_win32_window_frame(self.hwnd);
             }
         }
+        #[cfg(target_os = "windows")]
+        if self.hwnd != 0 {
+            apply_no_native_titlebar(self.hwnd);
+        }
 
         // Lazy tray icon initialization — attempt exactly once when the window handle is ready.
         // If Shell_NotifyIcon fails (e.g. Explorer not yet ready), tray-icon's built-in
@@ -864,6 +868,60 @@ fn get_window_hwnd() -> isize {
 }
 
 #[cfg(target_os = "windows")]
+fn strip_native_titlebar_bits(style: i32) -> i32 {
+    const WS_CAPTION: i32 = 0x00C00000;
+    const WS_SYSMENU: i32 = 0x00080000;
+    const WS_MINIMIZEBOX: i32 = 0x00020000;
+    const WS_MAXIMIZEBOX: i32 = 0x00010000;
+    style & !(WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)
+}
+
+#[cfg(target_os = "windows")]
+fn apply_no_native_titlebar(hwnd: isize) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetWindowLongW(hWnd: isize, nIndex: i32) -> i32;
+        fn SetWindowLongW(hWnd: isize, nIndex: i32, dwNewLong: i32) -> i32;
+        fn SetWindowPos(
+            hWnd: isize,
+            hWndInsertAfter: isize,
+            X: i32,
+            Y: i32,
+            cx: i32,
+            cy: i32,
+            uFlags: u32,
+        ) -> i32;
+    }
+    const GWL_STYLE: i32 = -16;
+    const SWP_NOMOVE: u32 = 0x0002;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_FRAMECHANGED: u32 = 0x0020;
+    const SWP_NOACTIVATE: u32 = 0x0010;
+
+    if hwnd == 0 {
+        return;
+    }
+
+    unsafe {
+        let style = GetWindowLongW(hwnd, GWL_STYLE);
+        let stripped = strip_native_titlebar_bits(style);
+        if stripped != style {
+            SetWindowLongW(hwnd, GWL_STYLE, stripped);
+            let _ = SetWindowPos(
+                hwnd,
+                0,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn init_win32_window_frame(hwnd: isize) {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
@@ -912,6 +970,8 @@ fn init_win32_window_frame(hwnd: isize) {
     const DWMWCP_DONOTROUND: u32 = 1;
 
     unsafe {
+        apply_no_native_titlebar(hwnd);
+
         // Register single-instance wakeup message if not already registered
         let mut msg_id = WAKE_MSG.load(Ordering::Relaxed);
         if msg_id == 0 {
@@ -1237,6 +1297,25 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_titlebar_bits_are_removed() {
+        const WS_CAPTION: i32 = 0x00C00000;
+        const WS_SYSMENU: i32 = 0x00080000;
+        const WS_MINIMIZEBOX: i32 = 0x00020000;
+        const WS_MAXIMIZEBOX: i32 = 0x00010000;
+
+        let style = 0x16CB0000;
+        let stripped = strip_native_titlebar_bits(style);
+
+        assert_eq!(stripped & (WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX), 0);
+        assert_ne!(style, stripped);
     }
 }
 
