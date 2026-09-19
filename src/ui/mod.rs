@@ -7,4 +7,6 @@ pub mod styles;
 
 pub use hud_app::HudApp;
 #[cfg(target_os = "windows")]
+pub use hud_app::WAKE_MSG;
+#[cfg(target_os = "windows")]
 pub use native_menu::enable_win32_dark_mode;

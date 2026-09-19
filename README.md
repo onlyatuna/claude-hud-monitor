@@ -96,6 +96,6 @@ Default values match the Python original exactly.
 
 ## Known Limitations
 
-- Click-through on Windows needs `raw_window_handle` integration (partial placeholder)
+- Click-through ghost mode is fully supported on Windows (`WS_EX_TRANSPARENT` + layered hit-test passthrough with ghost indicator); macOS/Linux click-through passthrough is currently layout/docking based
 - macOS hotkeys not yet implemented (use tray menu as fallback)
 - Linux tray icon requires libappindicator

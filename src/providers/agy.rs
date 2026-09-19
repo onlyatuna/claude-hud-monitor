@@ -85,7 +85,17 @@ impl AgyProvider {
             if bin.to_lowercase().ends_with(".cmd") || bin.to_lowercase().ends_with(".bat") {
                 let mut c = Command::new("cmd.exe");
                 c.creation_flags(CREATE_NO_WINDOW);
-                c.args(["/c", bin, "--output-format", "json", "--print", "/quota"]);
+                c.args([
+                    "/d",
+                    "/s",
+                    "/c",
+                    "call",
+                    bin,
+                    "--output-format",
+                    "json",
+                    "--print",
+                    "/quota",
+                ]);
                 c
             } else {
                 let mut c = Command::new(bin);

@@ -134,6 +134,30 @@ impl ConfigManager {
         Self::config_dir().join("config.json")
     }
 
+    /// Sanitize and clamp configuration parameters to valid ranges.
+    pub fn sanitize(cfg: &mut Config) {
+        if cfg.horizontal_height < MIN_HORIZONTAL_HEIGHT {
+            cfg.horizontal_height = DEFAULT_HORIZONTAL_HEIGHT;
+        }
+        if cfg.horizontal_width < MIN_HORIZONTAL_WIDTH {
+            cfg.horizontal_width = DEFAULT_HORIZONTAL_WIDTH;
+        }
+        if cfg.vertical_height < MIN_VERTICAL_HEIGHT {
+            cfg.vertical_height = DEFAULT_VERTICAL_HEIGHT;
+        }
+        if cfg.vertical_width < MIN_VERTICAL_WIDTH {
+            cfg.vertical_width = DEFAULT_VERTICAL_WIDTH;
+        }
+        if !cfg.opacity.is_finite() || cfg.opacity <= 0.0 {
+            cfg.opacity = default_opacity();
+        } else {
+            cfg.opacity = cfg.opacity.clamp(0.1, 1.0);
+        }
+        if cfg.refresh_interval_sec < 20 {
+            cfg.refresh_interval_sec = default_refresh_interval();
+        }
+    }
+
     /// Load config from disk, falling back to defaults on any error.
     pub fn load() -> Config {
         let path = Self::config_path();
@@ -142,18 +166,7 @@ impl ConfigManager {
                 Ok(text) => match serde_json::from_str::<Config>(&text) {
                     Ok(mut cfg) => {
                         info!("[Config] Loaded from {:?}", path);
-                        if cfg.horizontal_height < MIN_HORIZONTAL_HEIGHT {
-                            cfg.horizontal_height = DEFAULT_HORIZONTAL_HEIGHT;
-                        }
-                        if cfg.horizontal_width < MIN_HORIZONTAL_WIDTH {
-                            cfg.horizontal_width = DEFAULT_HORIZONTAL_WIDTH;
-                        }
-                        if cfg.vertical_height < MIN_VERTICAL_HEIGHT {
-                            cfg.vertical_height = DEFAULT_VERTICAL_HEIGHT;
-                        }
-                        if cfg.vertical_width < MIN_VERTICAL_WIDTH {
-                            cfg.vertical_width = DEFAULT_VERTICAL_WIDTH;
-                        }
+                        Self::sanitize(&mut cfg);
                         return cfg;
                     }
                     Err(e) => error!("[Config] Parse error: {e}"),
@@ -232,5 +245,48 @@ mod tests {
         assert_eq!(restored.opacity, 0.75);
         assert!(restored.click_through);
         assert_eq!(restored.refresh_interval_sec, 120);
+    }
+
+    #[test]
+    fn test_config_nan_and_bounds_sanitization() {
+        let mut cfg = Config {
+            opacity: f32::NAN,
+            refresh_interval_sec: 5,
+            horizontal_height: 50,
+            horizontal_width: 100,
+            vertical_height: 50,
+            vertical_width: 100,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg);
+        assert_eq!(cfg.opacity, 0.88);
+        assert_eq!(cfg.refresh_interval_sec, 60);
+        assert_eq!(cfg.horizontal_height, DEFAULT_HORIZONTAL_HEIGHT);
+        assert_eq!(cfg.horizontal_width, DEFAULT_HORIZONTAL_WIDTH);
+        assert_eq!(cfg.vertical_height, DEFAULT_VERTICAL_HEIGHT);
+        assert_eq!(cfg.vertical_width, DEFAULT_VERTICAL_WIDTH);
+
+        // Test non-finite and negative opacity
+        let mut cfg_neg = Config {
+            opacity: -0.5,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg_neg);
+        assert_eq!(cfg_neg.opacity, 0.88);
+
+        // Test clamping of values > 1.0 and < 0.1
+        let mut cfg_clamp = Config {
+            opacity: 1.5,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg_clamp);
+        assert_eq!(cfg_clamp.opacity, 1.0);
+
+        let mut cfg_clamp2 = Config {
+            opacity: 0.05,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg_clamp2);
+        assert_eq!(cfg_clamp2.opacity, 0.1);
     }
 }

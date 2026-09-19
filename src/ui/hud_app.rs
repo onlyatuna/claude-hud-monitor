@@ -27,7 +27,7 @@ use crate::refresh_controller::RefreshController;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 #[cfg(target_os = "windows")]
-static WAKE_MSG: AtomicU32 = AtomicU32::new(0);
+pub static WAKE_MSG: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_os = "windows")]
 static WAKE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -824,11 +824,14 @@ fn init_win32_window_frame(hwnd: isize) {
     const DWMWCP_DONOTROUND: u32 = 1;
 
     unsafe {
-        // Register single-instance wakeup message
-        let wake_name: Vec<u16> = OsStr::new("ClaudeHUD_WakeUp\0").encode_wide().collect();
-        let msg_id = RegisterWindowMessageW(wake_name.as_ptr());
-        if msg_id != 0 {
-            WAKE_MSG.store(msg_id, Ordering::Relaxed);
+        // Register single-instance wakeup message if not already registered
+        let mut msg_id = WAKE_MSG.load(Ordering::Relaxed);
+        if msg_id == 0 {
+            let wake_name: Vec<u16> = OsStr::new("ClaudeHUD_WakeUp\0").encode_wide().collect();
+            msg_id = RegisterWindowMessageW(wake_name.as_ptr());
+            if msg_id != 0 {
+                WAKE_MSG.store(msg_id, Ordering::Relaxed);
+            }
         }
 
         // 1. Prevent GDI from painting standard white window background brush

@@ -39,6 +39,9 @@ jobs:
       - name: Check (cargo check)
         run: cargo check --all-features
 
+      - name: Run Tests (cargo test)
+        run: cargo test --all-targets
+
       - name: Lint (clippy)
         run: cargo clippy -- -D warnings
         continue-on-error: true   # advisory only

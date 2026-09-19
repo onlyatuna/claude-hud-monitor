@@ -97,6 +97,15 @@ jobs:
           strip "${{ matrix.asset_name }}" || true
           chmod +x "${{ matrix.asset_name }}"
 
+      # ── Upload macOS artifact for universal binary ───────────────────
+      - name: Upload macOS slice artifact
+        if: startsWith(matrix.name, 'macos-')
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: ${{ matrix.asset_name }}
+          retention-days: 1
+
       # ── Upload to GitHub Release ─────────────────────────────────────
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
@@ -112,24 +121,27 @@ jobs:
     needs: build
     runs-on: macos-latest
     steps:
-      - name: Download arm64
+      - name: Download macOS slices
         uses: actions/download-artifact@v4
-        continue-on-error: true   # skip if individual builds already uploaded
         with:
           pattern: claude-hud-monitor-macos-*
           merge-multiple: true
 
       - name: Create universal binary
         run: |
-          if [ -f claude-hud-monitor-macos-arm64 ] && [ -f claude-hud-monitor-macos-x86_64 ]; then
-            lipo -create \
-              claude-hud-monitor-macos-arm64 \
-              claude-hud-monitor-macos-x86_64 \
-              -output claude-hud-monitor-macos-universal
-            chmod +x claude-hud-monitor-macos-universal
+          if [ ! -f claude-hud-monitor-macos-arm64 ] || [ ! -f claude-hud-monitor-macos-x86_64 ]; then
+            echo "Error: Missing macOS binaries for lipo!"
+            ls -la
+            exit 1
           fi
+          lipo -create \
+            claude-hud-monitor-macos-arm64 \
+            claude-hud-monitor-macos-x86_64 \
+            -output claude-hud-monitor-macos-universal
+          chmod +x claude-hud-monitor-macos-universal
 
       - name: Upload universal binary
         uses: softprops/action-gh-release@v2
         with:
           files: claude-hud-monitor-macos-universal
+          prerelease: ${{ contains(github.ref_name, '-') }}

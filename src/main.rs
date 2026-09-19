@@ -47,13 +47,16 @@ fn main() -> eframe::Result {
         let mutex_name: Vec<u16> = OsStr::new("Local\\ClaudeHUDMonitorSingleInstanceMutex\0")
             .encode_wide()
             .collect();
+        let wake_name: Vec<u16> = OsStr::new("ClaudeHUD_WakeUp\0").encode_wide().collect();
         unsafe {
             let _handle = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
+            let msg_id = RegisterWindowMessageW(wake_name.as_ptr());
+            if msg_id != 0 {
+                ui::WAKE_MSG.store(msg_id, std::sync::atomic::Ordering::Relaxed);
+            }
             if GetLastError() == 183 {
                 // ERROR_ALREADY_EXISTS: broadcast wake-up message to restore existing instance
                 log::warn!("[SingleInstance] Another instance is already running. Waking it up and exiting.");
-                let wake_name: Vec<u16> = OsStr::new("ClaudeHUD_WakeUp\0").encode_wide().collect();
-                let msg_id = RegisterWindowMessageW(wake_name.as_ptr());
                 if msg_id != 0 {
                     const HWND_BROADCAST: isize = 0xFFFF;
                     PostMessageW(HWND_BROADCAST, msg_id, 0, 0);
