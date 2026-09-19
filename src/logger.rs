@@ -9,6 +9,9 @@ use std::sync::Mutex;
 
 struct DualLogger {
     file: Mutex<Option<File>>,
+    current_size: Mutex<u64>,
+    log_path: PathBuf,
+    backup_path: PathBuf,
 }
 
 impl log::Log for DualLogger {
@@ -30,10 +33,26 @@ impl log::Log for DualLogger {
             // Stderr output (if console attached)
             eprint!("{}", line);
 
-            // File output
+            // File output with continuous 2MB rolling check
             if let Ok(mut lock) = self.file.lock() {
+                let bytes = line.as_bytes();
+                if let Ok(mut size) = self.current_size.lock() {
+                    const MAX_LOG_SIZE: u64 = 2 * 1024 * 1024;
+                    if *size + bytes.len() as u64 > MAX_LOG_SIZE {
+                        // Drop existing open file before renaming (essential on Windows)
+                        *lock = None;
+                        let _ = std::fs::rename(&self.log_path, &self.backup_path);
+                        *lock = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&self.log_path)
+                            .ok();
+                        *size = 0;
+                    }
+                    *size += bytes.len() as u64;
+                }
                 if let Some(ref mut f) = *lock {
-                    let _ = f.write_all(line.as_bytes());
+                    let _ = f.write_all(bytes);
                     let _ = f.flush();
                 }
             }
@@ -54,14 +73,14 @@ pub fn setup_logging() {
     let dir = log_dir();
     let _ = std::fs::create_dir_all(&dir);
     let log_path = dir.join("hud_monitor.log");
+    let backup_path = dir.join("hud_monitor.log.1");
 
-    // 2MB log rotation (keep 1 backup like Python version)
-    if let Ok(meta) = std::fs::metadata(&log_path) {
-        if meta.len() > 2 * 1024 * 1024 {
-            let backup_path = dir.join("hud_monitor.log.1");
-            let _ = std::fs::rename(&log_path, &backup_path);
-        }
+    // 2MB log rotation at startup
+    let initial_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+    if initial_size > 2 * 1024 * 1024 {
+        let _ = std::fs::rename(&log_path, &backup_path);
     }
+    let current_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
 
     let file = OpenOptions::new()
         .create(true)
@@ -71,6 +90,9 @@ pub fn setup_logging() {
 
     let logger = DualLogger {
         file: Mutex::new(file),
+        current_size: Mutex::new(current_size),
+        log_path,
+        backup_path,
     };
 
     let _ = log::set_boxed_logger(Box::new(logger));

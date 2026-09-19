@@ -13,8 +13,10 @@ use eframe::egui;
 use log::info;
 use std::sync::{Arc, Mutex};
 
-use config::ConfigManager;
-use providers::{AgyProvider, ClaudeProvider, CodexProvider};
+use config::{
+    ConfigManager, MIN_HORIZONTAL_HEIGHT, MIN_HORIZONTAL_WIDTH, MIN_VERTICAL_HEIGHT,
+    MIN_VERTICAL_WIDTH,
+};
 use refresh_controller::RefreshController;
 use ui::HudApp;
 
@@ -75,13 +77,6 @@ fn main() -> eframe::Result {
         ConfigManager::config_path().display()
     );
 
-    // Build providers
-    let providers: Vec<Box<dyn providers::Provider + Send>> = vec![
-        Box::new(ClaudeProvider::new()),
-        Box::new(AgyProvider::new()),
-        Box::new(CodexProvider::new()),
-    ];
-
     let interval = {
         let cfg = config.lock().unwrap();
         cfg.refresh_interval_sec
@@ -109,17 +104,17 @@ fn main() -> eframe::Result {
         let cfg = config.lock().unwrap();
         let (init_w, init_h, min_w, min_h) = if cfg.layout_mode == "horizontal" {
             (
-                (cfg.horizontal_width as f32).max(540.0),
-                (cfg.horizontal_height as f32).max(150.0),
-                540.0,
-                130.0,
+                (cfg.horizontal_width as f32).max(MIN_HORIZONTAL_WIDTH as f32),
+                (cfg.horizontal_height as f32).max(MIN_HORIZONTAL_HEIGHT as f32),
+                MIN_HORIZONTAL_WIDTH as f32,
+                MIN_HORIZONTAL_HEIGHT as f32,
             )
         } else {
             (
-                (cfg.vertical_width as f32).max(250.0),
-                (cfg.vertical_height as f32).max(320.0),
-                250.0,
-                320.0,
+                (cfg.vertical_width as f32).max(MIN_VERTICAL_WIDTH as f32),
+                (cfg.vertical_height as f32).max(MIN_VERTICAL_HEIGHT as f32),
+                MIN_VERTICAL_WIDTH as f32,
+                MIN_VERTICAL_HEIGHT as f32,
             )
         };
 
@@ -152,12 +147,20 @@ fn main() -> eframe::Result {
             // Configure CJK, Symbols & Monospace fonts
             let mut fonts = egui::FontDefinitions::default();
 
+            // Dynamically resolve Windows system directory to avoid hardcoding C:\Windows
+            #[cfg(target_os = "windows")]
+            let win_dir = std::env::var("WINDIR")
+                .or_else(|_| std::env::var("SystemRoot"))
+                .unwrap_or_else(|_| "C:\\Windows".to_string());
+            #[cfg(not(target_os = "windows"))]
+            let win_dir = "C:\\Windows".to_string();
+
             // 1. Latin UI font fallbacks
             let latin_paths = [
-                "C:\\Windows\\Fonts\\segoeui.ttf",
-                "/System/Library/Fonts/SFPro.ttf",
-                "/System/Library/Fonts/Helvetica.ttc",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                format!("{}\\Fonts\\segoeui.ttf", win_dir),
+                "/System/Library/Fonts/SFPro.ttf".to_string(),
+                "/System/Library/Fonts/Helvetica.ttc".to_string(),
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".to_string(),
             ];
             for path in &latin_paths {
                 if let Ok(bytes) = std::fs::read(path) {
@@ -175,21 +178,21 @@ fn main() -> eframe::Result {
 
             // 2. Chinese CJK font fallbacks (Windows, macOS, Linux)
             let cjk_paths = [
-                // Windows
-                "C:\\Windows\\Fonts\\msjh.ttc",
-                "C:\\Windows\\Fonts\\msjhbd.ttc",
-                "C:\\Windows\\Fonts\\msyh.ttc",
+                // Windows (dynamic system drive)
+                format!("{}\\Fonts\\msjh.ttc", win_dir),
+                format!("{}\\Fonts\\msjhbd.ttc", win_dir),
+                format!("{}\\Fonts\\msyh.ttc", win_dir),
                 // macOS
-                "/System/Library/Fonts/PingFang.ttc",
-                "/System/Library/Fonts/Hiragino Sans GB.ttc",
-                "/System/Library/Fonts/STHeiti Light.ttc",
-                "/Library/Fonts/Arial Unicode.ttf",
+                "/System/Library/Fonts/PingFang.ttc".to_string(),
+                "/System/Library/Fonts/Hiragino Sans GB.ttc".to_string(),
+                "/System/Library/Fonts/STHeiti Light.ttc".to_string(),
+                "/Library/Fonts/Arial Unicode.ttf".to_string(),
                 // Linux
-                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
-                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc".to_string(),
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc".to_string(),
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc".to_string(),
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc".to_string(),
+                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc".to_string(),
             ];
             for path in &cjk_paths {
                 if let Ok(bytes) = std::fs::read(path) {
@@ -212,8 +215,8 @@ fn main() -> eframe::Result {
 
             // 3. UI Symbols
             let sym_paths = [
-                "C:\\Windows\\Fonts\\seguisym.ttf",
-                "/System/Library/Fonts/Apple Color Emoji.ttc",
+                format!("{}\\Fonts\\seguisym.ttf", win_dir),
+                "/System/Library/Fonts/Apple Color Emoji.ttc".to_string(),
             ];
             for path in &sym_paths {
                 if let Ok(bytes) = std::fs::read(path) {
@@ -236,10 +239,10 @@ fn main() -> eframe::Result {
 
             // 4. Monospace numbers and metrics
             let mono_paths = [
-                "C:\\Windows\\Fonts\\consola.ttf",
-                "/System/Library/Fonts/Monaco.ttf",
-                "/Library/Fonts/Courier New.ttf",
-                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+                format!("{}\\Fonts\\consola.ttf", win_dir),
+                "/System/Library/Fonts/Monaco.ttf".to_string(),
+                "/Library/Fonts/Courier New.ttf".to_string(),
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf".to_string(),
             ];
             for path in &mono_paths {
                 if let Ok(bytes) = std::fs::read(path) {
@@ -259,7 +262,6 @@ fn main() -> eframe::Result {
             Ok(Box::new(HudApp::new(
                 cc,
                 Arc::clone(&config),
-                providers,
                 Arc::clone(&refresh_ctrl),
             )))
         }),

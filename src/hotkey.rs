@@ -54,11 +54,60 @@ impl Drop for HotkeyManager {
     }
 }
 
+/// Parses a hotkey string like "Alt+C", "Ctrl+Shift+H", "F10" into (fsModifiers, vkCode).
+pub fn parse_hotkey(s: &str) -> (u32, u32) {
+    let mut mods = 0u32;
+    let mut vk = 0u32;
+
+    const MOD_ALT: u32 = 0x0001;
+    const MOD_CONTROL: u32 = 0x0002;
+    const MOD_SHIFT: u32 = 0x0004;
+    const MOD_WIN: u32 = 0x0008;
+
+    for part in s.split('+').map(|p| p.trim()) {
+        match part.to_lowercase().as_str() {
+            "alt" => mods |= MOD_ALT,
+            "ctrl" | "control" => mods |= MOD_CONTROL,
+            "shift" => mods |= MOD_SHIFT,
+            "win" | "windows" | "super" => mods |= MOD_WIN,
+            other => {
+                if other.len() == 1 {
+                    let ch = other.chars().next().unwrap().to_ascii_uppercase();
+                    if ch.is_ascii_alphanumeric() {
+                        vk = ch as u32;
+                    }
+                } else if other.starts_with('f') && other.len() >= 2 {
+                    if let Ok(num) = other[1..].parse::<u32>() {
+                        if (1..=24).contains(&num) {
+                            vk = 0x70 + (num - 1); // VK_F1 = 0x70
+                        }
+                    }
+                } else {
+                    match other {
+                        "space" => vk = 0x20,
+                        "tab" => vk = 0x09,
+                        "esc" | "escape" => vk = 0x1B,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    if vk == 0 {
+        // Fallback default: Alt+C
+        (MOD_ALT, b'C' as u32)
+    } else {
+        (mods, vk)
+    }
+}
+
 impl HotkeyManager {
-    pub fn start() -> Result<Self, String> {
+    pub fn start(hotkey_str: &str) -> Result<Self, String> {
         let toggle_flag = Arc::new(AtomicBool::new(false));
         let ct_flag = Arc::new(AtomicBool::new(false));
         let egui_ctx = Arc::new(Mutex::new(None));
+        let (mods, vk) = parse_hotkey(hotkey_str);
 
         #[cfg(target_os = "windows")]
         {
@@ -69,7 +118,7 @@ impl HotkeyManager {
             let tid_clone = Arc::clone(&thread_id);
             let handle = thread::Builder::new()
                 .name("hotkey-win32".to_owned())
-                .spawn(move || windows_hotkey_loop(t_flag, c_flag, ctx_clone, tid_clone))
+                .spawn(move || windows_hotkey_loop(t_flag, c_flag, ctx_clone, tid_clone, mods, vk))
                 .map_err(|e| format!("Failed to start hotkey thread: {e}"))?;
             Ok(Self {
                 toggle_flag,
@@ -121,6 +170,8 @@ fn windows_hotkey_loop(
     ct_flag: Arc<AtomicBool>,
     egui_ctx: Arc<Mutex<Option<eframe::egui::Context>>>,
     thread_id: Arc<AtomicU32>,
+    mods: u32,
+    vk: u32,
 ) {
     use std::mem::MaybeUninit;
 
@@ -131,12 +182,10 @@ fn windows_hotkey_loop(
 
     const WM_HOTKEY: u32 = 0x0312;
     const WM_QUIT: u32 = 0x0012;
-    const MOD_ALT: u32 = 0x0001;
     const MOD_SHIFT: u32 = 0x0004;
     const MOD_NOREPEAT: u32 = 0x4000;
     const HOTKEY_ID_TOGGLE: i32 = 9527;
     const HOTKEY_ID_CLICKTHROUGH: i32 = 9528;
-    const VK_C: u32 = b'C' as u32;
 
     // Force message queue creation and store Thread ID
     unsafe {
@@ -144,23 +193,30 @@ fn windows_hotkey_loop(
         let mut msg: MSG = MaybeUninit::zeroed().assume_init();
         PeekMessageW(&mut msg, 0, 0, 0, 0); // PM_NOREMOVE=0
 
-        let ok1 = RegisterHotKey(0, HOTKEY_ID_TOGGLE, MOD_ALT | MOD_NOREPEAT, VK_C);
+        let ok1 = RegisterHotKey(0, HOTKEY_ID_TOGGLE, mods | MOD_NOREPEAT, vk);
         if ok1 == 0 {
-            warn!("[Hotkey] Alt+C registration failed");
+            warn!(
+                "[Hotkey] Main hotkey registration failed (mods={:#x}, vk={:#x})",
+                mods, vk
+            );
         } else {
-            info!("[Hotkey] Alt+C registered");
+            info!(
+                "[Hotkey] Main hotkey registered (mods={:#x}, vk={:#x})",
+                mods, vk
+            );
         }
 
-        let ok2 = RegisterHotKey(
-            0,
-            HOTKEY_ID_CLICKTHROUGH,
-            MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
-            VK_C,
-        );
-        if ok2 == 0 {
-            warn!("[Hotkey] Alt+Shift+C registration failed");
+        // Secondary hotkey: toggle click-through (add Shift)
+        let ct_mods = if (mods & MOD_SHIFT) != 0 {
+            mods | 0x0002 // If shift already present, add Ctrl
         } else {
-            info!("[Hotkey] Alt+Shift+C registered");
+            mods | MOD_SHIFT
+        };
+        let ok2 = RegisterHotKey(0, HOTKEY_ID_CLICKTHROUGH, ct_mods | MOD_NOREPEAT, vk);
+        if ok2 == 0 {
+            warn!("[Hotkey] Click-through hotkey registration failed");
+        } else {
+            info!("[Hotkey] Click-through hotkey registered");
         }
 
         loop {
@@ -227,4 +283,36 @@ extern "system" {
         wMsgFilterMax: u32,
         wRemoveMsg: u32,
     ) -> i32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_hotkey() {
+        const MOD_ALT: u32 = 0x0001;
+        const MOD_CONTROL: u32 = 0x0002;
+        const MOD_SHIFT: u32 = 0x0004;
+
+        // Default "Alt+C"
+        let (m, k) = parse_hotkey("Alt+C");
+        assert_eq!(m, MOD_ALT);
+        assert_eq!(k, b'C' as u32);
+
+        // "Ctrl+Shift+H"
+        let (m2, k2) = parse_hotkey("Ctrl+Shift+H");
+        assert_eq!(m2, MOD_CONTROL | MOD_SHIFT);
+        assert_eq!(k2, b'H' as u32);
+
+        // Function key "F12"
+        let (m3, k3) = parse_hotkey("F12");
+        assert_eq!(m3, 0);
+        assert_eq!(k3, 0x70 + 11);
+
+        // Invalid fallback to Alt+C
+        let (m4, k4) = parse_hotkey("InvalidKeyString");
+        assert_eq!(m4, MOD_ALT);
+        assert_eq!(k4, b'C' as u32);
+    }
 }

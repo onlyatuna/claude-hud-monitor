@@ -13,7 +13,10 @@ use super::styles::{
     apply_hud_visuals, BG_DARK, BORDER_COLOR, COLOR_AMBER, COLOR_BLUE, COLOR_GREEN, TEXT_MUTED,
     TEXT_SECONDARY,
 };
-use crate::config::{Config, ConfigManager};
+use crate::config::{
+    Config, ConfigManager, MIN_HORIZONTAL_HEIGHT, MIN_HORIZONTAL_WIDTH, MIN_VERTICAL_HEIGHT,
+    MIN_VERTICAL_WIDTH,
+};
 use crate::hotkey::HotkeyManager;
 use crate::providers::{
     AgyProvider, ClaudeProvider, CodexProvider, Provider, UsageMetrics, PROVIDER_IDS,
@@ -47,16 +50,15 @@ pub struct HudApp {
     last_heartbeat: Instant,
 
     hotkey: Option<HotkeyManager>,
-
-    hwnd: isize,
     #[cfg(target_os = "windows")]
     active_resize: Option<ActiveResize>,
+    hwnd: isize,
 
     is_visible: bool,
     toggle_btn_rect: egui::Rect,
     #[cfg(not(target_os = "linux"))]
-    tray_attempts: u32,
-    frame_count: u32,
+    tray_attempts: usize,
+    frame_count: u64,
 
     // Ghost icon texture handle
     ghost_texture: Option<egui::TextureHandle>,
@@ -69,7 +71,6 @@ impl HudApp {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         config: Arc<Mutex<Config>>,
-        _providers: Vec<Box<dyn Provider + Send>>,
         refresh_ctrl: Arc<Mutex<RefreshController>>,
     ) -> Self {
         apply_hud_visuals(&cc.egui_ctx);
@@ -99,9 +100,12 @@ impl HudApp {
         }
 
         // Hotkey manager
-        let hotkey_enabled = config.lock().unwrap().hotkey_enabled;
+        let (hotkey_enabled, hotkey_str) = {
+            let cfg = config.lock().unwrap();
+            (cfg.hotkey_enabled, cfg.hotkey.clone())
+        };
         let hotkey = if hotkey_enabled {
-            match HotkeyManager::start() {
+            match HotkeyManager::start(&hotkey_str) {
                 Ok(hk) => Some(hk),
                 Err(e) => {
                     log::warn!("[HudApp] Hotkey registration failed: {}", e);
@@ -153,17 +157,17 @@ impl HudApp {
 
         let (w, h, min_w, min_h) = if new_mode == "horizontal" {
             (
-                (cfg.horizontal_width as f32).max(540.0),
-                (cfg.horizontal_height as f32).max(130.0),
-                540.0,
-                130.0,
+                (cfg.horizontal_width as f32).max(MIN_HORIZONTAL_WIDTH as f32),
+                (cfg.horizontal_height as f32).max(MIN_HORIZONTAL_HEIGHT as f32),
+                MIN_HORIZONTAL_WIDTH as f32,
+                MIN_HORIZONTAL_HEIGHT as f32,
             )
         } else {
             (
-                (cfg.vertical_width as f32).max(250.0),
-                (cfg.vertical_height as f32).max(320.0),
-                250.0,
-                320.0,
+                (cfg.vertical_width as f32).max(MIN_VERTICAL_WIDTH as f32),
+                (cfg.vertical_height as f32).max(MIN_VERTICAL_HEIGHT as f32),
+                MIN_VERTICAL_WIDTH as f32,
+                MIN_VERTICAL_HEIGHT as f32,
             )
         };
 
@@ -1051,11 +1055,11 @@ fn sync_window_geometry(hwnd: isize, config: &Arc<Mutex<Config>>, ppp: f32) {
         cfg.window_x = Some((left as f32 / ppp).round() as i32);
         cfg.window_y = Some((top as f32 / ppp).round() as i32);
         if cfg.layout_mode == "horizontal" {
-            cfg.horizontal_width = logical_w.max(540);
-            cfg.horizontal_height = logical_h.max(125);
+            cfg.horizontal_width = logical_w.max(MIN_HORIZONTAL_WIDTH);
+            cfg.horizontal_height = logical_h.max(MIN_HORIZONTAL_HEIGHT);
         } else {
-            cfg.vertical_width = logical_w.max(250);
-            cfg.vertical_height = logical_h.max(320);
+            cfg.vertical_width = logical_w.max(MIN_VERTICAL_WIDTH);
+            cfg.vertical_height = logical_h.max(MIN_VERTICAL_HEIGHT);
         }
         ConfigManager::save(&cfg);
     }
@@ -1250,15 +1254,15 @@ impl HudApp {
         let total_divider_spacing = (total_cards as f32 - 1.0) * (spacing * 2.0 + 1.0); // 34.0
         let cards_avail_w = (total_w - total_divider_spacing).max(300.0);
 
-        // Perfectly balanced equal column widths (1:1:1 ratio across all 3 providers)
+        // Perfectly balanced equal column widths (distributing remainder to middle column)
         let base_w = (cards_avail_w / total_cards as f32).floor();
         let rem = cards_avail_w - (base_w * total_cards as f32);
-        let card_widths = [base_w, base_w + rem, base_w];
+        let mid = total_cards / 2;
 
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
             for (i, &id) in PROVIDER_IDS.iter().enumerate() {
-                let card_w = card_widths[i];
+                let card_w = if i == mid { base_w + rem } else { base_w };
                 ui.allocate_ui_with_layout(
                     egui::vec2(card_w, avail_h),
                     egui::Layout::top_down(egui::Align::Min),

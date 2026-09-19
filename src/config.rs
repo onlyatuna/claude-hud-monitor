@@ -46,20 +46,30 @@ pub struct Config {
     pub autostart: bool,
 }
 
+pub const MIN_HORIZONTAL_WIDTH: u32 = 540;
+pub const MIN_HORIZONTAL_HEIGHT: u32 = 130;
+pub const MIN_VERTICAL_WIDTH: u32 = 250;
+pub const MIN_VERTICAL_HEIGHT: u32 = 320;
+
+pub const DEFAULT_HORIZONTAL_WIDTH: u32 = 690;
+pub const DEFAULT_HORIZONTAL_HEIGHT: u32 = 152;
+pub const DEFAULT_VERTICAL_WIDTH: u32 = 280;
+pub const DEFAULT_VERTICAL_HEIGHT: u32 = 410;
+
 fn default_layout_mode() -> String {
     "vertical".to_owned()
 }
 fn default_vertical_width() -> u32 {
-    280
+    DEFAULT_VERTICAL_WIDTH
 }
 fn default_vertical_height() -> u32 {
-    410
+    DEFAULT_VERTICAL_HEIGHT
 }
 fn default_horizontal_width() -> u32 {
-    690
+    DEFAULT_HORIZONTAL_WIDTH
 }
 fn default_horizontal_height() -> u32 {
-    152
+    DEFAULT_HORIZONTAL_HEIGHT
 }
 fn default_true() -> bool {
     true
@@ -132,17 +142,17 @@ impl ConfigManager {
                 Ok(text) => match serde_json::from_str::<Config>(&text) {
                     Ok(mut cfg) => {
                         info!("[Config] Loaded from {:?}", path);
-                        if cfg.horizontal_height < 125 {
-                            cfg.horizontal_height = 145;
+                        if cfg.horizontal_height < MIN_HORIZONTAL_HEIGHT {
+                            cfg.horizontal_height = DEFAULT_HORIZONTAL_HEIGHT;
                         }
-                        if cfg.horizontal_width < 540 {
-                            cfg.horizontal_width = 690;
+                        if cfg.horizontal_width < MIN_HORIZONTAL_WIDTH {
+                            cfg.horizontal_width = DEFAULT_HORIZONTAL_WIDTH;
                         }
-                        if cfg.vertical_height < 320 {
-                            cfg.vertical_height = 410;
+                        if cfg.vertical_height < MIN_VERTICAL_HEIGHT {
+                            cfg.vertical_height = DEFAULT_VERTICAL_HEIGHT;
                         }
-                        if cfg.vertical_width < 250 {
-                            cfg.vertical_width = 280;
+                        if cfg.vertical_width < MIN_VERTICAL_WIDTH {
+                            cfg.vertical_width = DEFAULT_VERTICAL_WIDTH;
                         }
                         return cfg;
                     }
@@ -207,11 +217,13 @@ mod tests {
 
     #[test]
     fn test_config_serde_roundtrip() {
-        let mut cfg = Config::default();
-        cfg.layout_mode = "horizontal".to_string();
-        cfg.opacity = 0.75;
-        cfg.click_through = true;
-        cfg.refresh_interval_sec = 120;
+        let cfg = Config {
+            layout_mode: "horizontal".to_string(),
+            opacity: 0.75,
+            click_through: true,
+            refresh_interval_sec: 120,
+            ..Default::default()
+        };
 
         let json = serde_json::to_string(&cfg).expect("serialization failed");
         let restored: Config = serde_json::from_str(&json).expect("deserialization failed");

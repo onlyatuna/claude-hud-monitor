@@ -50,11 +50,24 @@ impl CodexProvider {
 
 fn parse_timestamp(ts: Option<&Value>) -> Option<DateTime<Utc>> {
     let ts = ts?;
-    let val = ts.as_f64()?;
-    let val = if val > 1e11 { val / 1000.0 } else { val };
-    let secs = val as i64;
-    let nanos = ((val - secs as f64) * 1e9) as u32;
-    Utc.timestamp_opt(secs, nanos).single()
+    if let Some(val) = ts.as_f64() {
+        let val = if val > 1e11 { val / 1000.0 } else { val };
+        let secs = val as i64;
+        let nanos = ((val - secs as f64) * 1e9) as u32;
+        return Utc.timestamp_opt(secs, nanos).single();
+    }
+    if let Some(s) = ts.as_str() {
+        if let Ok(val) = s.parse::<f64>() {
+            let val = if val > 1e11 { val / 1000.0 } else { val };
+            let secs = val as i64;
+            let nanos = ((val - secs as f64) * 1e9) as u32;
+            return Utc.timestamp_opt(secs, nanos).single();
+        }
+        if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+            return Some(dt.with_timezone(&Utc));
+        }
+    }
+    None
 }
 
 fn window_title(window: &Value, fallback: &str) -> String {
@@ -277,5 +290,34 @@ mod tests {
         assert_eq!(metrics.metric2_text, "82%");
         assert_eq!(metrics.badge1_text, "Plan: Pro");
         assert!(metrics.error.is_none());
+    }
+
+    #[test]
+    fn test_parse_timestamp() {
+        use serde_json::json;
+
+        // Seconds numeric
+        let ts_sec = json!(1893456000);
+        let dt1 = parse_timestamp(Some(&ts_sec)).unwrap();
+        assert_eq!(dt1.timestamp(), 1893456000);
+
+        // Milliseconds numeric (> 1e11)
+        let ts_ms = json!(1893456000000_i64);
+        let dt2 = parse_timestamp(Some(&ts_ms)).unwrap();
+        assert_eq!(dt2.timestamp(), 1893456000);
+
+        // String numeric
+        let ts_str = json!("1893456000");
+        let dt3 = parse_timestamp(Some(&ts_str)).unwrap();
+        assert_eq!(dt3.timestamp(), 1893456000);
+
+        // ISO-8601 string
+        let ts_iso = json!("2030-01-01T00:00:00Z");
+        let dt4 = parse_timestamp(Some(&ts_iso)).unwrap();
+        assert_eq!(dt4.timestamp(), 1893456000);
+
+        // Invalid / null
+        assert!(parse_timestamp(None).is_none());
+        assert!(parse_timestamp(Some(&json!("invalid"))).is_none());
     }
 }
