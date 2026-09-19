@@ -186,3 +186,39 @@ fn dirs_home() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_defaults() {
+        let cfg = Config::default();
+        assert_eq!(cfg.layout_mode, "vertical");
+        assert_eq!(cfg.vertical_width, 280);
+        assert_eq!(cfg.vertical_height, 410);
+        assert_eq!(cfg.horizontal_width, 690);
+        assert_eq!(cfg.horizontal_height, 152);
+        assert!(cfg.always_on_top);
+        assert!(!cfg.click_through);
+        assert_eq!(cfg.refresh_interval_sec, 60);
+        assert_eq!(cfg.hotkey, "Alt+C");
+    }
+
+    #[test]
+    fn test_config_serde_roundtrip() {
+        let mut cfg = Config::default();
+        cfg.layout_mode = "horizontal".to_string();
+        cfg.opacity = 0.75;
+        cfg.click_through = true;
+        cfg.refresh_interval_sec = 120;
+
+        let json = serde_json::to_string(&cfg).expect("serialization failed");
+        let restored: Config = serde_json::from_str(&json).expect("deserialization failed");
+
+        assert_eq!(restored.layout_mode, "horizontal");
+        assert_eq!(restored.opacity, 0.75);
+        assert!(restored.click_through);
+        assert_eq!(restored.refresh_interval_sec, 120);
+    }
+}

@@ -14,12 +14,13 @@ use log::{info, warn};
 #[cfg(target_os = "windows")]
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub struct HotkeyManager {
     toggle_flag: Arc<AtomicBool>,
     clickthrough_flag: Arc<AtomicBool>,
+    egui_ctx: Arc<Mutex<Option<eframe::egui::Context>>>,
     #[cfg(target_os = "windows")]
     thread_id: Arc<AtomicU32>,
     _thread: Option<thread::JoinHandle<()>>,
@@ -57,20 +58,23 @@ impl HotkeyManager {
     pub fn start() -> Result<Self, String> {
         let toggle_flag = Arc::new(AtomicBool::new(false));
         let ct_flag = Arc::new(AtomicBool::new(false));
+        let egui_ctx = Arc::new(Mutex::new(None));
 
         #[cfg(target_os = "windows")]
         {
             let t_flag = Arc::clone(&toggle_flag);
             let c_flag = Arc::clone(&ct_flag);
+            let ctx_clone = Arc::clone(&egui_ctx);
             let thread_id = Arc::new(AtomicU32::new(0));
             let tid_clone = Arc::clone(&thread_id);
             let handle = thread::Builder::new()
                 .name("hotkey-win32".to_owned())
-                .spawn(move || windows_hotkey_loop(t_flag, c_flag, tid_clone))
+                .spawn(move || windows_hotkey_loop(t_flag, c_flag, ctx_clone, tid_clone))
                 .map_err(|e| format!("Failed to start hotkey thread: {e}"))?;
             Ok(Self {
                 toggle_flag,
                 clickthrough_flag: ct_flag,
+                egui_ctx,
                 thread_id,
                 _thread: Some(handle),
             })
@@ -82,8 +86,16 @@ impl HotkeyManager {
             Ok(Self {
                 toggle_flag,
                 clickthrough_flag: ct_flag,
+                egui_ctx,
                 _thread: None,
             })
+        }
+    }
+
+    /// Sets the egui Context so the hotkey thread can trigger 0ms immediate repaint on event
+    pub fn set_context(&self, ctx: eframe::egui::Context) {
+        if let Ok(mut guard) = self.egui_ctx.lock() {
+            *guard = Some(ctx);
         }
     }
 
@@ -107,6 +119,7 @@ impl HotkeyManager {
 fn windows_hotkey_loop(
     toggle_flag: Arc<AtomicBool>,
     ct_flag: Arc<AtomicBool>,
+    egui_ctx: Arc<Mutex<Option<eframe::egui::Context>>>,
     thread_id: Arc<AtomicU32>,
 ) {
     use std::mem::MaybeUninit;
@@ -158,8 +171,18 @@ fn windows_hotkey_loop(
             if msg.message == WM_HOTKEY {
                 if msg.wParam == HOTKEY_ID_TOGGLE as usize {
                     toggle_flag.store(true, Ordering::SeqCst);
+                    if let Ok(guard) = egui_ctx.lock() {
+                        if let Some(ctx) = guard.as_ref() {
+                            ctx.request_repaint();
+                        }
+                    }
                 } else if msg.wParam == HOTKEY_ID_CLICKTHROUGH as usize {
                     ct_flag.store(true, Ordering::SeqCst);
+                    if let Ok(guard) = egui_ctx.lock() {
+                        if let Some(ctx) = guard.as_ref() {
+                            ctx.request_repaint();
+                        }
+                    }
                 }
             } else if msg.message == WM_QUIT {
                 break;

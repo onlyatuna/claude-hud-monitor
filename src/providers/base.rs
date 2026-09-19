@@ -132,3 +132,61 @@ pub trait Provider {
     /// Blocking fetch; called from a background thread.
     fn fetch_usage(&self) -> UsageMetrics;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn test_percentage_valid_and_invalid() {
+        assert_eq!(percentage(Some(50.0), 100.0), Some(50.0));
+        assert_eq!(percentage(Some(0.0), 100.0), Some(0.0));
+        assert_eq!(percentage(Some(100.0), 100.0), Some(100.0));
+        assert_eq!(percentage(Some(-1.0), 100.0), None);
+        assert_eq!(percentage(Some(105.0), 100.0), None);
+        assert_eq!(percentage(Some(f64::NAN), 100.0), None);
+        assert_eq!(percentage(Some(f64::INFINITY), 100.0), None);
+        assert_eq!(percentage(None, 100.0), None);
+    }
+
+    #[test]
+    fn test_percent_text() {
+        assert_eq!(percent_text(Some(42.6)), "43%");
+        assert_eq!(percent_text(Some(0.0)), "0%");
+        assert_eq!(percent_text(None), "--");
+    }
+
+    #[test]
+    fn test_format_countdown() {
+        assert_eq!(format_countdown(None), "--");
+
+        // Expired target
+        let past = Utc::now() - Duration::seconds(10);
+        assert_eq!(format_countdown(Some(past)), "即將重設");
+
+        // Future target (1 day, 2 hours, 3 mins)
+        let future_days =
+            Utc::now() + Duration::days(1) + Duration::hours(2) + Duration::minutes(3);
+        let res_days = format_countdown(Some(future_days));
+        assert!(res_days.contains("天") && res_days.contains("時"));
+
+        // Future target (2 hours, 30 mins)
+        let future_hours = Utc::now() + Duration::hours(2) + Duration::minutes(30);
+        let res_hours = format_countdown(Some(future_hours));
+        assert!(res_hours.contains("2h") && res_hours.contains("m"));
+
+        // Future target (45 mins)
+        let future_mins = Utc::now() + Duration::minutes(45);
+        let res_mins = format_countdown(Some(future_mins));
+        assert!(res_mins.contains("45m") || res_mins.contains("44m"));
+    }
+
+    #[test]
+    fn test_progress_color_rgb() {
+        assert_eq!(progress_color_rgb(95.0), (0xef, 0x44, 0x44)); // Red
+        assert_eq!(progress_color_rgb(80.0), (0xf5, 0x9e, 0x0b)); // Amber
+        assert_eq!(progress_color_rgb(60.0), (0x3b, 0x82, 0xf6)); // Blue
+        assert_eq!(progress_color_rgb(20.0), (0x10, 0xb9, 0x81)); // Green
+    }
+}

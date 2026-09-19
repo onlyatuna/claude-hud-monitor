@@ -34,6 +34,11 @@ fn main() -> eframe::Result {
             ) -> isize;
             fn GetLastError() -> u32;
         }
+        #[link(name = "user32")]
+        extern "system" {
+            fn RegisterWindowMessageW(lpString: *const u16) -> u32;
+            fn PostMessageW(hWnd: isize, Msg: u32, wParam: usize, lParam: isize) -> i32;
+        }
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
 
@@ -43,8 +48,14 @@ fn main() -> eframe::Result {
         unsafe {
             let _handle = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
             if GetLastError() == 183 {
-                // ERROR_ALREADY_EXISTS
-                log::warn!("[SingleInstance] Another instance is already running. Exiting.");
+                // ERROR_ALREADY_EXISTS: broadcast wake-up message to restore existing instance
+                log::warn!("[SingleInstance] Another instance is already running. Waking it up and exiting.");
+                let wake_name: Vec<u16> = OsStr::new("ClaudeHUD_WakeUp\0").encode_wide().collect();
+                let msg_id = RegisterWindowMessageW(wake_name.as_ptr());
+                if msg_id != 0 {
+                    const HWND_BROADCAST: isize = 0xFFFF;
+                    PostMessageW(HWND_BROADCAST, msg_id, 0, 0);
+                }
                 return Ok(());
             }
         }
@@ -139,72 +150,108 @@ fn main() -> eframe::Result {
         native_options,
         Box::new(move |cc| {
             // Configure CJK, Symbols & Monospace fonts
-            #[allow(unused_mut)]
             let mut fonts = egui::FontDefinitions::default();
-            #[cfg(target_os = "windows")]
-            {
-                // 1. Segoe UI for sleek Latin UI typography
-                let segoe_path = "C:\\Windows\\Fonts\\segoeui.ttf";
-                if let Ok(bytes) = std::fs::read(segoe_path) {
+
+            // 1. Latin UI font fallbacks
+            let latin_paths = [
+                "C:\\Windows\\Fonts\\segoeui.ttf",
+                "/System/Library/Fonts/SFPro.ttf",
+                "/System/Library/Fonts/Helvetica.ttc",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            ];
+            for path in &latin_paths {
+                if let Ok(bytes) = std::fs::read(path) {
                     fonts
                         .font_data
-                        .insert("segoe_ui".to_owned(), egui::FontData::from_owned(bytes));
+                        .insert("ui_latin".to_owned(), egui::FontData::from_owned(bytes));
                     fonts
                         .families
                         .get_mut(&egui::FontFamily::Proportional)
                         .unwrap()
-                        .insert(0, "segoe_ui".to_owned());
+                        .insert(0, "ui_latin".to_owned());
+                    break;
                 }
+            }
 
-                // 2. Microsoft JhengHei for crisp Chinese rendering
-                let font_path = "C:\\Windows\\Fonts\\msjh.ttc";
-                if let Ok(bytes) = std::fs::read(font_path) {
-                    fonts.font_data.insert(
-                        "microsoft_jhenghei".to_owned(),
-                        egui::FontData::from_owned(bytes),
-                    );
-                    fonts
-                        .families
-                        .get_mut(&egui::FontFamily::Proportional)
-                        .unwrap()
-                        .push("microsoft_jhenghei".to_owned());
-                    fonts
-                        .families
-                        .get_mut(&egui::FontFamily::Monospace)
-                        .unwrap()
-                        .push("microsoft_jhenghei".to_owned());
-                }
-
-                // 3. Segoe UI Symbol for UI icons: ⇄, 👻, ●, etc.
-                let segui_sym = "C:\\Windows\\Fonts\\seguisym.ttf";
-                if let Ok(bytes) = std::fs::read(segui_sym) {
-                    fonts.font_data.insert(
-                        "segoe_ui_symbol".to_owned(),
-                        egui::FontData::from_owned(bytes),
-                    );
-                    fonts
-                        .families
-                        .get_mut(&egui::FontFamily::Proportional)
-                        .unwrap()
-                        .push("segoe_ui_symbol".to_owned());
-                    fonts
-                        .families
-                        .get_mut(&egui::FontFamily::Monospace)
-                        .unwrap()
-                        .push("segoe_ui_symbol".to_owned());
-                }
-
-                // 4. Consolas for monospace numbers
-                let consolas_path = "C:\\Windows\\Fonts\\consola.ttf";
-                if let Ok(bytes) = std::fs::read(consolas_path) {
+            // 2. Chinese CJK font fallbacks (Windows, macOS, Linux)
+            let cjk_paths = [
+                // Windows
+                "C:\\Windows\\Fonts\\msjh.ttc",
+                "C:\\Windows\\Fonts\\msjhbd.ttc",
+                "C:\\Windows\\Fonts\\msyh.ttc",
+                // macOS
+                "/System/Library/Fonts/PingFang.ttc",
+                "/System/Library/Fonts/Hiragino Sans GB.ttc",
+                "/System/Library/Fonts/STHeiti Light.ttc",
+                "/Library/Fonts/Arial Unicode.ttf",
+                // Linux
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+                "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            ];
+            for path in &cjk_paths {
+                if let Ok(bytes) = std::fs::read(path) {
                     fonts
                         .font_data
-                        .insert("consolas".to_owned(), egui::FontData::from_owned(bytes));
+                        .insert("cjk_fallback".to_owned(), egui::FontData::from_owned(bytes));
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Proportional)
+                        .unwrap()
+                        .push("cjk_fallback".to_owned());
                     fonts
                         .families
                         .get_mut(&egui::FontFamily::Monospace)
                         .unwrap()
-                        .insert(0, "consolas".to_owned());
+                        .push("cjk_fallback".to_owned());
+                    break;
+                }
+            }
+
+            // 3. UI Symbols
+            let sym_paths = [
+                "C:\\Windows\\Fonts\\seguisym.ttf",
+                "/System/Library/Fonts/Apple Color Emoji.ttc",
+            ];
+            for path in &sym_paths {
+                if let Ok(bytes) = std::fs::read(path) {
+                    fonts
+                        .font_data
+                        .insert("ui_symbol".to_owned(), egui::FontData::from_owned(bytes));
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Proportional)
+                        .unwrap()
+                        .push("ui_symbol".to_owned());
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Monospace)
+                        .unwrap()
+                        .push("ui_symbol".to_owned());
+                    break;
+                }
+            }
+
+            // 4. Monospace numbers and metrics
+            let mono_paths = [
+                "C:\\Windows\\Fonts\\consola.ttf",
+                "/System/Library/Fonts/Monaco.ttf",
+                "/Library/Fonts/Courier New.ttf",
+                "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+            ];
+            for path in &mono_paths {
+                if let Ok(bytes) = std::fs::read(path) {
+                    fonts
+                        .font_data
+                        .insert("ui_mono".to_owned(), egui::FontData::from_owned(bytes));
+                    fonts
+                        .families
+                        .get_mut(&egui::FontFamily::Monospace)
+                        .unwrap()
+                        .insert(0, "ui_mono".to_owned());
+                    break;
                 }
             }
             cc.egui_ctx.set_fonts(fonts);

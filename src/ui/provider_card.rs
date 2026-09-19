@@ -75,7 +75,7 @@ pub fn render_provider_card(
                     render_metric_row(ui, m2_title, None, "--", None, row_spacing);
                 }
                 Some(d) if d.error.is_some() && !d.stale => {
-                    render_error_state(ui, d, row_spacing);
+                    render_error_state(ui, id, d, row_spacing);
                 }
                 Some(d) => {
                     render_metric_row(
@@ -239,7 +239,8 @@ fn badge_label(ui: &mut Ui, text: &str) {
     });
 }
 
-fn render_error_state(ui: &mut Ui, d: &UsageMetrics, row_spacing: f32) {
+fn render_error_state(ui: &mut Ui, id: &str, d: &UsageMetrics, row_spacing: f32) {
+    let (m1_title, m2_title) = default_metric_titles(id);
     let err_msg = d.error.as_deref().unwrap_or("未知錯誤");
     let first_line = err_msg.lines().next().unwrap_or(err_msg);
 
@@ -252,7 +253,7 @@ fn render_error_state(ui: &mut Ui, d: &UsageMetrics, row_spacing: f32) {
             |ui| {
                 ui.set_height(row_h);
                 ui.label(
-                    RichText::new("SESSION 5H")
+                    RichText::new(m1_title)
                         .color(TEXT_SECONDARY)
                         .size(9.5)
                         .strong(),
@@ -271,7 +272,8 @@ fn render_error_state(ui: &mut Ui, d: &UsageMetrics, row_spacing: f32) {
         );
 
         custom_progress_bar(ui, 0.0, COLOR_RED);
-        ui.label(RichText::new(first_line).color(COLOR_RED).size(9.0));
+        ui.label(RichText::new(first_line).color(COLOR_RED).size(9.0))
+            .on_hover_text(err_msg);
     });
 
     ui.scope(|ui| {
@@ -283,7 +285,7 @@ fn render_error_state(ui: &mut Ui, d: &UsageMetrics, row_spacing: f32) {
             |ui| {
                 ui.set_height(row_h);
                 ui.label(
-                    RichText::new("WEEKLY 7D")
+                    RichText::new(m2_title)
                         .color(TEXT_SECONDARY)
                         .size(9.5)
                         .strong(),

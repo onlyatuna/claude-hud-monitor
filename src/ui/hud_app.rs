@@ -21,6 +21,15 @@ use crate::providers::{
 use crate::refresh_controller::RefreshController;
 
 #[cfg(target_os = "windows")]
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+#[cfg(target_os = "windows")]
+static WAKE_MSG: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(target_os = "windows")]
+static WAKE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
 #[derive(Clone, Copy, Debug)]
 struct ActiveResize {
     direction: egui::viewport::ResizeDirection,
@@ -177,6 +186,19 @@ impl HudApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
     }
 
+    /// Toggle HUD window visibility, releasing memory working set on hide.
+    pub fn toggle_visibility(&mut self, ctx: &egui::Context) {
+        self.is_visible = !self.is_visible;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.is_visible));
+        if self.is_visible {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint();
+        } else {
+            #[cfg(target_os = "windows")]
+            trim_working_set();
+        }
+    }
+
     /// Handle menu actions dispatched from the native Win32 context menu
     pub fn handle_menu_action(&mut self, action: MenuAction, ctx: &egui::Context) {
         match action {
@@ -282,10 +304,7 @@ impl HudApp {
                 crate::logger::open_log_dir();
             }
             MenuAction::ToggleHide => {
-                self.is_visible = false;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                #[cfg(target_os = "windows")]
-                trim_working_set();
+                self.toggle_visibility(ctx);
             }
             MenuAction::Exit => {
                 std::process::exit(0);
@@ -301,9 +320,22 @@ impl eframe::App for HudApp {
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.frame_count = self.frame_count.wrapping_add(1);
+        if self.frame_count == 1 {
+            if let Some(hk) = &self.hotkey {
+                hk.set_context(ctx.clone());
+            }
+        }
         #[cfg(target_os = "windows")]
-        if self.frame_count == 5 || (self.frame_count > 5 && self.frame_count.is_multiple_of(60)) {
+        if self.frame_count == 10 {
             trim_working_set();
+        }
+
+        #[cfg(target_os = "windows")]
+        if WAKE_REQUESTED.swap(false, Ordering::Relaxed) {
+            self.is_visible = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint();
         }
 
         // Drain worker results
@@ -331,24 +363,24 @@ impl eframe::App for HudApp {
         self.last_heartbeat = now;
 
         // Hotkey polling
-        if let Some(hk) = &self.hotkey {
-            if hk.poll_toggle() {
-                self.is_visible = !self.is_visible;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.is_visible));
-                if self.is_visible {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
-            }
-            if hk.poll_clickthrough() {
-                let mut cfg = self.config.lock().unwrap();
-                cfg.click_through = !cfg.click_through;
-                let ct = cfg.click_through;
-                ConfigManager::save(&cfg);
-                drop(cfg);
-                ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
-                #[cfg(target_os = "windows")]
-                apply_win32_click_through(self.hwnd, ct);
-            }
+        let (hk_toggle, hk_ct) = if let Some(hk) = &self.hotkey {
+            (hk.poll_toggle(), hk.poll_clickthrough())
+        } else {
+            (false, false)
+        };
+
+        if hk_toggle {
+            self.toggle_visibility(ctx);
+        }
+        if hk_ct {
+            let mut cfg = self.config.lock().unwrap();
+            cfg.click_through = !cfg.click_through;
+            let ct = cfg.click_through;
+            ConfigManager::save(&cfg);
+            drop(cfg);
+            ctx.send_viewport_cmd(egui::ViewportCommand::MousePassthrough(ct));
+            #[cfg(target_os = "windows")]
+            apply_win32_click_through(self.hwnd, ct);
         }
 
         // One-shot: apply stored click_through on first rendered frame (frame_count==2 means
@@ -393,11 +425,7 @@ impl eframe::App for HudApp {
                     button_state: tray_icon::MouseButtonState::Up,
                     ..
                 } => {
-                    self.is_visible = !self.is_visible;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.is_visible));
-                    if self.is_visible {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                    }
+                    self.toggle_visibility(ctx);
                 }
                 tray_icon::TrayIconEvent::Click {
                     button: tray_icon::MouseButton::Right,
@@ -711,35 +739,43 @@ fn set_resize_cursor(ctx: &egui::Context, dir: egui::viewport::ResizeDirection) 
 
 #[cfg(target_os = "windows")]
 fn get_window_hwnd() -> isize {
-    use std::ffi::OsStr;
-    use std::os::windows::ffi::OsStrExt;
-
     #[link(name = "user32")]
     extern "system" {
-        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
-        fn GetWindowThreadProcessId(hWnd: isize, lpdwProcessId: *mut u32) -> u32;
+        fn EnumThreadWindows(
+            dwThreadId: u32,
+            lpfn: unsafe extern "system" fn(isize, isize) -> i32,
+            lParam: isize,
+        ) -> i32;
+        fn GetParent(hWnd: isize) -> isize;
     }
     #[link(name = "kernel32")]
     extern "system" {
-        fn GetCurrentProcessId() -> u32;
+        fn GetCurrentThreadId() -> u32;
     }
 
-    let title: Vec<u16> = OsStr::new("AI Agent HUD Monitor\0").encode_wide().collect();
-    let hwnd = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
-    if hwnd != 0 {
-        let mut proc_id = 0u32;
-        unsafe {
-            GetWindowThreadProcessId(hwnd, &mut proc_id);
-            if proc_id == GetCurrentProcessId() {
-                return hwnd;
-            }
+    unsafe extern "system" fn enum_proc(hwnd: isize, lparam: isize) -> i32 {
+        if GetParent(hwnd) == 0 {
+            let out = lparam as *mut isize;
+            *out = hwnd;
+            0 // Stop enumerating
+        } else {
+            1 // Continue
         }
     }
-    0
+
+    let mut found_hwnd: isize = 0;
+    unsafe {
+        let tid = GetCurrentThreadId();
+        EnumThreadWindows(tid, enum_proc, &mut found_hwnd as *mut isize as isize);
+    }
+    found_hwnd
 }
 
 #[cfg(target_os = "windows")]
 fn init_win32_window_frame(hwnd: isize) {
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+
     #[repr(C)]
     #[allow(non_snake_case)]
     struct MARGINS {
@@ -754,6 +790,7 @@ fn init_win32_window_frame(hwnd: isize) {
         fn GetWindowLongW(hWnd: isize, nIndex: i32) -> i32;
         fn SetWindowLongW(hWnd: isize, nIndex: i32, dwNewLong: i32) -> i32;
         fn SetClassLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+        fn RegisterWindowMessageW(lpString: *const u16) -> u32;
     }
     #[link(name = "dwmapi")]
     extern "system" {
@@ -783,10 +820,17 @@ fn init_win32_window_frame(hwnd: isize) {
     const DWMWCP_DONOTROUND: u32 = 1;
 
     unsafe {
+        // Register single-instance wakeup message
+        let wake_name: Vec<u16> = OsStr::new("ClaudeHUD_WakeUp\0").encode_wide().collect();
+        let msg_id = RegisterWindowMessageW(wake_name.as_ptr());
+        if msg_id != 0 {
+            WAKE_MSG.store(msg_id, Ordering::Relaxed);
+        }
+
         // 1. Prevent GDI from painting standard white window background brush
         SetClassLongPtrW(hwnd, GCLP_HBRBACKGROUND, 0);
 
-        // 2. Subclass window to absorb WM_ERASEBKGND (0x0014)
+        // 2. Subclass window to absorb WM_ERASEBKGND (0x0014) and handle WakeUp
         unsafe extern "system" fn bg_subclass(
             h: isize,
             msg: u32,
@@ -795,6 +839,18 @@ fn init_win32_window_frame(hwnd: isize) {
             _id: usize,
             _data: usize,
         ) -> isize {
+            #[link(name = "user32")]
+            extern "system" {
+                fn ShowWindow(hWnd: isize, nCmdShow: i32) -> i32;
+                fn SetForegroundWindow(hWnd: isize) -> i32;
+            }
+            let wake_msg = WAKE_MSG.load(Ordering::Relaxed);
+            if wake_msg != 0 && msg == wake_msg {
+                WAKE_REQUESTED.store(true, Ordering::Relaxed);
+                ShowWindow(h, 9); // SW_RESTORE
+                SetForegroundWindow(h);
+                return 0;
+            }
             if msg == 0x0014 {
                 // WM_ERASEBKGND
                 return 1;

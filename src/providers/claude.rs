@@ -221,3 +221,38 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<f64> {
         .parse::<f64>()
         .ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_claude_response() {
+        let json_data = serde_json::json!({
+            "five_hour": {
+                "utilization": 28.5,
+                "resets_at": "2030-01-01T05:00:00Z"
+            },
+            "seven_day": {
+                "utilization": 64.0,
+                "resets_at": "2030-01-07T00:00:00Z"
+            },
+            "seven_day_breakdown": {
+                "rows": [
+                    {"key": "claude_code", "percent": 50.0},
+                    {"key": "chat", "percent": 14.0}
+                ]
+            }
+        });
+
+        let metrics = parse_claude_response(json_data, "10:00:00");
+        assert_eq!(metrics.provider_id, "claude");
+        assert_eq!(metrics.metric1_val, Some(28.5));
+        assert_eq!(metrics.metric1_text, "28%");
+        assert_eq!(metrics.metric2_val, Some(64.0));
+        assert_eq!(metrics.metric2_text, "64%");
+        assert_eq!(metrics.badge1_text, "Code: 50%");
+        assert_eq!(metrics.badge2_text, "Chat: 14%");
+        assert!(metrics.error.is_none());
+    }
+}

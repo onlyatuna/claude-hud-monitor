@@ -248,3 +248,34 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<f64> {
         .parse::<f64>()
         .ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_codex_response() {
+        let json_data = serde_json::json!({
+            "rate_limit": {
+                "primary_window": {
+                    "used_percent": 15.0,
+                    "reset_at": 1893456000
+                },
+                "secondary_window": {
+                    "used_percent": 82.5,
+                    "reset_at": 1893542400
+                }
+            },
+            "plan_type": "pro"
+        });
+
+        let metrics = parse_codex_response(json_data, "10:00:00");
+        assert_eq!(metrics.provider_id, "codex");
+        assert_eq!(metrics.metric1_val, Some(15.0));
+        assert_eq!(metrics.metric1_text, "15%");
+        assert_eq!(metrics.metric2_val, Some(82.5));
+        assert_eq!(metrics.metric2_text, "82%");
+        assert_eq!(metrics.badge1_text, "Plan: Pro");
+        assert!(metrics.error.is_none());
+    }
+}

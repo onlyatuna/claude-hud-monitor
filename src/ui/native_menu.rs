@@ -24,6 +24,17 @@ pub enum MenuAction {
 }
 
 #[cfg(target_os = "windows")]
+use std::collections::HashMap;
+#[cfg(target_os = "windows")]
+use std::sync::Mutex;
+
+#[cfg(target_os = "windows")]
+type MenuIconCache = Mutex<Option<HashMap<(usize, u32, u32), image::RgbaImage>>>;
+
+#[cfg(target_os = "windows")]
+static MENU_ICON_CACHE: MenuIconCache = Mutex::new(None);
+
+#[cfg(target_os = "windows")]
 #[repr(C)]
 struct POINT {
     x: i32,
@@ -499,9 +510,20 @@ fn create_menu_pargb_bitmap(png_bytes: &[u8], checked: bool, cx: u32, cy: u32) -
     let total_w = cx + gap + cx;
     let total_h = cy;
 
-    let img = image::load_from_memory(png_bytes).ok()?;
-    let resized = img.resize_exact(cx, cy, image::imageops::FilterType::Lanczos3);
-    let rgba = resized.to_rgba8();
+    let key = (png_bytes.as_ptr() as usize, cx, cy);
+    let rgba = {
+        let mut cache = MENU_ICON_CACHE.lock().unwrap();
+        let map = cache.get_or_insert_with(HashMap::new);
+        if let Some(cached) = map.get(&key) {
+            cached.clone()
+        } else {
+            let img = image::load_from_memory(png_bytes).ok()?;
+            let resized = img.resize_exact(cx, cy, image::imageops::FilterType::Lanczos3);
+            let r = resized.to_rgba8();
+            map.insert(key, r.clone());
+            r
+        }
+    };
 
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {

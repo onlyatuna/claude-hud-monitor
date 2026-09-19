@@ -110,6 +110,22 @@ impl AgyProvider {
             .spawn()
             .map_err(|e| format!("無法啟動 agy，請確認安裝與執行權限: {e}"))?;
 
+        // Drain stdout and stderr in background threads to avoid OS pipe buffer deadlock
+        let mut stdout_pipe = child.stdout.take().unwrap();
+        let mut stderr_pipe = child.stderr.take().unwrap();
+
+        let stdout_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stdout_pipe, &mut buf);
+            buf
+        });
+
+        let stderr_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stderr_pipe, &mut buf);
+            buf
+        });
+
         let timeout = std::time::Duration::from_secs(timeout_secs.max(5));
         let exit_status = loop {
             match child.try_wait() {
@@ -118,21 +134,23 @@ impl AgyProvider {
                     if started.elapsed() >= timeout {
                         let _ = child.kill();
                         let _ = child.wait();
+                        let _ = stdout_thread.join();
+                        let _ = stderr_thread.join();
                         return Err(format!("agy 執行逾時 (超過 {} 秒)", timeout_secs));
                     }
                     std::thread::sleep(std::time::Duration::from_millis(50));
                 }
                 Err(e) => {
                     let _ = child.kill();
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
                     return Err(format!("agy 等待錯誤: {e}"));
                 }
             }
         };
 
-        let mut stdout_bytes = Vec::new();
-        if let Some(mut out) = child.stdout.take() {
-            let _ = std::io::Read::read_to_end(&mut out, &mut stdout_bytes);
-        }
+        let stdout_bytes = stdout_thread.join().unwrap_or_default();
+        let stderr_bytes = stderr_thread.join().unwrap_or_default();
 
         let elapsed = started.elapsed().as_secs_f64();
         info!(
@@ -142,6 +160,14 @@ impl AgyProvider {
         );
 
         if !exit_status.success() {
+            let stderr_msg = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
+            if !stderr_msg.is_empty() {
+                return Err(format!(
+                    "agy 查詢失敗 (exit {}): {}",
+                    exit_status.code().unwrap_or(-1),
+                    stderr_msg
+                ));
+            }
             return Err(format!(
                 "agy 查詢失敗 (exit {})",
                 exit_status.code().unwrap_or(-1)
@@ -251,8 +277,12 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_lowercase();
-                let rem_frac =
-                    percentage(b.get("remaining_fraction").and_then(|v| v.as_f64()), 1.0);
+                let rem_frac = percentage(
+                    b.get("remaining_fraction")
+                        .or_else(|| b.get("remainingFraction"))
+                        .and_then(|v| v.as_f64()),
+                    1.0,
+                );
                 let Some(rem_frac) = rem_frac else {
                     continue;
                 };
@@ -261,6 +291,7 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
 
                 let reset_dt: Option<DateTime<Utc>> = b
                     .get("reset_time")
+                    .or_else(|| b.get("resetTime"))
                     .and_then(|v| v.as_str())
                     .and_then(|s| DateTime::parse_from_rfc3339(&s.replace('Z', "+00:00")).ok())
                     .map(|dt| dt.with_timezone(&Utc));
@@ -289,9 +320,13 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_lowercase();
-                if b_id.contains("week") {
-                    let rem_frac =
-                        percentage(b.get("remaining_fraction").and_then(|v| v.as_f64()), 1.0);
+                if b_id.contains("week") || b_id.contains("third_party") {
+                    let rem_frac = percentage(
+                        b.get("remaining_fraction")
+                            .or_else(|| b.get("remainingFraction"))
+                            .and_then(|v| v.as_f64()),
+                        1.0,
+                    );
                     if let Some(rem_frac) = rem_frac {
                         let remaining = rem_frac * 100.0;
                         third_party_rem_pct = Some(
@@ -328,5 +363,81 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
             String::new()
         },
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_try_parse_json() {
+        // Direct parse
+        let pure = r#"{"hello": "world"}"#;
+        let val = try_parse_json(pure).expect("should parse pure json");
+        assert_eq!(val["hello"], "world");
+
+        // With CLI headers/footers
+        let banner = "Welcome to AGY CLI v2.0\nInfo: fetching quota\n{\"status\": \"ok\", \"count\": 42}\nDone in 0.2s";
+        let val2 = try_parse_json(banner).expect("should parse json inside banner");
+        assert_eq!(val2["status"], "ok");
+        assert_eq!(val2["count"], 42);
+
+        // Invalid
+        assert!(try_parse_json("not json at all").is_none());
+        assert!(try_parse_json("").is_none());
+    }
+
+    #[test]
+    fn test_parse_agy_json() {
+        let json_str = r#"{
+            "command": {
+                "data": {
+                    "groups": [
+                        {
+                            "name": "Gemini Models",
+                            "buckets": [
+                                {
+                                    "id": "session",
+                                    "window": "5h",
+                                    "remainingFraction": 0.8,
+                                    "resetTime": "2030-01-01T00:00:00Z"
+                                },
+                                {
+                                    "id": "weekly",
+                                    "window": "7d",
+                                    "remainingFraction": 0.45,
+                                    "resetTime": "2030-01-07T00:00:00Z"
+                                }
+                            ]
+                        },
+                        {
+                            "name": "Claude / 3rd Party Models",
+                            "buckets": [
+                                {
+                                    "id": "third_party",
+                                    "remainingFraction": 0.92
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }"#;
+
+        let val: Value = serde_json::from_str(json_str).unwrap();
+        let m = parse_agy_json(val, "12:00:00");
+
+        assert_eq!(m.provider_id, "agy");
+        assert_eq!(m.provider_name, "Antigravity");
+        // Used = (1.0 - 0.8) * 100 = 20.0%
+        assert!((m.metric1_val.unwrap() - 20.0).abs() < 0.1);
+        assert_eq!(m.metric1_text, "20%");
+        // Weekly used = (1.0 - 0.45) * 100 = 55.0%
+        assert!((m.metric2_val.unwrap() - 55.0).abs() < 0.1);
+        assert_eq!(m.metric2_text, "55%");
+        // Badge has 92%
+        assert!(m.badge1_text.contains("92%"));
+        assert!(m.error.is_none());
     }
 }
