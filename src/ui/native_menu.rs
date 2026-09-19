@@ -73,7 +73,7 @@ extern "system" {
         lpmii: *const MENUITEMINFOW,
     ) -> i32;
     fn GetSystemMetrics(nIndex: i32) -> i32;
-    fn CheckMenuRadioItem(hMenu: isize, first: u32, last: u32, check: u32, flags: u32) -> i32;
+    fn CheckMenuItem(hMenu: isize, uIDCheckItem: u32, uCheck: u32) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -152,15 +152,11 @@ pub fn show_native_context_menu(
         let is_horiz = config.layout_mode == "horizontal";
         let t_h = to_wide("橫向三欄並排 (Horizontal Triple)");
         let t_v = to_wide("直立三層堆疊 (Vertical Stack)");
-        AppendMenuW(layout_sub, MF_STRING, 1002, t_h.as_ptr());
-        AppendMenuW(layout_sub, MF_STRING, 1003, t_v.as_ptr());
-        CheckMenuRadioItem(
-            layout_sub,
-            1002,
-            1003,
-            if is_horiz { 1002 } else { 1003 },
-            0,
-        );
+        let flag_h = MF_STRING | if is_horiz { MF_CHECKED } else { MF_UNCHECKED };
+        let flag_v = MF_STRING | if !is_horiz { MF_CHECKED } else { MF_UNCHECKED };
+        AppendMenuW(layout_sub, flag_h, 1002, t_h.as_ptr());
+        AppendMenuW(layout_sub, flag_v, 1003, t_v.as_ptr());
+        CheckMenuItem(layout_sub, if is_horiz { 1002 } else { 1003 }, MF_CHECKED);
 
         let t_layout = to_wide("顯示佈局 (Layout)");
         AppendMenuW(root, MF_POPUP, layout_sub as usize, t_layout.as_ptr());
@@ -176,6 +172,9 @@ pub fn show_native_context_menu(
         let t_ct = to_wide("滑鼠點擊穿透 (Alt+Shift+C)");
         AppendMenuW(root, flag_ct, 1004, t_ct.as_ptr());
         attach_icon(root, 1004, false, ICON_GHOST, cx, cy, &mut bitmaps);
+        if config.click_through {
+            CheckMenuItem(root, 1004, MF_CHECKED);
+        }
 
         // 4. Always on Top
         let flag_aot = MF_STRING
@@ -187,6 +186,9 @@ pub fn show_native_context_menu(
         let t_aot = to_wide("視窗永遠置頂 (Always on Top)");
         AppendMenuW(root, flag_aot, 1005, t_aot.as_ptr());
         attach_icon(root, 1005, false, ICON_PIN, cx, cy, &mut bitmaps);
+        if config.always_on_top {
+            CheckMenuItem(root, 1005, MF_CHECKED);
+        }
 
         // 5. Lock position
         let flag_lock = MF_STRING
@@ -198,6 +200,9 @@ pub fn show_native_context_menu(
         let t_lock = to_wide("鎖定視窗位置 (Lock Drag)");
         AppendMenuW(root, flag_lock, 1006, t_lock.as_ptr());
         attach_icon(root, 1006, false, ICON_LOCK, cx, cy, &mut bitmaps);
+        if config.locked {
+            CheckMenuItem(root, 1006, MF_CHECKED);
+        }
 
         // 6. Opacity Submenu
         let op_sub = CreatePopupMenu();
@@ -205,13 +210,15 @@ pub fn show_native_context_menu(
         let op_values = [100u32, 90, 80, 70, 50, 30];
         let mut active_op_id = 1100;
         for (i, &val) in op_values.iter().enumerate() {
+            let is_cur = (cur_op as i32 - val as i32).abs() < 5;
+            let flag = MF_STRING | if is_cur { MF_CHECKED } else { MF_UNCHECKED };
             let t = to_wide(&format!("{}%", val));
-            AppendMenuW(op_sub, MF_STRING, 1100 + i, t.as_ptr());
-            if (cur_op as i32 - val as i32).abs() < 5 {
+            AppendMenuW(op_sub, flag, 1100 + i, t.as_ptr());
+            if is_cur {
                 active_op_id = 1100 + i as u32;
             }
         }
-        CheckMenuRadioItem(op_sub, 1100, 1105, active_op_id, 0);
+        CheckMenuItem(op_sub, active_op_id, MF_CHECKED);
 
         let t_op = to_wide("視窗透明度 (Opacity)");
         AppendMenuW(root, MF_POPUP, op_sub as usize, t_op.as_ptr());
@@ -222,13 +229,15 @@ pub fn show_native_context_menu(
         let int_values = [30u64, 60, 120, 300];
         let mut active_int_id = 1201;
         for (i, &sec) in int_values.iter().enumerate() {
+            let is_cur = config.refresh_interval_sec == sec;
+            let flag = MF_STRING | if is_cur { MF_CHECKED } else { MF_UNCHECKED };
             let t = to_wide(&format!("{} 秒", sec));
-            AppendMenuW(int_sub, MF_STRING, 1200 + i, t.as_ptr());
-            if config.refresh_interval_sec == sec {
+            AppendMenuW(int_sub, flag, 1200 + i, t.as_ptr());
+            if is_cur {
                 active_int_id = 1200 + i as u32;
             }
         }
-        CheckMenuRadioItem(int_sub, 1200, 1203, active_int_id, 0);
+        CheckMenuItem(int_sub, active_int_id, MF_CHECKED);
 
         let t_int = to_wide("更新頻率 (Interval)");
         AppendMenuW(root, MF_POPUP, int_sub as usize, t_int.as_ptr());
@@ -244,6 +253,9 @@ pub fn show_native_context_menu(
         let t_as = to_wide("開機自動啟動 (Start on Boot)");
         AppendMenuW(root, flag_as, 1007, t_as.as_ptr());
         attach_icon(root, 1007, false, ICON_ROCKET, cx, cy, &mut bitmaps);
+        if is_autostart {
+            CheckMenuItem(root, 1007, MF_CHECKED);
+        }
 
         AppendMenuW(root, MF_SEPARATOR, 0, std::ptr::null());
 
