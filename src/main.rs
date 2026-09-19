@@ -116,7 +116,7 @@ fn main() -> eframe::Result {
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()
-            .with_resizable(true)
+            .with_resizable(false)
             .with_inner_size([init_w, init_h])
             .with_position([
                 cfg.window_x.unwrap_or(400) as f32,

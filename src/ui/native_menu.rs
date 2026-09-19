@@ -73,7 +73,6 @@ extern "system" {
         lpmii: *const MENUITEMINFOW,
     ) -> i32;
     fn GetSystemMetrics(nIndex: i32) -> i32;
-    fn CheckMenuItem(hMenu: isize, uIDCheckItem: u32, uCheck: u32) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -105,8 +104,6 @@ pub fn show_native_context_menu(
     const MF_STRING: u32 = 0x00000000;
     const MF_POPUP: u32 = 0x00000010;
     const MF_SEPARATOR: u32 = 0x00000800;
-    const MF_CHECKED: u32 = 0x00000008;
-    const MF_UNCHECKED: u32 = 0x00000000;
 
     unsafe {
         let target_hwnd = if hwnd != 0 {
@@ -141,7 +138,7 @@ pub fn show_native_context_menu(
         let root = CreatePopupMenu();
 
         // 1. Refresh All
-        let text = to_wide("立即重新整理所有 AI (Refresh All)");
+        let text = to_wide("    立即重新整理所有 AI (Refresh All)");
         AppendMenuW(root, MF_STRING, 1001, text.as_ptr());
         attach_icon(root, 1001, false, ICON_REFRESH, cx, cy, &mut bitmaps);
 
@@ -150,134 +147,113 @@ pub fn show_native_context_menu(
         // 2. Layout Submenu
         let layout_sub = CreatePopupMenu();
         let is_horiz = config.layout_mode == "horizontal";
-        let t_h = to_wide("橫向三欄並排 (Horizontal Triple)");
-        let t_v = to_wide("直立三層堆疊 (Vertical Stack)");
-        let flag_h = MF_STRING | if is_horiz { MF_CHECKED } else { MF_UNCHECKED };
-        let flag_v = MF_STRING | if !is_horiz { MF_CHECKED } else { MF_UNCHECKED };
-        AppendMenuW(layout_sub, flag_h, 1002, t_h.as_ptr());
-        AppendMenuW(layout_sub, flag_v, 1003, t_v.as_ptr());
-        CheckMenuItem(layout_sub, if is_horiz { 1002 } else { 1003 }, MF_CHECKED);
+        let t_h = to_wide(&format!(
+            "{}橫向三欄並排 (Horizontal Triple)",
+            if is_horiz { "✓  " } else { "    " }
+        ));
+        let t_v = to_wide(&format!(
+            "{}直立三層堆疊 (Vertical Stack)",
+            if !is_horiz { "✓  " } else { "    " }
+        ));
+        AppendMenuW(layout_sub, MF_STRING, 1002, t_h.as_ptr());
+        AppendMenuW(layout_sub, MF_STRING, 1003, t_v.as_ptr());
 
-        let t_layout = to_wide("顯示佈局 (Layout)");
+        let t_layout = to_wide("    顯示佈局 (Layout)");
         AppendMenuW(root, MF_POPUP, layout_sub as usize, t_layout.as_ptr());
         attach_icon(root, 2, true, ICON_LAYOUT, cx, cy, &mut bitmaps);
 
         // 3. Click-through
-        let flag_ct = MF_STRING
-            | if config.click_through {
-                MF_CHECKED
+        let t_ct = to_wide(&format!(
+            "{}滑鼠點擊穿透 (Alt+Shift+C)",
+            if config.click_through {
+                "✓  "
             } else {
-                MF_UNCHECKED
-            };
-        let t_ct = to_wide("滑鼠點擊穿透 (Alt+Shift+C)");
-        AppendMenuW(root, flag_ct, 1004, t_ct.as_ptr());
+                "    "
+            }
+        ));
+        AppendMenuW(root, MF_STRING, 1004, t_ct.as_ptr());
         attach_icon(root, 1004, false, ICON_GHOST, cx, cy, &mut bitmaps);
-        if config.click_through {
-            CheckMenuItem(root, 1004, MF_CHECKED);
-        }
 
         // 4. Always on Top
-        let flag_aot = MF_STRING
-            | if config.always_on_top {
-                MF_CHECKED
+        let t_aot = to_wide(&format!(
+            "{}視窗永遠置頂 (Always on Top)",
+            if config.always_on_top {
+                "✓  "
             } else {
-                MF_UNCHECKED
-            };
-        let t_aot = to_wide("視窗永遠置頂 (Always on Top)");
-        AppendMenuW(root, flag_aot, 1005, t_aot.as_ptr());
+                "    "
+            }
+        ));
+        AppendMenuW(root, MF_STRING, 1005, t_aot.as_ptr());
         attach_icon(root, 1005, false, ICON_PIN, cx, cy, &mut bitmaps);
-        if config.always_on_top {
-            CheckMenuItem(root, 1005, MF_CHECKED);
-        }
 
         // 5. Lock position
-        let flag_lock = MF_STRING
-            | if config.locked {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-        let t_lock = to_wide("鎖定視窗位置 (Lock Drag)");
-        AppendMenuW(root, flag_lock, 1006, t_lock.as_ptr());
+        let t_lock = to_wide(&format!(
+            "{}鎖定視窗位置 (Lock Drag)",
+            if config.locked { "✓  " } else { "    " }
+        ));
+        AppendMenuW(root, MF_STRING, 1006, t_lock.as_ptr());
         attach_icon(root, 1006, false, ICON_LOCK, cx, cy, &mut bitmaps);
-        if config.locked {
-            CheckMenuItem(root, 1006, MF_CHECKED);
-        }
 
         // 6. Opacity Submenu
         let op_sub = CreatePopupMenu();
         let cur_op = (config.opacity * 100.0).round() as u32;
         let op_values = [100u32, 90, 80, 70, 50, 30];
-        let mut active_op_id = 1100;
         for (i, &val) in op_values.iter().enumerate() {
             let is_cur = (cur_op as i32 - val as i32).abs() < 5;
-            let flag = MF_STRING | if is_cur { MF_CHECKED } else { MF_UNCHECKED };
-            let t = to_wide(&format!("{}%", val));
-            AppendMenuW(op_sub, flag, 1100 + i, t.as_ptr());
-            if is_cur {
-                active_op_id = 1100 + i as u32;
-            }
+            let t = to_wide(&format!("{}{}%", if is_cur { "✓  " } else { "    " }, val));
+            AppendMenuW(op_sub, MF_STRING, 1100 + i, t.as_ptr());
         }
-        CheckMenuItem(op_sub, active_op_id, MF_CHECKED);
 
-        let t_op = to_wide("視窗透明度 (Opacity)");
+        let t_op = to_wide("    視窗透明度 (Opacity)");
         AppendMenuW(root, MF_POPUP, op_sub as usize, t_op.as_ptr());
         attach_icon(root, 6, true, ICON_OPACITY, cx, cy, &mut bitmaps);
 
         // 7. Interval Submenu
         let int_sub = CreatePopupMenu();
         let int_values = [30u64, 60, 120, 300];
-        let mut active_int_id = 1201;
         for (i, &sec) in int_values.iter().enumerate() {
             let is_cur = config.refresh_interval_sec == sec;
-            let flag = MF_STRING | if is_cur { MF_CHECKED } else { MF_UNCHECKED };
-            let t = to_wide(&format!("{} 秒", sec));
-            AppendMenuW(int_sub, flag, 1200 + i, t.as_ptr());
-            if is_cur {
-                active_int_id = 1200 + i as u32;
-            }
+            let t = to_wide(&format!(
+                "{}{} 秒",
+                if is_cur { "✓  " } else { "    " },
+                sec
+            ));
+            AppendMenuW(int_sub, MF_STRING, 1200 + i, t.as_ptr());
         }
-        CheckMenuItem(int_sub, active_int_id, MF_CHECKED);
 
-        let t_int = to_wide("更新頻率 (Interval)");
+        let t_int = to_wide("    更新頻率 (Interval)");
         AppendMenuW(root, MF_POPUP, int_sub as usize, t_int.as_ptr());
         attach_icon(root, 7, true, ICON_TIMER, cx, cy, &mut bitmaps);
 
         // 8. Autostart
-        let flag_as = MF_STRING
-            | if is_autostart {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-        let t_as = to_wide("開機自動啟動 (Start on Boot)");
-        AppendMenuW(root, flag_as, 1007, t_as.as_ptr());
+        let t_as = to_wide(&format!(
+            "{}開機自動啟動 (Start on Boot)",
+            if is_autostart { "✓  " } else { "    " }
+        ));
+        AppendMenuW(root, MF_STRING, 1007, t_as.as_ptr());
         attach_icon(root, 1007, false, ICON_ROCKET, cx, cy, &mut bitmaps);
-        if is_autostart {
-            CheckMenuItem(root, 1007, MF_CHECKED);
-        }
 
         AppendMenuW(root, MF_SEPARATOR, 0, std::ptr::null());
 
         // 9. Open Logs
-        let t_log = to_wide("開啟記錄檔目錄 (Open Logs)");
+        let t_log = to_wide("    開啟記錄檔目錄 (Open Logs)");
         AppendMenuW(root, MF_STRING, 1009, t_log.as_ptr());
         attach_icon(root, 1009, false, ICON_FOLDER, cx, cy, &mut bitmaps);
 
         // 10. Reset Geometry
-        let t_reset = to_wide("重設預設尺寸與位置");
+        let t_reset = to_wide("    重設預設尺寸與位置");
         AppendMenuW(root, MF_STRING, 1008, t_reset.as_ptr());
         attach_icon(root, 1008, false, ICON_RESET, cx, cy, &mut bitmaps);
 
         // 11. Hide HUD
-        let t_hide = to_wide("隱藏 HUD (Alt+C 重新喚出)");
+        let t_hide = to_wide("    隱藏 HUD (Alt+C 重新喚出)");
         AppendMenuW(root, MF_STRING, 1011, t_hide.as_ptr());
         attach_icon(root, 1011, false, ICON_EYE, cx, cy, &mut bitmaps);
 
         AppendMenuW(root, MF_SEPARATOR, 0, std::ptr::null());
 
         // 12. Exit
-        let t_exit = to_wide("結束程式 (Exit)");
+        let t_exit = to_wide("    結束程式 (Exit)");
         AppendMenuW(root, MF_STRING, 1010, t_exit.as_ptr());
         attach_icon(root, 1010, false, ICON_EXIT, cx, cy, &mut bitmaps);
 
