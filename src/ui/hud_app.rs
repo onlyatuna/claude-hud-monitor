@@ -1300,10 +1300,8 @@ fn apply_win32_click_through(hwnd: isize, enable: bool) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 mod tests {
-    use super::*;
-
     #[test]
     fn native_titlebar_bits_are_removed() {
         const WS_CAPTION: i32 = 0x00C00000;
@@ -1312,7 +1310,7 @@ mod tests {
         const WS_MAXIMIZEBOX: i32 = 0x00010000;
 
         let style = 0x16CB0000;
-        let stripped = strip_native_titlebar_bits(style);
+        let stripped = super::strip_native_titlebar_bits(style);
 
         assert_eq!(stripped & (WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX), 0);
         assert_ne!(style, stripped);

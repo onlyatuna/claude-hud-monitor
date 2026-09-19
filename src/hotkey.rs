@@ -107,6 +107,8 @@ impl HotkeyManager {
         let toggle_flag = Arc::new(AtomicBool::new(false));
         let ct_flag = Arc::new(AtomicBool::new(false));
         let egui_ctx = Arc::new(Mutex::new(None));
+
+        #[cfg(target_os = "windows")]
         let (mods, vk) = parse_hotkey(hotkey_str);
 
         #[cfg(target_os = "windows")]
