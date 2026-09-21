@@ -1,0 +1,57 @@
+[package]
+name = "claude-hud-monitor"
+version = "0.2.0"
+edition = "2021"
+description = "AI Agent HUD Monitor (Claude / Antigravity / OpenAI Codex) — Rust port"
+authors = []
+
+[[bin]]
+name = "ClaudeHUD"
+path = "src/main.rs"
+
+[dependencies]
+# GUI
+eframe = { version = "0.29", features = ["default_fonts"] }
+egui = "0.29"
+
+# HTTP (synchronous TLS client; providers already run on worker threads)
+ureq = { version = "2.12", default-features = false, features = ["json", "tls"] }
+
+# JSON
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging
+log = "0.4"
+
+# Image loading for tray icon
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tray-icon = { version = "0.19", features = ["common-controls-v6"] }
+winreg = "0.52"
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winres = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tray-icon = "0.19"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# tray-icon requires libappindicator on Linux
+# tray-icon = "0.19"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+incremental = false
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+incremental = true
