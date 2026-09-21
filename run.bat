@@ -1,3 +1,3 @@
 @echo off
-start "" "%~dp0target\release\claude-hud-monitor.exe"
+start "" "%~dp0target\release\ClaudeHUD.exe"
 exit

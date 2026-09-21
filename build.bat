@@ -5,7 +5,7 @@ if %ERRORLEVEL% equ 0 (
     echo.
     echo ========================================================
     echo Build Successful!
-    echo Output: target\release\claude-hud-monitor.exe
+    echo Output: target\release\ClaudeHUD.exe
     echo ========================================================
 ) else (
     echo Build failed!

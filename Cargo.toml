@@ -6,7 +6,7 @@ description = "AI Agent HUD Monitor (Claude / Antigravity / OpenAI Codex) — Ru
 authors = []
 
 [[bin]]
-name = "claude-hud-monitor"
+name = "ClaudeHUD"
 path = "src/main.rs"
 
 [dependencies]

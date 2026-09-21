@@ -70,7 +70,7 @@ fn main() {
                             [..pe.sz_exe_file.iter().position(|&c| c == 0).unwrap_or(260)],
                     )
                     .to_lowercase();
-                    if exe.contains("claude-hud") {
+                    if exe.contains("claude-hud") || exe.contains("claudehud") {
                         println!("Found process: {} (PID={})", exe, pe.th32_process_id);
                         target_pids.push(pe.th32_process_id);
                     }
