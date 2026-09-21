@@ -129,7 +129,8 @@ pub fn show_native_context_menu(
             enable_win32_dark_mode(target_hwnd);
         }
 
-        const ICON_CLAUDE: &[u8] = include_bytes!("../../assets/app_icon.png");
+        const ICON_CLAUDE: &[u8] = include_bytes!("../../assets/menu/menu_claude.png");
+        const ICON_TARGET: &[u8] = include_bytes!("../../assets/menu/menu_target.png");
         const ICON_REFRESH: &[u8] = include_bytes!("../../assets/menu/menu_refresh.png");
         const ICON_LAYOUT: &[u8] = include_bytes!("../../assets/menu/menu_layout.png");
         const ICON_LAPTOP: &[u8] = include_bytes!("../../assets/menu/menu_laptop.png");
@@ -149,7 +150,7 @@ pub fn show_native_context_menu(
         const SM_CYSMICON: i32 = 50;
         let cx = GetSystemMetrics(SM_CXSMICON).max(16) as u32;
         let cy = GetSystemMetrics(SM_CYSMICON).max(16) as u32;
-        let mut bitmaps: Vec<isize> = Vec::with_capacity(16);
+        let mut bitmaps: Vec<isize> = Vec::with_capacity(32);
 
         let root = CreatePopupMenu();
 
@@ -167,17 +168,17 @@ pub fn show_native_context_menu(
 
         let (active_prof, _) =
             crate::providers::claude::resolve_active_profile(&config.claude_profile);
-        let auto_prefix = if is_auto { "✓ " } else { "    " };
         let auto_title = if is_auto && active_prof.id != "default" {
             format!(
-                "{}🎯 智慧自動追蹤 (目前: {})",
-                auto_prefix, active_prof.short_name
+                "智慧自動追蹤 (目前: {})",
+                active_prof.short_name
             )
         } else {
-            format!("{}🎯 智慧自動追蹤 (最近活躍)", auto_prefix)
+            "智慧自動追蹤 (最近活躍)".to_string()
         };
         let t_auto = to_wide(&auto_title);
         AppendMenuW(claude_sub, MF_STRING, 1300, t_auto.as_ptr());
+        attach_icon(claude_sub, 1300, false, ICON_TARGET, is_auto, cx, cy, &mut bitmaps);
 
         AppendMenuW(claude_sub, MF_SEPARATOR, 0, std::ptr::null());
 

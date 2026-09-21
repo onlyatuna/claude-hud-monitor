@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QFrame
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt
 
@@ -27,14 +27,15 @@ class ProviderCardWidget(QWidget):
 
         # 1. Header: Status dot + Provider Title + Badge
         header = QHBoxLayout()
-        header.setSpacing(5)
+        header.setSpacing(4)
 
         self.dot = QLabel("●")
         self.dot.setStyleSheet(f"color: {self.theme['color']}; font-size: 10px;")
         header.addWidget(self.dot)
 
         self.title = QLabel(self.theme["name"])
-        self.title.setStyleSheet(f"color: {self.theme['color']}; font-size: 10px; font-weight: 800; letter-spacing: 0.8px;")
+        self.title.setStyleSheet(f"color: {self.theme['color']}; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;")
+        self.title.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
         header.addWidget(self.title)
 
         header.addStretch()
@@ -106,6 +107,10 @@ class ProviderCardWidget(QWidget):
 
     def update_metrics(self, data: UsageMetrics):
         self.current_metrics = data
+        if data.provider_name:
+            self.title.setText(data.provider_name)
+        else:
+            self.title.setText(self.theme["name"])
 
         self.setToolTip(data.error or "")
         if data.error and not data.stale:
@@ -155,18 +160,20 @@ class ProviderCardWidget(QWidget):
         self.m2_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c2}; }}")
         self.m2_bar.setValue(int(min(100, max(0, data.metric2_val or 0))))
 
-        # Badges
-        if data.badge1_text and data.badge2_text:
-            self.badge.setText(data.badge1_text)
+        # Badges (compact formatting to prevent squeezing title)
+        b1 = (data.badge1_text or "").replace(" 剩餘:", ":").replace("剩餘:", ":")
+        b2 = (data.badge2_text or "").replace(" 剩餘:", ":").replace("剩餘:", ":")
+        if b1 and b2:
+            self.badge.setText(b1)
             self.badge.setVisible(True)
-            self.badge2.setText(data.badge2_text)
+            self.badge2.setText(b2)
             self.badge2.setVisible(True)
-        elif data.badge1_text:
-            self.badge.setText(data.badge1_text)
+        elif b1:
+            self.badge.setText(b1)
             self.badge.setVisible(True)
             self.badge2.setVisible(False)
-        elif data.badge2_text:
-            self.badge.setText(data.badge2_text)
+        elif b2:
+            self.badge.setText(b2)
             self.badge.setVisible(True)
             self.badge2.setVisible(False)
         else:

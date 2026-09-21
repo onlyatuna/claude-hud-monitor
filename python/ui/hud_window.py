@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication
 )
-from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 
 from core.providers import PROVIDERS, UsageMetrics
 from core.config_manager import ConfigManager
@@ -65,8 +65,12 @@ class HUDWindow(QWidget):
         self.current_edge = None
 
         self._provider_errors = {}
+        self.providers = PROVIDERS if providers is None else providers
+        for p in self.providers.values():
+            if hasattr(p, "config"):
+                p.config = self.config
         self.refresh_controller = RefreshController(
-            PROVIDERS if providers is None else providers, config.get("refresh_interval_sec", 60), self)
+            self.providers, config.get("refresh_interval_sec", 60), self)
         self.refresh_controller.updated.connect(self._on_data_fetched)
         self.refresh_controller.busy_changed.connect(self._on_busy_changed)
 
@@ -521,6 +525,31 @@ class HUDWindow(QWidget):
 
         menu.addSeparator()
 
+        # Claude Account Submenu
+        claude_menu = menu.addMenu("✳️ Claude 帳號 (Claude Account)")
+
+        from core.providers.claude_provider import discover_profiles, resolve_active_profile
+        cur_profile = self.config.get("claude_profile", "auto")
+        is_auto = (cur_profile == "auto")
+        active_prof, _ = resolve_active_profile(cur_profile)
+
+        auto_title = f"智慧自動追蹤 (目前: {active_prof.short_name})" if (is_auto and active_prof.id != "default") else "智慧自動追蹤 (最近活躍)"
+        auto_act = claude_menu.addAction(f"🎯 {auto_title}")
+        auto_act.setCheckable(True)
+        auto_act.setChecked(is_auto)
+        auto_act.triggered.connect(lambda: self._set_claude_profile("auto"))
+
+        claude_menu.addSeparator()
+
+        for prof in discover_profiles()[:40]:
+            is_selected = (not is_auto and (cur_profile == prof.id or (cur_profile == ".claude" and prof.id == "default")))
+            p_act = claude_menu.addAction(prof.display_name)
+            p_act.setCheckable(True)
+            p_act.setChecked(is_selected)
+            p_act.triggered.connect(lambda checked, pid=prof.id: self._set_claude_profile(pid))
+
+        menu.addSeparator()
+
         # Layout Switch Submenu
         layout_menu = menu.addMenu("📐 顯示佈局 (Layout)")
         cur_layout = self.config.get("layout_mode", "horizontal")
@@ -614,6 +643,14 @@ class HUDWindow(QWidget):
     def _set_interval(self, seconds: int):
         self.config.set("refresh_interval_sec", seconds)
         self.refresh_controller.set_interval(seconds)
+
+    def _set_claude_profile(self, profile_id: str):
+        self.config.set("claude_profile", profile_id)
+        if hasattr(self, "providers") and isinstance(self.providers, dict):
+            cp = self.providers.get("claude")
+            if cp and hasattr(cp, "profile_preference"):
+                cp.profile_preference = profile_id
+        self.trigger_async_refresh()
 
     def _toggle_autostart(self):
         currently_enabled = is_autostart_enabled()
