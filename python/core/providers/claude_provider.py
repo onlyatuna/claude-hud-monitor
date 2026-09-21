@@ -1,11 +1,13 @@
 import json
 import os
+import subprocess
+import sys
 import urllib.request
 import urllib.error
 from datetime import datetime
 from typing import Optional
 
-from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
+from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay, ssl_context
 from core.logger import logger
 
 class ClaudeProvider(BaseProvider):
@@ -13,6 +15,7 @@ class ClaudeProvider(BaseProvider):
     display_name = "Claude"
 
     CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
+    KEYCHAIN_SERVICE = "Claude Code-credentials"
     USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
     USER_AGENT = "claude-code/0.2.29"
     BETA_HEADER = "oauth-2025-04-20"
@@ -21,14 +24,39 @@ class ClaudeProvider(BaseProvider):
         self.timeout = timeout
 
     def get_access_token(self) -> Optional[str]:
+        token = self._token_from_file()
+        if not token and sys.platform == "darwin":
+            # Claude Code on macOS stores credentials in the login Keychain, not on disk.
+            token = self._token_from_keychain()
+        return token
+
+    def _token_from_file(self) -> Optional[str]:
         if not os.path.exists(self.CREDENTIALS_PATH):
             return None
         try:
             with open(self.CREDENTIALS_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data.get("claudeAiOauth", {}).get("accessToken")
+                return self._extract_token(json.load(f))
         except Exception:
             return None
+
+    def _token_from_keychain(self) -> Optional[str]:
+        try:
+            out = subprocess.run(
+                ["/usr/bin/security", "find-generic-password", "-s", self.KEYCHAIN_SERVICE, "-w"],
+                capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL
+            )
+            if out.returncode != 0:
+                return None
+            return self._extract_token(json.loads(out.stdout))
+        except Exception:
+            return None
+
+    @staticmethod
+    def _extract_token(data) -> Optional[str]:
+        if not isinstance(data, dict):
+            return None
+        oauth = data.get("claudeAiOauth")
+        return oauth.get("accessToken") if isinstance(oauth, dict) else None
 
     def fetch_usage(self) -> UsageMetrics:
         token = self.get_access_token()
@@ -50,7 +78,7 @@ class ClaudeProvider(BaseProvider):
 
         req = urllib.request.Request(self.USAGE_URL, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=ssl_context()) as resp:
                 if resp.status != 200:
                     return UsageMetrics(
                         provider_name="Claude Code",

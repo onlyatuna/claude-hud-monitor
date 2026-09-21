@@ -5,7 +5,7 @@ import urllib.error
 from datetime import datetime, timezone
 from typing import Optional
 
-from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay
+from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay, ssl_context
 from core.logger import logger
 
 def _parse_timestamp(ts) -> Optional[datetime]:
@@ -73,7 +73,7 @@ class CodexProvider(BaseProvider):
 
         req = urllib.request.Request(self.USAGE_URL, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout, context=ssl_context()) as resp:
                 raw_json = json.loads(resp.read().decode("utf-8"))
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
