@@ -1,72 +1,145 @@
-# AI HUD Monitor
+# ClaudeHUD Monitor
 
-Python / PySide6 桌面 AI 額度 HUD，同時顯示 Claude Code、Antigravity CLI（AGY）與 Codex。
-支援橫直排版、置頂、透明度、系統匣、倒數與滑鼠穿透。
+桌面 AI 額度監控 HUD，支援 Claude Code、Antigravity CLI (AGY) 與 OpenAI Codex。
+支援水平橫排／垂直直排切換、視窗置頂、透明度設定、系統匣常駐、額度重置倒數與滑鼠穿透。
 
-## 開發與本地測試
+本專案採 Monorepo 架構維護，包含 Rust 實作 (`rust/`) 與 Python 實作 (`python/`)。兩者產生的執行檔名稱統一為 `ClaudeHUD`。
 
-驗證基準為 Python 3.12，建議使用獨立虛擬環境。
+---
+
+## 實作規格與架構
+
+| 項目 | Rust 實作 (`rust/`) | Python 實作 (`python/`) |
+| :--- | :--- | :--- |
+| **執行檔名** | `ClaudeHUD.exe` (Windows) / `ClaudeHUD` (macOS, Linux) | `ClaudeHUD.exe` (Windows) / `ClaudeHUD.app` (macOS) |
+| **語言與版本** | Rust (2021 edition) | Python 3.12 |
+| **GUI 框架** | egui 0.29 / eframe 0.29 | PySide6 (Qt 6.7+) |
+| **HTTP 客戶端** | ureq 2.12 (TLS) | urllib.request (標準函式庫) |
+| **行程與記憶體機制** | 原生編譯二進制，無額外 Runtime 依賴 | 內建 gc.collect() 與 Win32 EmptyWorkingSet 工作集釋放機制 |
+| **打包方式** | `cargo build --release` (LTO, strip, opt-level="z") | PyInstaller 6.x (自訂 spec 排除未使用的 Qt 模組與語系) |
+| **支援平台與架構** | Windows (x86_64), macOS (Universal: arm64 + x86_64), Linux (x86_64) | Windows (x86_64), macOS (arm64) |
+
+---
+
+## 專案結構
+
+```text
+claude-hud-monitor/
+├── .github/workflows/
+│   ├── ci.yml                 # CI 工作流程 (依 paths 分別執行 Python / Rust 測試)
+│   └── release.yml            # 發布工作流程 (跨平台矩陣編譯雙版本產物)
+├── python/                    # Python 實作原始碼與測試
+│   ├── core/                  # Providers、設定管理、更新排程
+│   ├── ui/                    # PySide6 介面與卡片元件
+│   ├── system/                # 全域快捷鍵與系統 API 呼叫
+│   ├── tests/                 # 單元測試套件
+│   ├── ClaudeHUD.spec         # PyInstaller 打包規格檔
+│   ├── main.py                # Python 進入點
+│   └── requirements.txt
+├── rust/                      # Rust 實作原始碼與測試
+│   ├── src/                   # 狀態機、HTTP 客戶端、平台系統匣與視窗
+│   ├── assets/                # 專案圖示與資源
+│   ├── Cargo.toml             # 二進制名稱定義為 ClaudeHUD
+│   └── build.rs               # Windows 資源表與 DPI 設定
+├── docs/                      # 規格與相容性文件
+├── LICENSE                    # AGPL-3.0
+└── README.md
+```
+
+---
+
+## 本地建置與測試
+
+### Rust 實作 (`rust/`)
+
+需要 Rust 1.80+ 工具鏈。
 
 ```powershell
+cd rust
+
+# 本地執行
+cargo run
+
+# 執行測試套件
+cargo test
+
+# 編譯 Release 二進制 (產物路徑: rust/target/release/ClaudeHUD.exe)
+cargo build --release
+```
+
+Windows 環境可使用 `rust/build.bat` 執行打包，使用 `rust/run.bat` 或 `rust/start_silent.vbs` 啟動。
+
+---
+
+### Python 實作 (`python/`)
+
+需要 Python 3.12 環境。
+
+```powershell
+cd python
+
 python -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -r requirements-build.txt
+.venv\Scripts\Activate.ps1    # macOS: source .venv/bin/activate
+
+pip install -r requirements-build.txt
+
+# 執行回歸測試
 python -B -m unittest discover -s tests -v
+
+# 啟動應用程式
 python main.py
 ```
 
-macOS 使用 `source .venv/bin/activate`。Windows 使用 `build_exe.bat`，macOS 使用 `bash build_mac.sh` 打包。
-GitHub Windows 產物為 `ClaudeHUD-Windows.exe`；本地腳本產物為 `dist/ClaudeHUD.exe`。
-本地修改尚未發布，詳見 [驗證紀錄](docs/LOCAL_VALIDATION.md)。
+Windows 環境可使用 `python/build_exe.bat` 產出 `dist/ClaudeHUD.exe`；macOS 環境可使用 `python/build_mac.sh` 產出 `dist/ClaudeHUD.app`。
+
+---
 
 ## 額度資料來源
 
-| 服務 | 查詢方式 | 必要條件 |
-| --- | --- | --- |
-| Claude | 本機 OAuth → `/api/oauth/usage` | `~/.claude/.credentials.json` 含有效 access token |
-| Codex | 本機 OAuth → `/backend-api/wham/usage` | `~/.codex/auth.json` 含有效 access token |
-| AGY | `agy --output-format json --print /quota` | 已安裝且登入相容的 AGY CLI |
+| 服務 | 查詢途徑 | 認證與必要條件 |
+| :--- | :--- | :--- |
+| **Claude** | 本機 OAuth → `/api/oauth/usage` | `~/.claude/.credentials.json` 包含有效 access token (支援多帳號切換) |
+| **Codex** | 本機 OAuth → `/backend-api/wham/usage` | `~/.codex/auth.json` 包含有效 access token |
+| **AGY** | 本地 API / IPC 查詢 | 已安裝且登入的 Antigravity CLI |
 
-Adapter 依賴服務回應／CLI 格式，不保證所有登入儲存方式或未來版本相容。
-不需手動输入 API Key；HUD 不更新或寫入認證檔。只存於系統鑰匙圈等登入方式，目前可能無法使用。
+* 數值顯示為已使用額度百分比。
+* AGY 的 `C/G 剩餘` 顯示第三方群組可用餘額。
+* 預設更新週期為 60 秒。若請求失敗，採指數退避重試，若標頭含 `Retry-After` 則優先採用。
 
-- 百分比為**已使用額度**；AGY 的 `C/G 剩餘` 徽章代表第三方群組剩餘額度。
-- `--` 表示沒有有效資料，不能解讀為 0%。Codex 窗口依回應長度顯示，未知時為 PRIMARY／SECONDARY。
-- `STALE` 表示查詢失敗後保留的最後成功資料；副文字顯示資料時間，滑鼠停留卡片可查看錯誤。
-- Codex 顯示回應中的方案，不推測目前模型。AGY 同窗口多個 bucket 採已用比例最高者。
-- 預設每 60 秒更新；失敗採退避，最高 15 分鐘，HTTP Retry-After 較長時優先遵守。手動刷新可立即重試。
+---
 
-格式與排查：[Provider 相容性](docs/PROVIDERS.md)。
+## 快捷鍵與操作
 
-## 操作與平台狀態
+| 操作 | 說明 |
+| :--- | :--- |
+| **Alt + C** (macOS: Option + C) | 顯示／隱藏視窗 |
+| **Alt + Shift + C** | 開關滑鼠穿透模式（亦可從系統匣圖示切換） |
+| **標題列 ⇄** | 切換水平橫排與垂直直排 |
+| **雙擊空白處** | 立即手動刷新各 Provider 額度 |
+| **拖曳空白處 / 邊框** | 移動視窗 / 調整視窗尺寸 |
+| **右鍵選單 / 系統匣圖示** | 透明度、置頂、更新頻率、開機啟動與帳號切換 |
 
-| 操作 | 功能 |
-| --- | --- |
-| Alt+C（macOS 為 Option+C） | 顯示／隱藏 |
-| Alt+Shift+C | 開關穿透，亦可由系統匣解除 |
-| 標題列 ⇄ | 橫直排版 |
-| 雙擊空白處 | 立即刷新 |
-| 拖曳邊框／空白處 | 縮放／移動 |
-| 右鍵與系統匣 | 透明度、置頂、更新頻率、開機啟動等 |
+---
 
-Windows 為本輪驗證平台。macOS 快捷鍵、穿透與 LaunchAgent 已有實作及模擬測試，**仍需實機驗證**。
-macOS 快捷鍵使用 pynput，需要系統輔助使用／輸入監控權限；未授權時使用系統匣。
-CI macOS 目標為 Apple Silicon arm64，不宣稱 Universal 或 Intel 支援。Linux 尚不在支援範圍。
+## CI/CD 流程與產物清單
 
-## 設定與診斷
+### 測試流程 (`.github/workflows/ci.yml`)
+在發起 Pull Request 或推送到 `develop`、`main` 分支時觸發：
+* 變更 `python/**` 時：執行 Python 測試矩陣 (Windows, macOS)。
+* 變更 `rust/**` 時：執行 Rust 測試矩陣 (Windows, macOS, Linux)。
 
-原始碼模式保留專案內 `config.json`；打包後使用：
+### 發布流程 (`.github/workflows/release.yml`)
+推送到 `v*` 標籤時觸發，於 GitHub Release 發布以下檔案：
+* `ClaudeHUD-Rust-Windows-x64.exe` (Rust Windows x86_64 原生執行檔)
+* `ClaudeHUD-Rust-macOS-Universal.zip` (Rust macOS Universal binary: arm64 + x86_64)
+* `ClaudeHUD-Rust-Linux-x64` (Rust Linux x86_64 原生執行檔)
+* `ClaudeHUD-Python-Windows-x64.exe` (Python Windows x86_64 打包執行檔)
+* `ClaudeHUD-Python-macOS-arm64.zip` (Python macOS arm64 打包應用程式)
+* `SHA256SUMS.txt` (所有發布產物之 SHA256 校驗值清單)
 
-- Windows：`%APPDATA%/ClaudeHUDMonitor/config.json`
-- macOS：`~/Library/Application Support/ClaudeHUDMonitor/config.json`
+---
 
-`diagnostics.log` 在設定檔旁，輪替上限為 256 KiB × 3 份。只記錄耗時、退出碼等操作資訊，不記錄 token 或回應內容。
-舊單檔版暫存目錄中的設定不保證能找回。詳見 [架構規格](PROJECT_SPEC.md)。
+## 開發與貢獻規範
 
-## 貢獻與發布
-
-`main` 與 `develop` 維持既有保護分支流程。修正從 `develop` 建立 topic branch，PR 以 `develop` 為目標。
-本地測試不需要推送、建立 Tag 或發布。CI 保留既有建置工作，增加 PR 觸發與測試；`v*` Tag 發布流程保留。
-參閱 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md) 與 [行為準則](CODE_OF_CONDUCT.md)。
-
-授權：[AGPL-3.0](LICENSE)。
+* 分支策略：`develop` 為日常開發與 PR 目標分支，`main` 為穩定版本分支。
+* 授權條款：[AGPL-3.0](LICENSE)。

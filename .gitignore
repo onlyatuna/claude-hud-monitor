@@ -9,9 +9,13 @@ __pycache__/
 # Distribution / packaging
 build/
 dist/
+target/
+rust/target/
 *.egg-info/
 .eggs/
 *.zip
+*.pdb
+*.exe
 
 # PyInstaller Note:
 # ClaudeHUD.spec is intentionally tracked because it contains custom
