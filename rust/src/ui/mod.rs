@@ -5,6 +5,7 @@ pub mod native_menu;
 pub mod provider_card;
 pub mod styles;
 
+pub use hud_app::validate_saved_position;
 pub use hud_app::HudApp;
 #[cfg(target_os = "windows")]
 pub use hud_app::WAKE_MSG;
