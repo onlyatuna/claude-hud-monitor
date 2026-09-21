@@ -9,11 +9,10 @@ from core.logger import logger
 DEFAULT_CONFIG = {
     "window_x": None,
     "window_y": None,
-    "layout_mode": "vertical",  # "vertical" or "horizontal"
-    "vertical_width": 280,
-    "vertical_height": 410,
-    "horizontal_width": 690,
-    "horizontal_height": 145,
+    "table_width": 450,
+    "table_height": 350,
+    "color_scheme": "scale",  # "scale" or "duo"
+    "appearance": "auto",     # "auto", "light" or "dark"
     "always_on_top": True,
     "opacity": 0.88,
     "click_through": False,

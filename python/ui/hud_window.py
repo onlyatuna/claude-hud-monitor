@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from PySide6.QtCore import Qt, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QApplication
 )
 from PySide6.QtGui import QCursor, QGuiApplication
 
@@ -13,15 +13,16 @@ from core.config_manager import ConfigManager
 from core.refresh_controller import RefreshController
 from core.autostart import is_autostart_enabled, set_autostart
 from core.logger import logger, open_log_dir
-from ui.styles import get_hud_stylesheet
-from ui.provider_card import ProviderCardWidget
+from ui.styles import APPEARANCES, SCHEMES, THEMES, get_hud_stylesheet
+from ui.usage_table import UsageTable
+from ui import vibrancy
 from system.memory import trim_memory
 
-MIN_HORIZ_W, MIN_HORIZ_H = 540, 125
-DEF_HORIZ_W, DEF_HORIZ_H = 690, 145
+MIN_W, MIN_H = 400, 300
+DEF_W, DEF_H = 450, 350
 
-MIN_VERT_W, MIN_VERT_H = 250, 320
-DEF_VERT_W, DEF_VERT_H = 280, 410
+SCHEME_LABELS = {"scale": "色階（綠／黃／橘／紅）", "duo": "雙色（內圈／外環）"}
+APPEARANCE_LABELS = {"auto": "跟隨系統", "light": "淺色", "dark": "深色"}
 
 if sys.platform == "win32":
     import ctypes
@@ -65,22 +66,23 @@ class HUDWindow(QWidget):
         self.current_edge = None
 
         self._provider_errors = {}
+        self._latest_metrics = {}
+        self.table = None
+        self._vibrant = False
         self.refresh_controller = RefreshController(
             PROVIDERS if providers is None else providers, config.get("refresh_interval_sec", 60), self)
         self.refresh_controller.updated.connect(self._on_data_fetched)
         self.refresh_controller.busy_changed.connect(self._on_busy_changed)
 
-        # Provider Cards
-        self.cards = {
-            "claude": ProviderCardWidget("claude"),
-            "agy": ProviderCardWidget("agy"),
-            "codex": ProviderCardWidget("codex")
-        }
-
         self._init_window_flags()
         self._init_ui_skeleton()
-        self._apply_layout_mode(self.config.get("layout_mode", "horizontal"), initial=True)
+        self._apply_theme()
+        self._restore_initial_geometry()
         self._setup_timers()
+
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "colorSchemeChanged"):
+            hints.colorSchemeChanged.connect(self._on_system_color_scheme_changed)
 
         if self.config.get("click_through", False):
             # Delay startup click-through to verify hotkeys and prevent lockout
@@ -111,8 +113,6 @@ class HUDWindow(QWidget):
         self.setWindowOpacity(opacity)
 
     def _init_ui_skeleton(self):
-        self.setStyleSheet(get_hud_stylesheet())
-
         self.root_layout = QVBoxLayout(self)
         self.root_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -123,147 +123,94 @@ class HUDWindow(QWidget):
 
         self.inner_layout = QVBoxLayout(self.container)
         self.inner_layout.setContentsMargins(12, 8, 12, 10)
-        self.inner_layout.setSpacing(6)
+        self.inner_layout.setSpacing(4)
 
-        # Header bar widgets
         self.status_dot = QLabel("●")
-        self.status_dot.setStyleSheet("color: #10b981; font-size: 11px;")
+        self.status_dot.setStyleSheet("color: #30d158; font-size: 9px;")
 
-        self.title_label = QLabel("AI AGENT HUD (3-IN-1)")
+        self.title_label = QLabel("AI Agent HUD")
         self.title_label.setObjectName("HeaderTitle")
 
         self.ghost_label = QLabel("👻")
         self.ghost_label.setToolTip("滑鼠穿透中 (Alt+Shift+C 解除)")
         self.ghost_label.setVisible(False)
 
-        self.layout_toggle_btn = QPushButton("⇄")
-        self.layout_toggle_btn.setObjectName("LayoutToggleBtn")
-        self.layout_toggle_btn.setToolTip("切換 橫向並排 / 直式堆疊 佈局")
-        self.layout_toggle_btn.clicked.connect(self.toggle_layout_mode)
-
         self.time_label = QLabel("--:--:--")
         self.time_label.setObjectName("HeaderStatus")
 
-    def _clear_layout(self, layout):
-        keep_widgets = {
-            getattr(self, "status_dot", None),
-            getattr(self, "title_label", None),
-            getattr(self, "ghost_label", None),
-            getattr(self, "layout_toggle_btn", None),
-            getattr(self, "time_label", None),
-            *getattr(self, "cards", {}).values()
-        }
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.setParent(None)
-                if widget not in keep_widgets:
-                    widget.deleteLater()
-            sub_layout = item.layout()
-            if sub_layout:
-                self._clear_layout(sub_layout)
-                sub_layout.deleteLater()
-
-    def _apply_layout_mode(self, mode: str, initial=False):
-        if not initial:
-            self._persist_geometry()
-            self.config.set("layout_mode", mode)
-        self._restoring_geometry = True
-        self._clear_layout(self.inner_layout)
-
-        # Common Header
         header_layout = QHBoxLayout()
         header_layout.setSpacing(6)
         header_layout.addWidget(self.status_dot)
         header_layout.addWidget(self.title_label)
         header_layout.addWidget(self.ghost_label)
-        header_layout.addWidget(self.layout_toggle_btn)
         header_layout.addStretch()
         header_layout.addWidget(self.time_label)
         self.inner_layout.addLayout(header_layout)
 
-        if mode == "horizontal":
-            # Horizontal: 3 side-by-side columns
-            self.setMinimumSize(MIN_HORIZ_W, MIN_HORIZ_H)
-            w = self.config.get("horizontal_width", DEF_HORIZ_W)
-            h = self.config.get("horizontal_height", DEF_HORIZ_H)
-            if w < MIN_HORIZ_W:
-                w = DEF_HORIZ_W
-            if h < MIN_HORIZ_H:
-                h = DEF_HORIZ_H
-            self.resize(w, h)
+    # ================= Theme (appearance × colour scheme) =================
+    def resolved_appearance(self) -> str:
+        appearance = self.config.get("appearance", "auto")
+        if appearance in ("light", "dark"):
+            return appearance
+        hints = QGuiApplication.styleHints()
+        if hasattr(hints, "colorScheme") and hints.colorScheme() == Qt.ColorScheme.Dark:
+            return "dark"
+        return "light"
 
-            body_layout = QHBoxLayout()
-            body_layout.setSpacing(8)
+    def color_scheme(self) -> str:
+        scheme = self.config.get("color_scheme", "scale")
+        return scheme if scheme in SCHEMES else "scale"
 
-            provider_ids = ["claude", "agy", "codex"]
-            for i, pid in enumerate(provider_ids):
-                body_layout.addWidget(self.cards[pid], 1)
-                if i < len(provider_ids) - 1:
-                    divider = QFrame()
-                    divider.setObjectName("Divider")
-                    divider.setFrameShape(QFrame.Shape.VLine)
-                    body_layout.addWidget(divider)
+    def _theme(self) -> dict:
+        return THEMES[self.resolved_appearance()]
 
-            self.inner_layout.addLayout(body_layout)
+    def _refresh_backdrop(self):
+        """Native blur where available, and the panel opacity that matches it."""
+        theme = self._theme()
+        self._vibrant = self.isVisible() and vibrancy.apply(
+            self, dark=self.resolved_appearance() == "dark", corner_radius=theme["radius"])
+        self.setStyleSheet(get_hud_stylesheet(theme, self._vibrant))
 
-        else:
-            # Vertical: 3 stacked rows
-            self.setMinimumSize(MIN_VERT_W, MIN_VERT_H)
-            w = self.config.get("vertical_width", DEF_VERT_W)
-            h = self.config.get("vertical_height", DEF_VERT_H)
-            if w < MIN_VERT_W:
-                w = DEF_VERT_W
-            if h < MIN_VERT_H:
-                h = DEF_VERT_H
-            self.resize(w, h)
+    def _apply_theme(self):
+        self._refresh_backdrop()
+        # The table bakes colours into painted glyphs, so rebuild it and replay the latest data.
+        if self.table is not None:
+            self.inner_layout.removeWidget(self.table)
+            self.table.deleteLater()
+        self.table = UsageTable(self._theme(), self.color_scheme(), parent=self.container)
+        self.inner_layout.addWidget(self.table, 1)
+        for metrics in self._latest_metrics.values():
+            self.table.update_metrics(metrics)
 
-            provider_ids = ["claude", "agy", "codex"]
-            for i, pid in enumerate(provider_ids):
-                self.inner_layout.addWidget(self.cards[pid])
-                if i < len(provider_ids) - 1:
-                    h_div = QFrame()
-                    h_div.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px; min-height: 1px;")
-                    h_div.setFrameShape(QFrame.Shape.HLine)
-                    self.inner_layout.addWidget(h_div)
+    def set_color_scheme(self, scheme: str):
+        if scheme in SCHEMES and scheme != self.color_scheme():
+            self.config.set("color_scheme", scheme)
+            self._apply_theme()
 
-        if initial:
-            x = self.config.get("window_x")
-            y = self.config.get("window_y")
-            self._restore_or_default_position(x, y, w, h)
-        else:
-            self._ensure_within_screen(w, h)
+    def set_appearance(self, appearance: str):
+        if appearance in APPEARANCES and appearance != self.config.get("appearance", "auto"):
+            self.config.set("appearance", appearance)
+            self._apply_theme()
 
+    def _on_system_color_scheme_changed(self, *_):
+        if self.config.get("appearance", "auto") == "auto":
+            self._apply_theme()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Native blur needs a native window; flag changes recreate it, so (re)apply on every show.
+        QTimer.singleShot(0, self._refresh_backdrop)
+
+    def _restore_initial_geometry(self):
+        self.setMinimumSize(MIN_W, MIN_H)
+        w = self.config.get("table_width", DEF_W)
+        h = self.config.get("table_height", DEF_H)
+        w = w if isinstance(w, int) and w >= MIN_W else DEF_W
+        h = h if isinstance(h, int) and h >= MIN_H else DEF_H
+        self.resize(w, h)
+        self._restore_or_default_position(self.config.get("window_x"), self.config.get("window_y"), w, h)
         self._restoring_geometry = False
         self._save_geometry()
-
-    def _ensure_within_screen(self, w: int, h: int):
-        current_center = self.geometry().center()
-        target_screen = None
-        for screen in QGuiApplication.screens():
-            if screen.availableGeometry().contains(current_center):
-                target_screen = screen
-                break
-        if not target_screen:
-            target_screen = self.screen() or QGuiApplication.primaryScreen()
-
-        if target_screen:
-            avail = target_screen.availableGeometry()
-            cur_x = self.x()
-            cur_y = self.y()
-
-            if cur_x + w > avail.right():
-                cur_x = max(avail.left(), avail.right() - w)
-            if cur_x < avail.left():
-                cur_x = avail.left()
-
-            if cur_y + h > avail.bottom():
-                cur_y = max(avail.top(), avail.bottom() - h)
-            if cur_y < avail.top():
-                cur_y = avail.top()
-
-            self.move(cur_x, cur_y)
 
     def _restore_or_default_position(self, x, y, w, h):
         is_visible = False
@@ -302,11 +249,6 @@ class HUDWindow(QWidget):
             return
         self.set_click_through(True, notify=False)
 
-    def toggle_layout_mode(self):
-        cur = self.config.get("layout_mode", "horizontal")
-        new_mode = "vertical" if cur == "horizontal" else "horizontal"
-        self._apply_layout_mode(new_mode)
-
     def _setup_timers(self):
         self.countdown_timer = QTimer(self)
         self.countdown_timer.timeout.connect(self._update_all_countdowns)
@@ -316,14 +258,14 @@ class HUDWindow(QWidget):
         self.refresh_controller.refresh()
 
     def _on_data_fetched(self, metrics: UsageMetrics):
-        if metrics.provider_id in self.cards:
-            self.cards[metrics.provider_id].update_metrics(metrics)
+        self._latest_metrics[metrics.provider_id] = metrics
+        self.table.update_metrics(metrics)
         self._provider_errors[metrics.provider_id] = bool(metrics.error)
         self.time_label.setText(datetime.now().strftime("%H:%M:%S"))
 
     def _on_busy_changed(self, busy):
-        color = "#38bdf8" if busy else ("#f59e0b" if any(self._provider_errors.values()) else "#10b981")
-        self.status_dot.setStyleSheet(f"color: {color}; font-size: 11px;")
+        color = "#64d2ff" if busy else ("#ff9f0a" if any(self._provider_errors.values()) else "#30d158")
+        self.status_dot.setStyleSheet(f"color: {color}; font-size: 9px;")
         if not busy:
             # Reclaim transient JSON/HTTP buffers after batch refresh cycle completes
             QTimer.singleShot(1000, trim_memory)
@@ -337,8 +279,7 @@ class HUDWindow(QWidget):
                 self.trigger_async_refresh()
         self._last_countdown_ts = cur_ts
 
-        for card in self.cards.values():
-            card.update_countdown()
+        self.table.update_countdowns()
 
     # ================= Click-Through Mode =================
     def _apply_native_click_through(self, enable: bool):
@@ -499,18 +440,12 @@ class HUDWindow(QWidget):
             return
         self.geometry_timer.stop()
         pos, size = self.pos(), self.size()
-        mode = self.config.get("layout_mode", "horizontal")
-        updates = {
+        self.config.set_many({
             "window_x": pos.x(),
             "window_y": pos.y(),
-        }
-        if mode == "horizontal":
-            updates["horizontal_width"] = max(MIN_HORIZ_W, size.width())
-            updates["horizontal_height"] = max(MIN_HORIZ_H, size.height())
-        else:
-            updates["vertical_width"] = max(MIN_VERT_W, size.width())
-            updates["vertical_height"] = max(MIN_VERT_H, size.height())
-        self.config.set_many(updates)
+            "table_width": max(MIN_W, size.width()),
+            "table_height": max(MIN_H, size.height()),
+        })
 
     # ================= Context Menu =================
     def contextMenuEvent(self, event):
@@ -521,18 +456,7 @@ class HUDWindow(QWidget):
 
         menu.addSeparator()
 
-        # Layout Switch Submenu
-        layout_menu = menu.addMenu("📐 顯示佈局 (Layout)")
-        cur_layout = self.config.get("layout_mode", "horizontal")
-        horiz_act = layout_menu.addAction("💻 橫向三欄並排 (Horizontal Triple)")
-        horiz_act.setCheckable(True)
-        horiz_act.setChecked(cur_layout == "horizontal")
-        horiz_act.triggered.connect(lambda: self._apply_layout_mode("horizontal"))
-
-        vert_act = layout_menu.addAction("📱 直立三層堆疊 (Vertical Stack)")
-        vert_act.setCheckable(True)
-        vert_act.setChecked(cur_layout == "vertical")
-        vert_act.triggered.connect(lambda: self._apply_layout_mode("vertical"))
+        self.add_theme_menus(menu)
 
         # Click-through toggle
         ghost_act = menu.addAction("👻 滑鼠點擊穿透 (Alt+Shift+C)")
@@ -593,6 +517,28 @@ class HUDWindow(QWidget):
 
         menu.exec(event.globalPos())
 
+    def add_theme_menus(self, menu: QMenu):
+        """Colour scheme and appearance submenus (used by both the HUD and the tray menu)."""
+        def build(title, options, labels, current, apply):
+            sub = menu.addMenu(title)
+            for value in options:
+                act = sub.addAction(labels[value])
+                act.setCheckable(True)
+                act.setData(value)
+                act.triggered.connect(lambda checked, v=value: apply(v))
+
+            def sync():
+                for act in sub.actions():
+                    act.setChecked(act.data() == current())
+            sync()
+            # The tray menu is built once, so re-sync whenever the submenu opens
+            sub.aboutToShow.connect(sync)
+            return sub
+
+        build("🎨 配色 (Colors)", SCHEMES, SCHEME_LABELS, self.color_scheme, self.set_color_scheme)
+        build("🌓 外觀 (Appearance)", APPEARANCES, APPEARANCE_LABELS,
+              lambda: self.config.get("appearance", "auto"), self.set_appearance)
+
     def _toggle_always_on_top(self):
         new_val = not self.config.get("always_on_top", True)
         self.config.set("always_on_top", new_val)
@@ -626,11 +572,7 @@ class HUDWindow(QWidget):
             self.tray_icon.update_menu_state()
 
     def _reset_geometry(self):
-        mode = self.config.get("layout_mode", "horizontal")
-        if mode == "horizontal":
-            w, h = DEF_HORIZ_W, DEF_HORIZ_H
-        else:
-            w, h = DEF_VERT_W, DEF_VERT_H
+        w, h = DEF_W, DEF_H
         self.resize(w, h)
         primary_screen = QGuiApplication.primaryScreen()
         screen_geom = primary_screen.availableGeometry() if primary_screen else self.screen().availableGeometry()

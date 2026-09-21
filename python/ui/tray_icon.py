@@ -62,18 +62,8 @@ class HUDTrayIcon(QSystemTrayIcon):
 
         self.menu.addSeparator()
 
-        # Layout submenu
-        self.layout_menu = self.menu.addMenu("📐 顯示佈局 (Layout)")
-        cur_layout = self.hud_window.config.get("layout_mode", "horizontal")
-        self.horiz_act = self.layout_menu.addAction("💻 橫向三欄並排 (Horizontal Triple)")
-        self.horiz_act.setCheckable(True)
-        self.horiz_act.setChecked(cur_layout == "horizontal")
-        self.horiz_act.triggered.connect(lambda: self.hud_window._apply_layout_mode("horizontal"))
-
-        self.vert_act = self.layout_menu.addAction("📱 直立三層堆疊 (Vertical Stack)")
-        self.vert_act.setCheckable(True)
-        self.vert_act.setChecked(cur_layout == "vertical")
-        self.vert_act.triggered.connect(lambda: self.hud_window._apply_layout_mode("vertical"))
+        # Colour scheme / appearance submenus
+        self.hud_window.add_theme_menus(self.menu)
 
         # Click-through toggle
         self.clickthrough_act = self.menu.addAction("👻 滑鼠點擊穿透 (Alt+Shift+C)")
@@ -105,9 +95,6 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.setContextMenu(self.menu)
 
     def update_menu_state(self):
-        cur_layout = self.hud_window.config.get("layout_mode", "horizontal")
-        self.horiz_act.setChecked(cur_layout == "horizontal")
-        self.vert_act.setChecked(cur_layout == "vertical")
         self.clickthrough_act.setChecked(self.hud_window.config.get("click_through", False))
         self.aot_act.setChecked(self.hud_window.config.get("always_on_top", True))
         self.autostart_act.setChecked(is_autostart_enabled())
