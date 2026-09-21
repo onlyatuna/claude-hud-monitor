@@ -260,7 +260,12 @@ fn extract_token(data: &Value) -> Option<String> {
 fn token_from_keychain() -> Option<String> {
     use std::process::Command;
     let output = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", "Claude Code-credentials", "-w"])
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
         .output()
         .ok()?;
 

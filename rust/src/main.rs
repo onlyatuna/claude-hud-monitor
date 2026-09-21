@@ -121,12 +121,8 @@ fn main() -> eframe::Result {
             )
         };
 
-        let (init_x, init_y) = ui::validate_saved_position(
-            cfg.window_x,
-            cfg.window_y,
-            init_w as i32,
-            init_h as i32,
-        );
+        let (init_x, init_y) =
+            ui::validate_saved_position(cfg.window_x, cfg.window_y, init_w as i32, init_h as i32);
 
         let mut vp = egui::ViewportBuilder::default()
             .with_decorations(false)

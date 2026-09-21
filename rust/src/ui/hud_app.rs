@@ -352,7 +352,8 @@ impl HudApp {
                 }
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                    def_x as f32, def_y as f32,
+                    def_x as f32,
+                    def_y as f32,
                 )));
             }
             MenuAction::OpenLogs => {
@@ -1340,7 +1341,12 @@ pub fn validate_saved_position(
                                 cand_y,
                                 width,
                                 height,
-                                [mi.rc_work.left, mi.rc_work.top, mi.rc_work.right, mi.rc_work.bottom],
+                                [
+                                    mi.rc_work.left,
+                                    mi.rc_work.top,
+                                    mi.rc_work.right,
+                                    mi.rc_work.bottom,
+                                ],
                             );
                         }
                     }
@@ -1436,7 +1442,12 @@ fn ensure_window_within_monitor(hwnd: isize, config: &Arc<Mutex<Config>>, ppp: f
                             cur_y,
                             cur_w,
                             cur_h,
-                            [mi.rc_work.left, mi.rc_work.top, mi.rc_work.right, mi.rc_work.bottom],
+                            [
+                                mi.rc_work.left,
+                                mi.rc_work.top,
+                                mi.rc_work.right,
+                                mi.rc_work.bottom,
+                            ],
                         );
                         if cx != cur_x || cy != cur_y {
                             target_x = cx;
