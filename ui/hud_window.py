@@ -15,6 +15,7 @@ from core.autostart import is_autostart_enabled, set_autostart
 from core.logger import logger, open_log_dir
 from ui.styles import get_hud_stylesheet
 from ui.provider_card import ProviderCardWidget
+from system.memory import trim_memory
 
 MIN_HORIZ_W, MIN_HORIZ_H = 540, 125
 DEF_HORIZ_W, DEF_HORIZ_H = 690, 145
@@ -87,6 +88,9 @@ class HUDWindow(QWidget):
 
         # Initial fetch for all providers
         self.refresh_controller.start()
+
+        # Release initialization cold pages after UI and DirectWrite/fonts stabilize
+        QTimer.singleShot(2500, trim_memory)
 
     def set_hotkey_manager(self, hotkey_mgr):
         self.hotkey_manager = hotkey_mgr
@@ -320,6 +324,9 @@ class HUDWindow(QWidget):
     def _on_busy_changed(self, busy):
         color = "#38bdf8" if busy else ("#f59e0b" if any(self._provider_errors.values()) else "#10b981")
         self.status_dot.setStyleSheet(f"color: {color}; font-size: 11px;")
+        if not busy:
+            # Reclaim transient JSON/HTTP buffers after batch refresh cycle completes
+            QTimer.singleShot(1000, trim_memory)
 
     def _update_all_countdowns(self):
         # Auto-detect system wake from sleep/suspend
@@ -472,6 +479,11 @@ class HUDWindow(QWidget):
     def closeEvent(self, event):
         self._persist_geometry()
         super().closeEvent(event)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        # Deep sleep trim when HUD is minimized to background tray
+        QTimer.singleShot(150, trim_memory)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

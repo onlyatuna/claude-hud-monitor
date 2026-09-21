@@ -81,6 +81,12 @@ class RefreshTests(unittest.TestCase):
             time.sleep(0.005)
         self.assertEqual(self.results, [])
 
+    def test_retry_after_is_finite_and_capped(self):
+        for retry_after, expected_due in ((float('nan'), 60), (-1, 60), (float('inf'), 60), (10 ** 20, 86400)):
+            self.controller._complete('test', 0, UsageMetrics(provider_id='test', error='limited', retry_after=retry_after))
+            self.assertEqual(self.controller.states['test'].due, expected_due)
+            self.controller.states['test'].failures = 0
+
     def test_one_slow_provider_does_not_block_another(self):
         other = Provider()
         controller = RefreshController({'slow': self.provider, 'fast': other})

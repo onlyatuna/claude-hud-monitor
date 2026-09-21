@@ -18,8 +18,14 @@ if [ -f "assets/app_icon.icns" ]; then
     ICON_ARG="assets/app_icon.icns"
 fi
 
-echo "=== Building ClaudeHUD.app for macOS ==="
-python3 -m PyInstaller --windowed --hidden-import pynput.keyboard._darwin --hidden-import pynput.mouse._darwin --name "ClaudeHUD" --icon "$ICON_ARG" --add-data "assets:assets" main.py
+echo "=== Running unit tests ==="
+python3 -B -m unittest discover -s tests -v
+
+echo "=== Building ClaudeHUD.app for macOS using ClaudeHUD.spec ==="
+python3 -m PyInstaller --noconfirm --clean ClaudeHUD.spec
+
+echo "=== Verifying packaged app offline ==="
+python3 -c "import subprocess; subprocess.run(['dist/ClaudeHUD.app/Contents/MacOS/ClaudeHUD', '--smoke-test'], check=True, timeout=45)"
 
 echo "=== Packing into ZIP ==="
 cd dist

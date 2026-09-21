@@ -1,5 +1,6 @@
 """Per-provider scheduling. All mutable state belongs to the Qt UI thread."""
 import logging
+import math
 import threading
 import time
 import queue
@@ -107,8 +108,10 @@ class RefreshController(QObject):
         if result.error:
             state.failures += 1
             delay = min(900, self.interval * 2 ** min(state.failures - 1, 4))
-            if result.retry_after is not None:
-                delay = max(delay, result.retry_after)
+            retry_after = result.retry_after
+            if (isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool)
+                    and math.isfinite(retry_after) and retry_after >= 0):
+                delay = min(86400, max(delay, retry_after))
             logging.getLogger(__name__).warning("provider=%s error=%s retry_seconds=%.1f", pid, result.error_code or "unknown", delay)
             state.due = now + delay
             if state.cached is not None:
