@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 import math
-from functools import wraps
+import ssl
+from functools import lru_cache, wraps
 from email.utils import parsedate_to_datetime
 
 
@@ -35,6 +36,20 @@ def safe_parse(method):
             return UsageMetrics(provider_id=self.provider_id, provider_name=self.display_name,
                                 last_updated_time=now_str, error="配額資料格式不相容", error_code="schema")
     return wrapped
+
+
+@lru_cache(maxsize=1)
+def ssl_context():
+    """Verify HTTPS against certifi's CA bundle when available.
+
+    Frozen builds made with python.org Python cannot see the macOS system
+    trust store, so the default context fails with CERTIFICATE_VERIFY_FAILED.
+    """
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except (ImportError, OSError):
+        return ssl.create_default_context()
 
 
 def retry_delay(value):
