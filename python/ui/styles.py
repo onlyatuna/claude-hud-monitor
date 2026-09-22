@@ -54,11 +54,12 @@ THEMES = {
 }
 
 
-def get_cards_stylesheet() -> str:
+def get_cards_stylesheet(vibrant: bool = False) -> str:
     """Classic Cards layout stylesheet (NVIDIA / RivaTuner Aesthetic)."""
-    return """
+    bg = "rgba(14, 17, 23, 0.60)" if vibrant else "rgba(14, 17, 23, 0.94)"
+    template = """
     QWidget#CentralWidget {
-        background-color: rgba(14, 17, 23, 0.94);
+        background-color: __BG__;
         border: 1px solid rgba(255, 255, 255, 0.14);
         border-radius: 9px;
     }
@@ -169,6 +170,7 @@ def get_cards_stylesheet() -> str:
         margin: 4px 8px;
     }
     """
+    return template.replace("__BG__", bg)
 
 
 def get_hud_stylesheet(theme: dict = None, vibrant: bool = False) -> str:
