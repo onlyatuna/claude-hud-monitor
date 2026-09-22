@@ -121,16 +121,16 @@ fn main() -> eframe::Result {
             )
         };
 
+        let (init_x, init_y) =
+            ui::validate_saved_position(cfg.window_x, cfg.window_y, init_w as i32, init_h as i32);
+
         let mut vp = egui::ViewportBuilder::default()
             .with_decorations(false)
             .with_transparent(true)
             .with_always_on_top()
             .with_resizable(true)
             .with_inner_size([init_w, init_h])
-            .with_position([
-                cfg.window_x.unwrap_or(400) as f32,
-                cfg.window_y.unwrap_or(50) as f32,
-            ])
+            .with_position([init_x as f32, init_y as f32])
             .with_min_inner_size([min_w, min_h]);
 
         if let Some(icon) = window_icon {

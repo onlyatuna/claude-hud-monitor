@@ -198,6 +198,7 @@ impl HudApp {
                 let phys_w = (w * ppp).round() as i32;
                 let phys_h = (h * ppp).round() as i32;
                 set_window_rect(self.hwnd, left, top, phys_w, phys_h);
+                ensure_window_within_monitor(self.hwnd, &self.config, ppp);
             }
         }
 
@@ -326,6 +327,7 @@ impl HudApp {
                 } else {
                     (280.0, DEFAULT_VERTICAL_HEIGHT as f32)
                 };
+                let (def_x, def_y) = get_primary_monitor_default_pos(w as i32, h as i32);
                 {
                     let mut cfg = self.config.lock().unwrap();
                     if mode == "horizontal" {
@@ -335,22 +337,23 @@ impl HudApp {
                         cfg.vertical_width = 280;
                         cfg.vertical_height = DEFAULT_VERTICAL_HEIGHT;
                     }
-                    cfg.window_x = Some(400);
-                    cfg.window_y = Some(50);
+                    cfg.window_x = Some(def_x);
+                    cfg.window_y = Some(def_y);
                     ConfigManager::save(&cfg);
                 }
                 #[cfg(target_os = "windows")]
                 if self.hwnd != 0 {
                     let ppp = ctx.pixels_per_point();
-                    let phys_x = (400.0 * ppp).round() as i32;
-                    let phys_y = (50.0 * ppp).round() as i32;
+                    let phys_x = (def_x as f32 * ppp).round() as i32;
+                    let phys_y = (def_y as f32 * ppp).round() as i32;
                     let phys_w = (w * ppp).round() as i32;
                     let phys_h = (h * ppp).round() as i32;
                     set_window_rect(self.hwnd, phys_x, phys_y, phys_w, phys_h);
                 }
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
                 ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(
-                    400.0, 50.0,
+                    def_x as f32,
+                    def_y as f32,
                 )));
             }
             MenuAction::OpenLogs => {
@@ -473,6 +476,8 @@ impl eframe::App for HudApp {
             self.hwnd = get_window_hwnd();
             if self.hwnd != 0 {
                 init_win32_window_frame(self.hwnd);
+                let ppp = ctx.pixels_per_point();
+                ensure_window_within_monitor(self.hwnd, &self.config, ppp);
             }
         }
         #[cfg(target_os = "windows")]
@@ -767,6 +772,7 @@ impl eframe::App for HudApp {
                     if self.hwnd != 0 {
                         native_drag_window(self.hwnd);
                         let ppp = ctx.pixels_per_point();
+                        ensure_window_within_monitor(self.hwnd, &self.config, ppp);
                         sync_window_position(self.hwnd, &self.config, ppp);
                         ctx.request_repaint();
                     }
@@ -1247,24 +1253,247 @@ fn get_cursor_screen_pos() -> Option<egui::Pos2> {
 }
 
 #[cfg(target_os = "windows")]
-fn get_window_rect(hwnd: isize) -> Option<[i32; 4]> {
-    #[repr(C)]
-    struct RECT {
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
+pub fn clamp_rect_to_work_area(
+    mut cand_x: i32,
+    mut cand_y: i32,
+    width: i32,
+    height: i32,
+    work_area: [i32; 4], // [left, top, right, bottom]
+) -> (i32, i32) {
+    let [work_left, work_top, work_right, work_bottom] = work_area;
+    if cand_x + width > work_right {
+        cand_x = (work_right - width).max(work_left);
     }
+    if cand_x < work_left {
+        cand_x = work_left;
+    }
+    if cand_y + height > work_bottom {
+        cand_y = (work_bottom - height).max(work_top);
+    }
+    if cand_y < work_top {
+        cand_y = work_top;
+    }
+    (cand_x, cand_y)
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RECT {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct MONITORINFO {
+    cb_size: u32,
+    rc_monitor: RECT,
+    rc_work: RECT,
+    dw_flags: u32,
+}
+
+#[cfg(target_os = "windows")]
+pub fn validate_saved_position(
+    x: Option<i32>,
+    y: Option<i32>,
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn MonitorFromRect(lprc: *const RECT, dwFlags: u32) -> isize;
+        fn MonitorFromWindow(hWnd: isize, dwFlags: u32) -> isize;
+        fn GetMonitorInfoW(hMonitor: isize, lpmi: *mut MONITORINFO) -> i32;
+        fn IntersectRect(lprcDst: *mut RECT, lprcSrc1: *const RECT, lprcSrc2: *const RECT) -> i32;
+    }
+
+    const MONITOR_DEFAULTTONULL: u32 = 0;
+    const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
+
+    if let (Some(cand_x), Some(cand_y)) = (x, y) {
+        let cand_rect = RECT {
+            left: cand_x,
+            top: cand_y,
+            right: cand_x + width,
+            bottom: cand_y + height,
+        };
+
+        unsafe {
+            let h_mon = MonitorFromRect(&cand_rect, MONITOR_DEFAULTTONULL);
+            if h_mon != 0 {
+                let mut mi = MONITORINFO {
+                    cb_size: std::mem::size_of::<MONITORINFO>() as u32,
+                    rc_monitor: RECT::default(),
+                    rc_work: RECT::default(),
+                    dw_flags: 0,
+                };
+                if GetMonitorInfoW(h_mon, &mut mi) != 0 {
+                    let mut intersect = RECT::default();
+                    if IntersectRect(&mut intersect, &cand_rect, &mi.rc_work) != 0 {
+                        let inter_w = intersect.right - intersect.left;
+                        let inter_h = intersect.bottom - intersect.top;
+                        if inter_w >= 50 && inter_h >= 30 {
+                            return clamp_rect_to_work_area(
+                                cand_x,
+                                cand_y,
+                                width,
+                                height,
+                                [
+                                    mi.rc_work.left,
+                                    mi.rc_work.top,
+                                    mi.rc_work.right,
+                                    mi.rc_work.bottom,
+                                ],
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: place on Primary Monitor work area
+    unsafe {
+        let h_prim = MonitorFromWindow(0, MONITOR_DEFAULTTOPRIMARY);
+        let mut mi = MONITORINFO {
+            cb_size: std::mem::size_of::<MONITORINFO>() as u32,
+            rc_monitor: RECT::default(),
+            rc_work: RECT::default(),
+            dw_flags: 0,
+        };
+        if h_prim != 0 && GetMonitorInfoW(h_prim, &mut mi) != 0 {
+            let def_x = (mi.rc_work.right - width - 40).max(mi.rc_work.left + 10);
+            let def_y = (mi.rc_work.top + 50).max(mi.rc_work.top + 10);
+            (def_x, def_y)
+        } else {
+            (400, 50)
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn validate_saved_position(
+    x: Option<i32>,
+    y: Option<i32>,
+    _width: i32,
+    _height: i32,
+) -> (i32, i32) {
+    (x.unwrap_or(400).max(0), y.unwrap_or(50).max(0))
+}
+
+#[cfg(target_os = "windows")]
+fn get_primary_monitor_default_pos(logical_w: i32, logical_h: i32) -> (i32, i32) {
+    validate_saved_position(None, None, logical_w, logical_h)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_primary_monitor_default_pos(_logical_w: i32, _logical_h: i32) -> (i32, i32) {
+    (400, 50)
+}
+
+#[cfg(target_os = "windows")]
+fn ensure_window_within_monitor(hwnd: isize, config: &Arc<Mutex<Config>>, ppp: f32) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn MonitorFromRect(lprc: *const RECT, dwFlags: u32) -> isize;
+        fn MonitorFromWindow(hWnd: isize, dwFlags: u32) -> isize;
+        fn GetMonitorInfoW(hMonitor: isize, lpmi: *mut MONITORINFO) -> i32;
+        fn IntersectRect(lprcDst: *mut RECT, lprcSrc1: *const RECT, lprcSrc2: *const RECT) -> i32;
+    }
+
+    const MONITOR_DEFAULTTONULL: u32 = 0;
+    const MONITOR_DEFAULTTOPRIMARY: u32 = 1;
+
+    let Some([cur_x, cur_y, cur_w, cur_h]) = get_window_rect(hwnd) else {
+        return;
+    };
+
+    let cand_rect = RECT {
+        left: cur_x,
+        top: cur_y,
+        right: cur_x + cur_w,
+        bottom: cur_y + cur_h,
+    };
+
+    unsafe {
+        let mut target_x = cur_x;
+        let mut target_y = cur_y;
+        let mut adjusted = false;
+
+        let h_mon = MonitorFromRect(&cand_rect, MONITOR_DEFAULTTONULL);
+        if h_mon != 0 {
+            let mut mi = MONITORINFO {
+                cb_size: std::mem::size_of::<MONITORINFO>() as u32,
+                rc_monitor: RECT::default(),
+                rc_work: RECT::default(),
+                dw_flags: 0,
+            };
+            if GetMonitorInfoW(h_mon, &mut mi) != 0 {
+                let mut intersect = RECT::default();
+                if IntersectRect(&mut intersect, &cand_rect, &mi.rc_work) != 0 {
+                    let inter_w = intersect.right - intersect.left;
+                    let inter_h = intersect.bottom - intersect.top;
+                    if inter_w >= 50 && inter_h >= 30 {
+                        let (cx, cy) = clamp_rect_to_work_area(
+                            cur_x,
+                            cur_y,
+                            cur_w,
+                            cur_h,
+                            [
+                                mi.rc_work.left,
+                                mi.rc_work.top,
+                                mi.rc_work.right,
+                                mi.rc_work.bottom,
+                            ],
+                        );
+                        if cx != cur_x || cy != cur_y {
+                            target_x = cx;
+                            target_y = cy;
+                            adjusted = true;
+                        }
+                    } else {
+                        target_x = (mi.rc_work.right - cur_w - 40).max(mi.rc_work.left + 10);
+                        target_y = (mi.rc_work.top + 50).max(mi.rc_work.top + 10);
+                        adjusted = true;
+                    }
+                } else {
+                    target_x = (mi.rc_work.right - cur_w - 40).max(mi.rc_work.left + 10);
+                    target_y = (mi.rc_work.top + 50).max(mi.rc_work.top + 10);
+                    adjusted = true;
+                }
+            }
+        } else {
+            let h_prim = MonitorFromWindow(0, MONITOR_DEFAULTTOPRIMARY);
+            let mut mi = MONITORINFO {
+                cb_size: std::mem::size_of::<MONITORINFO>() as u32,
+                rc_monitor: RECT::default(),
+                rc_work: RECT::default(),
+                dw_flags: 0,
+            };
+            if h_prim != 0 && GetMonitorInfoW(h_prim, &mut mi) != 0 {
+                target_x = (mi.rc_work.right - cur_w - 40).max(mi.rc_work.left + 10);
+                target_y = (mi.rc_work.top + 50).max(mi.rc_work.top + 10);
+                adjusted = true;
+            }
+        }
+
+        if adjusted {
+            set_window_rect(hwnd, target_x, target_y, cur_w, cur_h);
+            sync_window_position(hwnd, config, ppp);
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_window_rect(hwnd: isize) -> Option<[i32; 4]> {
     #[link(name = "user32")]
     extern "system" {
         fn GetWindowRect(hWnd: isize, lpRect: *mut RECT) -> i32;
     }
-    let mut r = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
+    let mut r = RECT::default();
     unsafe {
         if GetWindowRect(hwnd, &mut r) != 0 {
             Some([r.left, r.top, r.right - r.left, r.bottom - r.top])
@@ -1298,14 +1527,6 @@ fn set_window_rect(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
 
 #[cfg(target_os = "windows")]
 fn apply_window_region(hwnd: isize) {
-    #[repr(C)]
-    struct RECT {
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-    }
-
     #[link(name = "user32")]
     extern "system" {
         fn GetClientRect(hWnd: isize, lpRect: *mut RECT) -> i32;
@@ -1467,6 +1688,31 @@ mod tests {
             0
         );
         assert_ne!(style, stripped);
+    }
+
+    #[test]
+    fn test_clamp_rect_to_work_area() {
+        use super::clamp_rect_to_work_area;
+
+        // 1. Inside bounds: unchanged
+        let (x, y) = clamp_rect_to_work_area(100, 100, 690, 152, [0, 0, 1920, 1040]);
+        assert_eq!((x, y), (100, 100));
+
+        // 2. Off right edge: clamped to right - width
+        let (x, y) = clamp_rect_to_work_area(1800, 100, 690, 152, [0, 0, 1920, 1040]);
+        assert_eq!((x, y), (1230, 100));
+
+        // 3. Off bottom edge (e.g. taskbar): clamped to bottom - height
+        let (x, y) = clamp_rect_to_work_area(100, 950, 690, 152, [0, 0, 1920, 1040]);
+        assert_eq!((x, y), (100, 888));
+
+        // 4. Off left edge
+        let (x, y) = clamp_rect_to_work_area(-50, 100, 690, 152, [0, 0, 1920, 1040]);
+        assert_eq!((x, y), (0, 100));
+
+        // 5. Off top edge
+        let (x, y) = clamp_rect_to_work_area(100, -30, 690, 152, [0, 0, 1920, 1040]);
+        assert_eq!((x, y), (100, 0));
     }
 }
 

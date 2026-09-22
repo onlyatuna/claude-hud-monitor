@@ -249,15 +249,54 @@ pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
     )
 }
 
-fn get_access_token(credentials_path: &Path) -> Option<String> {
-    if !credentials_path.exists() {
+fn extract_token(data: &Value) -> Option<String> {
+    data.get("claudeAiOauth")
+        .and_then(|oauth| oauth.get("accessToken"))
+        .and_then(|tok| tok.as_str())
+        .map(|s| s.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn token_from_keychain() -> Option<String> {
+    use std::process::Command;
+    let output = Command::new("/usr/bin/security")
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
         return None;
     }
-    let text = fs::read_to_string(credentials_path).ok()?;
-    let json: Value = serde_json::from_str(&text).ok()?;
-    json["claudeAiOauth"]["accessToken"]
-        .as_str()
-        .map(|s| s.to_owned())
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    let json: Value = serde_json::from_str(stdout.trim()).ok()?;
+    extract_token(&json)
+}
+
+fn get_access_token(credentials_path: &Path) -> Option<String> {
+    if credentials_path.exists() {
+        if let Ok(text) = fs::read_to_string(credentials_path) {
+            if let Ok(json) = serde_json::from_str::<Value>(&text) {
+                if let Some(token) = extract_token(&json) {
+                    return Some(token);
+                }
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(token) = token_from_keychain() {
+            return Some(token);
+        }
+    }
+
+    None
 }
 
 pub struct ClaudeProvider {
@@ -521,5 +560,26 @@ mod tests {
         let (default_alias, is_auto4) = resolve_active_profile(".claude");
         assert!(!is_auto4);
         assert_eq!(default_alias.id, "default");
+    }
+
+    #[test]
+    fn test_extract_token() {
+        let valid_json = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": "sk-ant-test-token"
+            }
+        });
+        assert_eq!(
+            extract_token(&valid_json),
+            Some("sk-ant-test-token".to_string())
+        );
+
+        let invalid_json = serde_json::json!({
+            "claudeAiOauth": "not an object"
+        });
+        assert_eq!(extract_token(&invalid_json), None);
+
+        let empty_json = serde_json::json!({});
+        assert_eq!(extract_token(&empty_json), None);
     }
 }
