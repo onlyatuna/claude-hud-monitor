@@ -75,8 +75,8 @@ def get_hud_stylesheet() -> str:
         background-color: rgba(255, 255, 255, 0.06);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 3px;
-        padding: 1px 5px;
-        font-size: 9.5px;
+        padding: 1px 4px;
+        font-size: 9px;
         color: #cbd5e1;
         font-family: 'Consolas', monospace;
     }

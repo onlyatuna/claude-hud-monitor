@@ -48,6 +48,25 @@ class ClaudeCredentialTests(unittest.TestCase):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as directory, patch('sys.platform', 'darwin'), patch('subprocess.run', **kwargs):
                 self.assertIsNone(self.provider_without_file(directory).get_access_token())
 
+    def test_resolve_active_profile(self):
+        from core.providers.claude_provider import resolve_active_profile
+        def_prof, is_auto = resolve_active_profile("auto")
+        self.assertTrue(is_auto)
+        self.assertEqual(def_prof.id, "default")
+
+        explicit_prof, is_auto2 = resolve_active_profile("claude01")
+        self.assertFalse(is_auto2)
+        self.assertEqual(explicit_prof.id, "claude01")
+        self.assertEqual(explicit_prof.short_name, "claude01")
+
+        dot_prof, is_auto3 = resolve_active_profile(".claude-02")
+        self.assertFalse(is_auto3)
+        self.assertEqual(dot_prof.short_name, "claude-02")
+
+        default_alias, is_auto4 = resolve_active_profile(".claude")
+        self.assertFalse(is_auto4)
+        self.assertEqual(default_alias.id, "default")
+
 
 class SSLContextTests(unittest.TestCase):
     def test_context_verifies_certificates(self):

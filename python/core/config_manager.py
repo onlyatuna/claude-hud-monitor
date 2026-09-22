@@ -21,7 +21,8 @@ DEFAULT_CONFIG = {
     "hotkey_enabled": True,
     "hotkey": "Alt+C",
     "locked": False,
-    "autostart": False
+    "autostart": False,
+    "claude_profile": "auto"
 }
 
 def get_user_config_dir() -> str:

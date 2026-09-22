@@ -4,6 +4,7 @@ echo ========================================================
 echo   Building Claude HUD Monitor into Standalone EXE...
 echo ========================================================
 echo.
+taskkill /F /IM ClaudeHUD.exe >nul 2>&1
 python -m pip install -r requirements-build.txt
 if errorlevel 1 exit /b 1
 python -B -m unittest discover -s tests -v
