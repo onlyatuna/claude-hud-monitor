@@ -56,7 +56,7 @@ THEMES = {
 
 def get_cards_stylesheet(vibrant: bool = False) -> str:
     """Classic Cards layout stylesheet (NVIDIA / RivaTuner Aesthetic)."""
-    bg = "rgba(14, 17, 23, 0.60)" if vibrant else "rgba(14, 17, 23, 0.94)"
+    bg = "rgba(14, 17, 23, 0.94)"
     template = """
     QWidget#CentralWidget {
         background-color: __BG__;

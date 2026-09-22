@@ -227,12 +227,13 @@ class HUDWindow(QWidget):
     def _apply_theme(self):
         ui_mode = self.config.get("ui_mode", "cards")
         t = self.theme()
-        dark = (t is THEMES["dark"])
-        vibrant = bool(self.isVisible() and vibrancy.apply(self, dark, t["radius"]))
         if ui_mode == "table":
+            dark = (t is THEMES["dark"])
+            vibrant = bool(self.isVisible() and vibrancy.apply(self, dark, t["radius"]))
             self.setStyleSheet(get_hud_stylesheet(t, vibrant))
         else:
-            self.setStyleSheet(get_cards_stylesheet(vibrant))
+            vibrancy.clear(self)
+            self.setStyleSheet(get_cards_stylesheet())
 
     def _rebuild_table(self):
         t = self.theme()

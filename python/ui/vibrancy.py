@@ -1,7 +1,7 @@
 """
 Native frosted-glass backdrop:
 - macOS: NSVisualEffectView (pyobjc)
-- Windows: DWM System Backdrop (Acrylic / Mica) via dwmapi.dll / user32.dll
+- Windows: Borderless Acrylic / Accent blur via user32.dll
 """
 import os
 import sys
@@ -28,7 +28,7 @@ def is_supported() -> bool:
     elif sys.platform == "win32":
         try:
             import ctypes
-            _ = ctypes.windll.dwmapi
+            _ = ctypes.windll.user32
             return True
         except Exception:
             return False
@@ -73,6 +73,7 @@ def _apply_macos(widget, dark: bool, corner_radius: float) -> bool:
 
 
 def _apply_windows(widget, dark: bool) -> bool:
+    """Apply true borderless Acrylic blur on Windows without white edges."""
     try:
         import ctypes
 
@@ -80,50 +81,67 @@ def _apply_windows(widget, dark: bool) -> bool:
         if win_id == 0:
             return False
 
-        dwmapi = ctypes.windll.dwmapi
+        user32 = ctypes.windll.user32
 
-        class MARGINS(Structure):
+        class ACCENT_POLICY(Structure):
             _fields_ = [
-                ("cxLeftWidth", c_int),
-                ("cxRightWidth", c_int),
-                ("cyTopHeight", c_int),
-                ("cyBottomHeight", c_int),
+                ("AccentState", c_int),
+                ("AccentFlags", c_int),
+                ("GradientColor", c_int),
+                ("AnimationId", c_int),
             ]
 
-        # 1. Extend DWM frame into entire client area
-        margins = MARGINS(-1, -1, -1, -1)
-        dwmapi.DwmExtendFrameIntoClientArea(win_id, byref(margins))
-
-        # 2. Immersive Dark Mode for DWM (Attribute 20)
-        dark_val = c_int(1 if dark else 0)
-        dwmapi.DwmSetWindowAttribute(win_id, 20, byref(dark_val), sizeof(dark_val))
-
-        # 3. Windows 11 22H2+ (Build >= 22621): Official System Backdrop (Attribute 38)
-        build = getattr(sys.getwindowsversion(), "build", 0)
-        if build >= 22621:
-            # 3 = DWMSBT_TRANSIENTWINDOW (Acrylic blur), 2 = DWMSBT_MAINWINDOW (Mica)
-            backdrop_type = c_int(3)
-            hr = dwmapi.DwmSetWindowAttribute(win_id, 38, byref(backdrop_type), sizeof(backdrop_type))
-            if hr == 0:
-                return True
-
-        # Fallback for Windows 10 (1803+) and Windows 11 < 22621
-        user32 = ctypes.windll.user32
-        class ACCENT_POLICY(Structure):
-            _fields_ = [("AccentState", c_int), ("AccentFlags", c_int),
-                        ("GradientColor", c_int), ("AnimationId", c_int)]
         class WINCOMPATTRDATA(Structure):
-            _fields_ = [("Attribute", c_int), ("Data", c_void_p), ("SizeOfData", c_int)]
+            _fields_ = [
+                ("Attribute", c_int),
+                ("Data", c_void_p),
+                ("SizeOfData", c_int),
+            ]
 
-        # ACCENT_ENABLE_ACRYLICBLURBEHIND = 4, GradientColor = 0xAABBGGRR
-        grad_color = 0x66202026 if dark else 0x66F0F0F5
-        accent = ACCENT_POLICY(4, 0, grad_color, 0)
+        # AccentState: 4 = ACCENT_ENABLE_ACRYLICBLURBEHIND, 3 = ACCENT_ENABLE_BLURBEHIND
+        # AccentFlags: 2 = Draw all borders OFF (prevents white square borders around rounded corners)
+        # GradientColor: 0x99161a22 (AABBGGRR - deep dark smoke tint)
+        grad_color = 0x99161a22 if dark else 0x99f0f2f8
+        accent = ACCENT_POLICY(4, 2, grad_color, 0)
         data = WINCOMPATTRDATA(19, ctypes.cast(ctypes.pointer(accent), c_void_p), sizeof(accent))
         res = user32.SetWindowCompositionAttribute(win_id, byref(data))
         return bool(res)
     except Exception as e:
-        logger.warning(f"[Vibrancy Windows] Native blur unavailable: {e}")
+        logger.warning(f"[Vibrancy Windows] Acrylic blur unavailable: {e}")
         return False
+
+
+def clear(widget) -> bool:
+    """Clear native backdrop blur behind widget."""
+    if not is_supported():
+        return False
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            win_id = int(widget.winId())
+            if win_id == 0:
+                return False
+            user32 = ctypes.windll.user32
+            class ACCENT_POLICY(Structure):
+                _fields_ = [
+                    ("AccentState", c_int),
+                    ("AccentFlags", c_int),
+                    ("GradientColor", c_int),
+                    ("AnimationId", c_int),
+                ]
+            class WINCOMPATTRDATA(Structure):
+                _fields_ = [
+                    ("Attribute", c_int),
+                    ("Data", c_void_p),
+                    ("SizeOfData", c_int),
+                ]
+            accent = ACCENT_POLICY(0, 0, 0, 0)
+            data = WINCOMPATTRDATA(19, ctypes.cast(ctypes.pointer(accent), c_void_p), sizeof(accent))
+            return bool(user32.SetWindowCompositionAttribute(win_id, byref(data)))
+        except Exception as e:
+            logger.warning(f"[Vibrancy Windows] Clear blur failed: {e}")
+            return False
+    return False
 
 
 def apply(widget, dark: bool, corner_radius: float = 12.0) -> bool:
@@ -139,3 +157,4 @@ def apply(widget, dark: bool, corner_radius: float = 12.0) -> bool:
         return _apply_windows(widget, dark)
 
     return False
+
