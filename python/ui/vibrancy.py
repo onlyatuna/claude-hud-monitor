@@ -5,7 +5,9 @@ Qt can't blur what is behind a window, so on macOS the window's content view is
 wrapped in an NSVisualEffectView and Qt keeps drawing (translucently) on top.
 Everywhere else this is a no-op and the caller falls back to a more opaque panel.
 """
+import os
 import sys
+from ctypes import c_void_p
 
 from core.logger import logger
 
@@ -18,6 +20,8 @@ _AUTORESIZE_WIDTH_HEIGHT = 2 | 16
 def is_supported() -> bool:
     if sys.platform != "darwin":
         return False
+    if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
+        return False
     try:
         import AppKit  # noqa: F401  (pyobjc, pulled in by pynput on macOS)
         return True
@@ -29,11 +33,17 @@ def apply(widget, dark: bool, corner_radius: float) -> bool:
     """Install (or retune) the blur behind a top-level widget. Returns True when active."""
     if not is_supported():
         return False
+    if not widget.isVisible():
+        return False
     try:
         import AppKit
         import objc
 
-        view = objc.objc_object(c_void_p=int(widget.winId()))
+        win_id = int(widget.winId())
+        if win_id == 0:
+            return False
+
+        view = objc.objc_object(c_void_p=win_id)
         window = view.window()
         if window is None:
             return False
