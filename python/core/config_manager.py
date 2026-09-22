@@ -18,7 +18,7 @@ DEFAULT_CONFIG = {
     "table_width": 450,
     "table_height": 350,
     "color_scheme": "scale",  # "scale" or "duo" (for table mode)
-    "appearance": "auto",     # "auto", "light" or "dark" (for table mode)
+    "appearance": "auto",     # "auto", "light" or "dark" (both UI modes)
     "always_on_top": True,
     "opacity": 0.88,
     "click_through": False,

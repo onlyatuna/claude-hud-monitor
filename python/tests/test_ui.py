@@ -118,6 +118,54 @@ class HudTests(unittest.TestCase):
         hud.geometry_timer.stop()
         hud.close()
 
+    def test_cards_appearance_menu_persists_and_keeps_data(self):
+        from PySide6.QtWidgets import QMenu
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='cards', appearance='dark')
+            try:
+                hud._on_data_fetched(UsageMetrics(provider_id='claude', metric1_val=42, metric1_text='42%'))
+                menu = QMenu(hud)
+                hud.add_theme_menus(menu)
+                colors, appearance = [action.menu() for action in menu.actions()]
+                self.assertFalse(colors.menuAction().isVisible())
+                light = next(action for action in appearance.actions() if action.data() == 'light')
+                light.trigger()
+                appearance.aboutToShow.emit()
+                self.assertTrue(light.isChecked())
+                self.assertIn('rgba(248, 250, 252, 0.94)', hud.styleSheet())
+                self.assertIn('#0369a1', hud.cards['claude'].title.styleSheet())
+                self.assertEqual(hud.cards['claude'].m1_val.text(), '42%')
+                self.assertEqual(ConfigManager(config.path).get('appearance'), 'light')
+                hud.cards['claude'].update_metrics(UsageMetrics(provider_id='claude', error='offline'))
+                hud.set_appearance('dark')
+                self.assertEqual(hud.cards['claude'].badge.text(), 'OFFLINE')
+                self.assertIn('#ef4444', hud.cards['claude'].m1_val.styleSheet())
+                self.assertIn('rgba(14, 17, 23, 0.94)', hud.styleSheet())
+            finally:
+                self._close(hud)
+
+    def test_cards_follow_system_only_in_auto_mode(self):
+        from PySide6.QtCore import Qt
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='cards', appearance='auto')
+            try:
+                with patch.object(hud, '_system_is_dark', return_value=False):
+                    APP.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Light)
+                    APP.processEvents()
+                    self.assertFalse(hud.cards['claude'].dark)
+                with patch.object(hud, '_system_is_dark', return_value=True):
+                    APP.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+                    APP.processEvents()
+                    self.assertTrue(hud.cards['claude'].dark)
+                self.assertEqual(config.get('appearance'), 'auto')
+                hud.set_appearance('light')
+                with patch.object(hud, '_system_is_dark', return_value=True):
+                    APP.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Dark)
+                    APP.processEvents()
+                    self.assertFalse(hud.cards['claude'].dark)
+            finally:
+                self._close(hud)
+
     def test_hud_preserves_independent_cards_layout_sizes(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
             config, hud = self._hud(directory, ui_mode='cards', layout_mode='vertical',

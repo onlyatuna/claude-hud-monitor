@@ -101,6 +101,7 @@ class HUDWindow(QWidget):
         self._init_ui_skeleton()
         self._apply_ui_mode(self.config.get("ui_mode", "cards"), initial=True)
         self._setup_timers()
+        QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_system_appearance_changed)
 
         if self.config.get("click_through", False):
             # Delay startup click-through to verify hotkeys and prevent lockout
@@ -209,6 +210,15 @@ class HUDWindow(QWidget):
         self._apply_theme()
         self._rebuild_table()
 
+    def _on_system_appearance_changed(self, *_):
+        if self.config.get("appearance", "auto") == "auto":
+            QTimer.singleShot(0, self._refresh_system_appearance)
+
+    def _refresh_system_appearance(self):
+        if self.config.get("appearance", "auto") == "auto":
+            self._apply_theme()
+            self._rebuild_table()
+
     def theme(self) -> dict:
         app_setting = self.config.get("appearance", "auto")
         if app_setting == "light":
@@ -218,6 +228,9 @@ class HUDWindow(QWidget):
         return THEMES["dark"] if self._system_is_dark() else THEMES["light"]
 
     def _system_is_dark(self) -> bool:
+        scheme = QGuiApplication.styleHints().colorScheme()
+        if scheme != Qt.ColorScheme.Unknown:
+            return scheme == Qt.ColorScheme.Dark
         app = QApplication.instance()
         pal = app.palette() if app else None
         if pal:
@@ -233,7 +246,10 @@ class HUDWindow(QWidget):
             self.setStyleSheet(get_hud_stylesheet(t, vibrant))
         else:
             vibrancy.clear(self)
-            self.setStyleSheet(get_cards_stylesheet())
+            dark = t is THEMES["dark"]
+            self.setStyleSheet(get_cards_stylesheet(dark=dark))
+            for card in self.cards.values():
+                card.set_appearance(dark)
 
     def _rebuild_table(self):
         t = self.theme()
@@ -341,7 +357,7 @@ class HUDWindow(QWidget):
                 self.cards_layout.addWidget(self.cards[pid])
                 if i < len(provider_ids) - 1:
                     h_div = QFrame()
-                    h_div.setStyleSheet("background-color: rgba(255, 255, 255, 0.08); max-height: 1px; min-height: 1px;")
+                    h_div.setObjectName("HorizontalDivider")
                     h_div.setFrameShape(QFrame.Shape.HLine)
                     self.cards_layout.addWidget(h_div)
 
@@ -650,7 +666,11 @@ class HUDWindow(QWidget):
             sub.aboutToShow.connect(sync)
             return sub
 
-        build("🎨 配色 (Colors)", SCHEMES, SCHEME_LABELS, self.color_scheme, self.set_color_scheme)
+        colors = build("🎨 配色 (Colors)", SCHEMES, SCHEME_LABELS, self.color_scheme, self.set_color_scheme)
+        def sync_colors():
+            colors.menuAction().setVisible(self.config.get("ui_mode", "cards") == "table")
+        sync_colors()
+        menu.aboutToShow.connect(sync_colors)
         build("🌓 外觀 (Appearance)", APPEARANCES, APPEARANCE_LABELS,
               lambda: self.config.get("appearance", "auto"), self.set_appearance)
 
@@ -713,8 +733,7 @@ class HUDWindow(QWidget):
             vert_act.setCheckable(True)
             vert_act.setChecked(cur_layout == "vertical")
             vert_act.triggered.connect(lambda: self._apply_cards_layout_mode("vertical"))
-        else:
-            self.add_theme_menus(menu)
+        self.add_theme_menus(menu)
 
         # Click-through toggle
         ghost_act = menu.addAction("👻 滑鼠點擊穿透 (Alt+Shift+C)")

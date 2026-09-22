@@ -4,15 +4,15 @@ HUD themes and stylesheets supporting both Classic Cards and Modern Table layout
 
 # ==================== Common / Card Colors ====================
 
-def get_progress_color(percent: float) -> str:
+def get_progress_color(percent: float, dark: bool = True) -> str:
     if percent >= 90:
-        return "#ef4444"  # Neon Red
+        return ("#ef4444" if dark else "#b91c1c")  # Neon Red
     elif percent >= 75:
-        return "#f59e0b"  # Amber Warning
+        return ("#f59e0b" if dark else "#92400e")  # Amber Warning
     elif percent >= 50:
-        return "#3b82f6"  # Tech Blue
+        return ("#3b82f6" if dark else "#1d4ed8")  # Tech Blue
     else:
-        return "#10b981"  # GeForce Emerald Green
+        return ("#10b981" if dark else "#047857")  # GeForce Emerald Green
 
 
 # ==================== Table Theme Definitions ====================
@@ -54,7 +54,7 @@ THEMES = {
 }
 
 
-def get_cards_stylesheet(vibrant: bool = False) -> str:
+def get_cards_stylesheet(vibrant: bool = False, *, dark: bool = True) -> str:
     """Classic Cards layout stylesheet (NVIDIA / RivaTuner Aesthetic)."""
     bg = "rgba(14, 17, 23, 0.94)"
     template = """
@@ -141,11 +141,19 @@ def get_cards_stylesheet(vibrant: bool = False) -> str:
     }
     
     QFrame#Divider {
+        border: none;
         background-color: rgba(255, 255, 255, 0.12);
         max-width: 1px;
         min-width: 1px;
     }
     
+    QFrame#HorizontalDivider {
+        background-color: rgba(255, 255, 255, 0.08);
+        border: none;
+        min-height: 1px;
+        max-height: 1px;
+    }
+
     QMenu {
         background-color: #161920;
         border: 1px solid rgba(255, 255, 255, 0.18);
@@ -170,7 +178,23 @@ def get_cards_stylesheet(vibrant: bool = False) -> str:
         margin: 4px 8px;
     }
     """
-    return template.replace("__BG__", bg)
+    sheet = template.replace("__BG__", bg)
+    if not dark:
+        import re
+        light_colors = {
+            "rgba(14, 17, 23, 0.94)": "rgba(248, 250, 252, 0.94)",
+            "#e2e8f0": "#172033", "#94a3b8": "#475569",
+            "#cbd5e1": "#334155", "#38bdf8": "#0369a1",
+            "#161920": "#f8fafc", "#272f3d": "#e2e8f0",
+            "rgba(255, 255, 255, 0.14)": "rgba(15, 23, 42, 0.18)",
+            "rgba(255, 255, 255, 0.08)": "rgba(15, 23, 42, 0.10)",
+            "rgba(255, 255, 255, 0.06)": "rgba(15, 23, 42, 0.05)",
+            "rgba(255, 255, 255, 0.12)": "rgba(15, 23, 42, 0.12)",
+            "rgba(255, 255, 255, 0.18)": "rgba(15, 23, 42, 0.18)",
+        }
+        sheet = re.sub("|".join(map(re.escape, light_colors)),
+                       lambda match: light_colors[match.group()], sheet)
+    return sheet
 
 
 def get_hud_stylesheet(theme: dict = None, vibrant: bool = False) -> str:

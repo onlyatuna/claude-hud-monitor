@@ -145,3 +145,5 @@ Windows 環境可使用 `python/build_exe.bat` 產出 `dist/ClaudeHUD.exe`；mac
 
 * 分支策略：`develop` 為日常開發與 PR 目標分支，`main` 為穩定版本分支。
 * 授權條款：[AGPL-3.0](LICENSE)。
+
+傳統卡片與儀表表格共用「外觀」設定：跟隨系統／淺色／深色。可從右鍵或系統匣選單切換，重啟後保留；選擇跟隨系統時，執行中也會自動更新。

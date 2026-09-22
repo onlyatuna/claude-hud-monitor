@@ -16,6 +16,7 @@ class ProviderCardWidget(QWidget):
     def __init__(self, provider_id: str, parent=None):
         super().__init__(parent)
         self.provider_id = provider_id
+        self.dark = True
         self.theme = PROVIDER_THEMES.get(provider_id, {"color": "#38bdf8", "name": provider_id.upper()})
         self.current_metrics = UsageMetrics(provider_id=provider_id)
         self._init_ui()
@@ -105,6 +106,15 @@ class ProviderCardWidget(QWidget):
 
         layout.addLayout(m2_box)
 
+    def set_appearance(self, dark: bool):
+        self.dark = dark
+        base = PROVIDER_THEMES.get(self.provider_id, {"color": "#38bdf8", "name": self.provider_id.upper()})
+        self.theme = dict(base)
+        if not dark:
+            self.theme["color"] = {"claude": "#0369a1", "agy": "#047857", "codex": "#7e22ce"}.get(self.provider_id, "#0369a1")
+        self.title.setStyleSheet(f"color: {self.theme['color']}; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;")
+        self.update_metrics(self.current_metrics)
+
     def update_metrics(self, data: UsageMetrics):
         self.current_metrics = data
         if data.provider_name:
@@ -113,13 +123,14 @@ class ProviderCardWidget(QWidget):
             self.title.setText(self.theme["name"])
 
         self.setToolTip(data.error or "")
+        error_color = "#ef4444" if self.dark else "#b91c1c"
         if data.error and not data.stale:
-            self.dot.setStyleSheet("color: #ef4444; font-size: 10px;")
+            self.dot.setStyleSheet(f"color: {error_color}; font-size: 10px;")
             self.m1_val.setText("ERR")
-            self.m1_val.setStyleSheet("color: #ef4444; font-size: 13px;")
+            self.m1_val.setStyleSheet(f"color: {error_color}; font-size: 13px;")
             self.m1_bar.setValue(0)
             self.m1_sub.setText(data.error.split("\n")[0])
-            self.m1_sub.setStyleSheet("color: #ef4444;")
+            self.m1_sub.setStyleSheet(f"color: {error_color};")
 
             self.m2_val.setText("--")
             self.m2_bar.setValue(0)
@@ -147,7 +158,7 @@ class ProviderCardWidget(QWidget):
         # Metric 1
         self.m1_label.setText(data.metric1_title)
         self.m1_val.setText(data.metric1_text)
-        c1 = get_progress_color(data.metric1_val) if data.metric1_val is not None else "#64748b"
+        c1 = get_progress_color(data.metric1_val, self.dark) if data.metric1_val is not None else "#64748b"
         self.m1_val.setStyleSheet(f"color: {c1}; font-size: 14px;")
         self.m1_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c1}; }}")
         self.m1_bar.setValue(int(min(100, max(0, data.metric1_val or 0))))
@@ -155,7 +166,7 @@ class ProviderCardWidget(QWidget):
         # Metric 2
         self.m2_label.setText(data.metric2_title)
         self.m2_val.setText(data.metric2_text)
-        c2 = get_progress_color(data.metric2_val) if data.metric2_val is not None else "#64748b"
+        c2 = get_progress_color(data.metric2_val, self.dark) if data.metric2_val is not None else "#64748b"
         self.m2_val.setStyleSheet(f"color: {c2}; font-size: 14px;")
         self.m2_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c2}; }}")
         self.m2_bar.setValue(int(min(100, max(0, data.metric2_val or 0))))
@@ -183,7 +194,7 @@ class ProviderCardWidget(QWidget):
 
         self.update_countdown()
         if data.stale:
-            self.dot.setStyleSheet("color: #f59e0b; font-size: 10px;")
+            self.dot.setStyleSheet(f"color: {'#f59e0b' if self.dark else '#92400e'}; font-size: 10px;")
             self.badge.setText("STALE")
 
     def update_countdown(self):
@@ -198,5 +209,5 @@ class ProviderCardWidget(QWidget):
         if data.stale:
             stamp = data.last_success.astimezone().strftime("%m/%d %H:%M:%S") if data.last_success else "--"
             self.m1_sub.setText(f"舊資料 {stamp}")
-            self.m1_sub.setStyleSheet("color: #f59e0b;")
+            self.m1_sub.setStyleSheet(f"color: {'#f59e0b' if self.dark else '#92400e'};")
 

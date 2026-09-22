@@ -52,7 +52,7 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.activated.connect(self._on_activated)
 
     def _init_menu(self):
-        self.menu = QMenu()
+        self.menu = QMenu(self.hud_window)
 
         toggle_act = self.menu.addAction("👁️ 顯示 / 隱藏 HUD (Alt+C)")
         toggle_act.triggered.connect(self.hud_window.toggle_visibility)
@@ -89,7 +89,7 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.vert_act.setChecked(cur_layout == "vertical")
         self.vert_act.triggered.connect(lambda: self.hud_window._apply_cards_layout_mode("vertical"))
 
-        # Table theme submenus
+        # Shared appearance and table color submenus
         self.hud_window.add_theme_menus(self.menu)
 
         # Click-through toggle
