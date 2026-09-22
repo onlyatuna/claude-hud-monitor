@@ -1,12 +1,21 @@
 """
-HUD themes and stylesheets.
-
-Frosted-glass look modelled on macOS utility panels: no boxed cells, hairline
-section separators, one quiet accent. Two appearances (light / dark) × two
-colour schemes:
-  "scale" - muted green / yellow / orange / red by usage (see core.pace.SCALE_THRESHOLDS)
-  "duo"   - fixed periwinkle pair: inner pie = 5h window, outer ring = weekly window
+HUD themes and stylesheets supporting both Classic Cards and Modern Table layouts.
 """
+
+# ==================== Common / Card Colors ====================
+
+def get_progress_color(percent: float) -> str:
+    if percent >= 90:
+        return "#ef4444"  # Neon Red
+    elif percent >= 75:
+        return "#f59e0b"  # Amber Warning
+    elif percent >= 50:
+        return "#3b82f6"  # Tech Blue
+    else:
+        return "#10b981"  # GeForce Emerald Green
+
+
+# ==================== Table Theme Definitions ====================
 
 SCHEMES = ("scale", "duo")
 APPEARANCES = ("auto", "light", "dark")
@@ -45,7 +54,128 @@ THEMES = {
 }
 
 
-def get_hud_stylesheet(theme: dict, vibrant: bool) -> str:
+def get_cards_stylesheet() -> str:
+    """Classic Cards layout stylesheet (NVIDIA / RivaTuner Aesthetic)."""
+    return """
+    QWidget#CentralWidget {
+        background-color: rgba(14, 17, 23, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 9px;
+    }
+    
+    QLabel {
+        color: #e2e8f0;
+        font-family: 'Segoe UI', 'SF Pro Display', 'Microsoft JhengHei', sans-serif;
+    }
+    
+    QLabel#HeaderTitle {
+        font-size: 10.5px;
+        font-weight: 800;
+        letter-spacing: 1.0px;
+        color: #94a3b8;
+    }
+    
+    QLabel#HeaderStatus {
+        font-size: 9.5px;
+        color: #64748b;
+        font-family: 'Consolas', monospace;
+    }
+    
+    QLabel#MetricTitle {
+        font-size: 10px;
+        font-weight: 700;
+        color: #94a3b8;
+        letter-spacing: 0.6px;
+    }
+    
+    QLabel#MetricValue {
+        font-size: 16px;
+        font-weight: 800;
+        font-family: 'Consolas', 'Courier New', monospace;
+    }
+    
+    QLabel#SubDetail {
+        font-size: 9.5px;
+        color: #64748b;
+    }
+    
+    QProgressBar {
+        background-color: rgba(255, 255, 255, 0.08);
+        border: none;
+        border-radius: 3px;
+        text-align: right;
+        min-height: 5px;
+        max-height: 5px;
+    }
+    
+    QProgressBar::chunk {
+        border-radius: 3px;
+    }
+    
+    QLabel#Badge {
+        background-color: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 3px;
+        padding: 1px 4px;
+        font-size: 9px;
+        color: #cbd5e1;
+        font-family: 'Consolas', monospace;
+    }
+    
+    QPushButton#LayoutToggleBtn {
+        background-color: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
+        color: #94a3b8;
+        font-size: 11px;
+        padding: 1px 4px;
+        min-width: 18px;
+        max-height: 18px;
+    }
+    
+    QPushButton#LayoutToggleBtn:hover {
+        background-color: rgba(255, 255, 255, 0.12);
+        color: #38bdf8;
+        border-color: #38bdf8;
+    }
+    
+    QFrame#Divider {
+        background-color: rgba(255, 255, 255, 0.12);
+        max-width: 1px;
+        min-width: 1px;
+    }
+    
+    QMenu {
+        background-color: #161920;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 6px;
+        padding: 4px 0px;
+    }
+    
+    QMenu::item {
+        color: #e2e8f0;
+        padding: 6px 24px 6px 20px;
+        font-size: 11px;
+    }
+    
+    QMenu::item:selected {
+        background-color: #272f3d;
+        color: #38bdf8;
+    }
+    
+    QMenu::separator {
+        height: 1px;
+        background-color: rgba(255, 255, 255, 0.12);
+        margin: 4px 8px;
+    }
+    """
+
+
+def get_hud_stylesheet(theme: dict = None, vibrant: bool = False) -> str:
+    """Return appropriate stylesheet for HUD window."""
+    if theme is None:
+        return get_cards_stylesheet()
+
     panel = theme["panel"] if vibrant else theme["panel_solid"]
     return f"""
     QWidget#CentralWidget {{
@@ -54,8 +184,22 @@ def get_hud_stylesheet(theme: dict, vibrant: bool) -> str:
         border-radius: {theme['radius']}px;
     }}
     QLabel {{ color: {theme['text']}; }}
-    QLabel#HeaderTitle {{ font-size: 12px; font-weight: 600; color: {theme['text2']}; }}
-    QLabel#HeaderStatus {{ font-size: 11px; color: {theme['text2']}; }}
+    QLabel#HeaderTitle {{ font-size: 11px; font-weight: 700; color: {theme['text2']}; }}
+    QLabel#HeaderStatus {{ font-size: 10px; color: {theme['text2']}; }}
+    QPushButton#LayoutToggleBtn {{
+        background-color: transparent;
+        border: 1px solid {theme['separator']};
+        border-radius: 4px;
+        color: {theme['text2']};
+        font-size: 11px;
+        padding: 1px 4px;
+        min-width: 18px;
+        max-height: 18px;
+    }}
+    QPushButton#LayoutToggleBtn:hover {{
+        background-color: {theme['menu_hover']};
+        color: {theme['text']};
+    }}
     QMenu {{
         background-color: {theme['menu_bg']};
         border: 1px solid {theme['separator']};
@@ -70,6 +214,7 @@ def get_hud_stylesheet(theme: dict, vibrant: bool) -> str:
 
 
 def get_table_stylesheet(theme: dict) -> str:
+    """Stylesheet for UsageTable elements."""
     return f"""
     QLabel {{ color: {theme['text']}; }}
     QLabel#SectionTitle {{ font-size: 13px; font-weight: 600; }}

@@ -62,7 +62,34 @@ class HUDTrayIcon(QSystemTrayIcon):
 
         self.menu.addSeparator()
 
-        # Colour scheme / appearance submenus
+        # UI Style Submenu (Dual Mode)
+        self.ui_style_menu = self.menu.addMenu("🎭 介面風格 (UI Style)")
+        cur_ui_mode = self.hud_window.config.get("ui_mode", "cards")
+
+        self.cards_mode_act = self.ui_style_menu.addAction("🗂️ 傳統卡片 (Classic Cards)")
+        self.cards_mode_act.setCheckable(True)
+        self.cards_mode_act.setChecked(cur_ui_mode == "cards")
+        self.cards_mode_act.triggered.connect(lambda: self.hud_window._apply_ui_mode("cards"))
+
+        self.table_mode_act = self.ui_style_menu.addAction("📊 儀表表格 (Modern Table)")
+        self.table_mode_act.setCheckable(True)
+        self.table_mode_act.setChecked(cur_ui_mode == "table")
+        self.table_mode_act.triggered.connect(lambda: self.hud_window._apply_ui_mode("table"))
+
+        # Layout submenu (for Cards mode)
+        self.layout_menu = self.menu.addMenu("📐 顯示佈局 (Layout)")
+        cur_layout = self.hud_window.config.get("layout_mode", "horizontal")
+        self.horiz_act = self.layout_menu.addAction("💻 橫向三欄並排 (Horizontal Triple)")
+        self.horiz_act.setCheckable(True)
+        self.horiz_act.setChecked(cur_layout == "horizontal")
+        self.horiz_act.triggered.connect(lambda: self.hud_window._apply_cards_layout_mode("horizontal"))
+
+        self.vert_act = self.layout_menu.addAction("📱 直立三層堆疊 (Vertical Stack)")
+        self.vert_act.setCheckable(True)
+        self.vert_act.setChecked(cur_layout == "vertical")
+        self.vert_act.triggered.connect(lambda: self.hud_window._apply_cards_layout_mode("vertical"))
+
+        # Table theme submenus
         self.hud_window.add_theme_menus(self.menu)
 
         # Click-through toggle
@@ -95,6 +122,17 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.setContextMenu(self.menu)
 
     def update_menu_state(self):
+        cur_ui_mode = self.hud_window.config.get("ui_mode", "cards")
+        self.cards_mode_act.setChecked(cur_ui_mode == "cards")
+        self.table_mode_act.setChecked(cur_ui_mode == "table")
+
+        cur_layout = self.hud_window.config.get("layout_mode", "horizontal")
+        self.horiz_act.setChecked(cur_layout == "horizontal")
+        self.vert_act.setChecked(cur_layout == "vertical")
+
+        # Hide or show cards layout menu depending on current UI mode
+        self.layout_menu.menuAction().setVisible(cur_ui_mode == "cards")
+
         self.clickthrough_act.setChecked(self.hud_window.config.get("click_through", False))
         self.aot_act.setChecked(self.hud_window.config.get("always_on_top", True))
         self.autostart_act.setChecked(is_autostart_enabled())

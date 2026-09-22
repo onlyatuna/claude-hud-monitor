@@ -15,7 +15,7 @@ QTimer / 手動刷新 / 休眠恢復
               ↓
         UsageMetrics
               ↓ Python queue → Qt timer
-       UsageTable（表格：Provider 為欄，圓盤 內圈 5 小時／外環 1 週）
+       ProviderCardWidget (Classic Cards) / UsageTable (Modern Table)
 ```
 
 ## 責任界線
@@ -23,11 +23,12 @@ QTimer / 手動刷新 / 休眠恢復
 - core/providers/：傳輸、認證讀取、解析；不碰 Qt widget、不修改憑證。
 - core/providers/base.py：共用資料契約、百分比驗證、錯誤分類、倒數。
 - core/refresh_controller.py：請求序號、退避、最後成功資料與排程；可變狀態由 Qt 主執行緒更新。
-- ui/hud_window.py：視窗、選單、穿透、主題切換與休眠偵測。
-- ui/usage_table.py：渲染資料，不查網路；平均進度虛線與超出段斜紋只表達速度，不改變顏色。
-- ui/styles.py：淺色／深色主題 × 色階／雙色配色的色號與樣式表。
-- ui/vibrancy.py：macOS 原生毛玻璃背景（NSVisualEffectView）；其他平台改用較不透明的面板。
-- core/pace.py：倒數格式、視窗長度解析、平均進度與色階門檻（純函式，可單元測試）。
+- ui/hud_window.py：視窗、選單、穿透、排版/主題雙模式切換與休眠偵測。
+- ui/provider_card.py：渲染經典卡片資料，不查網路。
+- ui/usage_table.py：渲染現代表格與圓盤儀表，不查網路；平均進度虛線與超出段斜紋只表達速度，不改變顏色。
+- ui/styles.py：經典暗黑樣式與現代毛玻璃淺色／深色主題樣式表。
+- ui/vibrancy.py：macOS 原生毛玻璃背景（NSVisualEffectView）；其他平台自動改用不透明面板。
+- core/pace.py：倒數格式、視窗長度解析、平均進度與色階門檻（純函式，具完整單元測試）。
 - core/config_manager.py：設定位置、批次更新、同目錄暫存檔與原子替換。
 - core/diagnostics.py：限制大小的操作紀錄，禁止傳入憑證、原始回應與 CLI stderr。
 - system/hotkey.py、core/autostart.py：平台整合。
