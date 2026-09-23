@@ -153,30 +153,6 @@ def get_cards_stylesheet(vibrant: bool = False, *, dark: bool = True) -> str:
         min-height: 1px;
         max-height: 1px;
     }
-
-    QMenu {
-        background-color: #161920;
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 6px;
-        padding: 4px 0px;
-    }
-    
-    QMenu::item {
-        color: #e2e8f0;
-        padding: 6px 24px 6px 20px;
-        font-size: 11px;
-    }
-    
-    QMenu::item:selected {
-        background-color: #272f3d;
-        color: #38bdf8;
-    }
-    
-    QMenu::separator {
-        height: 1px;
-        background-color: rgba(255, 255, 255, 0.12);
-        margin: 4px 8px;
-    }
     """
     sheet = template.replace("__BG__", bg)
     if not dark:
@@ -226,16 +202,6 @@ def get_hud_stylesheet(theme: dict = None, vibrant: bool = False) -> str:
         background-color: {theme['menu_hover']};
         color: {theme['text']};
     }}
-    QMenu {{
-        background-color: {theme['menu_bg']};
-        border: 1px solid {theme['separator']};
-        border-radius: 8px;
-        padding: 5px 0px;
-    }}
-    QMenu::item {{ color: {theme['text']}; padding: 5px 26px 5px 22px; font-size: 12px; }}
-    QMenu::item:selected {{ background-color: {theme['menu_hover']}; }}
-    QMenu::item:disabled {{ color: {theme['text3']}; }}
-    QMenu::separator {{ height: 1px; background-color: {theme['separator']}; margin: 5px 10px; }}
     """
 
 
