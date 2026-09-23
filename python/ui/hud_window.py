@@ -744,8 +744,23 @@ class HUDWindow(QWidget):
 
         menu.addSeparator()
 
+        # UI Mode Submenu (Dual Mode Switcher)
+        ui_mode_menu = menu.addMenu(menu_icon("layout"), "介面風格 (UI Style)")
+        cur_ui_mode = self.config.get("ui_mode", "cards")
+
+        cards_act = ui_mode_menu.addAction("傳統卡片 (Classic Cards)")
+        cards_act.setCheckable(True)
+        cards_act.setChecked(cur_ui_mode == "cards")
+        cards_act.triggered.connect(lambda: self._apply_ui_mode("cards"))
+
+        table_act = ui_mode_menu.addAction("儀表表格 (Modern Table)")
+        table_act.setCheckable(True)
+        table_act.setChecked(cur_ui_mode == "table")
+        table_act.triggered.connect(lambda: self._apply_ui_mode("table"))
+
         # Layout Switch Submenu
         layout_menu = menu.addMenu(menu_icon("layout"), "顯示佈局 (Layout)")
+        layout_menu.menuAction().setVisible(cur_ui_mode == "cards")
         cur_layout = self.config.get("layout_mode", "horizontal")
         horiz_act = layout_menu.addAction(menu_icon("laptop"), "橫向三欄並排 (Horizontal Triple)")
         horiz_act.setCheckable(True)
@@ -756,6 +771,8 @@ class HUDWindow(QWidget):
         vert_act.setCheckable(True)
         vert_act.setChecked(cur_layout == "vertical")
         vert_act.triggered.connect(lambda: self._apply_cards_layout_mode("vertical"))
+
+        self.add_theme_menus(menu)
 
         # Click-through toggle
         ghost_act = menu.addAction(menu_icon("ghost"), "滑鼠點擊穿透 (Alt+Shift+C)")
