@@ -552,7 +552,7 @@ pub fn save_current_as_profile(alias: &str) -> Result<AgyProfile, String> {
     }
 
     let id_tok = raw.get("id_token").and_then(|v| v.as_str());
-    let (mut email, mut name) = extract_jwt_email(id_tok);
+    let (mut email, name) = extract_jwt_email(id_tok);
     if email.is_none() {
         email = raw.get("email").and_then(|v| v.as_str()).map(|s| s.to_string())
             .or_else(|| raw.get("user").and_then(|v| v.as_str()).map(|s| s.to_string()));
@@ -622,6 +622,7 @@ pub struct AgyProvider {
 }
 
 impl AgyProvider {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::with_config(None)
     }
