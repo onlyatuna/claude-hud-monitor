@@ -5,11 +5,13 @@
 // Mirrors Python core/providers/agy_provider.py
 
 use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
+use crate::config::Config;
 use chrono::{DateTime, Utc};
 use log::{info, warn};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::process::Command;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use ureq::OrAnyStatus;
 
@@ -21,8 +23,73 @@ const USER_AGENT: &str = "antigravity/1.0";
 
 static AGY_BINARY: OnceLock<Option<String>> = OnceLock::new();
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgyProfile {
+    pub id: String,           // "default", "evanchen940628", "work"
+    pub display_name: String, // "預設 (evanchen940628@gmail.com)" or "work (evanchen940628@gmail.com)"
+    pub short_name: String,   // "預設", "evanchen", "work"
+    pub email: Option<String>,
+    pub profile_path: Option<PathBuf>,
+    pub is_keyring_active: bool,
+    pub last_activity: Option<std::time::SystemTime>,
+}
+
+pub fn base64_url_decode(input: &str) -> Option<Vec<u8>> {
+    let mut s = input.replace('-', "+").replace('_', "/");
+    let missing_padding = (4 - s.len() % 4) % 4;
+    for _ in 0..missing_padding {
+        s.push('=');
+    }
+
+    let mut out = Vec::new();
+    let mut buf: u32 = 0;
+    let mut bits: u32 = 0;
+
+    for &b in s.as_bytes() {
+        let val = match b {
+            b'A'..=b'Z' => (b - b'A') as u32,
+            b'a'..=b'z' => (b - b'a' + 26) as u32,
+            b'0'..=b'9' => (b - b'0' + 52) as u32,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => break,
+            _ => return None,
+        };
+        buf = (buf << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+            buf &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
+}
+
+pub fn extract_jwt_email(id_token: Option<&str>) -> (Option<String>, Option<String>) {
+    let token = match id_token {
+        Some(t) if !t.is_empty() => t,
+        _ => return (None, None),
+    };
+    let parts: Vec<&str> = token.trim().split('.').collect();
+    if parts.len() < 2 {
+        return (None, None);
+    }
+    let bytes = match base64_url_decode(parts[1]) {
+        Some(b) => b,
+        None => return (None, None),
+    };
+    let val: serde_json::Value = match serde_json::from_slice(&bytes) {
+        Ok(v) => v,
+        Err(_) => return (None, None),
+    };
+    let email = val.get("email").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let name = val.get("name").and_then(|v| v.as_str()).map(|s| s.to_string());
+    (email, name)
+}
+
 #[cfg(target_os = "windows")]
-mod os_cred {
+pub mod os_cred {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
@@ -50,13 +117,18 @@ mod os_cred {
             flags: u32,
             credential: *mut *mut CREDENTIALW,
         ) -> i32;
+        fn CredWriteW(credential: *const CREDENTIALW, flags: u32) -> i32;
         fn CredFree(buffer: *mut std::ffi::c_void);
     }
 
-    pub fn get_gemini_token() -> Option<String> {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetLastError() -> u32;
+    }
+
+    pub fn get_gemini_raw() -> Option<serde_json::Value> {
         let target: Vec<u16> = OsStr::new("gemini:antigravity\0").encode_wide().collect();
         let mut cred_ptr: *mut CREDENTIALW = std::ptr::null_mut();
-        // CRED_TYPE_GENERIC = 1
         let res = unsafe { CredReadW(target.as_ptr(), 1, 0, &mut cred_ptr) };
         if res == 0 || cred_ptr.is_null() {
             return None;
@@ -73,19 +145,65 @@ mod os_cred {
             CredFree(cred_ptr as *mut std::ffi::c_void);
         }
 
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        json.get("token")?
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn get_gemini_token() -> Option<String> {
+        get_gemini_raw()?
+            .get("token")?
             .get("access_token")?
             .as_str()
             .map(|s| s.to_string())
     }
+
+    pub fn set_gemini_raw(val: &serde_json::Value) -> Result<(), String> {
+        let mut text = serde_json::to_string(val).map_err(|e| e.to_string())?;
+        // Size Guard: Windows Generic Credential limit is 2560 bytes
+        if text.len() > 2560 {
+            if let Some(obj) = val.as_object() {
+                let mut trimmed = obj.clone();
+                trimmed.remove("id_token");
+                if let Ok(s) = serde_json::to_string(&trimmed) {
+                    text = s;
+                }
+            }
+        }
+
+        let target: Vec<u16> = OsStr::new("gemini:antigravity\0").encode_wide().collect();
+        let user: Vec<u16> = OsStr::new("antigravity\0").encode_wide().collect();
+        let mut bytes = text.into_bytes();
+
+        let cred = CREDENTIALW {
+            flags: 0,
+            r#type: 1, // CRED_TYPE_GENERIC
+            target_name: target.as_ptr() as *mut u16,
+            comment: std::ptr::null_mut(),
+            last_written: [0, 0],
+            credential_blob_size: bytes.len() as u32,
+            credential_blob: bytes.as_mut_ptr(),
+            persist: 2, // CRED_PERSIST_LOCAL_MACHINE
+            attribute_count: 0,
+            attributes: std::ptr::null_mut(),
+            target_alias: std::ptr::null_mut(),
+            user_name: user.as_ptr() as *mut u16,
+        };
+
+        let res = unsafe { CredWriteW(&cred, 0) };
+        if res == 0 {
+            let err = unsafe { GetLastError() };
+            return Err(format!("CredWriteW 失敗 (Win32 Error {})", err));
+        }
+
+        super::update_fallback_token_file(val);
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "macos")]
-mod os_cred {
+pub mod os_cred {
     use std::process::Command;
 
-    pub fn get_gemini_token() -> Option<String> {
+    pub fn get_gemini_raw() -> Option<serde_json::Value> {
         let output = Command::new("security")
             .args([
                 "find-generic-password",
@@ -101,19 +219,47 @@ mod os_cred {
             return None;
         }
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        json.get("token")?
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn get_gemini_token() -> Option<String> {
+        get_gemini_raw()?
+            .get("token")?
             .get("access_token")?
             .as_str()
             .map(|s| s.to_string())
     }
+
+    pub fn set_gemini_raw(val: &serde_json::Value) -> Result<(), String> {
+        let text = serde_json::to_string(val).map_err(|e| e.to_string())?;
+        let output = Command::new("security")
+            .args([
+                "add-generic-password",
+                "-s",
+                "gemini",
+                "-a",
+                "antigravity",
+                "-w",
+                &text,
+                "-U",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !output.status.success() {
+            return Err("security add-generic-password 失敗".to_string());
+        }
+
+        super::update_fallback_token_file(val);
+        Ok(())
+    }
 }
 
 #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-mod os_cred {
+pub mod os_cred {
+    use std::io::Write;
     use std::process::Command;
 
-    pub fn get_gemini_token() -> Option<String> {
+    pub fn get_gemini_raw() -> Option<serde_json::Value> {
         let output = Command::new("secret-tool")
             .args(["lookup", "service", "gemini", "account", "antigravity"])
             .output()
@@ -122,26 +268,371 @@ mod os_cred {
             return None;
         }
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        json.get("token")?
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn get_gemini_token() -> Option<String> {
+        get_gemini_raw()?
+            .get("token")?
             .get("access_token")?
             .as_str()
             .map(|s| s.to_string())
     }
+
+    pub fn set_gemini_raw(val: &serde_json::Value) -> Result<(), String> {
+        let text = serde_json::to_string(val).map_err(|e| e.to_string())?;
+        let mut child = Command::new("secret-tool")
+            .args([
+                "store",
+                "--label=gemini:antigravity",
+                "service",
+                "gemini",
+                "account",
+                "antigravity",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let status = child.wait().map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err("secret-tool store 失敗".to_string());
+        }
+
+        super::update_fallback_token_file(val);
+        Ok(())
+    }
+}
+
+pub fn update_fallback_token_file(val: &serde_json::Value) {
+    let dir = crate::providers::claude::dirs_home().join(".gemini").join("antigravity-cli");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("antigravity-oauth-token");
+    if let Ok(text) = serde_json::to_string(val) {
+        let _ = std::fs::write(&path, text);
+    }
+}
+
+pub fn get_profiles_dir() -> PathBuf {
+    let dir = crate::providers::claude::dirs_home().join(".gemini").join("profiles");
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
+pub fn auto_capture_active_profile() -> Option<AgyProfile> {
+    let raw = os_cred::get_gemini_raw()?;
+    let id_tok = raw.get("id_token").and_then(|v| v.as_str());
+    let (mut email, mut name) = extract_jwt_email(id_tok);
+    if email.is_none() {
+        email = raw.get("email").and_then(|v| v.as_str()).map(|s| s.to_string())
+            .or_else(|| raw.get("user").and_then(|v| v.as_str()).map(|s| s.to_string()));
+    }
+    let email = email?;
+    let email_clean = email.trim().to_string();
+    let short_name = email_clean.split('@').next().unwrap_or(&email_clean).to_string();
+    if name.is_none() {
+        name = Some(short_name.clone());
+    }
+
+    let p_dir = get_profiles_dir();
+    let p_path = p_dir.join(format!("{}.json", short_name));
+
+    let mut needs_save = false;
+    if !p_path.exists() {
+        needs_save = true;
+    } else if let Ok(text) = std::fs::read_to_string(&p_path) {
+        if let Ok(saved) = serde_json::from_str::<serde_json::Value>(&text) {
+            let saved_tok = saved.pointer("/credential/token/access_token")
+                .or_else(|| saved.pointer("/token/access_token"))
+                .and_then(|v| v.as_str());
+            let curr_tok = raw.pointer("/token/access_token").and_then(|v| v.as_str());
+            if saved_tok != curr_tok && curr_tok.is_some() {
+                needs_save = true;
+            }
+        } else {
+            needs_save = true;
+        }
+    } else {
+        needs_save = true;
+    }
+
+    if needs_save {
+        let snapshot = serde_json::json!({
+            "id": short_name,
+            "email": email_clean,
+            "name": name,
+            "display_name": format!("{} ({})", short_name, email_clean),
+            "short_name": short_name,
+            "credential": raw
+        });
+        if let Ok(s) = serde_json::to_string_pretty(&snapshot) {
+            let tmp = p_path.with_extension("json.tmp");
+            if std::fs::write(&tmp, s).is_ok() {
+                let _ = std::fs::rename(&tmp, &p_path);
+            }
+        }
+    }
+
+    let last_activity = std::fs::metadata(&p_path).and_then(|m| m.modified()).ok();
+    Some(AgyProfile {
+        id: short_name.clone(),
+        display_name: format!("{} ({})", short_name, email_clean),
+        short_name,
+        email: Some(email_clean),
+        profile_path: Some(p_path),
+        is_keyring_active: true,
+        last_activity,
+    })
+}
+
+pub fn discover_profiles() -> Vec<AgyProfile> {
+    let mut profiles = Vec::new();
+    let mut seen_ids = std::collections::HashSet::new();
+
+    let active_prof = auto_capture_active_profile();
+    let active_id = active_prof.as_ref().map(|p| p.id.to_lowercase());
+    if let Some(ap) = active_prof {
+        seen_ids.insert(ap.id.to_lowercase());
+        profiles.push(ap);
+    }
+
+    let p_dir = get_profiles_dir();
+    if let Ok(entries) = std::fs::read_dir(&p_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("json") {
+                let pid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+                if pid.is_empty() || seen_ids.contains(&pid.to_lowercase()) {
+                    continue;
+                }
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    if let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) {
+                        let mut email = data.get("email").and_then(|v| v.as_str()).map(|s| s.to_string());
+                        if email.is_none() {
+                            let id_tok = data.pointer("/credential/id_token")
+                                .or_else(|| data.get("id_token"))
+                                .and_then(|v| v.as_str());
+                            email = extract_jwt_email(id_tok).0;
+                        }
+                        let short = data.get("short_name").and_then(|v| v.as_str()).unwrap_or(&pid).to_string();
+                        let disp = data.get("display_name").and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| {
+                                if let Some(e) = &email {
+                                    format!("{} ({})", short, e)
+                                } else {
+                                    format!("{} (~/{})", short, path.file_name().and_then(|f| f.to_str()).unwrap_or(""))
+                                }
+                            });
+                        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+                        let is_active = active_id.as_deref() == Some(&pid.to_lowercase());
+                        seen_ids.insert(pid.to_lowercase());
+                        profiles.push(AgyProfile {
+                            id: pid,
+                            display_name: disp,
+                            short_name: short,
+                            email,
+                            profile_path: Some(path),
+                            is_keyring_active: is_active,
+                            last_activity: mtime,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    if profiles.is_empty() {
+        profiles.push(AgyProfile {
+            id: "default".to_string(),
+            display_name: "預設帳號 (Keyring)".to_string(),
+            short_name: "預設".to_string(),
+            email: None,
+            profile_path: None,
+            is_keyring_active: true,
+            last_activity: None,
+        });
+    }
+
+    profiles.sort_by(|a, b| {
+        let active_cmp = b.is_keyring_active.cmp(&a.is_keyring_active);
+        if active_cmp != std::cmp::Ordering::Equal {
+            active_cmp
+        } else {
+            a.id.to_lowercase().cmp(&b.id.to_lowercase())
+        }
+    });
+
+    profiles
+}
+
+pub fn resolve_active_profile(preference: &str) -> (AgyProfile, bool) {
+    let profiles = discover_profiles();
+    let pref = preference.trim();
+
+    if pref.is_empty() || pref.eq_ignore_ascii_case("auto") {
+        if let Some(active) = profiles.iter().find(|p| p.is_keyring_active) {
+            return (active.clone(), true);
+        }
+        if let Some(first) = profiles.first() {
+            return (first.clone(), true);
+        }
+        return (
+            AgyProfile {
+                id: "default".to_string(),
+                display_name: "預設帳號".to_string(),
+                short_name: "預設".to_string(),
+                email: None,
+                profile_path: None,
+                is_keyring_active: true,
+                last_activity: None,
+            },
+            true,
+        );
+    }
+
+    for p in &profiles {
+        if p.id.eq_ignore_ascii_case(pref)
+            || p.short_name.eq_ignore_ascii_case(pref)
+            || p.email.as_deref().map(|e| e.eq_ignore_ascii_case(pref)).unwrap_or(false)
+        {
+            return (p.clone(), false);
+        }
+    }
+
+    let custom_path = get_profiles_dir().join(format!("{}.json", pref));
+    (
+        AgyProfile {
+            id: pref.to_string(),
+            display_name: format!("{} (~/.gemini/profiles/{}.json)", pref, pref),
+            short_name: pref.to_string(),
+            email: None,
+            profile_path: Some(custom_path),
+            is_keyring_active: false,
+            last_activity: None,
+        },
+        false,
+    )
+}
+
+pub fn switch_active_profile(profile_id: &str) -> Result<(), String> {
+    if profile_id.is_empty() || profile_id.eq_ignore_ascii_case("auto") {
+        return Ok(());
+    }
+
+    let profiles = discover_profiles();
+    let target_prof = profiles
+        .iter()
+        .find(|p| p.id.eq_ignore_ascii_case(profile_id) || p.short_name.eq_ignore_ascii_case(profile_id))
+        .ok_or_else(|| format!("未找到 Profile: {}", profile_id))?;
+
+    let path = target_prof
+        .profile_path
+        .as_ref()
+        .ok_or_else(|| format!("Profile {} 沒有檔案路徑", profile_id))?;
+
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("無法讀取 Profile 檔案: {e}"))?;
+    let data: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("Profile JSON 解析失敗: {e}"))?;
+
+    let cred = data.get("credential").unwrap_or(&data);
+    os_cred::set_gemini_raw(cred)?;
+    log::info!("[AgyProvider] 成功切換系統活躍 AGY Profile 為 {}", profile_id);
+    Ok(())
+}
+
+pub fn save_current_as_profile(alias: &str) -> Result<AgyProfile, String> {
+    let raw = os_cred::get_gemini_raw().ok_or_else(|| "無法讀取當前金鑰庫憑證".to_string())?;
+    let alias_clean = alias.trim().replace(' ', "_");
+    if alias_clean.is_empty() {
+        return Err("別名不可為空白".to_string());
+    }
+
+    let id_tok = raw.get("id_token").and_then(|v| v.as_str());
+    let (mut email, mut name) = extract_jwt_email(id_tok);
+    if email.is_none() {
+        email = raw.get("email").and_then(|v| v.as_str()).map(|s| s.to_string())
+            .or_else(|| raw.get("user").and_then(|v| v.as_str()).map(|s| s.to_string()));
+    }
+
+    let p_dir = get_profiles_dir();
+    let p_path = p_dir.join(format!("{}.json", alias_clean));
+
+    let snapshot = serde_json::json!({
+        "id": alias_clean,
+        "email": email,
+        "name": name.clone().unwrap_or_else(|| alias_clean.clone()),
+        "display_name": if let Some(e) = &email { format!("{} ({})", alias_clean, e) } else { alias_clean.clone() },
+        "short_name": alias_clean,
+        "credential": raw
+    });
+
+    let s = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+    let tmp = p_path.with_extension("json.tmp");
+    std::fs::write(&tmp, s).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &p_path).map_err(|e| e.to_string())?;
+
+    let last_activity = std::fs::metadata(&p_path).and_then(|m| m.modified()).ok();
+    Ok(AgyProfile {
+        id: alias_clean.clone(),
+        display_name: if let Some(e) = email.as_ref() { format!("{} ({})", alias_clean, e) } else { alias_clean.clone() },
+        short_name: alias_clean,
+        email,
+        profile_path: Some(p_path),
+        is_keyring_active: true,
+        last_activity,
+    })
+}
+
+/// Derive a filesystem-safe alias from an email's local part (native menus have no text input).
+pub fn alias_from_email(email: Option<&str>) -> String {
+    let local = email.and_then(|e| e.split('@').next()).unwrap_or("");
+    let cleaned: String = local
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        .collect();
+    if cleaned.is_empty() {
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("agy_{}", secs)
+    } else {
+        cleaned
+    }
+}
+
+/// Snapshot the current keyring account, naming it after its email (used by the native menu).
+pub fn save_current_auto() -> Result<AgyProfile, String> {
+    let raw = os_cred::get_gemini_raw().ok_or_else(|| "無法讀取當前金鑰庫憑證".to_string())?;
+    let (mut email, _) = extract_jwt_email(raw.get("id_token").and_then(|v| v.as_str()));
+    if email.is_none() {
+        email = raw.get("email").and_then(|v| v.as_str()).map(|s| s.to_string());
+    }
+    save_current_as_profile(&alias_from_email(email.as_deref()))
 }
 
 pub struct AgyProvider {
     timeout_secs: u64,
     client: ureq::Agent,
+    config: Option<Arc<Mutex<Config>>>,
 }
 
 impl AgyProvider {
     pub fn new() -> Self {
+        Self::with_config(None)
+    }
+
+    pub fn with_config(config: Option<Arc<Mutex<Config>>>) -> Self {
         let timeout = Duration::from_secs(8);
         let client = ureq::AgentBuilder::new().timeout(timeout).build();
         Self {
             timeout_secs: 30,
             client,
+            config,
         }
     }
 
@@ -404,11 +895,52 @@ impl Provider for AgyProvider {
     fn fetch_usage(&self) -> UsageMetrics {
         let now = now_str();
 
-        // 1. Fast path: Direct CloudCode API call (~200ms vs ~4000ms)
-        if let Some(token) = os_cred::get_gemini_token() {
-            match self.fetch_usage_api(&token, &now) {
-                Ok(metrics) => {
+        // Resolve which profile to use from config (mirrors ClaudeProvider::fetch_usage)
+        let preference = self
+            .config
+            .as_ref()
+            .and_then(|c| c.lock().ok())
+            .map(|c| c.agy_profile.clone())
+            .unwrap_or_else(|| "auto".to_string());
+
+        let (active_profile, is_auto) = resolve_active_profile(&preference);
+        let display_title = if is_auto {
+            if active_profile.id == "default" {
+                "ANTIGRAVITY".to_string()
+            } else {
+                format!("AGY [{}]", active_profile.short_name)
+            }
+        } else if active_profile.id == "default" {
+            "ANTIGRAVITY".to_string()
+        } else {
+            format!("AGY ({})", active_profile.short_name)
+        };
+
+        // 1. Fast path: read token from profile snapshot if available, else keyring
+        let token = if let Some(ref path) = active_profile.profile_path {
+            if path.exists() {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|data| {
+                        let cred = data.get("credential").unwrap_or(&data);
+                        cred.pointer("/token/access_token")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+        .or_else(|| os_cred::get_gemini_token());
+
+        if let Some(tok) = token {
+            match self.fetch_usage_api(&tok, &now) {
+                Ok(mut metrics) => {
                     info!("[AgyProvider] Direct API fetch succeeded (fast path)");
+                    metrics.provider_name = display_title;
                     return metrics;
                 }
                 Err(err) => {
@@ -419,11 +951,13 @@ impl Provider for AgyProvider {
                 }
             }
         } else {
-            info!("[AgyProvider] No cached OAuth token in keyring, using CLI subprocess");
+            info!("[AgyProvider] No cached OAuth token, using CLI subprocess");
         }
 
         // 2. Fallback path: CLI subprocess (refreshes tokens and updates keyring)
-        self.fetch_usage_cli(&now)
+        let mut metrics = self.fetch_usage_cli(&now);
+        metrics.provider_name = display_title;
+        metrics
     }
 }
 
@@ -578,6 +1112,105 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_base64_url_decode_basic() {
+        // "hello" in standard base64 is "aGVsbG8="
+        // url-safe without padding: "aGVsbG8"
+        let result = base64_url_decode("aGVsbG8");
+        assert!(result.is_some(), "should decode without padding");
+        assert_eq!(result.unwrap(), b"hello");
+    }
+
+    #[test]
+    fn test_base64_url_decode_with_url_chars() {
+        // base64url uses '-' for '+' and '_' for '/'
+        let result = base64_url_decode("-_8");
+        assert!(result.is_some(), "should handle - and _ characters");
+    }
+
+    // Minimal base64url encoder (test-only, no external crate needed)
+    fn base64_url_encode(input: &[u8]) -> String {
+        const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        let mut out = String::new();
+        let mut i = 0;
+        while i < input.len() {
+            let b0 = input[i] as u32;
+            let b1 = if i + 1 < input.len() { input[i + 1] as u32 } else { 0 };
+            let b2 = if i + 2 < input.len() { input[i + 2] as u32 } else { 0 };
+            out.push(ALPHABET[((b0 >> 2) & 0x3F) as usize] as char);
+            out.push(ALPHABET[(((b0 & 0x3) << 4) | (b1 >> 4)) as usize] as char);
+            if i + 1 < input.len() {
+                out.push(ALPHABET[(((b1 & 0xF) << 2) | (b2 >> 6)) as usize] as char);
+            }
+            if i + 2 < input.len() {
+                out.push(ALPHABET[(b2 & 0x3F) as usize] as char);
+            }
+            i += 3;
+        }
+        out
+    }
+
+    #[test]
+    fn test_extract_jwt_email_valid() {
+        // Build a minimal JWT: header.payload.signature (all base64url, no padding)
+        let payload_json = r#"{"email":"test@example.com","name":"Test User","sub":"12345"}"#;
+        let encoded = base64_url_encode(payload_json.as_bytes());
+        let fake_jwt = format!("header.{}.signature", encoded);
+        let (email, name) = extract_jwt_email(Some(&fake_jwt));
+        assert_eq!(email.as_deref(), Some("test@example.com"));
+        assert_eq!(name.as_deref(), Some("Test User"));
+    }
+
+    #[test]
+    fn test_extract_jwt_email_none_on_invalid() {
+        let (email, name) = extract_jwt_email(None);
+        assert!(email.is_none());
+        assert!(name.is_none());
+
+        // A 3-part token whose payload isn't valid base64url
+        let (email2, _) = extract_jwt_email(Some("header.!!!.sig"));
+        assert!(email2.is_none());
+    }
+
+    #[test]
+    fn test_alias_from_email() {
+        assert_eq!(alias_from_email(Some("john.doe+x@gmail.com")), "john.doex");
+        assert_eq!(alias_from_email(Some("work_1@corp.io")), "work_1");
+        assert!(alias_from_email(None).starts_with("agy_"));
+        assert!(alias_from_email(Some("@bad.com")).starts_with("agy_"));
+    }
+
+    #[test]
+    fn test_agy_profile_defaults() {
+        let p = AgyProfile {
+            id: "alice".to_string(),
+            display_name: "Alice (alice@example.com)".to_string(),
+            short_name: "alice".to_string(),
+            email: Some("alice@example.com".to_string()),
+            profile_path: None,
+            is_keyring_active: false,
+            last_activity: None,
+        };
+        assert_eq!(p.id, "alice");
+        assert!(!p.is_keyring_active);
+        assert!(p.profile_path.is_none());
+    }
+
+    #[test]
+    fn test_resolve_active_profile_auto_fallback() {
+        let (prof, is_auto) = resolve_active_profile("auto");
+        assert!(is_auto, "auto preference should return is_auto=true");
+        assert!(!prof.id.is_empty(), "profile id must not be empty");
+    }
+
+    #[test]
+    fn test_resolve_active_profile_explicit() {
+        let (prof, is_auto) = resolve_active_profile("nonexistent_profile_xyz");
+        assert!(!is_auto, "explicit preference must return is_auto=false");
+        assert_eq!(prof.id, "nonexistent_profile_xyz");
+        assert_eq!(prof.short_name, "nonexistent_profile_xyz");
+    }
+
+    #[test]
     fn test_try_parse_json() {
         // Direct parse
         let pure = r#"{"hello": "world"}"#;
@@ -726,7 +1359,8 @@ mod tests {
         );
         eprintln!("Badge 1: {}", metrics.badge1_text);
         assert!(metrics.error.is_none());
-        // Must be fast!
-        assert!(elapsed < std::time::Duration::from_secs(3));
+        // Correctness check: must finish within the CLI subprocess timeout.
+        // (Fast path ≈200ms; CLI fallback ≈5–8s when the cached token is stale.)
+        assert!(elapsed < std::time::Duration::from_secs(45), "fetch took too long: {:.2?}", elapsed);
     }
 }

@@ -46,6 +46,8 @@ pub struct Config {
     pub autostart: bool,
     #[serde(default = "default_claude_profile")]
     pub claude_profile: String,
+    #[serde(default = "default_agy_profile")]
+    pub agy_profile: String,
 }
 
 pub const MIN_HORIZONTAL_WIDTH: u32 = 540;
@@ -105,6 +107,9 @@ fn default_hotkey() -> String {
 fn default_claude_profile() -> String {
     "auto".to_owned()
 }
+fn default_agy_profile() -> String {
+    "auto".to_owned()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -125,6 +130,7 @@ impl Default for Config {
             locked: false,
             autostart: false,
             claude_profile: default_claude_profile(),
+            agy_profile: default_agy_profile(),
         }
     }
 }
@@ -196,6 +202,9 @@ impl ConfigManager {
         }
         if cfg.claude_profile.trim().is_empty() {
             cfg.claude_profile = default_claude_profile();
+        }
+        if cfg.agy_profile.trim().is_empty() {
+            cfg.agy_profile = default_agy_profile();
         }
     }
 
@@ -351,17 +360,20 @@ mod tests {
         assert_eq!(cfg_valid_coords.window_y, Some(100));
         assert_eq!(cfg_valid_coords.layout_mode, "vertical");
 
-        // Test claude_profile default and sanitization
+        // Test claude_profile and agy_profile default and sanitization
         let mut cfg_profile = Config {
             claude_profile: "   ".to_string(),
+            agy_profile: "   ".to_string(),
             ..Default::default()
         };
         ConfigManager::sanitize(&mut cfg_profile);
         assert_eq!(cfg_profile.claude_profile, "auto");
+        assert_eq!(cfg_profile.agy_profile, "auto");
 
-        // Test backward compatibility deserialization without claude_profile
+        // Test backward compatibility deserialization without claude_profile and agy_profile
         let json = r#"{"opacity": 0.5}"#;
         let deserialized: Config = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.claude_profile, "auto");
+        assert_eq!(deserialized.agy_profile, "auto");
     }
 }

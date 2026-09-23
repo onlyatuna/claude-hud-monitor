@@ -27,7 +27,8 @@ DEFAULT_CONFIG = {
     "hotkey": "Alt+C",
     "locked": False,
     "autostart": False,
-    "claude_profile": "auto"
+    "claude_profile": "auto",
+    "agy_profile": "auto"
 }
 
 def get_user_config_dir() -> str:

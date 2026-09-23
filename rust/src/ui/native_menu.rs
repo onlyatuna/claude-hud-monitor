@@ -18,6 +18,8 @@ pub enum MenuAction {
     SetOpacity(u32),  // 100, 90, 80, 70, 50, 30
     SetInterval(u64), // 30, 60, 120, 300
     SetClaudeProfile(String),
+    SetAgyProfile(String),
+    SaveAgyProfile,
     ToggleAutostart,
     OpenLogs,
     ResetGeometry,
@@ -86,6 +88,7 @@ extern "system" {
         lpmii: *const MENUITEMINFOW,
     ) -> i32;
     fn GetSystemMetrics(nIndex: i32) -> i32;
+    fn GetMenuItemCount(hMenu: isize) -> i32;
 }
 
 #[cfg(target_os = "windows")]
@@ -130,6 +133,8 @@ pub fn show_native_context_menu(
         }
 
         const ICON_CLAUDE: &[u8] = include_bytes!("../../assets/menu/menu_claude.png");
+        const ICON_SAVE: &[u8] = include_bytes!("../../assets/menu/menu_save.png");
+        const ICON_AGY: &[u8] = include_bytes!("../../assets/menu/menu_agy.png");
         const ICON_TARGET: &[u8] = include_bytes!("../../assets/menu/menu_target.png");
         const ICON_REFRESH: &[u8] = include_bytes!("../../assets/menu/menu_refresh.png");
         const ICON_LAYOUT: &[u8] = include_bytes!("../../assets/menu/menu_layout.png");
@@ -186,15 +191,49 @@ pub fn show_native_context_menu(
             let is_selected = !is_auto
                 && (config.claude_profile == p.id
                     || (config.claude_profile == ".claude" && p.id == "default"));
-            let prefix = if is_selected { "✓ " } else { "    " };
-            let label = format!("{}{}", prefix, p.display_name);
-            let t_p = to_wide(&label);
+            let t_p = to_wide(&p.display_name);
             AppendMenuW(claude_sub, MF_STRING, 1301 + i, t_p.as_ptr());
+            attach_check(claude_sub, (1301 + i) as u32, is_selected, cx, cy, &mut bitmaps);
         }
 
         let t_claude = to_wide("Claude 帳號 (Claude Account)");
         AppendMenuW(root, MF_POPUP, claude_sub as usize, t_claude.as_ptr());
-        attach_icon(root, 2, true, ICON_CLAUDE, false, cx, cy, &mut bitmaps);
+        attach_icon_to_last(root, ICON_CLAUDE, false, cx, cy, &mut bitmaps);
+
+        // AGY Accounts Submenu (IDs 1400–1450)
+        let agy_sub = CreatePopupMenu();
+        let agy_profiles = crate::providers::agy::discover_profiles();
+        let is_agy_auto = config.agy_profile == "auto";
+
+        let (active_agy, _) =
+            crate::providers::agy::resolve_active_profile(&config.agy_profile);
+        let agy_auto_title = if is_agy_auto && active_agy.id != "default" {
+            format!("智慧自動追蹤 (目前: {})", active_agy.short_name)
+        } else {
+            "智慧自動追蹤 (最近活躍)".to_string()
+        };
+        let t_agy_auto = to_wide(&agy_auto_title);
+        AppendMenuW(agy_sub, MF_STRING, 1400, t_agy_auto.as_ptr());
+        attach_icon(agy_sub, 1400, false, ICON_TARGET, is_agy_auto, cx, cy, &mut bitmaps);
+
+        AppendMenuW(agy_sub, MF_SEPARATOR, 0, std::ptr::null());
+
+        for (i, p) in agy_profiles.iter().take(40).enumerate() {
+            let is_selected = !is_agy_auto
+                && config.agy_profile == p.id;
+            let t_p = to_wide(&p.display_name);
+            AppendMenuW(agy_sub, MF_STRING, 1401 + i, t_p.as_ptr());
+            attach_check(agy_sub, (1401 + i) as u32, is_selected, cx, cy, &mut bitmaps);
+        }
+
+        AppendMenuW(agy_sub, MF_SEPARATOR, 0, std::ptr::null());
+        let t_agy_save = to_wide("將當前帳號儲存 (Save Current)");
+        AppendMenuW(agy_sub, MF_STRING, 1449, t_agy_save.as_ptr());
+        attach_icon(agy_sub, 1449, false, ICON_SAVE, false, cx, cy, &mut bitmaps);
+
+        let t_agy = to_wide("AGY 帳號 (AGY Account)");
+        AppendMenuW(root, MF_POPUP, agy_sub as usize, t_agy.as_ptr());
+        attach_icon_to_last(root, ICON_AGY, false, cx, cy, &mut bitmaps);
 
         AppendMenuW(root, MF_SEPARATOR, 0, std::ptr::null());
 
@@ -228,7 +267,7 @@ pub fn show_native_context_menu(
 
         let t_layout = to_wide("顯示佈局 (Layout)");
         AppendMenuW(root, MF_POPUP, layout_sub as usize, t_layout.as_ptr());
-        attach_icon(root, 4, true, ICON_LAYOUT, false, cx, cy, &mut bitmaps);
+        attach_icon_to_last(root, ICON_LAYOUT, false, cx, cy, &mut bitmaps);
 
         // 3. Click-through
         let t_ct = to_wide("滑鼠點擊穿透 (Alt+Shift+C)");
@@ -278,30 +317,28 @@ pub fn show_native_context_menu(
         let op_values = [100u32, 90, 80, 70, 50, 30];
         for (i, &val) in op_values.iter().enumerate() {
             let is_cur = (cur_op as i32 - val as i32).abs() < 5;
-            let t = to_wide(&format!("{} {}%", if is_cur { "✓ " } else { "    " }, val));
+            let t = to_wide(&format!("{}%", val));
             AppendMenuW(op_sub, MF_STRING, 1100 + i, t.as_ptr());
+            attach_check(op_sub, (1100 + i) as u32, is_cur, cx, cy, &mut bitmaps);
         }
 
         let t_op = to_wide("視窗透明度 (Opacity)");
         AppendMenuW(root, MF_POPUP, op_sub as usize, t_op.as_ptr());
-        attach_icon(root, 8, true, ICON_OPACITY, false, cx, cy, &mut bitmaps);
+        attach_icon_to_last(root, ICON_OPACITY, false, cx, cy, &mut bitmaps);
 
         // 7. Interval Submenu
         let int_sub = CreatePopupMenu();
         let int_values = [30u64, 60, 120, 300];
         for (i, &sec) in int_values.iter().enumerate() {
             let is_cur = config.refresh_interval_sec == sec;
-            let t = to_wide(&format!(
-                "{} {} 秒",
-                if is_cur { "✓ " } else { "    " },
-                sec
-            ));
+            let t = to_wide(&format!("{} 秒", sec));
             AppendMenuW(int_sub, MF_STRING, 1200 + i, t.as_ptr());
+            attach_check(int_sub, (1200 + i) as u32, is_cur, cx, cy, &mut bitmaps);
         }
 
         let t_int = to_wide("更新頻率 (Interval)");
         AppendMenuW(root, MF_POPUP, int_sub as usize, t_int.as_ptr());
-        attach_icon(root, 9, true, ICON_TIMER, false, cx, cy, &mut bitmaps);
+        attach_icon_to_last(root, ICON_TIMER, false, cx, cy, &mut bitmaps);
 
         // 8. Autostart
         let t_as = to_wide("開機自動啟動 (Start on Boot)");
@@ -394,6 +431,16 @@ pub fn show_native_context_menu(
                 let idx = (c - 1200) as usize;
                 if idx < int_values.len() {
                     Some(MenuAction::SetInterval(int_values[idx]))
+                } else {
+                    None
+                }
+            }
+            1400 => Some(MenuAction::SetAgyProfile("auto".into())),
+            1449 => Some(MenuAction::SaveAgyProfile),
+            c if (1401..1449).contains(&c) => {
+                let idx = (c - 1401) as usize;
+                if idx < agy_profiles.len() {
+                    Some(MenuAction::SetAgyProfile(agy_profiles[idx].id.clone()))
                 } else {
                     None
                 }
@@ -522,7 +569,12 @@ fn draw_checkmark(dest: &mut [u8], stride: usize, cx: u32, cy: u32) {
 }
 
 #[cfg(target_os = "windows")]
-fn create_menu_pargb_bitmap(png_bytes: &[u8], checked: bool, cx: u32, cy: u32) -> Option<isize> {
+fn create_menu_pargb_bitmap(
+    png_bytes: Option<&[u8]>,
+    checked: bool,
+    cx: u32,
+    cy: u32,
+) -> Option<isize> {
     #[repr(C)]
     #[allow(non_snake_case)]
     struct BITMAPINFOHEADER {
@@ -560,18 +612,23 @@ fn create_menu_pargb_bitmap(png_bytes: &[u8], checked: bool, cx: u32, cy: u32) -
     let total_w = cx + gap + cx;
     let total_h = cy;
 
-    let key = (png_bytes.as_ptr() as usize, cx, cy);
-    let rgba = {
-        let mut cache = MENU_ICON_CACHE.lock().unwrap();
-        let map = cache.get_or_insert_with(HashMap::new);
-        if let Some(cached) = map.get(&key) {
-            cached.clone()
-        } else {
-            let img = image::load_from_memory(png_bytes).ok()?;
-            let resized = img.resize_exact(cx, cy, image::imageops::FilterType::Lanczos3);
-            let r = resized.to_rgba8();
-            map.insert(key, r.clone());
-            r
+    // `None` = check-only bitmap: keeps the same [check][gap][icon] geometry so icon-less items
+    // line up with the ones that have an icon.
+    let rgba = match png_bytes {
+        None => None,
+        Some(bytes) => {
+            let key = (bytes.as_ptr() as usize, cx, cy);
+            let mut cache = MENU_ICON_CACHE.lock().unwrap();
+            let map = cache.get_or_insert_with(HashMap::new);
+            Some(if let Some(cached) = map.get(&key) {
+                cached.clone()
+            } else {
+                let img = image::load_from_memory(bytes).ok()?;
+                let resized = img.resize_exact(cx, cy, image::imageops::FilterType::Lanczos3);
+                let r = resized.to_rgba8();
+                map.insert(key, r.clone());
+                r
+            })
         }
     };
 
@@ -620,8 +677,9 @@ fn create_menu_pargb_bitmap(png_bytes: &[u8], checked: bool, cx: u32, cy: u32) -
 
         // 2. Icon on the right (cx + gap .. total_w)
         let icon_x_offset = (cx + gap) as usize;
-        let src = rgba.as_raw();
-        for y in 0..cy as usize {
+        let src: &[u8] = rgba.as_ref().map(|r| r.as_raw().as_slice()).unwrap_or(&[]);
+        let icon_rows = if src.is_empty() { 0 } else { cy as usize };
+        for y in 0..icon_rows {
             for x in 0..cx as usize {
                 let src_idx = (y * cx as usize + x) * 4;
                 let r = src[src_idx] as u32;
@@ -659,6 +717,27 @@ fn attach_icon(
     cy: u32,
     bitmaps: &mut Vec<isize>,
 ) {
+    attach_bitmap(hmenu, id_or_pos, by_position, Some(png_bytes), checked, cx, cy, bitmaps);
+}
+
+/// Give an icon-less item the same check column + blank icon slot as iconed items.
+#[cfg(target_os = "windows")]
+fn attach_check(hmenu: isize, id: u32, checked: bool, cx: u32, cy: u32, bitmaps: &mut Vec<isize>) {
+    attach_bitmap(hmenu, id, false, None, checked, cx, cy, bitmaps);
+}
+
+#[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
+fn attach_bitmap(
+    hmenu: isize,
+    id_or_pos: u32,
+    by_position: bool,
+    png_bytes: Option<&[u8]>,
+    checked: bool,
+    cx: u32,
+    cy: u32,
+    bitmaps: &mut Vec<isize>,
+) {
     if let Some(hbmp) = create_menu_pargb_bitmap(png_bytes, checked, cx, cy) {
         unsafe {
             let mut mii = std::mem::zeroed::<MENUITEMINFOW>();
@@ -668,6 +747,25 @@ fn attach_icon(
             SetMenuItemInfoW(hmenu, id_or_pos, if by_position { 1 } else { 0 }, &mii);
         }
         bitmaps.push(hbmp);
+    }
+}
+
+/// Attach an icon to the popup item that was just appended to `hmenu`.
+/// Popup items have no command ID, so use the live position instead of a hard-coded index
+/// (hard-coded indices silently break whenever an item is inserted above them).
+#[cfg(target_os = "windows")]
+#[allow(clippy::too_many_arguments)]
+fn attach_icon_to_last(
+    hmenu: isize,
+    png_bytes: &[u8],
+    checked: bool,
+    cx: u32,
+    cy: u32,
+    bitmaps: &mut Vec<isize>,
+) {
+    let count = unsafe { GetMenuItemCount(hmenu) };
+    if count > 0 {
+        attach_icon(hmenu, (count - 1) as u32, true, png_bytes, checked, cx, cy, bitmaps);
     }
 }
 
@@ -733,6 +831,52 @@ pub fn render_context_menu_items(
             }
         }
     });
+
+    // AGY Accounts submenu
+    {
+        let agy_profiles = crate::providers::agy::discover_profiles();
+        let is_agy_auto = cfg.agy_profile == "auto";
+        let (active_agy, _) = crate::providers::agy::resolve_active_profile(&cfg.agy_profile);
+
+        ui.menu_button("🪐 AGY 帳號", |ui| {
+            let agy_auto_label = if is_agy_auto {
+                if active_agy.id != "default" {
+                    format!("✔ 🎯 智慧自動追蹤 (目前: {})", active_agy.short_name)
+                } else {
+                    "✔ 🎯 智慧自動追蹤 (最近活躍)".to_string()
+                }
+            } else {
+                "   🎯 智慧自動追蹤 (最近活躍)".to_string()
+            };
+
+            if ui.button(agy_auto_label).clicked() {
+                selected = Some(MenuAction::SetAgyProfile("auto".to_string()));
+                ui.close_menu();
+            }
+
+            ui.separator();
+
+            for p in &agy_profiles {
+                let is_sel = !is_agy_auto && cfg.agy_profile == p.id;
+                let label = if is_sel {
+                    format!("✔ {}", p.display_name)
+                } else {
+                    format!("   {}", p.display_name)
+                };
+                if ui.button(label).clicked() {
+                    selected = Some(MenuAction::SetAgyProfile(p.id.clone()));
+                    ui.close_menu();
+                }
+            }
+
+            ui.separator();
+
+            if ui.button("💾 將當前帳號儲存 (Save Current)").clicked() {
+                selected = Some(MenuAction::SaveAgyProfile);
+                ui.close_menu();
+            }
+        });
+    }
 
     ui.separator();
 

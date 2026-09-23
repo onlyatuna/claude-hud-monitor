@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 from PySide6.QtCore import Qt, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication, QInputDialog
 )
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 
@@ -20,6 +20,7 @@ from ui.styles import (
 from ui.provider_card import ProviderCardWidget
 from ui.usage_table import UsageTable
 from ui import vibrancy
+from ui.menu_icons import menu_icon
 from system.memory import trim_memory
 
 SCHEME_LABELS = {"scale": "色階 (Scale)", "duo": "雙色 (Duo)"}
@@ -676,21 +677,25 @@ class HUDWindow(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
+        self.populate_context_menu(menu)
+        menu.exec(event.globalPos())
 
-        refresh_act = menu.addAction("🔄 立即重新整理所有 AI (Refresh All)")
+    def populate_context_menu(self, menu: QMenu):
+        """Fill `menu` with the full HUD menu (shared by the right-click menu and the tray icon)."""
+        refresh_act = menu.addAction(menu_icon("refresh"), "立即重新整理所有 AI (Refresh All)")
         refresh_act.triggered.connect(self.trigger_async_refresh)
 
         menu.addSeparator()
 
-        # Claude Account Submenu (PR 13)
-        claude_menu = menu.addMenu("✳️ Claude 帳號 (Claude Account)")
+        # Claude Account Submenu
+        claude_menu = menu.addMenu(menu_icon("claude"), "Claude 帳號 (Claude Account)")
         from core.providers.claude_provider import discover_profiles, resolve_active_profile
         cur_profile = self.config.get("claude_profile", "auto")
         is_auto = (cur_profile == "auto")
         active_prof, _ = resolve_active_profile(cur_profile)
 
         auto_title = f"智慧自動追蹤 (目前: {active_prof.short_name})" if (is_auto and active_prof.id != "default") else "智慧自動追蹤 (最近活躍)"
-        auto_act = claude_menu.addAction(f"🎯 {auto_title}")
+        auto_act = claude_menu.addAction(menu_icon("target"), auto_title)
         auto_act.setCheckable(True)
         auto_act.setChecked(is_auto)
         auto_act.triggered.connect(lambda: self._set_claude_profile("auto"))
@@ -706,8 +711,37 @@ class HUDWindow(QWidget):
 
         menu.addSeparator()
 
+        # AGY Account Submenu
+        agy_menu = menu.addMenu(menu_icon("agy"), "AGY 帳號 (AGY Account)")
+
+        from core.providers.agy_provider import discover_profiles as discover_agy_profiles, resolve_active_profile as resolve_active_agy_profile
+        cur_agy_profile = self.config.get("agy_profile", "auto")
+        is_agy_auto = (cur_agy_profile == "auto")
+        active_agy_prof, _ = resolve_active_agy_profile(cur_agy_profile)
+
+        agy_auto_title = f"智慧自動追蹤 (目前: {active_agy_prof.short_name})" if (is_agy_auto and active_agy_prof.id != "default") else "智慧自動追蹤 (目前活躍)"
+        agy_auto_act = agy_menu.addAction(menu_icon("target"), agy_auto_title)
+        agy_auto_act.setCheckable(True)
+        agy_auto_act.setChecked(is_agy_auto)
+        agy_auto_act.triggered.connect(lambda: self._set_agy_profile("auto"))
+
+        agy_menu.addSeparator()
+
+        for prof in discover_agy_profiles()[:40]:
+            is_selected = (not is_agy_auto and (cur_agy_profile == prof.id or cur_agy_profile == prof.short_name))
+            p_act = agy_menu.addAction(prof.display_name)
+            p_act.setCheckable(True)
+            p_act.setChecked(is_selected)
+            p_act.triggered.connect(lambda checked, pid=prof.id: self._set_agy_profile(pid))
+
+        agy_menu.addSeparator()
+        save_act = agy_menu.addAction(menu_icon("save"), "將當前帳號儲存為...")
+        save_act.triggered.connect(self._prompt_save_agy_profile)
+
+        menu.addSeparator()
+
         # UI Mode Submenu (Dual Mode Switcher)
-        ui_mode_menu = menu.addMenu("🎭 介面風格 (UI Style)")
+        ui_mode_menu = menu.addMenu(menu_icon("layout"), "介面風格 (UI Style)")
         cur_ui_mode = self.config.get("ui_mode", "cards")
 
         cards_act = ui_mode_menu.addAction("🗂️ 傳統卡片 (Classic Cards)")
@@ -722,39 +756,39 @@ class HUDWindow(QWidget):
 
         # Context-specific options
         if cur_ui_mode == "cards":
-            layout_menu = menu.addMenu("📐 顯示佈局 (Layout)")
+            layout_menu = menu.addMenu(menu_icon("layout"), "顯示佈局 (Layout)")
             cur_layout = self.config.get("layout_mode", "horizontal")
-            horiz_act = layout_menu.addAction("💻 橫向三欄並排 (Horizontal Triple)")
+            horiz_act = layout_menu.addAction(menu_icon("laptop"), "橫向三欄並排 (Horizontal Triple)")
             horiz_act.setCheckable(True)
             horiz_act.setChecked(cur_layout == "horizontal")
             horiz_act.triggered.connect(lambda: self._apply_cards_layout_mode("horizontal"))
 
-            vert_act = layout_menu.addAction("📱 直立三層堆疊 (Vertical Stack)")
+            vert_act = layout_menu.addAction(menu_icon("phone"), "直立三層堆疊 (Vertical Stack)")
             vert_act.setCheckable(True)
             vert_act.setChecked(cur_layout == "vertical")
             vert_act.triggered.connect(lambda: self._apply_cards_layout_mode("vertical"))
         self.add_theme_menus(menu)
 
         # Click-through toggle
-        ghost_act = menu.addAction("👻 滑鼠點擊穿透 (Alt+Shift+C)")
+        ghost_act = menu.addAction(menu_icon("ghost"), "滑鼠點擊穿透 (Alt+Shift+C)")
         ghost_act.setCheckable(True)
         ghost_act.setChecked(self.config.get("click_through", False))
         ghost_act.triggered.connect(self.toggle_click_through)
 
         # Always on top
-        aot_act = menu.addAction("📌 視窗永遠置頂 (Always on Top)")
+        aot_act = menu.addAction(menu_icon("pin"), "視窗永遠置頂 (Always on Top)")
         aot_act.setCheckable(True)
         aot_act.setChecked(self.config.get("always_on_top", True))
         aot_act.triggered.connect(self._toggle_always_on_top)
 
         # Lock position
-        lock_act = menu.addAction("🔒 鎖定視窗位置 (Lock Drag)")
+        lock_act = menu.addAction(menu_icon("lock"), "鎖定視窗位置 (Lock Drag)")
         lock_act.setCheckable(True)
         lock_act.setChecked(self.config.get("locked", False))
         lock_act.triggered.connect(self._toggle_lock)
 
         # Opacity submenu
-        opacity_menu = menu.addMenu("🌗 視窗透明度 (Opacity)")
+        opacity_menu = menu.addMenu(menu_icon("opacity"), "視窗透明度 (Opacity)")
         current_op = self.config.get("opacity", 0.88)
         for pct in [100, 90, 80, 70, 50, 30]:
             val = pct / 100.0
@@ -764,7 +798,7 @@ class HUDWindow(QWidget):
             act.triggered.connect(lambda checked, v=val: self._set_opacity(v))
 
         # Refresh interval submenu
-        interval_menu = menu.addMenu("⏱️ 更新頻率 (Interval)")
+        interval_menu = menu.addMenu(menu_icon("timer"), "更新頻率 (Interval)")
         cur_int = self.config.get("refresh_interval_sec", 60)
         for sec in [30, 60, 120, 300]:
             act = interval_menu.addAction(f"{sec} 秒")
@@ -773,26 +807,24 @@ class HUDWindow(QWidget):
             act.triggered.connect(lambda checked, s=sec: self._set_interval(s))
 
         # Autostart (cross-platform)
-        autostart_act = menu.addAction("🚀 開機自動啟動 (Start on Boot)")
+        autostart_act = menu.addAction(menu_icon("rocket"), "開機自動啟動 (Start on Boot)")
         autostart_act.setCheckable(True)
         autostart_act.setChecked(is_autostart_enabled())
         autostart_act.triggered.connect(self._toggle_autostart)
 
         menu.addSeparator()
 
-        log_act = menu.addAction("📂 開啟記錄檔目錄 (Open Logs)")
+        log_act = menu.addAction(menu_icon("folder"), "開啟記錄檔目錄 (Open Logs)")
         log_act.triggered.connect(open_log_dir)
 
-        reset_act = menu.addAction("📐 重設預設尺寸與位置")
+        reset_act = menu.addAction(menu_icon("reset"), "重設預設尺寸與位置")
         reset_act.triggered.connect(self._reset_geometry)
 
-        hide_act = menu.addAction("👁️ 隱藏 HUD (Alt+C 重新喚出)")
+        hide_act = menu.addAction(menu_icon("eye"), "隱藏 HUD (Alt+C 重新喚出)")
         hide_act.triggered.connect(self.hide)
 
-        exit_act = menu.addAction("❌ 結束程式 (Exit)")
+        exit_act = menu.addAction(menu_icon("exit"), "結束程式 (Exit)")
         exit_act.triggered.connect(self.close_application)
-
-        menu.exec(event.globalPos())
 
     def _apply_cards_layout_mode(self, mode: str):
         self._persist_geometry()
@@ -800,7 +832,6 @@ class HUDWindow(QWidget):
         self._apply_ui_mode("cards")
         if self.tray_icon:
             self.tray_icon.update_menu_state()
-
     def _toggle_always_on_top(self):
         new_val = not self.config.get("always_on_top", True)
         self.config.set("always_on_top", new_val)
@@ -830,6 +861,25 @@ class HUDWindow(QWidget):
             if cp and hasattr(cp, "profile_preference"):
                 cp.profile_preference = profile_id
         self.trigger_async_refresh()
+
+    def _set_agy_profile(self, profile_id: str):
+        self.config.set("agy_profile", profile_id)
+        if hasattr(self, "providers") and isinstance(self.providers, dict):
+            ap = self.providers.get("agy")
+            if ap and hasattr(ap, "profile_preference"):
+                ap.profile_preference = profile_id
+        from core.providers.agy_provider import switch_active_profile
+        if profile_id != "auto":
+            switch_active_profile(profile_id)
+        self.trigger_async_refresh()
+
+    def _prompt_save_agy_profile(self):
+        alias, ok = QInputDialog.getText(self, "儲存 AGY 帳號", "請輸入此帳號的別名 (例如 work, personal):")
+        if ok and alias.strip():
+            from core.providers.agy_provider import save_current_as_profile
+            prof = save_current_as_profile(alias.strip())
+            if prof:
+                self._set_agy_profile(prof.id)
 
     def _toggle_autostart(self):
         currently_enabled = is_autostart_enabled()

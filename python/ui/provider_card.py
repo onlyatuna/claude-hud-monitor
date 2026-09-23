@@ -2,6 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QFrame, QSizePolicy
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPainter
 
 from core.providers.base import UsageMetrics, BaseProvider
 from ui.styles import get_progress_color
@@ -11,6 +12,22 @@ PROVIDER_THEMES = {
     "agy": {"color": "#10b981", "name": "ANTIGRAVITY"},
     "codex": {"color": "#a855f7", "name": "OPENAI CODEX"}
 }
+
+class ElidedLabel(QLabel):
+    """QLabel that shrinks with "…" instead of pushing neighbouring widgets (badges) out of the card."""
+
+    def setText(self, text):
+        super().setText(text)
+        self.setToolTip(text)
+        # Keep at least the first few characters visible so the provider is always recognisable.
+        self.setMinimumWidth(min(44, self.fontMetrics().horizontalAdvance(text)))
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
+        painter.setPen(self.palette().windowText().color())
+        painter.drawText(self.rect(), int(self.alignment()), text)
+
 
 class ProviderCardWidget(QWidget):
     def __init__(self, provider_id: str, parent=None):
@@ -34,12 +51,10 @@ class ProviderCardWidget(QWidget):
         self.dot.setStyleSheet(f"color: {self.theme['color']}; font-size: 10px;")
         header.addWidget(self.dot)
 
-        self.title = QLabel(self.theme["name"])
+        self.title = ElidedLabel(self.theme["name"])
         self.title.setStyleSheet(f"color: {self.theme['color']}; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;")
-        self.title.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
-        header.addWidget(self.title)
-
-        header.addStretch()
+        self.title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        header.addWidget(self.title, 1)
 
         self.badge = QLabel("--")
         self.badge.setObjectName("Badge")

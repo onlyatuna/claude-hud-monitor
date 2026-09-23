@@ -88,7 +88,8 @@ impl HudApp {
             ),
             (
                 "agy".to_owned(),
-                Arc::new(AgyProvider::new()) as Arc<dyn Provider + Send + Sync>,
+                Arc::new(AgyProvider::with_config(Some(Arc::clone(&config))))
+                    as Arc<dyn Provider + Send + Sync>,
             ),
             (
                 "codex".to_owned(),
@@ -306,6 +307,42 @@ impl HudApp {
                     let mut cfg = self.config.lock().unwrap();
                     cfg.claude_profile = profile_id;
                     ConfigManager::save(&cfg);
+                }
+                self.refresh_ctrl
+                    .lock()
+                    .unwrap()
+                    .refresh(&self.providers_arc);
+                ctx.request_repaint();
+            }
+            MenuAction::SetAgyProfile(profile_id) => {
+                {
+                    let mut cfg = self.config.lock().unwrap();
+                    cfg.agy_profile = profile_id.clone();
+                    ConfigManager::save(&cfg);
+                }
+                // If not "auto", swap the keyring credential so the terminal agy also switches
+                if !profile_id.is_empty() && !profile_id.eq_ignore_ascii_case("auto") {
+                    if let Err(e) = crate::providers::agy::switch_active_profile(&profile_id) {
+                        log::warn!("[HudApp] AGY profile switch keyring error: {}", e);
+                    }
+                }
+                self.refresh_ctrl
+                    .lock()
+                    .unwrap()
+                    .refresh(&self.providers_arc);
+                ctx.request_repaint();
+            }
+            MenuAction::SaveAgyProfile => {
+                match crate::providers::agy::save_current_auto() {
+                    Ok(prof) => {
+                        log::info!("[HudApp] AGY profile saved as {}", prof.id);
+                        {
+                            let mut cfg = self.config.lock().unwrap();
+                            cfg.agy_profile = prof.id.clone();
+                            ConfigManager::save(&cfg);
+                        }
+                    }
+                    Err(e) => log::warn!("[HudApp] AGY save current failed: {}", e),
                 }
                 self.refresh_ctrl
                     .lock()
