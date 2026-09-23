@@ -13,27 +13,12 @@ PROVIDER_THEMES = {
     "codex": {"color": "#a855f7", "name": "OPENAI CODEX"}
 }
 
-class ElidedLabel(QLabel):
-    """QLabel that shrinks with "…" instead of pushing neighbouring widgets (badges) out of the card."""
-
-    def setText(self, text):
-        super().setText(text)
-        self.setToolTip(text)
-        # Keep at least the first few characters visible so the provider is always recognisable.
-        self.setMinimumWidth(min(44, self.fontMetrics().horizontalAdvance(text)))
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.width())
-        painter.setPen(self.palette().windowText().color())
-        painter.drawText(self.rect(), int(self.alignment()), text)
-
-
 class ProviderCardWidget(QWidget):
     def __init__(self, provider_id: str, parent=None):
         super().__init__(parent)
         self.provider_id = provider_id
         self.dark = True
+        self.layout_mode = "horizontal"
         self.theme = PROVIDER_THEMES.get(provider_id, {"color": "#38bdf8", "name": provider_id.upper()})
         self.current_metrics = UsageMetrics(provider_id=provider_id)
         self._init_ui()
@@ -51,10 +36,12 @@ class ProviderCardWidget(QWidget):
         self.dot.setStyleSheet(f"color: {self.theme['color']}; font-size: 10px;")
         header.addWidget(self.dot)
 
-        self.title = ElidedLabel(self.theme["name"])
+        self.title = QLabel(self.theme["name"])
         self.title.setStyleSheet(f"color: {self.theme['color']}; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;")
-        self.title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        header.addWidget(self.title, 1)
+        self.title.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Preferred)
+        header.addWidget(self.title)
+
+        header.addStretch()
 
         self.badge = QLabel("--")
         self.badge.setObjectName("Badge")
@@ -190,10 +177,15 @@ class ProviderCardWidget(QWidget):
         b1 = (data.badge1_text or "").replace(" 剩餘:", ":").replace("剩餘:", ":")
         b2 = (data.badge2_text or "").replace(" 剩餘:", ":").replace("剩餘:", ":")
         if b1 and b2:
-            self.badge.setText(b1)
-            self.badge.setVisible(True)
-            self.badge2.setText(b2)
-            self.badge2.setVisible(True)
+            if getattr(self, "layout_mode", "horizontal") == "horizontal":
+                self.badge.setText(b1)
+                self.badge.setVisible(True)
+                self.badge2.setVisible(False)
+            else:
+                self.badge.setText(b1)
+                self.badge.setVisible(True)
+                self.badge2.setText(b2)
+                self.badge2.setVisible(True)
         elif b1:
             self.badge.setText(b1)
             self.badge.setVisible(True)

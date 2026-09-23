@@ -324,6 +324,10 @@ class HUDWindow(QWidget):
         self._clear_layout(self.cards_layout)
         provider_ids = ["claude", "agy", "codex"]
 
+        for card in self.cards.values():
+            card.layout_mode = mode
+            card.update_metrics(card.current_metrics)
+
         if mode == "horizontal":
             self.setMinimumSize(MIN_HORIZ_W, MIN_HORIZ_H)
             w = self.config.get("horizontal_width", DEF_HORIZ_W)
@@ -740,34 +744,18 @@ class HUDWindow(QWidget):
 
         menu.addSeparator()
 
-        # UI Mode Submenu (Dual Mode Switcher)
-        ui_mode_menu = menu.addMenu(menu_icon("layout"), "介面風格 (UI Style)")
-        cur_ui_mode = self.config.get("ui_mode", "cards")
+        # Layout Switch Submenu
+        layout_menu = menu.addMenu(menu_icon("layout"), "顯示佈局 (Layout)")
+        cur_layout = self.config.get("layout_mode", "horizontal")
+        horiz_act = layout_menu.addAction(menu_icon("laptop"), "橫向三欄並排 (Horizontal Triple)")
+        horiz_act.setCheckable(True)
+        horiz_act.setChecked(cur_layout == "horizontal")
+        horiz_act.triggered.connect(lambda: self._apply_cards_layout_mode("horizontal"))
 
-        cards_act = ui_mode_menu.addAction("🗂️ 傳統卡片 (Classic Cards)")
-        cards_act.setCheckable(True)
-        cards_act.setChecked(cur_ui_mode == "cards")
-        cards_act.triggered.connect(lambda: self._apply_ui_mode("cards"))
-
-        table_act = ui_mode_menu.addAction("📊 儀表表格 (Modern Table)")
-        table_act.setCheckable(True)
-        table_act.setChecked(cur_ui_mode == "table")
-        table_act.triggered.connect(lambda: self._apply_ui_mode("table"))
-
-        # Context-specific options
-        if cur_ui_mode == "cards":
-            layout_menu = menu.addMenu(menu_icon("layout"), "顯示佈局 (Layout)")
-            cur_layout = self.config.get("layout_mode", "horizontal")
-            horiz_act = layout_menu.addAction(menu_icon("laptop"), "橫向三欄並排 (Horizontal Triple)")
-            horiz_act.setCheckable(True)
-            horiz_act.setChecked(cur_layout == "horizontal")
-            horiz_act.triggered.connect(lambda: self._apply_cards_layout_mode("horizontal"))
-
-            vert_act = layout_menu.addAction(menu_icon("phone"), "直立三層堆疊 (Vertical Stack)")
-            vert_act.setCheckable(True)
-            vert_act.setChecked(cur_layout == "vertical")
-            vert_act.triggered.connect(lambda: self._apply_cards_layout_mode("vertical"))
-        self.add_theme_menus(menu)
+        vert_act = layout_menu.addAction(menu_icon("phone"), "直立三層堆疊 (Vertical Stack)")
+        vert_act.setCheckable(True)
+        vert_act.setChecked(cur_layout == "vertical")
+        vert_act.triggered.connect(lambda: self._apply_cards_layout_mode("vertical"))
 
         # Click-through toggle
         ghost_act = menu.addAction(menu_icon("ghost"), "滑鼠點擊穿透 (Alt+Shift+C)")
