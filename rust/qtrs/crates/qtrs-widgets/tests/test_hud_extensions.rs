@@ -121,3 +121,20 @@ fn test_menu_high_dpi_hit_testing() {
         );
     }
 }
+#[test]
+fn test_window_present_custom_physical_backing_store_parity() {
+    let mut win = Window::new(
+        "Present Custom Test",
+        Rect::new(50, 50, 200, 150),
+        WindowFlags::FRAMELESS | WindowFlags::LAYERED,
+    )
+    .expect("Window creation failed");
+
+    let mut painted = false;
+    win.present_custom(|_painter| {
+        painted = true;
+    });
+    assert!(painted, "present_custom closure must be invoked");
+    assert!(win.backing_store().physical_width() >= 200);
+    assert!(win.backing_store().physical_height() >= 150);
+}

@@ -269,12 +269,16 @@ impl Window {
             f(&mut painter);
         }
         let opacity = self.platform_window.opacity();
-        let dirty = Rect::new(0, 0, self.geometry.width, self.geometry.height);
+        let phys_dirty = Rect::new(
+            0,
+            0,
+            self.backing_store.physical_width() as i32,
+            self.backing_store.physical_height() as i32,
+        );
         let _ = self
             .platform_window
-            .present_dirty(&mut self.backing_store, opacity, dirty);
+            .present_dirty(&mut self.backing_store, opacity, phys_dirty);
     }
-
     pub fn backing_store(&self) -> &Pixmap {
         &self.backing_store
     }

@@ -433,7 +433,11 @@ impl Menu {
             x = (s_geom.right() - size.width).max(s_geom.x);
         }
         if y + size.height > s_geom.bottom() {
-            y = (pos.y - size.height).max(s_geom.y);
+            y = if pos.y - size.height >= s_geom.y {
+                pos.y - size.height
+            } else {
+                (s_geom.bottom() - size.height).max(s_geom.y)
+            };
         }
         x = x.max(s_geom.x);
         y = y.max(s_geom.y);
@@ -508,7 +512,17 @@ impl Menu {
                             let new_h = covered.height.max(size.height);
                             let current_log = window.geometry();
                             if current_log.width != new_w || current_log.height != new_h {
-                                window.set_geometry(Rect::new(initial_rect.x, initial_rect.y, new_w, new_h));
+                                let target_x = if initial_rect.x + new_w > s_geom.right() {
+                                    (s_geom.right() - new_w).max(s_geom.x)
+                                } else {
+                                    initial_rect.x
+                                };
+                                let target_y = if initial_rect.y + new_h > s_geom.bottom() {
+                                    (s_geom.bottom() - new_h).max(s_geom.y)
+                                } else {
+                                    initial_rect.y
+                                };
+                                window.set_geometry(Rect::new(target_x, target_y, new_w, new_h));
                             }
                             window.present_custom(|painter| {
                                 self.paint_event(painter);
@@ -534,7 +548,17 @@ impl Menu {
                         let new_h = covered.height.max(size.height);
                         let current_log = window.geometry();
                         if current_log.width != new_w || current_log.height != new_h {
-                            window.set_geometry(Rect::new(initial_rect.x, initial_rect.y, new_w, new_h));
+                            let target_x = if initial_rect.x + new_w > s_geom.right() {
+                                (s_geom.right() - new_w).max(s_geom.x)
+                            } else {
+                                initial_rect.x
+                            };
+                            let target_y = if initial_rect.y + new_h > s_geom.bottom() {
+                                (s_geom.bottom() - new_h).max(s_geom.y)
+                            } else {
+                                initial_rect.y
+                            };
+                            window.set_geometry(Rect::new(target_x, target_y, new_w, new_h));
                         }
                         window.present_custom(|painter| {
                             self.paint_event(painter);
