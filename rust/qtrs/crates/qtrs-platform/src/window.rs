@@ -1113,12 +1113,9 @@ impl NativeWindow {
         if !self.hwnd.is_null() {
             unsafe {
                 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-                use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    GetMessagePos, PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN,
-                };
+                use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
                 ReleaseCapture();
-                let pos = GetMessagePos();
-                PostMessageW(self.hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, pos as isize);
+                PostMessageW(self.hwnd, WM_SYSCOMMAND, 0xF012 /*SC_DRAGMOVE*/, 0);
             }
             true
         } else {
@@ -1129,26 +1126,11 @@ impl NativeWindow {
     pub fn start_system_resize(&self, edges: crate::platform_window::WindowEdges) -> bool {
         if !self.hwnd.is_null() {
             unsafe {
-                use crate::platform_window::WindowEdges;
                 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-                use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    GetMessagePos, PostMessageW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
-                    HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, WM_NCLBUTTONDOWN,
-                };
+                use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
                 ReleaseCapture();
-                let cmd = match edges {
-                    WindowEdges::LEFT => HTLEFT,
-                    WindowEdges::RIGHT => HTRIGHT,
-                    WindowEdges::TOP => HTTOP,
-                    WindowEdges::BOTTOM => HTBOTTOM,
-                    WindowEdges::TOP_LEFT => HTTOPLEFT,
-                    WindowEdges::TOP_RIGHT => HTTOPRIGHT,
-                    WindowEdges::BOTTOM_LEFT => HTBOTTOMLEFT,
-                    WindowEdges::BOTTOM_RIGHT => HTBOTTOMRIGHT,
-                    _ => HTCAPTION,
-                };
-                let pos = GetMessagePos();
-                PostMessageW(self.hwnd, WM_NCLBUTTONDOWN, cmd as usize, pos as isize);
+                let orientation = edges_to_win_orientation(edges);
+                PostMessageW(self.hwnd, WM_SYSCOMMAND, orientation, 0);
             }
             true
         } else {
@@ -1471,12 +1453,9 @@ pub fn post_system_move(hwnd: isize) -> bool {
     if hwnd != 0 {
         unsafe {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                GetMessagePos, PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN,
-            };
+            use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
             ReleaseCapture();
-            let pos = GetMessagePos();
-            PostMessageW(hwnd as HWND, WM_NCLBUTTONDOWN, HTCAPTION as usize, pos as isize);
+            PostMessageW(hwnd as HWND, WM_SYSCOMMAND, 0xF012 /*SC_DRAGMOVE*/, 0);
         }
         return true;
     }
@@ -1487,26 +1466,11 @@ pub fn post_system_resize(hwnd: isize, edges: crate::platform_window::WindowEdge
     #[cfg(windows)]
     if hwnd != 0 {
         unsafe {
-            use crate::platform_window::WindowEdges;
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                GetMessagePos, PostMessageW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
-                HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, WM_NCLBUTTONDOWN,
-            };
+            use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
             ReleaseCapture();
-            let cmd = match edges {
-                WindowEdges::LEFT => HTLEFT,
-                WindowEdges::RIGHT => HTRIGHT,
-                WindowEdges::TOP => HTTOP,
-                WindowEdges::BOTTOM => HTBOTTOM,
-                WindowEdges::TOP_LEFT => HTTOPLEFT,
-                WindowEdges::TOP_RIGHT => HTTOPRIGHT,
-                WindowEdges::BOTTOM_LEFT => HTBOTTOMLEFT,
-                WindowEdges::BOTTOM_RIGHT => HTBOTTOMRIGHT,
-                _ => HTCAPTION,
-            };
-            let pos = GetMessagePos();
-            PostMessageW(hwnd as HWND, WM_NCLBUTTONDOWN, cmd as usize, pos as isize);
+            let orientation = edges_to_win_orientation(edges);
+            PostMessageW(hwnd as HWND, WM_SYSCOMMAND, orientation, 0);
         }
         return true;
     }
