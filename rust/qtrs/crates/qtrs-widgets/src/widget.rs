@@ -71,10 +71,14 @@ pub trait Widget: QObject + 'static {
         let g = self.geometry();
         if let Some(mut layout) = self.layout_ref_mut() {
             layout.set_geometry(Rect::new(0, 0, g.width, g.height));
+            layout.activate();
         }
         for child in self.children() {
-            child.borrow().update_layout();
+            if child.borrow().layout_ref_mut().is_some() {
+                child.borrow().update_layout();
+            }
         }
+        crate::layout_scheduler::LayoutScheduler::activate_pending();
     }
     fn parent_widget(&self) -> Option<WidgetWeak>;
 
@@ -391,6 +395,7 @@ pub struct EmptyWidget {
     pub base: WidgetBase,
     pub background_color: Option<qtrs_gui::tiny_skia::Color>,
     pub paint_handler: Option<PaintHandler>,
+    pub resize_handler: RefCell<Option<Box<dyn FnMut(Size, Size) + 'static>>>,
 }
 
 pub type CustomWidget = EmptyWidget;
@@ -401,6 +406,7 @@ impl EmptyWidget {
             base: WidgetBase::new(),
             background_color: None,
             paint_handler: None,
+            resize_handler: RefCell::new(None),
         }
     }
 
@@ -409,6 +415,7 @@ impl EmptyWidget {
             base: WidgetBase::with_geometry(geometry),
             background_color: None,
             paint_handler: None,
+            resize_handler: RefCell::new(None),
         }
     }
 
@@ -431,6 +438,10 @@ impl EmptyWidget {
     {
         self.paint_handler = Some(Box::new(handler));
         self
+    }
+
+    pub fn set_resize_handler<F: FnMut(Size, Size) + 'static>(&self, handler: F) {
+        *self.resize_handler.borrow_mut() = Some(Box::new(handler));
     }
 }
 
@@ -536,7 +547,7 @@ impl Widget for EmptyWidget {
 
     fn set_geometry(&self, rect: Rect) {
         let old_rect = self.base.geometry.get();
-        let size_changed = old_rect != rect;
+        let size_changed = old_rect.width != rect.width || old_rect.height != rect.height;
         let old_size = Size::new(old_rect.width, old_rect.height);
         let new_size = Size::new(rect.width, rect.height);
         self.base.geometry.set(rect);
@@ -544,8 +555,10 @@ impl Widget for EmptyWidget {
             self.resize_event(new_size, old_size);
         }
 
-        if let Some(layout) = self.base.layout.borrow_mut().as_mut() {
-            layout.set_geometry(Rect::new(0, 0, rect.width, rect.height));
+        if size_changed {
+            if let Some(layout) = self.base.layout.borrow_mut().as_mut() {
+                layout.invalidate();
+            }
         }
         self.update();
     }
@@ -607,14 +620,16 @@ impl Widget for EmptyWidget {
     }
 
     fn layout_ref_mut(&self) -> Option<RefMut<'_, Box<dyn Layout>>> {
-        let borrow = self.base.layout.borrow_mut();
-        if borrow.is_some() {
-            Some(RefMut::map(borrow, |opt| opt.as_mut().unwrap()))
+        if let Ok(borrow) = self.base.layout.try_borrow_mut() {
+            if borrow.is_some() {
+                Some(RefMut::map(borrow, |opt| opt.as_mut().unwrap()))
+            } else {
+                None
+            }
         } else {
             None
         }
     }
-
     fn set_layout(&mut self, mut layout: Box<dyn Layout>) {
         let g = self.base.geometry.get();
         layout.set_geometry(Rect::new(0, 0, g.width, g.height));
@@ -705,6 +720,14 @@ impl Widget for EmptyWidget {
             handler(painter);
         }
     }
+    fn resize_event(&self, new_size: Size, old_size: Size) {
+        if let Ok(mut h) = self.resize_handler.try_borrow_mut() {
+            if let Some(cb) = h.as_mut() {
+                cb(new_size, old_size);
+            }
+        }
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

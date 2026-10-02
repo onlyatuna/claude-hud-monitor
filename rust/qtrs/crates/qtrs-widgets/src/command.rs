@@ -120,8 +120,9 @@ impl WidgetCommandQueue {
             }
 
             for target in layout_targets {
-                target.borrow().update_layout();
+                crate::layout_scheduler::LayoutScheduler::invalidate(&target);
             }
+            crate::layout_scheduler::LayoutScheduler::activate_pending();
         }
     }
 

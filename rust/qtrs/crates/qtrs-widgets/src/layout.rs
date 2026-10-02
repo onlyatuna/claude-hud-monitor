@@ -48,7 +48,22 @@ pub trait Layout: 'static {
 
     fn size_hint(&self) -> Size;
 
-    fn update_layout(&mut self);
+    /// Marks this layout as dirty/invalid, requiring recalculation on next activation.
+    fn invalidate(&mut self);
+
+    /// Checks if this layout is currently dirty.
+    fn is_dirty(&self) -> bool {
+        true
+    }
+
+    /// Recalculates and positions child items if the layout is dirty.
+    fn activate(&mut self);
+
+    /// Convenience and compatibility method: invalidates and activates this layout.
+    fn update_layout(&mut self) {
+        self.invalidate();
+        self.activate();
+    }
 }
 
 /// Distributes 1D space among items based on hints, min/max constraints, policies, and stretch.
@@ -255,6 +270,7 @@ pub struct BoxLayout {
     margins: Margins,
     spacing: i32,
     items: Vec<LayoutItem>,
+    dirty: bool,
 }
 
 impl BoxLayout {
@@ -265,6 +281,7 @@ impl BoxLayout {
             margins: Margins::new(0, 0, 0, 0),
             spacing: 6,
             items: Vec::new(),
+            dirty: true,
         }
     }
 
@@ -317,7 +334,8 @@ impl Layout for BoxLayout {
 
     fn set_geometry(&mut self, rect: Rect) {
         self.geometry = rect;
-        self.update_layout();
+        self.dirty = true;
+        self.activate();
     }
 
     fn add_widget(&mut self, widget: WidgetRef) {
@@ -396,7 +414,20 @@ impl Layout for BoxLayout {
         )
     }
 
-    fn update_layout(&mut self) {
+    fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn activate(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+
         if self.items.is_empty() {
             return;
         }
@@ -462,7 +493,18 @@ impl Layout for BoxLayout {
                     };
 
                     let item_rect = Rect::new(avail_x, cur_y, item_w, item_h);
+                    let old_size = {
+                        let w = item.widget.borrow();
+                        let g = w.geometry();
+                        Size::new(g.width, g.height)
+                    };
                     item.widget.borrow().set_geometry(item_rect);
+                    let new_size = Size::new(item_w, item_h);
+                    if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
+                        if old_size != new_size || child_layout.is_dirty() {
+                            crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
+                        }
+                    }
                     cur_y += item_h + self.spacing;
                 }
             }
@@ -505,7 +547,18 @@ impl Layout for BoxLayout {
                     };
 
                     let item_rect = Rect::new(cur_x, avail_y + offset_y, item_w, item_h);
+                    let old_size = {
+                        let w = item.widget.borrow();
+                        let g = w.geometry();
+                        Size::new(g.width, g.height)
+                    };
                     item.widget.borrow().set_geometry(item_rect);
+                    let new_size = Size::new(item_w, item_h);
+                    if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
+                        if old_size != new_size || child_layout.is_dirty() {
+                            crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
+                        }
+                    }
                     cur_x += item_w + self.spacing;
                 }
             }
@@ -531,6 +584,7 @@ pub struct GridLayout {
     items: Vec<GridItem>,
     row_stretches: Vec<u32>,
     col_stretches: Vec<u32>,
+    dirty: bool,
 }
 
 impl GridLayout {
@@ -543,6 +597,7 @@ impl GridLayout {
             items: Vec::new(),
             row_stretches: Vec::new(),
             col_stretches: Vec::new(),
+            dirty: true,
         }
     }
 
@@ -624,7 +679,8 @@ impl Layout for GridLayout {
 
     fn set_geometry(&mut self, rect: Rect) {
         self.geometry = rect;
-        self.update_layout();
+        self.dirty = true;
+        self.activate();
     }
 
     fn add_widget(&mut self, widget: WidgetRef) {
@@ -695,7 +751,20 @@ impl Layout for GridLayout {
         Size::new(total_w, total_h)
     }
 
-    fn update_layout(&mut self) {
+    fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn activate(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+
         let rows = self.row_count();
         let cols = self.column_count();
         if rows == 0 || cols == 0 {
@@ -788,7 +857,18 @@ impl Layout for GridLayout {
                 .iter()
                 .sum::<i32>()
                 + ((item.row_span - 1) as i32).max(0) * self.v_spacing;
+            let old_size = {
+                let w = item.widget.borrow();
+                let g = w.geometry();
+                Size::new(g.width, g.height)
+            };
             item.widget.borrow().set_geometry(Rect::new(x, y, w, h));
+            let new_size = Size::new(w, h);
+            if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
+                if old_size != new_size || child_layout.is_dirty() {
+                    crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
+                }
+            }
         }
     }
 }

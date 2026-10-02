@@ -12,6 +12,7 @@ pub struct StackedLayout {
     margins: Margins,
     widgets: Vec<WidgetRef>,
     current_index: usize,
+    dirty: bool,
 }
 
 impl StackedLayout {
@@ -22,6 +23,7 @@ impl StackedLayout {
             margins: Margins::new(0, 0, 0, 0),
             widgets: Vec::new(),
             current_index: 0,
+            dirty: true,
         }
     }
 
@@ -91,7 +93,8 @@ impl Layout for StackedLayout {
 
     fn set_geometry(&mut self, rect: Rect) {
         self.geometry = rect;
-        self.update_layout();
+        self.dirty = true;
+        self.activate();
     }
 
     fn add_widget(&mut self, widget: WidgetRef) {
@@ -132,7 +135,20 @@ impl Layout for StackedLayout {
         }
     }
 
-    fn update_layout(&mut self) {
+    fn invalidate(&mut self) {
+        self.dirty = true;
+    }
+
+    fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    fn activate(&mut self) {
+        if !self.dirty {
+            return;
+        }
+        self.dirty = false;
+
         let avail_x = self.geometry.x + self.margins.left;
         let avail_y = self.geometry.y + self.margins.top;
         let avail_w = (self.geometry.width - self.margins.left - self.margins.right).max(0);
@@ -140,15 +156,26 @@ impl Layout for StackedLayout {
         let child_rect = Rect::new(avail_x, avail_y, avail_w, avail_h);
 
         for (idx, widget) in self.widgets.iter().enumerate() {
+            let old_size = {
+                let w = widget.borrow();
+                let g = w.geometry();
+                Size::new(g.width, g.height)
+            };
             let w = widget.borrow();
             w.set_geometry(child_rect);
             let should_be_visible = idx == self.current_index;
             if w.is_visible() != should_be_visible {
                 w.set_visible(should_be_visible);
             }
+            drop(w);
+            let new_size = Size::new(child_rect.width, child_rect.height);
+            if let Some(child_layout) = widget.borrow().layout_ref_mut() {
+                if old_size != new_size || child_layout.is_dirty() {
+                    crate::layout_scheduler::LayoutScheduler::invalidate(widget);
+                }
+            }
         }
     }
-
     fn widgets(&self) -> Vec<WidgetRef> {
         self.widgets.clone()
     }

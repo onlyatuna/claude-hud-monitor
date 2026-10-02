@@ -13,6 +13,8 @@ pub use widget::*;
 pub mod layout;
 pub use layout::*;
 
+pub mod layout_scheduler;
+pub use layout_scheduler::*;
 pub mod hit_test;
 pub use hit_test::*;
 

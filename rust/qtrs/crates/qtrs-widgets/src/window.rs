@@ -130,7 +130,14 @@ impl Window {
     }
 
     pub fn set_geometry(&mut self, rect: Rect) {
-        *self.geometry.lock().unwrap() = rect;
+        let (old_geom, old_size) = {
+            let mut geom = self.geometry.lock().unwrap();
+            let old = *geom;
+            *geom = rect;
+            (old, Size::new(old.width, old.height))
+        };
+        let size_changed = old_size.width != rect.width || old_size.height != rect.height;
+
         let dpr = platform().primary_screen().device_pixel_ratio();
         let native_rect = if dpr > 1.0 {
             qtrs_platform::high_dpi::to_native_rect(rect, dpr)
@@ -138,14 +145,33 @@ impl Window {
             rect
         };
         self.platform_window.lock().unwrap().set_geometry(native_rect);
-        {
-            let mut root = self.root_widget.borrow_mut();
-            root.set_geometry(Rect::new(0, 0, rect.width, rect.height));
-            if let Some(layout) = root.layout_mut() {
-                layout.update_layout();
+
+        // 1. Root geometry updated
+        self.root_widget
+            .borrow_mut()
+            .set_geometry(Rect::new(0, 0, rect.width, rect.height));
+
+        // 2. Dispatch ResizeEvent & resize callback
+        if size_changed {
+            let mut ev = Event::new_spontaneous(EventKind::Resize {
+                width: rect.width,
+                height: rect.height,
+                old_width: old_size.width,
+                old_height: old_size.height,
+            });
+            self.root_widget.borrow_mut().event(&mut ev);
+            if let Some(cb) = self.resize_cb.lock().unwrap().as_ref() {
+                cb(Size::new(rect.width, rect.height));
             }
-            root.update();
         }
+
+        // 3. Layout Invalidation & Activation via LayoutScheduler
+        if size_changed {
+            crate::layout_scheduler::LayoutScheduler::invalidate(&self.root_widget);
+            crate::layout_scheduler::LayoutScheduler::activate_pending();
+        }
+
+        // 4. Backing store invalidation & paint (Lazy Resize in do_render_and_present)
         self.render_and_present();
     }
     pub fn show(&mut self) {
@@ -320,17 +346,21 @@ impl QObject for Window {
                     geom.width = *width;
                     geom.height = *height;
                 }
-                {
-                    let mut root = self.root_widget.borrow_mut();
-                    root.set_geometry(Rect::new(0, 0, *width, *height));
-                    if let Some(layout) = root.layout_mut() {
-                        layout.update_layout();
-                    }
-                    root.update();
-                }
+                // 1. Root geometry
+                self.root_widget
+                    .borrow_mut()
+                    .set_geometry(Rect::new(0, 0, *width, *height));
+
+                // 2. Resize callback
                 if let Some(cb) = self.resize_cb.lock().unwrap().as_ref() {
                     cb(Size::new(*width, *height));
                 }
+
+                // 3. Layout Invalidation & Activation via LayoutScheduler
+                crate::layout_scheduler::LayoutScheduler::invalidate(&self.root_widget);
+                crate::layout_scheduler::LayoutScheduler::activate_pending();
+
+                // 4. Backing store invalidation & paint
                 self.render_and_present();
                 true
             }
@@ -585,21 +615,12 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 let size_changed = old_size.width != geometry.width || old_size.height != geometry.height;
                 let pos_changed = old_pos.x != geometry.x || old_pos.y != geometry.y;
 
-                // 1. Update root widget geometry & layout
-                {
-                    let mut root_borrow = root.borrow_mut();
-                    root_borrow.set_geometry(Rect::new(0, 0, geometry.width, geometry.height));
-                    if size_changed {
-                        if let Some(layout) = root_borrow.layout_mut() {
-                            layout.update_layout();
-                        }
-                    }
-                    root_borrow.update();
-                }
+                // 1. Update root widget geometry (widget geometry = new size)
+                root.borrow_mut().set_geometry(Rect::new(0, 0, geometry.width, geometry.height));
 
                 // 2. Dispatch Resize and Move events to widgets and callbacks.
                 // In Qt (QWidgetWindow::handleResizeEvent):
-                // Events are delivered to widgets BEFORE backing store synchronization,
+                // Events are delivered to widgets BEFORE backing store synchronization and layout activation,
                 // allowing callbacks to inspect/adjust state with the new geometry.
                 if size_changed {
                     let mut ev = Event::new_spontaneous(EventKind::Resize {
@@ -625,7 +646,13 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     self.dispatcher.dispatch_event(&root, &mut ev);
                 }
 
-                // 3. Paint and present: Lazy Backing Store Resize occurs inside do_render_and_present
+                // 3. Layout Invalidation & Activation via LayoutScheduler
+                if size_changed {
+                    crate::layout_scheduler::LayoutScheduler::invalidate(&root);
+                    crate::layout_scheduler::LayoutScheduler::activate_pending();
+                }
+
+                // 4. Paint and present: Lazy Backing Store Resize occurs inside do_render_and_present
                 // matching Qt's paintAndFlush() (store->resize() check at paint time).
                 if let Ok(mut pw) = self.platform_window.try_lock() {
                     let cur_geom = *self.geometry.lock().unwrap();
@@ -645,15 +672,10 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 let size_changed = old_size.width != size.width || old_size.height != size.height;
 
                 if size_changed {
-                    {
-                        let mut root_borrow = root.borrow_mut();
-                        root_borrow.set_geometry(Rect::new(0, 0, size.width, size.height));
-                        if let Some(layout) = root_borrow.layout_mut() {
-                            layout.update_layout();
-                        }
-                        root_borrow.update();
-                    }
+                    // 1. Update root widget geometry (widget geometry = new size)
+                    root.borrow_mut().set_geometry(Rect::new(0, 0, size.width, size.height));
 
+                    // 2. Dispatch Resize event to widgets and callback
                     let mut ev = Event::new_spontaneous(EventKind::Resize {
                         width: size.width,
                         height: size.height,
@@ -666,8 +688,12 @@ impl WindowSystemEventHandler for WindowEventHandler {
                         cb(size);
                     }
 
+                    // 3. Layout Invalidation & Activation via LayoutScheduler
+                    crate::layout_scheduler::LayoutScheduler::invalidate(&root);
+                    crate::layout_scheduler::LayoutScheduler::activate_pending();
+
+                    // 4. Paint and present: Lazy Backing Store Resize
                     if let Ok(mut pw) = self.platform_window.try_lock() {
-                        let cur_geom = *self.geometry.lock().unwrap();
                         let mut bs = self.backing_store.lock().unwrap();
                         do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
                     }

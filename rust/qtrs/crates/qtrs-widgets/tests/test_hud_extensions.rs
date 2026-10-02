@@ -377,3 +377,75 @@ fn test_lazy_backing_store_resize_observable_ordering() {
         );
     }
 }
+
+
+#[test]
+fn test_resize_event_observable_ordering_before_layout_activation() {
+    use qtrs_gui::geometry::primitives::{Rect, Size};
+    use qtrs_platform::handle_geometry_change;
+    use qtrs_platform::window_system_interface::Delivery;
+    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::sync::Arc;
+
+    let mut win = Window::new("Layout Lifecycle Test", Rect::new(0, 0, 300, 200), WindowFlags::empty())
+        .expect("create window");
+
+    let counter = Arc::new(AtomicI32::new(0));
+    let child_resize_order = Arc::new(AtomicI32::new(-1));
+    let cb_order = Arc::new(AtomicI32::new(-1));
+
+    let child = EmptyWidget::new();
+    let counter_child = Arc::clone(&counter);
+    let child_order_cb = Arc::clone(&child_resize_order);
+    child.set_resize_handler(move |_new_size: Size, _old_size: Size| {
+        let order = counter_child.fetch_add(1, Ordering::SeqCst);
+        child_order_cb.store(order, Ordering::SeqCst);
+    });
+
+    let child_ref: WidgetRef = Rc::new(RefCell::new(Box::new(child)));
+    let mut layout = BoxLayout::vertical();
+    layout.add_widget(child_ref.clone());
+    win.root_widget().borrow_mut().set_layout(Box::new(layout));
+
+    // Force initial layout pass and reset sequence counter
+    qtrs_widgets::layout_scheduler::LayoutScheduler::invalidate(&win.root_widget());
+    qtrs_widgets::layout_scheduler::LayoutScheduler::activate_pending();
+    counter.store(0, Ordering::SeqCst);
+    child_resize_order.store(-1, Ordering::SeqCst);
+
+    let counter_cb = Arc::clone(&counter);
+    let cb_order_clone = Arc::clone(&cb_order);
+
+    win.set_resize_handler(move |_size: Size| {
+        // Under Qt lifecycle ordering:
+        // ResizeEvent is dispatched to widgets and callbacks BEFORE layout activation!
+        let order = counter_cb.fetch_add(1, Ordering::SeqCst);
+        cb_order_clone.store(order, Ordering::SeqCst);
+    });
+
+    #[cfg(windows)]
+    {
+        let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
+        // Resize window to 600x500
+        handle_geometry_change(Delivery::Default, hwnd, Rect::new(0, 0, 600, 500));
+
+        let win_cb = cb_order.load(Ordering::SeqCst);
+        let child_res = child_resize_order.load(Ordering::SeqCst);
+
+        // Assert: Window resize callback was called BEFORE child resize event!
+        assert!(
+            win_cb >= 0,
+            "Window resize callback must have been executed"
+        );
+        assert!(
+            child_res >= 0,
+            "Child resize event must have been executed via layout activation"
+        );
+        assert!(
+            win_cb < child_res,
+            "Window resize callback (order {}) must execute BEFORE child resize event (order {})",
+            win_cb,
+            child_res
+        );
+    }
+}

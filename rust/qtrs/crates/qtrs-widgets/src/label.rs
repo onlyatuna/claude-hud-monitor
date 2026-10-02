@@ -57,6 +57,7 @@ impl Label {
         if self.text.chars().any(|c| (c as u32) >= 0x2E80) && self.font.family == "Segoe UI" {
             self.font.family = "Microsoft JhengHei".to_string();
         }
+        self.request_layout();
         self.update();
     }
 
