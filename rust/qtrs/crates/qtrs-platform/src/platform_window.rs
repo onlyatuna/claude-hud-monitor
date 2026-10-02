@@ -17,7 +17,7 @@ bitflags! {
 
 pub type WindowEdge = WindowEdges;
 
-pub trait PlatformWindow: Send + Sync {
+pub trait PlatformWindow: 'static {
     fn show(&self);
     fn hide(&self);
     fn geometry(&self) -> Rect;
@@ -69,8 +69,16 @@ pub trait PlatformWindow: Send + Sync {
     fn enable_drop_target(&mut self, _enabled: bool) -> bool {
         false
     }
+    fn state_flags(&self) -> crate::window::PlatformWindowStateFlags {
+        crate::window::PlatformWindowStateFlags::NONE
+    }
+    fn owner_thread(&self) -> std::thread::ThreadId {
+        std::thread::current().id()
+    }
+    fn is_within_set_geometry(&self) -> bool {
+        self.state_flags().contains(crate::window::PlatformWindowStateFlags::WITHIN_SET_GEOMETRY)
+    }
 }
-
 use crate::window::WindowFlags;
 use crate::window_system_interface::WindowSystemEventHandler;
 use qtrs_gui::geometry::primitives::Rect;
@@ -88,8 +96,9 @@ pub struct GenericWindow {
     last_pixmap: Mutex<Option<Pixmap>>,
     opacity: f32,
     min_size: (i32, i32),
+    owner_thread: std::thread::ThreadId,
+    state_flags: std::cell::Cell<crate::window::PlatformWindowStateFlags>,
 }
-
 impl GenericWindow {
     pub fn new(_title: &str, rect: Rect, flags: WindowFlags) -> Self {
         Self {
@@ -102,6 +111,8 @@ impl GenericWindow {
             last_pixmap: Mutex::new(None),
             opacity: 1.0,
             min_size: (0, 0),
+            owner_thread: std::thread::current().id(),
+            state_flags: std::cell::Cell::new(crate::window::PlatformWindowStateFlags::NONE),
         }
     }
 
@@ -115,6 +126,12 @@ impl GenericWindow {
 }
 
 impl PlatformWindow for GenericWindow {
+    fn state_flags(&self) -> crate::window::PlatformWindowStateFlags {
+        self.state_flags.get()
+    }
+    fn owner_thread(&self) -> std::thread::ThreadId {
+        self.owner_thread
+    }
     fn show(&self) {
         self.visible.store(true, Ordering::Release);
     }

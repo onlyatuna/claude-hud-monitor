@@ -104,7 +104,8 @@ pub use tray_icon::{Menu, MenuItem, TrayActivation, TrayIcon, WM_TRAY_CALLBACK};
 pub use window::{
     dispatch_window_system_event, flush_window_system_events, handle_geometry_change,
     post_window_system_event, send_window_system_event_immediately, set_dpi_awareness,
-    CustomFramelessConfig, NativeWindow, WindowFlags,
+    unregister_window_event_binding, CustomFramelessConfig, NativeWindow, PlatformWindowStateFlags,
+    SetGeometryGuard, WindowFlags,
 };
 pub use window_cocoa::{qt_mac_flip_point, qt_mac_flip_rect, CocoaNativeWindow};
 pub use window_system_interface::{

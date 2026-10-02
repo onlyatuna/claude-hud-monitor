@@ -343,7 +343,7 @@ fn test_lazy_backing_store_resize_observable_ordering() {
         // Under Qt observable ordering & Lazy Resize:
         // When resize callback runs, the backing store has NOT been reallocated yet!
         // Callbacks observe and adjust state before the buffer is allocated.
-        let bs = bs_arc.lock().unwrap();
+        let bs = bs_arc.borrow();
         sw_cb.store(bs.physical_width(), Ordering::SeqCst);
         sh_cb.store(bs.physical_height(), Ordering::SeqCst);
     });

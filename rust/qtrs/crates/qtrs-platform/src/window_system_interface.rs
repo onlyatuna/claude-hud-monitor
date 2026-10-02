@@ -155,20 +155,20 @@ pub enum PowerEvent {
     Resume,
 }
 
-pub trait WindowSystemEventHandler: Send + Sync {
+pub trait WindowSystemEventHandler: 'static {
     fn handle_window_event(&mut self, event: WindowSystemEvent);
 }
 
 pub struct ClosureWindowEventHandler<F>
 where
-    F: FnMut(WindowSystemEvent) + Send + Sync,
+    F: FnMut(WindowSystemEvent) + 'static,
 {
     handler: F,
 }
 
 impl<F> ClosureWindowEventHandler<F>
 where
-    F: FnMut(WindowSystemEvent) + Send + Sync,
+    F: FnMut(WindowSystemEvent) + 'static,
 {
     pub fn new(handler: F) -> Self {
         Self { handler }
@@ -177,7 +177,7 @@ where
 
 impl<F> WindowSystemEventHandler for ClosureWindowEventHandler<F>
 where
-    F: FnMut(WindowSystemEvent) + Send + Sync,
+    F: FnMut(WindowSystemEvent) + 'static,
 {
     fn handle_window_event(&mut self, event: WindowSystemEvent) {
         (self.handler)(event);

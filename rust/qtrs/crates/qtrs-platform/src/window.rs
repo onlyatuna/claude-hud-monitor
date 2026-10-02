@@ -70,6 +70,36 @@ impl Default for CustomFramelessConfig {
         }
     }
 }
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct PlatformWindowStateFlags: u32 {
+        const NONE                 = 0;
+        const WITHIN_SET_GEOMETRY  = 1 << 0;
+        const WITHIN_SET_STYLE     = 1 << 1;
+        const WITHIN_SET_PARENT    = 1 << 2;
+        const RESIZE_MOVE_ACTIVE   = 1 << 3;
+    }
+}
+
+pub struct SetGeometryGuard<'a> {
+    flags: &'a std::cell::Cell<PlatformWindowStateFlags>,
+}
+
+impl<'a> SetGeometryGuard<'a> {
+    pub fn new(flags: &'a std::cell::Cell<PlatformWindowStateFlags>) -> Self {
+        let cur = flags.get();
+        flags.set(cur | PlatformWindowStateFlags::WITHIN_SET_GEOMETRY);
+        Self { flags }
+    }
+}
+
+impl Drop for SetGeometryGuard<'_> {
+    fn drop(&mut self) {
+        // Critical: ONLY clear WITHIN_SET_GEOMETRY bit, never wipe out other flags set by re-entrant operations!
+        let cur = self.flags.get();
+        self.flags.set(cur & !PlatformWindowStateFlags::WITHIN_SET_GEOMETRY);
+    }
+}
 
 #[cfg(windows)]
 static WINDOW_EVENT_BINDINGS: RwLock<Option<HashMap<isize, (EventLoopHandle, ObjectId)>>> =
@@ -80,9 +110,10 @@ static WINDOW_FRAMELESS_CONFIGS: RwLock<Option<HashMap<isize, CustomFramelessCon
 
 static WINDOW_MIN_SIZES: RwLock<Option<HashMap<isize, (i32, i32)>>> = RwLock::new(None);
 
-static WINDOW_EVENT_HANDLERS: RwLock<Option<HashMap<isize, Box<dyn WindowSystemEventHandler>>>> =
-    RwLock::new(None);
-
+thread_local! {
+    static WINDOW_EVENT_HANDLERS: std::cell::RefCell<HashMap<isize, Box<dyn WindowSystemEventHandler>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
 pub fn set_window_min_size(hwnd: HWND, min_w: i32, min_h: i32) {
     let mut writer = WINDOW_MIN_SIZES.write().unwrap();
     if writer.is_none() {
@@ -130,10 +161,9 @@ pub fn unregister_window_event_binding(hwnd: HWND) {
     if let Some(m) = min_map.as_mut() {
         m.remove(&(hwnd as isize));
     }
-    let mut handler_map = WINDOW_EVENT_HANDLERS.write().unwrap();
-    if let Some(m) = handler_map.as_mut() {
-        m.remove(&(hwnd as isize));
-    }
+    let _ = WINDOW_EVENT_HANDLERS.try_with(|map| {
+        map.borrow_mut().remove(&(hwnd as isize));
+    });
 }
 
 #[inline]
@@ -157,11 +187,9 @@ pub fn set_window_frameless_config(hwnd: HWND, config: CustomFramelessConfig) {
 }
 
 pub fn set_window_event_handler(hwnd: HWND, handler: Box<dyn WindowSystemEventHandler>) {
-    let mut map = WINDOW_EVENT_HANDLERS.write().unwrap();
-    if map.is_none() {
-        *map = Some(HashMap::new());
-    }
-    map.as_mut().unwrap().insert(hwnd as isize, handler);
+    let _ = WINDOW_EVENT_HANDLERS.try_with(|map| {
+        map.borrow_mut().insert(hwnd as isize, handler);
+    });
 }
 
 static WINDOW_SYSTEM_EVENT_QUEUE: Mutex<Option<Vec<(isize, WindowSystemEvent)>>> = Mutex::new(None);
@@ -208,45 +236,40 @@ thread_local! {
 }
 
 pub fn send_window_system_event_immediately(hwnd: HWND, event: WindowSystemEvent) {
-    if IS_DISPATCHING.with(|d| d.get()) {
-        NESTED_EVENTS.with(|q| q.borrow_mut().push((hwnd, event)));
+    let is_dispatching = IS_DISPATCHING.try_with(|d| d.get()).unwrap_or(false);
+    if is_dispatching {
+        let _ = NESTED_EVENTS.try_with(|q| q.borrow_mut().push((hwnd, event)));
         return;
     }
 
-    IS_DISPATCHING.with(|d| d.set(true));
-
-    if let Ok(mut map) = WINDOW_EVENT_HANDLERS.write() {
-        if let Some(handlers) = map.as_mut() {
-            if let Some(handler) = handlers.get_mut(&(hwnd as isize)) {
-                handler.handle_window_event(event);
-            }
+    let _ = IS_DISPATCHING.try_with(|d| d.set(true));
+    let _ = WINDOW_EVENT_HANDLERS.try_with(|map| {
+        if let Some(handler) = map.borrow_mut().get_mut(&(hwnd as isize)) {
+            handler.handle_window_event(event);
         }
-    }
+    });
 
     loop {
-        let next = NESTED_EVENTS.with(|q| {
+        let next = NESTED_EVENTS.try_with(|q| {
             if q.borrow().is_empty() {
                 None
             } else {
                 Some(q.borrow_mut().remove(0))
             }
-        });
+        }).unwrap_or(None);
 
         match next {
             Some((h, ev)) => {
-                if let Ok(mut map) = WINDOW_EVENT_HANDLERS.write() {
-                    if let Some(handlers) = map.as_mut() {
-                        if let Some(handler) = handlers.get_mut(&(h as isize)) {
-                            handler.handle_window_event(ev);
-                        }
+                let _ = WINDOW_EVENT_HANDLERS.try_with(|map| {
+                    if let Some(handler) = map.borrow_mut().get_mut(&(h as isize)) {
+                        handler.handle_window_event(ev);
                     }
-                }
+                });
             }
             None => break,
         }
     }
-
-    IS_DISPATCHING.with(|d| d.set(false));
+    let _ = IS_DISPATCHING.try_with(|d| d.set(false));
 }
 fn is_window_thread(hwnd: HWND) -> bool {
     if hwnd.is_null() {
@@ -258,7 +281,7 @@ fn is_window_thread(hwnd: HWND) -> bool {
             ptr::null_mut(),
         );
         let cur_tid = windows_sys::Win32::System::Threading::GetCurrentThreadId();
-        win_tid == cur_tid || qtrs_core::object::ThreadContext::is_main_thread()
+        win_tid == cur_tid
     }
 }
 
@@ -1005,6 +1028,8 @@ pub struct NativeWindow {
     min_size: (i32, i32),
     layered_surface: Option<crate::surface::WindowsSurface>,
     presenter: Option<crate::presenter::WindowsPresenter>,
+    owner_thread: std::thread::ThreadId,
+    state_flags: std::cell::Cell<PlatformWindowStateFlags>,
 }
 
 #[cfg(windows)]
@@ -1112,6 +1137,8 @@ impl NativeWindow {
             min_size: (0, 0),
             layered_surface,
             presenter: None,
+            owner_thread: std::thread::current().id(),
+            state_flags: std::cell::Cell::new(PlatformWindowStateFlags::NONE),
         })
     }
 
@@ -1174,6 +1201,7 @@ impl NativeWindow {
 
     pub fn set_geometry(&mut self, rect: Rect) {
         if !self.hwnd.is_null() {
+            let _guard = SetGeometryGuard::new(&self.state_flags);
             unsafe {
                 SetWindowPos(
                     self.hwnd,
@@ -1402,6 +1430,14 @@ impl NativeWindow {
 
 #[cfg(windows)]
 impl crate::platform_window::PlatformWindow for NativeWindow {
+    fn state_flags(&self) -> PlatformWindowStateFlags {
+        self.state_flags.get()
+    }
+
+    fn owner_thread(&self) -> std::thread::ThreadId {
+        self.owner_thread
+    }
+
     fn show(&self) {
         self.show();
     }
