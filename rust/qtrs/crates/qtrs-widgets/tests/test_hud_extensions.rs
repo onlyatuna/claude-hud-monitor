@@ -138,3 +138,66 @@ fn test_window_present_custom_physical_backing_store_parity() {
     assert!(win.backing_store().physical_width() >= 200);
     assert!(win.backing_store().physical_height() >= 150);
 }
+#[test]
+fn test_submenu_hover_and_signature_propagation() {
+    use qtrs_widgets::action::Action;
+    use qtrs_widgets::menu::Menu;
+    use qtrs_gui::geometry::primitives::Point;
+
+    let mut root = Menu::new("RootMenu");
+    let sub_ref = root.add_menu("Layout");
+    let act_triple = Action::new_ref("Horizontal Triple");
+    let act_stack = Action::new_ref("Vertical Stack");
+    sub_ref.borrow_mut().add_action(act_triple.clone());
+    sub_ref.borrow_mut().add_action(act_stack.clone());
+
+    let act_layout = root.actions()[0].clone();
+    root.popup(Point::new(0, 0));
+
+    // Move to root item 0 (Layout) -> opens submenu
+    let layout_geo = root.action_geometry(&act_layout).expect("Layout action geometry");
+    root.handle_mouse_move_at(layout_geo.center());
+
+    assert!(root.active_action().is_some(), "Root item should be active");
+    assert!(root.open_submenu().is_some(), "Submenu should be open");
+
+    let sub_rc = root.open_submenu().unwrap();
+    assert!(sub_rc.borrow().active_action().is_none(), "Initially submenu has no active item");
+
+    let sig_before = root.hover_signature();
+
+    // Calculate coordinates inside the submenu item
+    let sub_origin = sub_rc.borrow().geometry();
+    let triple_local = sub_rc.borrow().action_geometry(&act_triple).expect("Triple action geo");
+    let root_coords_for_triple = Point::new(
+        sub_origin.x + triple_local.center().x,
+        sub_origin.y + triple_local.center().y,
+    );
+
+    // Move mouse into submenu item 0
+    root.handle_mouse_move_at(root_coords_for_triple);
+
+    assert_eq!(
+        sub_rc.borrow().active_action().map(|a| a.borrow().text().to_string()),
+        Some("Horizontal Triple".to_string()),
+        "Submenu item 0 should be active after hover"
+    );
+
+    let sig_after = root.hover_signature();
+    assert_ne!(
+        sig_before, sig_after,
+        "Hover signature must change to trigger window repaint"
+    );
+
+    // Move mouse back to root item -> clears submenu active item
+    root.handle_mouse_move_at(layout_geo.center());
+    assert!(
+        sub_rc.borrow().active_action().is_none(),
+        "Submenu active item must be cleared when mouse returns to parent menu"
+    );
+    assert_ne!(
+        sig_after,
+        root.hover_signature(),
+        "Hover signature must change when returning to parent menu"
+    );
+}

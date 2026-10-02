@@ -412,7 +412,7 @@ impl Menu {
         use qtrs_platform::{platform, WindowFlags};
         use windows_sys::Win32::Foundation::HWND;
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-            ReleaseCapture, SetCapture, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_UP,
+            ReleaseCapture, SetCapture, VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_UP,
         };
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             DispatchMessageW, GetMessageW, LoadCursorW, PeekMessageW, SetCursor,
@@ -499,14 +499,13 @@ impl Menu {
                         }
                     }
                     WM_MOUSEMOVE => {
-                        // Parity with Qt QMenu::mouseMoveEvent (qmenu.cpp:2935):
-                        // ONLY repaint when the hovered action or submenu actually changes!
-                        let old_active = self.active;
-                        let old_submenu = self.open_submenu.as_ref().map(|(i, _)| *i);
+                        // Parity with Qt QMenu::mouseMoveEvent (qmenu.cpp:2935 & 3511):
+                        // Repaint whenever hover changes on the root menu or any open submenu!
+                        let old_signature = self.hover_signature();
                         let outcome = self.handle_mouse_move(local_pt);
-                        let new_submenu = self.open_submenu.as_ref().map(|(i, _)| *i);
+                        let new_signature = self.hover_signature();
 
-                        if self.active != old_active || new_submenu != old_submenu {
+                        if old_signature != new_signature {
                             let covered = self.covered_rect();
                             let new_w = covered.width.max(size.width);
                             let new_h = covered.height.max(size.height);
@@ -593,6 +592,18 @@ impl Menu {
                             }
                             VK_DOWN => {
                                 self.handle_key(keys::DOWN, 0);
+                                window.present_custom(|painter| {
+                                    self.paint_event(painter);
+                                });
+                            }
+                            VK_LEFT => {
+                                self.handle_key(keys::LEFT, 0);
+                                window.present_custom(|painter| {
+                                    self.paint_event(painter);
+                                });
+                            }
+                            VK_RIGHT => {
+                                self.handle_key(keys::RIGHT, 0);
                                 window.present_custom(|painter| {
                                     self.paint_event(painter);
                                 });
@@ -921,6 +932,25 @@ impl Menu {
         }
         rect
     }
+    /// Visual hover signature tracking the active item and open submenu at every hierarchy level.
+    pub fn hover_signature(&self) -> Vec<(Option<usize>, Option<usize>)> {
+        let mut sig = vec![(self.active, self.open_submenu.as_ref().map(|(i, _)| *i))];
+        let mut curr = self.open_submenu.as_ref().map(|(_, s)| s.clone());
+        while let Some(sub_rc) = curr {
+            if let Ok(s) = sub_rc.try_borrow() {
+                sig.push((s.active, s.open_submenu.as_ref().map(|(i, _)| *i)));
+                curr = s.open_submenu.as_ref().map(|(_, next)| next.clone());
+            } else {
+                break;
+            }
+        }
+        sig
+    }
+
+    /// Handles mouse motion at `pos` in menu coordinates.
+    pub fn handle_mouse_move_at(&mut self, pos: Point) {
+        self.handle_mouse_move(pos);
+    }
 
     fn route_to_submenu<F>(&mut self, pos: Point, f: F) -> Option<MenuOutcome>
     where
@@ -1020,6 +1050,13 @@ impl Menu {
     pub(crate) fn handle_mouse_move(&mut self, pos: Point) -> MenuOutcome {
         if let Some(outcome) = self.route_to_submenu(pos, |s, p| s.handle_mouse_move(p)) {
             return outcome;
+        }
+        // Parity with Qt QMenu::mouseMoveEvent (qmenu.cpp:3511):
+        // When mouse is inside this menu, clear active hover selection on open submenus
+        if let Some((_, submenu)) = &self.open_submenu {
+            if let Ok(mut sub) = submenu.try_borrow_mut() {
+                sub.set_active_index(None);
+            }
         }
         if let Some(idx) = self.index_at(pos) {
             if self.is_selectable(idx) && self.active != Some(idx) {
