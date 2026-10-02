@@ -439,6 +439,8 @@ fn test_platform_window_move_resize_opacity_minsize() {
             assert_eq!(win.minimum_size(), (250, 150));
             win.set_opacity(0.8);
             assert!((win.opacity() - 0.8).abs() < 1e-4);
+            assert!(win.start_system_move());
+            assert!(win.start_system_resize(WindowEdges::BOTTOM_RIGHT));
         }
     }
 }

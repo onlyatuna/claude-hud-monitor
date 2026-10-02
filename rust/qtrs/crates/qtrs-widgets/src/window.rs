@@ -54,12 +54,14 @@ impl Window {
         let mouse_move_cb = Arc::new(Mutex::new(None));
         let move_cb_clone = Arc::clone(&mouse_move_cb);
         let resize_cb = Arc::new(Mutex::new(None));
+        let resize_cb_clone = Arc::clone(&resize_cb);
         let handler = WindowEventHandler {
             root: Arc::clone(&shared_root),
             dispatcher: EventTreeDispatcher::new(),
             context_menu_cb: cb_clone,
             mouse_press_cb: press_cb_clone,
             mouse_move_cb: move_cb_clone,
+            resize_cb: resize_cb_clone,
         };
         platform_win.set_event_handler(Box::new(handler));
         let win = Self {
@@ -465,6 +467,7 @@ struct WindowEventHandler {
     context_menu_cb: Arc<Mutex<Option<Box<dyn Fn(Point) + Send + Sync>>>>,
     mouse_press_cb: Arc<Mutex<Option<Box<dyn Fn(Point, qtrs_platform::MouseButton) -> bool + Send + Sync>>>>,
     mouse_move_cb: Arc<Mutex<Option<Box<dyn Fn(Point) + Send + Sync>>>>,
+    resize_cb: Arc<Mutex<Option<Box<dyn Fn(Size) + Send + Sync>>>>,
 }
 
 unsafe impl Send for WindowEventHandler {}
@@ -547,6 +550,9 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     old_height: 0,
                 });
                 self.dispatcher.dispatch_event(&root, &mut ev);
+                if let Some(cb) = self.resize_cb.lock().unwrap().as_ref() {
+                    cb(size);
+                }
             }
             WindowSystemEvent::KeyPress {
                 key,

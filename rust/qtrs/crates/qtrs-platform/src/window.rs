@@ -163,20 +163,51 @@ pub fn set_window_event_handler(hwnd: HWND, handler: Box<dyn WindowSystemEventHa
     map.as_mut().unwrap().insert(hwnd as isize, handler);
 }
 
+thread_local! {
+    static NESTED_EVENTS: std::cell::RefCell<Vec<(HWND, WindowSystemEvent)>> = std::cell::RefCell::new(Vec::new());
+    static IS_DISPATCHING: std::cell::Cell<bool> = std::cell::Cell::new(false);
+}
+
 fn dispatch_window_system_event(hwnd: HWND, event: WindowSystemEvent) {
-    let mut map = match WINDOW_EVENT_HANDLERS.try_write() {
-        Ok(m) => m,
-        Err(_) => {
-            // Guard against reentrancy from the same UI thread:
-            // if already locked on this thread, drop the nested event rather than deadlocking
-            return;
-        }
-    };
-    if let Some(handlers) = map.as_mut() {
-        if let Some(handler) = handlers.get_mut(&(hwnd as isize)) {
-            handler.handle_window_event(event);
+    if IS_DISPATCHING.with(|d| d.get()) {
+        NESTED_EVENTS.with(|q| q.borrow_mut().push((hwnd, event)));
+        return;
+    }
+
+    IS_DISPATCHING.with(|d| d.set(true));
+
+    if let Ok(mut map) = WINDOW_EVENT_HANDLERS.try_write() {
+        if let Some(handlers) = map.as_mut() {
+            if let Some(handler) = handlers.get_mut(&(hwnd as isize)) {
+                handler.handle_window_event(event);
+            }
         }
     }
+
+    loop {
+        let next = NESTED_EVENTS.with(|q| {
+            if q.borrow().is_empty() {
+                None
+            } else {
+                Some(q.borrow_mut().remove(0))
+            }
+        });
+
+        match next {
+            Some((h, ev)) => {
+                if let Ok(mut map) = WINDOW_EVENT_HANDLERS.try_write() {
+                    if let Some(handlers) = map.as_mut() {
+                        if let Some(handler) = handlers.get_mut(&(h as isize)) {
+                            handler.handle_window_event(ev);
+                        }
+                    }
+                }
+            }
+            None => break,
+        }
+    }
+
+    IS_DISPATCHING.with(|d| d.set(false));
 }
 
 fn query_keyboard_modifiers() -> KeyboardModifiers {
@@ -1082,9 +1113,12 @@ impl NativeWindow {
         if !self.hwnd.is_null() {
             unsafe {
                 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-                use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    GetMessagePos, PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN,
+                };
                 ReleaseCapture();
-                PostMessageW(self.hwnd, WM_SYSCOMMAND, 0xF012 /*SC_DRAGMOVE*/, 0);
+                let pos = GetMessagePos();
+                PostMessageW(self.hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, pos as isize);
             }
             true
         } else {
@@ -1095,11 +1129,26 @@ impl NativeWindow {
     pub fn start_system_resize(&self, edges: crate::platform_window::WindowEdges) -> bool {
         if !self.hwnd.is_null() {
             unsafe {
+                use crate::platform_window::WindowEdges;
                 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-                use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
+                use windows_sys::Win32::UI::WindowsAndMessaging::{
+                    GetMessagePos, PostMessageW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
+                    HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, WM_NCLBUTTONDOWN,
+                };
                 ReleaseCapture();
-                let orientation = edges_to_win_orientation(edges);
-                PostMessageW(self.hwnd, WM_SYSCOMMAND, orientation, 0);
+                let cmd = match edges {
+                    WindowEdges::LEFT => HTLEFT,
+                    WindowEdges::RIGHT => HTRIGHT,
+                    WindowEdges::TOP => HTTOP,
+                    WindowEdges::BOTTOM => HTBOTTOM,
+                    WindowEdges::TOP_LEFT => HTTOPLEFT,
+                    WindowEdges::TOP_RIGHT => HTTOPRIGHT,
+                    WindowEdges::BOTTOM_LEFT => HTBOTTOMLEFT,
+                    WindowEdges::BOTTOM_RIGHT => HTBOTTOMRIGHT,
+                    _ => HTCAPTION,
+                };
+                let pos = GetMessagePos();
+                PostMessageW(self.hwnd, WM_NCLBUTTONDOWN, cmd as usize, pos as isize);
             }
             true
         } else {
@@ -1393,6 +1442,7 @@ impl Drop for NativeWindow {
 }
 #[cfg(not(windows))]
 pub type NativeWindow = crate::platform_window::GenericWindow;
+#[allow(dead_code)]
 #[inline]
 pub(crate) fn edges_to_win_orientation(edges: crate::platform_window::WindowEdges) -> usize {
     use crate::platform_window::WindowEdges;
@@ -1421,9 +1471,12 @@ pub fn post_system_move(hwnd: isize) -> bool {
     if hwnd != 0 {
         unsafe {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetMessagePos, PostMessageW, HTCAPTION, WM_NCLBUTTONDOWN,
+            };
             ReleaseCapture();
-            PostMessageW(hwnd as HWND, WM_SYSCOMMAND, 0xF012 /*SC_DRAGMOVE*/, 0);
+            let pos = GetMessagePos();
+            PostMessageW(hwnd as HWND, WM_NCLBUTTONDOWN, HTCAPTION as usize, pos as isize);
         }
         return true;
     }
@@ -1434,11 +1487,26 @@ pub fn post_system_resize(hwnd: isize, edges: crate::platform_window::WindowEdge
     #[cfg(windows)]
     if hwnd != 0 {
         unsafe {
+            use crate::platform_window::WindowEdges;
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetMessagePos, PostMessageW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
+                HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, WM_NCLBUTTONDOWN,
+            };
             ReleaseCapture();
-            let orientation = edges_to_win_orientation(edges);
-            PostMessageW(hwnd as HWND, WM_SYSCOMMAND, orientation, 0);
+            let cmd = match edges {
+                WindowEdges::LEFT => HTLEFT,
+                WindowEdges::RIGHT => HTRIGHT,
+                WindowEdges::TOP => HTTOP,
+                WindowEdges::BOTTOM => HTBOTTOM,
+                WindowEdges::TOP_LEFT => HTTOPLEFT,
+                WindowEdges::TOP_RIGHT => HTTOPRIGHT,
+                WindowEdges::BOTTOM_LEFT => HTBOTTOMLEFT,
+                WindowEdges::BOTTOM_RIGHT => HTBOTTOMRIGHT,
+                _ => HTCAPTION,
+            };
+            let pos = GetMessagePos();
+            PostMessageW(hwnd as HWND, WM_NCLBUTTONDOWN, cmd as usize, pos as isize);
         }
         return true;
     }
@@ -1449,7 +1517,7 @@ pub fn calc_frameless_edge(hwnd: isize, pos: qtrs_gui::geometry::primitives::Poi
     if locked {
         return crate::platform_window::WindowEdges::empty();
     }
-    const M: i32 = 6;
+    const M: i32 = 8;
     #[cfg(windows)]
     let (w, h) = if hwnd != 0 {
         unsafe {
