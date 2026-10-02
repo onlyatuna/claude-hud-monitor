@@ -9,8 +9,8 @@ use windows_sys::Win32::Graphics::Gdi::{
     HBITMAP, HDC, HGDIOBJ,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetWindowRect, UpdateLayeredWindow, UpdateLayeredWindowIndirect, ULW_ALPHA,
-    UPDATELAYEREDWINDOWINFO,
+    GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, UpdateLayeredWindow,
+    UpdateLayeredWindowIndirect, GWL_EXSTYLE, ULW_ALPHA, UPDATELAYEREDWINDOWINFO, WS_EX_LAYERED,
 };
 
 pub struct Win32LayeredSurface {
@@ -35,6 +35,11 @@ impl Win32LayeredSurface {
         }
 
         unsafe {
+            // Ensure window has WS_EX_LAYERED extended style for UpdateLayeredWindow
+            let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if (ex_style as u32 & WS_EX_LAYERED) == 0 {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex_style | WS_EX_LAYERED as isize);
+            }
             let screen_dc = GetDC(ptr::null_mut());
             if screen_dc.is_null() {
                 return Err("Failed to get screen DC (GetDC)");

@@ -478,6 +478,10 @@ impl DCompSurface {
                 DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE,
             );
             if hr < 0 {
+                let u_hr = hr as u32;
+                if u_hr == 0x887A0005 || u_hr == 0x887A0007 {
+                    return Err("DXGI_ERROR_DEVICE_LOST");
+                }
                 return Err("ResizeBuffers failed on swap chain");
             }
 
@@ -603,6 +607,10 @@ impl PlatformSurface for DCompSurface {
             let hr = get_dc_fn(dxgi_surface, 0, &mut surface_dc);
             if hr < 0 || surface_dc.is_null() {
                 com_release(dxgi_surface);
+                let u_hr = hr as u32;
+                if u_hr == 0x887A0005 || u_hr == 0x887A0007 {
+                    return Err("DXGI_ERROR_DEVICE_LOST");
+                }
                 return Err("IDXGISurface1::GetDC failed");
             }
 
@@ -652,13 +660,23 @@ impl PlatformSurface for DCompSurface {
                 pScrollOffset: ptr::null(),
             };
 
-            let _ = present1_fn(self.swap_chain, 0, 0, &params);
+            let hr = present1_fn(self.swap_chain, 0, 0, &params);
+            if hr < 0 {
+                let u_hr = hr as u32;
+                if u_hr == 0x887A0005 || u_hr == 0x887A0007 {
+                    return Err("DXGI_ERROR_DEVICE_LOST");
+                }
+                return Err("IDXGISwapChain1::Present1 failed");
+            }
 
             // 7. Commit DirectComposition device
             let dev_vtbl = *(self.dcomp_device as *mut *mut usize);
             type PfnCommit = unsafe extern "system" fn(this: *mut c_void) -> HRESULT;
             let commit_fn: PfnCommit = std::mem::transmute(*dev_vtbl.add(3));
-            let _ = commit_fn(self.dcomp_device);
+            let hr_commit = commit_fn(self.dcomp_device);
+            if hr_commit < 0 {
+                return Err("IDCompositionDevice::Commit failed");
+            }
         }
 
         Ok(())

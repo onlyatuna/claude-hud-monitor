@@ -1017,7 +1017,9 @@ impl NativeWindow {
                 && rect.height > 0
             {
                 if let Some(surface) = &mut self.layered_surface {
-                    let _ = surface.resize(rect.width as u32, rect.height as u32);
+                    if surface.resize(rect.width as u32, rect.height as u32).is_err() {
+                        self.layered_surface = None;
+                    }
                 }
             }
             self.geometry = rect;
@@ -1161,9 +1163,12 @@ impl NativeWindow {
         }
         let surface = self.layered_surface.as_mut().unwrap();
         if surface.width() != width || surface.height() != height {
-            surface.resize(width, height)?;
+            if let Err(e) = surface.resize(width, height) {
+                self.layered_surface = None;
+                return Err(e);
+            }
         }
-        Ok(surface)
+        Ok(self.layered_surface.as_mut().unwrap())
     }
 
     pub fn close(&mut self) {
@@ -1265,8 +1270,8 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
     ) -> Result<(), &'static str> {
         let width = pixmap.physical_width();
         let height = pixmap.physical_height();
-        let surface = self.get_or_create_layered_surface(width, height)?;
-        surface.present(pixmap, opacity)
+        let full_dirty = Rect::new(0, 0, width as i32, height as i32);
+        self.present_dirty(pixmap, opacity, full_dirty)
     }
 
     fn present_dirty(
@@ -1277,8 +1282,30 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
     ) -> Result<(), &'static str> {
         let width = pixmap.physical_width();
         let height = pixmap.physical_height();
-        let surface = self.get_or_create_layered_surface(width, height)?;
-        surface.present_dirty(pixmap, opacity, dirty_rect)
+
+        // 1. Attempt present with existing or new surface
+        let res = match self.get_or_create_layered_surface(width, height) {
+            Ok(surface) => surface.present_dirty(pixmap, opacity, dirty_rect),
+            Err(e) => Err(e),
+        };
+
+        // 2. If present or resize failed (e.g. Device Lost / TDR / sleep resume):
+        if res.is_err() {
+            // Drop damaged surface to release COM objects and unbind DComp target
+            self.layered_surface.take();
+
+            // Re-create surface: tries DComp first, gracefully falls back to Win32LayeredSurface (GDI)
+            let mut recovered = crate::surface::WindowsSurface::create(self.hwnd, width, height)?;
+
+            // Newly allocated swap chain or DIB is uninitialized; force full-window redraw to eliminate black artifacts
+            let full_rect = Rect::new(0, 0, width as i32, height as i32);
+            let retry_res = recovered.present_dirty(pixmap, opacity, full_rect);
+
+            self.layered_surface = Some(recovered);
+            return retry_res;
+        }
+
+        Ok(())
     }
     fn set_event_handler(&mut self, handler: Box<dyn WindowSystemEventHandler>) {
         self.set_event_handler(handler);
