@@ -24,6 +24,36 @@ impl Pixmap {
         let pixmap = tiny_skia::Pixmap::new(width.max(1), height.max(1))?;
         Some(Self { pixmap, dpr })
     }
+
+    /// Resizes the pixmap buffer with the current DPR if dimensions differ.
+    ///
+    /// Returns `true` if a reallocation occurred, or `false` if the existing buffer
+    /// already matches the requested dimensions.
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        self.resize_with_dpr(width, height, self.dpr)
+    }
+
+    /// Resizes the pixmap buffer with the specified DPR if dimensions or DPR differ.
+    ///
+    /// Returns `true` if a reallocation occurred, or `false` if the existing buffer
+    /// already matches the requested physical dimensions and DPR.
+    pub fn resize_with_dpr(&mut self, width: u32, height: u32, dpr: f32) -> bool {
+        let width = width.max(1);
+        let height = height.max(1);
+        if self.physical_width() == width
+            && self.physical_height() == height
+            && (self.dpr - dpr).abs() < 0.001
+        {
+            return false;
+        }
+        if let Some(new_pixmap) = Self::with_dpr(width, height, dpr) {
+            *self = new_pixmap;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Physical width in pixels.
     #[inline]
     pub fn physical_width(&self) -> u32 {

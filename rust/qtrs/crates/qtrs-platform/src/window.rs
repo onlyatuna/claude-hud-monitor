@@ -215,7 +215,7 @@ pub fn send_window_system_event_immediately(hwnd: HWND, event: WindowSystemEvent
 
     IS_DISPATCHING.with(|d| d.set(true));
 
-    if let Ok(mut map) = WINDOW_EVENT_HANDLERS.try_write() {
+    if let Ok(mut map) = WINDOW_EVENT_HANDLERS.write() {
         if let Some(handlers) = map.as_mut() {
             if let Some(handler) = handlers.get_mut(&(hwnd as isize)) {
                 handler.handle_window_event(event);
@@ -234,7 +234,7 @@ pub fn send_window_system_event_immediately(hwnd: HWND, event: WindowSystemEvent
 
         match next {
             Some((h, ev)) => {
-                if let Ok(mut map) = WINDOW_EVENT_HANDLERS.try_write() {
+                if let Ok(mut map) = WINDOW_EVENT_HANDLERS.write() {
                     if let Some(handlers) = map.as_mut() {
                         if let Some(handler) = handlers.get_mut(&(h as isize)) {
                             handler.handle_window_event(ev);

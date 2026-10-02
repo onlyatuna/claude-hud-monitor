@@ -318,3 +318,62 @@ fn test_geometry_change_event_delivery() {
         assert!(win.backing_store().physical_height() > initial_store_h);
     }
 }
+
+#[test]
+fn test_lazy_backing_store_resize_observable_ordering() {
+    use qtrs_gui::geometry::primitives::{Rect, Size};
+    use qtrs_platform::handle_geometry_change;
+    use qtrs_platform::window_system_interface::Delivery;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    let mut win = Window::new("Lazy Resize Ordering Test", Rect::new(0, 0, 300, 200), WindowFlags::empty())
+        .expect("create window");
+
+    let initial_store_w = win.backing_store().physical_width();
+    let initial_store_h = win.backing_store().physical_height();
+
+    let bs_arc = win.backing_store_handle();
+    let store_w_during_callback = Arc::new(AtomicU32::new(0));
+    let store_h_during_callback = Arc::new(AtomicU32::new(0));
+    let sw_cb = Arc::clone(&store_w_during_callback);
+    let sh_cb = Arc::clone(&store_h_during_callback);
+
+    win.set_resize_handler(move |_size: Size| {
+        // Under Qt observable ordering & Lazy Resize:
+        // When resize callback runs, the backing store has NOT been reallocated yet!
+        // Callbacks observe and adjust state before the buffer is allocated.
+        let bs = bs_arc.lock().unwrap();
+        sw_cb.store(bs.physical_width(), Ordering::SeqCst);
+        sh_cb.store(bs.physical_height(), Ordering::SeqCst);
+    });
+
+    #[cfg(windows)]
+    {
+        let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
+        // Dispatch geometry change (600x450)
+        handle_geometry_change(Delivery::Default, hwnd, Rect::new(0, 0, 600, 450));
+
+        // 1. In callback: backing store was STILL at initial size (300x200 scaled)!
+        assert_eq!(
+            store_w_during_callback.load(Ordering::SeqCst),
+            initial_store_w,
+            "Backing store must NOT be reallocated before resize callback runs!"
+        );
+        assert_eq!(
+            store_h_during_callback.load(Ordering::SeqCst),
+            initial_store_h,
+            "Backing store must NOT be reallocated before resize callback runs!"
+        );
+
+        // 2. After event handling / paintAndFlush: backing store was lazily resized to the new size!
+        assert!(
+            win.backing_store().physical_width() > initial_store_w,
+            "Backing store must be resized after paintAndFlush completes"
+        );
+        assert!(
+            win.backing_store().physical_height() > initial_store_h,
+            "Backing store must be resized after paintAndFlush completes"
+        );
+    }
+}

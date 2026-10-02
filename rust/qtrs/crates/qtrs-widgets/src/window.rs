@@ -138,17 +138,6 @@ impl Window {
             rect
         };
         self.platform_window.lock().unwrap().set_geometry(native_rect);
-        let physical_w = ((rect.width.max(1) as f32) * dpr).round() as u32;
-        let physical_h = ((rect.height.max(1) as f32) * dpr).round() as u32;
-        {
-            let mut bs = self.backing_store.lock().unwrap();
-            if bs.physical_width() != physical_w || bs.physical_height() != physical_h {
-                if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
-                    *bs = new_pixmap;
-                }
-            }
-        }
-
         {
             let mut root = self.root_widget.borrow_mut();
             root.set_geometry(Rect::new(0, 0, rect.width, rect.height));
@@ -259,25 +248,34 @@ impl Window {
     }
 
     pub fn present_custom<F: FnOnce(&mut Painter)>(&mut self, f: F) {
+        let geom = *self.geometry.lock().unwrap();
+        let dpr = platform().primary_screen().device_pixel_ratio();
+        let physical_w = ((geom.width.max(1) as f32) * dpr).round() as u32;
+        let physical_h = ((geom.height.max(1) as f32) * dpr).round() as u32;
+
         let mut bs = self.backing_store.lock().unwrap();
+        bs.resize_with_dpr(physical_w, physical_h, dpr);
         bs.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
         {
             let mut painter = Painter::begin(&mut *bs);
             f(&mut painter);
         }
         let mut pw = self.platform_window.lock().unwrap();
-        let opacity = pw.opacity();
         let phys_dirty = Rect::new(
             0,
             0,
             bs.physical_width() as i32,
             bs.physical_height() as i32,
         );
-        let _ = pw.present_dirty(&mut *bs, opacity, phys_dirty);
+        let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
+        let _ = pw.present_region(&*bs, &dirty_region);
     }
 
     pub fn backing_store(&self) -> std::sync::MutexGuard<'_, Pixmap> {
         self.backing_store.lock().unwrap()
+    }
+    pub fn backing_store_handle(&self) -> Arc<Mutex<Pixmap>> {
+        Arc::clone(&self.backing_store)
     }
 
     pub fn save_png(&self, path: &std::path::Path) -> Result<(), &'static str> {
@@ -321,19 +319,6 @@ impl QObject for Window {
                     let mut geom = self.geometry.lock().unwrap();
                     geom.width = *width;
                     geom.height = *height;
-                }
-                {
-                    let mut bs = self.backing_store.lock().unwrap();
-                    let dpr = bs.device_pixel_ratio();
-                    let physical_w = ((*width as f32).max(1.0) * dpr).round() as u32;
-                    let physical_h = ((*height as f32).max(1.0) * dpr).round() as u32;
-                    if bs.physical_width() != physical_w
-                        || bs.physical_height() != physical_h
-                    {
-                        if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
-                            *bs = new_pixmap;
-                        }
-                    }
                 }
                 {
                     let mut root = self.root_widget.borrow_mut();
@@ -461,11 +446,21 @@ fn do_render_and_present(
     root_widget: &WidgetRef,
     geometry: Rect,
 ) {
+    let dpr = platform().primary_screen().device_pixel_ratio();
+    let physical_w = ((geometry.width.max(1) as f32) * dpr).round() as u32;
+    let physical_h = ((geometry.height.max(1) as f32) * dpr).round() as u32;
+
+    // --- Lazy Backing Store Resize (Qt QWidgetRepaintManager::paintAndFlush parity) ---
+    // If the backing store dimensions or DPR differ from the required top-level size,
+    // reallocate lazily here, and mark the entire window dirty so the new buffer is fully painted.
+    if backing_store.resize_with_dpr(physical_w, physical_h, dpr) {
+        root_widget.borrow_mut().update();
+    }
+
     let root_geom = Rect::new(0, 0, geometry.width, geometry.height);
     let dirty = collect_dirty_region(root_widget, Point::new(0, 0))
         .unwrap_or(root_geom)
         .intersected(&root_geom);
-
     if dirty.is_empty() {
         return;
     }
@@ -590,18 +585,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 let size_changed = old_size.width != geometry.width || old_size.height != geometry.height;
                 let pos_changed = old_pos.x != geometry.x || old_pos.y != geometry.y;
 
-                if size_changed {
-                    let mut bs = self.backing_store.lock().unwrap();
-                    let dpr = bs.device_pixel_ratio();
-                    let physical_w = ((geometry.width as f32).max(1.0) * dpr).round() as u32;
-                    let physical_h = ((geometry.height as f32).max(1.0) * dpr).round() as u32;
-                    if bs.physical_width() != physical_w || bs.physical_height() != physical_h {
-                        if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
-                            *bs = new_pixmap;
-                        }
-                    }
-                }
-
+                // 1. Update root widget geometry & layout
                 {
                     let mut root_borrow = root.borrow_mut();
                     root_borrow.set_geometry(Rect::new(0, 0, geometry.width, geometry.height));
@@ -613,6 +597,10 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     root_borrow.update();
                 }
 
+                // 2. Dispatch Resize and Move events to widgets and callbacks.
+                // In Qt (QWidgetWindow::handleResizeEvent):
+                // Events are delivered to widgets BEFORE backing store synchronization,
+                // allowing callbacks to inspect/adjust state with the new geometry.
                 if size_changed {
                     let mut ev = Event::new_spontaneous(EventKind::Resize {
                         width: geometry.width,
@@ -637,35 +625,26 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     self.dispatcher.dispatch_event(&root, &mut ev);
                 }
 
+                // 3. Paint and present: Lazy Backing Store Resize occurs inside do_render_and_present
+                // matching Qt's paintAndFlush() (store->resize() check at paint time).
                 if let Ok(mut pw) = self.platform_window.try_lock() {
+                    let cur_geom = *self.geometry.lock().unwrap();
                     let mut bs = self.backing_store.lock().unwrap();
-                    do_render_and_present(&mut **pw, &mut *bs, &root, geometry);
+                    do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
                 }
             }
             WindowSystemEvent::Resize { size } => {
-                let (same_size, cur_geom) = {
+                let (old_size, cur_geom) = {
                     let mut geom = self.geometry.lock().unwrap();
-                    let same = geom.width == size.width && geom.height == size.height;
+                    let old_size = Size::new(geom.width, geom.height);
                     geom.width = size.width;
                     geom.height = size.height;
-                    (same, *geom)
+                    (old_size, *geom)
                 };
 
-                let mut needs_present = false;
-                {
-                    let mut bs = self.backing_store.lock().unwrap();
-                    let dpr = bs.device_pixel_ratio();
-                    let physical_w = ((size.width as f32).max(1.0) * dpr).round() as u32;
-                    let physical_h = ((size.height as f32).max(1.0) * dpr).round() as u32;
-                    if bs.physical_width() != physical_w || bs.physical_height() != physical_h {
-                        if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
-                            *bs = new_pixmap;
-                            needs_present = true;
-                        }
-                    }
-                }
+                let size_changed = old_size.width != size.width || old_size.height != size.height;
 
-                if !same_size || needs_present {
+                if size_changed {
                     {
                         let mut root_borrow = root.borrow_mut();
                         root_borrow.set_geometry(Rect::new(0, 0, size.width, size.height));
@@ -678,8 +657,8 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     let mut ev = Event::new_spontaneous(EventKind::Resize {
                         width: size.width,
                         height: size.height,
-                        old_width: 0,
-                        old_height: 0,
+                        old_width: old_size.width,
+                        old_height: old_size.height,
                     });
                     self.dispatcher.dispatch_event(&root, &mut ev);
 
@@ -688,6 +667,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     }
 
                     if let Ok(mut pw) = self.platform_window.try_lock() {
+                        let cur_geom = *self.geometry.lock().unwrap();
                         let mut bs = self.backing_store.lock().unwrap();
                         do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
                     }
