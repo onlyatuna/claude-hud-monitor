@@ -321,6 +321,11 @@ impl EventTreeDispatcher {
                 }
                 root.borrow_mut().event(event)
             }
+            EventKind::DpiChanged { dpi_x, .. } => {
+                let new_dpr = (*dpi_x as f32) / 96.0;
+                crate::window::propagate_dpi_change_recursive(root, 1.0, new_dpr);
+                true
+            }
             _ => false,
         }
     }

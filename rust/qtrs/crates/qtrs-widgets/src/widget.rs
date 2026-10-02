@@ -158,6 +158,11 @@ pub trait Widget: QObject + 'static {
 
     fn key_release_event(&mut self, _key: u32, _modifiers: u32) {}
 
+    /// Called when the screen DPI changes during Per-Monitor V2 dynamic dragging or display reconfiguration.
+    /// Widgets should invalidate cached metrics, size hints, and layouts.
+    fn dpi_changed_event(&mut self, _old_dpr: f32, _new_dpr: f32) {
+        self.update();
+    }
     fn as_any(&self) -> &dyn std::any::Any;
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;

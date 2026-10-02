@@ -70,6 +70,48 @@ impl FontMetrics {
 
         total_width
     }
+    /// Calculates the exact horizontal advance width using the global font database and OpenType shaper.
+    /// Eliminates heuristic rounding discrepancies between layout bounding boxes and rasterized glyphs.
+    pub fn horizontal_advance_exact(&self, text: &str, font: &Font) -> f32 {
+        if text.is_empty() {
+            return 0.0;
+        }
+
+        let shaped_width = crate::text::font_database::with_global_font_database(|db| {
+            if let Some(font_face) = db.load_font(&font.family) {
+                let raw_data = db.get_raw_font_data(&font.family);
+                let engine = crate::text::glyph_layout::FontEngine {
+                    fontdue: font_face,
+                    raw_data,
+                    face_index: 0,
+                };
+                let layout = crate::text::glyph_layout::GlyphLayout::shape_with_engines(
+                    text,
+                    font,
+                    &[engine],
+                );
+                Some(layout.width)
+            } else {
+                None
+            }
+        });
+
+        match shaped_width {
+            Some(w) if w > 0.0 => w,
+            _ => self.horizontal_advance(text, font),
+        }
+    }
+
+    /// Calculates the exact bounding rectangle of a string using OpenType shaping.
+    pub fn bounding_rect_exact(&self, text: &str, font: &Font) -> RectF {
+        let width = self.horizontal_advance_exact(text, font);
+        RectF {
+            x: 0.0,
+            y: -self.ascent,
+            width,
+            height: self.height,
+        }
+    }
 
     /// Calculates the bounding rectangle of a string (`QFontMetricsF::boundingRect`).
     pub fn bounding_rect(&self, text: &str, font: &Font) -> RectF {

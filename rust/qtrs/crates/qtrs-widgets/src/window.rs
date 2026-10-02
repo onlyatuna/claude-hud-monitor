@@ -2,7 +2,7 @@ use crate::widget::{EmptyWidget, WidgetRef};
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::object::{register_qobject, unregister_qobject, ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF};
-use qtrs_gui::paint::{Painter, Pixmap};
+use qtrs_gui::paint::{PaintDevice, Painter, Pixmap};
 use qtrs_platform::{
     platform, PlatformWindow, WindowFlags, WindowSystemEvent, WindowSystemEventHandler,
 };
@@ -316,11 +316,15 @@ impl QObject for Window {
                 true
             }
             EventKind::DpiChanged { dpi_x, .. } => {
+                let old_dpr = self.backing_store.device_pixel_ratio();
                 let new_dpr = (*dpi_x as f32) / 96.0;
                 let physical_w = ((self.geometry.width.max(1) as f32) * new_dpr).round() as u32;
                 let physical_h = ((self.geometry.height.max(1) as f32) * new_dpr).round() as u32;
                 if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, new_dpr) {
                     self.backing_store = new_pixmap;
+                    // Propagate DPI changed recursively through the widget tree
+                    propagate_dpi_change_recursive(&self.root_widget, old_dpr, new_dpr);
+
                     // Invalidate and re-layout root widget tree
                     let mut root = self.root_widget.borrow_mut();
                     let root_w = self.geometry.width;
@@ -337,6 +341,22 @@ impl QObject for Window {
             }
             _ => false,
         }
+    }
+}
+/// Recursively propagates DPI change to all widgets in the tree,
+/// triggering `dpi_changed_event` and refreshing nested layouts.
+pub fn propagate_dpi_change_recursive(widget_ref: &WidgetRef, old_dpr: f32, new_dpr: f32) {
+    let mut widget = widget_ref.borrow_mut();
+    widget.dpi_changed_event(old_dpr, new_dpr);
+    let geom = widget.geometry();
+    if let Some(layout) = widget.layout_mut() {
+        layout.set_geometry(Rect::new(0, 0, geom.width, geom.height));
+    }
+    let children = widget.children();
+    drop(widget);
+
+    for child in children {
+        propagate_dpi_change_recursive(&child, old_dpr, new_dpr);
     }
 }
 

@@ -155,7 +155,7 @@ impl Widget for Label {
             font.size = sz;
         }
         let metrics = FontMetrics::from_font(&font);
-        let text_w = metrics.horizontal_advance(&self.text, &font).ceil() as i32 + 8;
+        let text_w = metrics.horizontal_advance_exact(&self.text, &font).ceil() as i32 + 8;
         let text_h = metrics.height.ceil() as i32 + 4;
         let w = style.min_width.unwrap_or(text_w);
         let h = style.max_height.or(style.min_height).unwrap_or(text_h);
@@ -235,6 +235,10 @@ impl Widget for Label {
     fn add_child(&mut self, _child: WidgetRef) {}
 
     fn remove_child(&mut self, _child_id: ObjectId) {}
+    fn dpi_changed_event(&mut self, _old_dpr: f32, _new_dpr: f32) {
+        self.base.clear_dirty();
+        self.base.update();
+    }
 
     fn paint_event(&mut self, painter: &mut Painter) {
         let geom = self.base.geometry();
@@ -309,7 +313,7 @@ impl Widget for Label {
             let mut start_y = ((geom.height as f32 - total_text_h) / 2.0).max(0.0) + metrics.ascent;
 
             for line in lines {
-                let line_w = metrics.horizontal_advance(line, &font);
+                let line_w = metrics.horizontal_advance_exact(line, &font);
                 let x = match self.alignment {
                     Alignment::Left => 4.0,
                     Alignment::Center => ((geom.width as f32 - line_w) / 2.0).max(0.0),
@@ -319,7 +323,7 @@ impl Widget for Label {
                 start_y += line_height;
             }
         } else {
-            let text_w = metrics.horizontal_advance(&self.text, &font);
+            let text_w = metrics.horizontal_advance_exact(&self.text, &font);
             let text_h = metrics.height;
             let x = match self.alignment {
                 Alignment::Left => 4.0,
