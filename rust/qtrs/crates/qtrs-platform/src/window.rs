@@ -5,6 +5,7 @@ use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoopHandle;
 use qtrs_core::object::ObjectId;
 use qtrs_gui::geometry::primitives::Rect;
+use crate::surface::PlatformSurface;
 use std::collections::HashMap;
 use std::ptr;
 use std::sync::Once;
@@ -831,6 +832,7 @@ pub struct NativeWindow {
     drop_target: *mut crate::drag_drop::win32_ole::OleDropTarget,
     opacity: f32,
     min_size: (i32, i32),
+    layered_surface: Option<crate::surface::WindowsSurface>,
 }
 
 #[cfg(windows)]
@@ -917,6 +919,17 @@ impl NativeWindow {
             set_window_frameless_config(hwnd, CustomFramelessConfig::default());
         }
 
+        let layered_surface = if flags.contains(WindowFlags::LAYERED) {
+            crate::surface::WindowsSurface::create(
+                hwnd,
+                rect.width.max(1) as u32,
+                rect.height.max(1) as u32,
+            )
+            .ok()
+        } else {
+            None
+        };
+
         Ok(Self {
             hwnd,
             title: title.to_string(),
@@ -925,6 +938,7 @@ impl NativeWindow {
             drop_target: std::ptr::null_mut(),
             opacity: 1.0,
             min_size: (0, 0),
+            layered_surface,
         })
     }
 
@@ -997,6 +1011,14 @@ impl NativeWindow {
                     rect.height,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+            }
+            if (rect.width != self.geometry.width || rect.height != self.geometry.height)
+                && rect.width > 0
+                && rect.height > 0
+            {
+                if let Some(surface) = &mut self.layered_surface {
+                    let _ = surface.resize(rect.width as u32, rect.height as u32);
+                }
             }
             self.geometry = rect;
         }
@@ -1129,9 +1151,24 @@ impl NativeWindow {
         )
     }
 
+    pub fn get_or_create_layered_surface(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<&mut crate::surface::WindowsSurface, &'static str> {
+        if self.layered_surface.is_none() {
+            self.layered_surface = Some(crate::surface::WindowsSurface::create(self.hwnd, width, height)?);
+        }
+        let surface = self.layered_surface.as_mut().unwrap();
+        if surface.width() != width || surface.height() != height {
+            surface.resize(width, height)?;
+        }
+        Ok(surface)
+    }
+
     pub fn close(&mut self) {
+        self.layered_surface = None;
         if !self.drop_target.is_null() {
-            crate::drag_drop::win32_ole::revoke_drop_target(self.hwnd, self.drop_target);
             self.drop_target = std::ptr::null_mut();
         }
         if !self.hwnd.is_null() {
@@ -1226,7 +1263,9 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         pixmap: &mut qtrs_gui::paint::Pixmap,
         opacity: f32,
     ) -> Result<(), &'static str> {
-        let mut surface = self.create_layered_surface()?;
+        let width = pixmap.physical_width();
+        let height = pixmap.physical_height();
+        let surface = self.get_or_create_layered_surface(width, height)?;
         surface.present(pixmap, opacity)
     }
 
@@ -1236,10 +1275,11 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         opacity: f32,
         dirty_rect: Rect,
     ) -> Result<(), &'static str> {
-        let mut surface = self.create_layered_surface()?;
+        let width = pixmap.physical_width();
+        let height = pixmap.physical_height();
+        let surface = self.get_or_create_layered_surface(width, height)?;
         surface.present_dirty(pixmap, opacity, dirty_rect)
     }
-
     fn set_event_handler(&mut self, handler: Box<dyn WindowSystemEventHandler>) {
         self.set_event_handler(handler);
     }

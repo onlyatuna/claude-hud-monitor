@@ -176,4 +176,34 @@ mod tests {
             .present_dirty(&mut pm, 1.0, Rect::new(10, 10, 20, 20))
             .is_ok());
     }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_native_window_persistent_surface_reuse() {
+        use crate::platform_window::PlatformWindow;
+
+        let mut window = NativeWindow::new(
+            "Persistent Surface Test",
+            Rect::new(20, 20, 120, 90),
+            WindowFlags::FRAMELESS | WindowFlags::LAYERED,
+        )
+        .expect("failed to create window");
+
+        let mut pixmap = Pixmap::new(120, 90).expect("failed to create pixmap");
+        pixmap.fill(Color::from_rgba8(20, 40, 60, 255));
+
+        // Multi-frame present_dirty calls reusing the cached surface
+        for i in 0..10 {
+            let dirty = Rect::new(i * 5, i * 5, 30, 30);
+            let res = window.present_dirty(&mut pixmap, 0.95, dirty);
+            assert!(res.is_ok(), "Frame {} present_dirty failed: {:?}", i, res.err());
+        }
+
+        // Test geometry change triggers surface resize
+        window.set_geometry(Rect::new(20, 20, 160, 120));
+        let mut resized_pixmap = Pixmap::new(160, 120).expect("resized pixmap");
+        resized_pixmap.fill(Color::from_rgba8(100, 150, 200, 255));
+        let res = window.present_dirty(&mut resized_pixmap, 1.0, Rect::new(0, 0, 160, 120));
+        assert!(res.is_ok(), "Resized window present_dirty failed: {:?}", res.err());
+    }
 }
