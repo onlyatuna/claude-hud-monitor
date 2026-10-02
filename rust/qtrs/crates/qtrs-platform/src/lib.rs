@@ -98,10 +98,14 @@ pub use tray::{
     DbusStatusNotifierItem,
 };
 pub use tray_icon::{Menu, MenuItem, TrayActivation, TrayIcon, WM_TRAY_CALLBACK};
-pub use window::{set_dpi_awareness, CustomFramelessConfig, NativeWindow, WindowFlags};
+pub use window::{
+    dispatch_window_system_event, flush_window_system_events, handle_geometry_change,
+    post_window_system_event, send_window_system_event_immediately, set_dpi_awareness,
+    CustomFramelessConfig, NativeWindow, WindowFlags,
+};
 pub use window_cocoa::{qt_mac_flip_point, qt_mac_flip_rect, CocoaNativeWindow};
 pub use window_system_interface::{
-    ClosureWindowEventHandler, KeyboardModifiers, MouseButton, PowerEvent, WheelDelta,
+    ClosureWindowEventHandler, Delivery, KeyboardModifiers, MouseButton, PowerEvent, WheelDelta,
     WindowSystemEvent, WindowSystemEventHandler,
 };
 pub use window_wayland::{WaylandEvent, WaylandNativeWindow};

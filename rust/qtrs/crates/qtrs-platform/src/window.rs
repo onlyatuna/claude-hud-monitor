@@ -1,15 +1,15 @@
 use crate::window_system_interface::{
-    KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent, WindowSystemEventHandler,
+    Delivery, KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent,
+    WindowSystemEventHandler,
 };
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoopHandle;
 use qtrs_core::object::ObjectId;
-use qtrs_gui::geometry::primitives::Rect;
+use qtrs_gui::geometry::primitives::{Point, Rect, Size};
 use crate::surface::PlatformSurface;
 use std::collections::HashMap;
 use std::ptr;
-use std::sync::Once;
-use std::sync::RwLock;
+use std::sync::{Mutex, Once, RwLock};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 #[cfg(windows)]
@@ -163,12 +163,50 @@ pub fn set_window_event_handler(hwnd: HWND, handler: Box<dyn WindowSystemEventHa
     map.as_mut().unwrap().insert(hwnd as isize, handler);
 }
 
+static WINDOW_SYSTEM_EVENT_QUEUE: Mutex<Option<Vec<(isize, WindowSystemEvent)>>> = Mutex::new(None);
+
+pub fn post_window_system_event(hwnd: HWND, event: WindowSystemEvent) {
+    {
+        let mut queue = WINDOW_SYSTEM_EVENT_QUEUE.lock().unwrap();
+        if queue.is_none() {
+            *queue = Some(Vec::new());
+        }
+        if let Some(q) = queue.as_mut() {
+            q.push((hwnd as isize, event));
+        }
+    }
+
+    if let Some((handle, _)) = get_window_event_binding(hwnd) {
+        handle.wake_up();
+    }
+}
+
+pub fn flush_window_system_events() -> bool {
+    let events: Vec<(isize, WindowSystemEvent)> = {
+        let mut queue = WINDOW_SYSTEM_EVENT_QUEUE.lock().unwrap();
+        if let Some(q) = queue.as_mut() {
+            q.drain(..).collect()
+        } else {
+            Vec::new()
+        }
+    };
+
+    if events.is_empty() {
+        return false;
+    }
+
+    for (hwnd_isize, event) in events {
+        send_window_system_event_immediately(hwnd_isize as HWND, event);
+    }
+    true
+}
+
 thread_local! {
     static NESTED_EVENTS: std::cell::RefCell<Vec<(HWND, WindowSystemEvent)>> = std::cell::RefCell::new(Vec::new());
     static IS_DISPATCHING: std::cell::Cell<bool> = std::cell::Cell::new(false);
 }
 
-fn dispatch_window_system_event(hwnd: HWND, event: WindowSystemEvent) {
+pub fn send_window_system_event_immediately(hwnd: HWND, event: WindowSystemEvent) {
     if IS_DISPATCHING.with(|d| d.get()) {
         NESTED_EVENTS.with(|q| q.borrow_mut().push((hwnd, event)));
         return;
@@ -208,6 +246,59 @@ fn dispatch_window_system_event(hwnd: HWND, event: WindowSystemEvent) {
     }
 
     IS_DISPATCHING.with(|d| d.set(false));
+}
+fn is_window_thread(hwnd: HWND) -> bool {
+    if hwnd.is_null() {
+        return qtrs_core::object::ThreadContext::is_main_thread();
+    }
+    unsafe {
+        let win_tid = windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+            hwnd,
+            ptr::null_mut(),
+        );
+        let cur_tid = windows_sys::Win32::System::Threading::GetCurrentThreadId();
+        win_tid == cur_tid || qtrs_core::object::ThreadContext::is_main_thread()
+    }
+}
+
+pub fn dispatch_window_system_event(
+    delivery: Delivery,
+    hwnd: HWND,
+    event: WindowSystemEvent,
+) {
+    match delivery {
+        Delivery::Synchronous => {
+            send_window_system_event_immediately(hwnd, event);
+        }
+        Delivery::Asynchronous => {
+            post_window_system_event(hwnd, event);
+        }
+        Delivery::Default => {
+            if is_window_thread(hwnd) {
+                send_window_system_event_immediately(hwnd, event);
+            } else {
+                post_window_system_event(hwnd, event);
+            }
+        }
+    }
+}
+
+pub fn handle_geometry_change(
+    delivery: Delivery,
+    hwnd: HWND,
+    geometry: Rect,
+) {
+    let size = Size::new(geometry.width, geometry.height);
+    dispatch_window_system_event(
+        delivery,
+        hwnd,
+        WindowSystemEvent::GeometryChange { geometry },
+    );
+    dispatch_window_system_event(
+        delivery,
+        hwnd,
+        WindowSystemEvent::Resize { size },
+    );
 }
 
 fn query_keyboard_modifiers() -> KeyboardModifiers {
@@ -341,7 +432,7 @@ unsafe extern "system" fn native_window_proc(
         }
         WM_ERASEBKGND => 1,
         WM_CLOSE => {
-            dispatch_window_system_event(hwnd, WindowSystemEvent::CloseRequest);
+            dispatch_window_system_event(Delivery::Default, hwnd, WindowSystemEvent::CloseRequest);
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(receiver, Event::new_spontaneous(EventKind::Close));
             }
@@ -359,12 +450,19 @@ unsafe extern "system" fn native_window_proc(
                 qtrs_gui::geometry::primitives::Size::new(phys_w, phys_h),
                 dpr,
             );
-            dispatch_window_system_event(
-                hwnd,
-                WindowSystemEvent::Resize {
-                    size: logical_size,
-                },
-            );
+            let mut r: RECT = unsafe { std::mem::zeroed() };
+            let (x, y) = if unsafe { GetWindowRect(hwnd, &mut r) } != 0 {
+                let logical_pt = crate::high_dpi::from_native_point(
+                    qtrs_gui::geometry::primitives::Point::new(r.left, r.top),
+                    dpr,
+                );
+                (logical_pt.x, logical_pt.y)
+            } else {
+                (0, 0)
+            };
+            let logical_rect = Rect::new(x, y, logical_size.width, logical_size.height);
+
+            handle_geometry_change(Delivery::Default, hwnd, logical_rect);
 
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(
@@ -387,6 +485,19 @@ unsafe extern "system" fn native_window_proc(
                 qtrs_gui::geometry::primitives::Point::new(phys_x, phys_y),
                 dpr,
             );
+            let mut r: RECT = unsafe { std::mem::zeroed() };
+            let (w, h) = if unsafe { GetWindowRect(hwnd, &mut r) } != 0 {
+                let logical_size = crate::high_dpi::from_native_size(
+                    qtrs_gui::geometry::primitives::Size::new(r.right - r.left, r.bottom - r.top),
+                    dpr,
+                );
+                (logical_size.width, logical_size.height)
+            } else {
+                (0, 0)
+            };
+            let logical_rect = Rect::new(pos.x, pos.y, w, h);
+            handle_geometry_change(Delivery::Default, hwnd, logical_rect);
+
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(
                     receiver,
@@ -419,7 +530,7 @@ unsafe extern "system" fn native_window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_SETFOCUS => {
-            dispatch_window_system_event(hwnd, WindowSystemEvent::FocusIn);
+            dispatch_window_system_event(Delivery::Default, hwnd, WindowSystemEvent::FocusIn);
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(
                     receiver,
@@ -431,7 +542,7 @@ unsafe extern "system" fn native_window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_KILLFOCUS => {
-            dispatch_window_system_event(hwnd, WindowSystemEvent::FocusOut);
+            dispatch_window_system_event(Delivery::Default, hwnd, WindowSystemEvent::FocusOut);
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(
                     receiver,
@@ -462,8 +573,11 @@ unsafe extern "system" fn native_window_proc(
                 );
             }
 
-            dispatch_window_system_event(hwnd, WindowSystemEvent::DpiChanged { dpi_x, dpi_y });
-
+            dispatch_window_system_event(
+                Delivery::Default,
+                hwnd,
+                WindowSystemEvent::DpiChanged { dpi_x, dpi_y },
+            );
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(
                     receiver,
@@ -508,6 +622,7 @@ unsafe extern "system" fn native_window_proc(
             let modifiers = query_keyboard_modifiers();
 
             dispatch_window_system_event(
+                Delivery::Default,
                 hwnd,
                 WindowSystemEvent::MousePress {
                     pos,
@@ -554,6 +669,7 @@ unsafe extern "system" fn native_window_proc(
             let modifiers = query_keyboard_modifiers();
 
             dispatch_window_system_event(
+                Delivery::Default,
                 hwnd,
                 WindowSystemEvent::MousePress {
                     pos,
@@ -600,6 +716,7 @@ unsafe extern "system" fn native_window_proc(
             let modifiers = query_keyboard_modifiers();
 
             dispatch_window_system_event(
+                Delivery::Default,
                 hwnd,
                 WindowSystemEvent::MouseRelease {
                     pos,
@@ -638,7 +755,11 @@ unsafe extern "system" fn native_window_proc(
             let phys_global = get_cursor_global_pos();
             let global_pos = crate::high_dpi::from_native_point(phys_global, dpr);
 
-            dispatch_window_system_event(hwnd, WindowSystemEvent::MouseMove { pos, global_pos });
+            dispatch_window_system_event(
+                Delivery::Default,
+                hwnd,
+                WindowSystemEvent::MouseMove { pos, global_pos },
+            );
 
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(
@@ -668,6 +789,7 @@ unsafe extern "system" fn native_window_proc(
             let modifiers = query_keyboard_modifiers();
 
             dispatch_window_system_event(
+                Delivery::Default,
                 hwnd,
                 WindowSystemEvent::Wheel {
                     pos,
@@ -697,7 +819,7 @@ unsafe extern "system" fn native_window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MOUSELEAVE => {
-            dispatch_window_system_event(hwnd, WindowSystemEvent::MouseLeave);
+            dispatch_window_system_event(Delivery::Default, hwnd, WindowSystemEvent::MouseLeave);
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_CONTEXTMENU => {
@@ -729,6 +851,7 @@ unsafe extern "system" fn native_window_proc(
             let modifiers = query_keyboard_modifiers();
 
             dispatch_window_system_event(
+                Delivery::Default,
                 hwnd,
                 WindowSystemEvent::KeyPress {
                     key,
@@ -752,7 +875,11 @@ unsafe extern "system" fn native_window_proc(
         WM_KEYUP => {
             let key = wparam as u32;
             let modifiers = query_keyboard_modifiers();
-            dispatch_window_system_event(hwnd, WindowSystemEvent::KeyRelease { key, modifiers });
+            dispatch_window_system_event(
+                Delivery::Default,
+                hwnd,
+                WindowSystemEvent::KeyRelease { key, modifiers },
+            );
 
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(
@@ -777,6 +904,7 @@ unsafe extern "system" fn native_window_proc(
 
             if !commit_string.is_empty() || !preedit_string.is_empty() {
                 dispatch_window_system_event(
+                    Delivery::Default,
                     hwnd,
                     WindowSystemEvent::InputMethod {
                         commit_string: commit_string.clone(),
@@ -809,7 +937,11 @@ unsafe extern "system" fn native_window_proc(
                 _ => None,
             };
             if let Some(event) = power_event {
-                dispatch_window_system_event(hwnd, WindowSystemEvent::Power { event });
+                dispatch_window_system_event(
+                    Delivery::Default,
+                    hwnd,
+                    WindowSystemEvent::Power { event },
+                );
             }
             1
         }
@@ -1360,6 +1492,7 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
                         effect,
                     } => {
                         dispatch_window_system_event(
+                            Delivery::Default,
                             hwnd,
                             WindowSystemEvent::DragEnter {
                                 pos,
@@ -1370,6 +1503,7 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
                     }
                     crate::drag_drop::DropEvent::Over { pos, effect } => {
                         dispatch_window_system_event(
+                            Delivery::Default,
                             hwnd,
                             WindowSystemEvent::DragMove {
                                 pos,
@@ -1378,7 +1512,7 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
                         );
                     }
                     crate::drag_drop::DropEvent::Leave => {
-                        dispatch_window_system_event(hwnd, WindowSystemEvent::DragLeave);
+                        dispatch_window_system_event(Delivery::Default, hwnd, WindowSystemEvent::DragLeave);
                     }
                     crate::drag_drop::DropEvent::Drop {
                         pos,
@@ -1387,6 +1521,7 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
                         effect,
                     } => {
                         dispatch_window_system_event(
+                            Delivery::Default,
                             hwnd,
                             WindowSystemEvent::Drop {
                                 pos,

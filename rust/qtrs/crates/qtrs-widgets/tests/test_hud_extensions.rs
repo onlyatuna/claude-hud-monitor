@@ -278,3 +278,43 @@ fn test_window_system_event_handler_resize() {
     assert!(win.backing_store().physical_width() > initial_store_w);
     assert!(win.backing_store().physical_height() > initial_store_h);
 }
+
+#[test]
+fn test_geometry_change_event_delivery() {
+    use qtrs_gui::geometry::primitives::Size;
+    use qtrs_platform::window_system_interface::Delivery;
+    use qtrs_platform::handle_geometry_change;
+    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::sync::Arc;
+
+    let mut win = Window::new("Geometry Change Test", Rect::new(0, 0, 320, 240), WindowFlags::empty())
+        .expect("create window");
+
+    let initial_store_w = win.backing_store().physical_width();
+    let initial_store_h = win.backing_store().physical_height();
+
+    let resized_w = Arc::new(AtomicI32::new(0));
+    let resized_h = Arc::new(AtomicI32::new(0));
+    let rw = Arc::clone(&resized_w);
+    let rh = Arc::clone(&resized_h);
+
+    win.set_resize_handler(move |size: Size| {
+        rw.store(size.width, Ordering::SeqCst);
+        rh.store(size.height, Ordering::SeqCst);
+    });
+
+    #[cfg(windows)]
+    {
+        let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
+        handle_geometry_change(Delivery::Default, hwnd, Rect::new(10, 20, 480, 360));
+
+        assert_eq!(win.geometry().x, 10);
+        assert_eq!(win.geometry().y, 20);
+        assert_eq!(win.geometry().width, 480);
+        assert_eq!(win.geometry().height, 360);
+        assert_eq!(resized_w.load(Ordering::SeqCst), 480);
+        assert_eq!(resized_h.load(Ordering::SeqCst), 360);
+        assert!(win.backing_store().physical_width() > initial_store_w);
+        assert!(win.backing_store().physical_height() > initial_store_h);
+    }
+}

@@ -623,3 +623,83 @@ fn test_power_events_and_screen_clamping() {
         }
     }
 }
+
+#[test]
+fn test_event_delivery_policies() {
+    #[cfg(windows)]
+    {
+        use qtrs_platform::integration::platform;
+        use qtrs_platform::window_system_interface::{
+            ClosureWindowEventHandler, Delivery, WindowSystemEvent,
+        };
+        use qtrs_platform::{
+            dispatch_window_system_event, flush_window_system_events, handle_geometry_change,
+        };
+        use std::sync::{Arc, Mutex};
+
+        let p = platform();
+        let mut win = p
+            .create_window("Delivery Test Window", Rect::new(50, 50, 300, 200), WindowFlags::NORMAL)
+            .expect("create window");
+        let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
+
+        let events = Arc::new(Mutex::new(Vec::<WindowSystemEvent>::new()));
+        let events_clone = Arc::clone(&events);
+        win.set_event_handler(Box::new(ClosureWindowEventHandler::new(move |ev| {
+            events_clone.lock().unwrap().push(ev);
+        })));
+
+        // 1. Synchronous delivery: dispatched immediately
+        dispatch_window_system_event(
+            Delivery::Synchronous,
+            hwnd,
+            WindowSystemEvent::FocusIn,
+        );
+        assert_eq!(events.lock().unwrap().len(), 1);
+        assert!(matches!(events.lock().unwrap()[0], WindowSystemEvent::FocusIn));
+
+        // 2. Asynchronous delivery: queued in WINDOW_SYSTEM_EVENT_QUEUE until flush
+        dispatch_window_system_event(
+            Delivery::Asynchronous,
+            hwnd,
+            WindowSystemEvent::FocusOut,
+        );
+        // Not delivered immediately
+        assert_eq!(events.lock().unwrap().len(), 1);
+        // Flush queue
+        let flushed = flush_window_system_events();
+        assert!(flushed);
+        assert_eq!(events.lock().unwrap().len(), 2);
+        assert!(matches!(events.lock().unwrap()[1], WindowSystemEvent::FocusOut));
+
+        // 3. handle_geometry_change with Delivery::Default on window thread: delivers immediately
+        handle_geometry_change(
+            Delivery::Default,
+            hwnd,
+            Rect::new(60, 70, 400, 300),
+        );
+        let current_events = events.lock().unwrap().clone();
+        assert!(current_events.iter().any(|e| matches!(e, WindowSystemEvent::GeometryChange { geometry } if geometry.width == 400 && geometry.height == 300)));
+        assert!(current_events.iter().any(|e| matches!(e, WindowSystemEvent::Resize { size } if size.width == 400 && size.height == 300)));
+
+        // 4. Background thread with Delivery::Default: queues asynchronously
+        let events_len_before = events.lock().unwrap().len();
+        let hwnd_isize = hwnd as isize;
+        let t = std::thread::spawn(move || {
+            let bg_hwnd = hwnd_isize as windows_sys::Win32::Foundation::HWND;
+            dispatch_window_system_event(
+                Delivery::Default,
+                bg_hwnd,
+                WindowSystemEvent::CloseRequest,
+            );
+        });
+        t.join().unwrap();
+        // Background thread queued the event
+        assert_eq!(events.lock().unwrap().len(), events_len_before);
+        // Flush delivers it
+        let flushed_bg = flush_window_system_events();
+        assert!(flushed_bg);
+        assert_eq!(events.lock().unwrap().len(), events_len_before + 1);
+        assert!(matches!(events.lock().unwrap().last().unwrap(), WindowSystemEvent::CloseRequest));
+    }
+}

@@ -1,4 +1,16 @@
-use qtrs_gui::geometry::primitives::{Point, Size};
+use qtrs_gui::geometry::primitives::{Point, Rect, Size};
+
+/// Delivery policy for window system events, aligned with Qt's QWindowSystemInterface::Delivery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Delivery {
+    /// Dispatches synchronously if on the GUI thread, or posts asynchronously to the event queue if on a secondary thread.
+    #[default]
+    Default,
+    /// Dispatches immediately to the handler.
+    Synchronous,
+    /// Posts the event to the window system event queue and wakes the GUI dispatcher.
+    Asynchronous,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
@@ -97,6 +109,9 @@ pub enum WindowSystemEvent {
     },
     Resize {
         size: Size,
+    },
+    GeometryChange {
+        geometry: Rect,
     },
     CloseRequest,
     FocusIn,

@@ -122,13 +122,7 @@ impl Window {
     }
 
     pub fn geometry(&self) -> Rect {
-        let dpr = platform().primary_screen().device_pixel_ratio();
-        if dpr > 1.0 {
-            let phys = self.platform_window.lock().unwrap().geometry();
-            qtrs_platform::high_dpi::from_native_rect(phys, dpr)
-        } else {
-            self.platform_window.lock().unwrap().geometry()
-        }
+        *self.geometry.lock().unwrap()
     }
 
     pub fn physical_geometry(&self) -> Rect {
@@ -583,19 +577,24 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 });
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
-            WindowSystemEvent::Resize { size } => {
-                let cur_geom = {
-                    let mut geom = self.geometry.lock().unwrap();
-                    geom.width = size.width;
-                    geom.height = size.height;
-                    *geom
+            WindowSystemEvent::GeometryChange { geometry } => {
+                let size = Size::new(geometry.width, geometry.height);
+                let (old_pos, old_size) = {
+                    let mut cur = self.geometry.lock().unwrap();
+                    let old_pos = Point::new(cur.x, cur.y);
+                    let old_size = Size::new(cur.width, cur.height);
+                    *cur = geometry;
+                    (old_pos, old_size)
                 };
 
-                {
+                let size_changed = old_size.width != geometry.width || old_size.height != geometry.height;
+                let pos_changed = old_pos.x != geometry.x || old_pos.y != geometry.y;
+
+                if size_changed {
                     let mut bs = self.backing_store.lock().unwrap();
                     let dpr = bs.device_pixel_ratio();
-                    let physical_w = ((size.width as f32).max(1.0) * dpr).round() as u32;
-                    let physical_h = ((size.height as f32).max(1.0) * dpr).round() as u32;
+                    let physical_w = ((geometry.width as f32).max(1.0) * dpr).round() as u32;
+                    let physical_h = ((geometry.height as f32).max(1.0) * dpr).round() as u32;
                     if bs.physical_width() != physical_w || bs.physical_height() != physical_h {
                         if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
                             *bs = new_pixmap;
@@ -605,28 +604,93 @@ impl WindowSystemEventHandler for WindowEventHandler {
 
                 {
                     let mut root_borrow = root.borrow_mut();
-                    root_borrow.set_geometry(Rect::new(0, 0, size.width, size.height));
-                    if let Some(layout) = root_borrow.layout_mut() {
-                        layout.update_layout();
+                    root_borrow.set_geometry(Rect::new(0, 0, geometry.width, geometry.height));
+                    if size_changed {
+                        if let Some(layout) = root_borrow.layout_mut() {
+                            layout.update_layout();
+                        }
                     }
                     root_borrow.update();
                 }
 
-                let mut ev = Event::new_spontaneous(EventKind::Resize {
-                    width: size.width,
-                    height: size.height,
-                    old_width: 0,
-                    old_height: 0,
-                });
-                self.dispatcher.dispatch_event(&root, &mut ev);
+                if size_changed {
+                    let mut ev = Event::new_spontaneous(EventKind::Resize {
+                        width: geometry.width,
+                        height: geometry.height,
+                        old_width: old_size.width,
+                        old_height: old_size.height,
+                    });
+                    self.dispatcher.dispatch_event(&root, &mut ev);
 
-                if let Some(cb) = self.resize_cb.lock().unwrap().as_ref() {
-                    cb(size);
+                    if let Some(cb) = self.resize_cb.lock().unwrap().as_ref() {
+                        cb(size);
+                    }
+                }
+
+                if pos_changed {
+                    let mut ev = Event::new_spontaneous(EventKind::Move {
+                        x: geometry.x,
+                        y: geometry.y,
+                        old_x: old_pos.x,
+                        old_y: old_pos.y,
+                    });
+                    self.dispatcher.dispatch_event(&root, &mut ev);
                 }
 
                 if let Ok(mut pw) = self.platform_window.try_lock() {
                     let mut bs = self.backing_store.lock().unwrap();
-                    do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
+                    do_render_and_present(&mut **pw, &mut *bs, &root, geometry);
+                }
+            }
+            WindowSystemEvent::Resize { size } => {
+                let (same_size, cur_geom) = {
+                    let mut geom = self.geometry.lock().unwrap();
+                    let same = geom.width == size.width && geom.height == size.height;
+                    geom.width = size.width;
+                    geom.height = size.height;
+                    (same, *geom)
+                };
+
+                let mut needs_present = false;
+                {
+                    let mut bs = self.backing_store.lock().unwrap();
+                    let dpr = bs.device_pixel_ratio();
+                    let physical_w = ((size.width as f32).max(1.0) * dpr).round() as u32;
+                    let physical_h = ((size.height as f32).max(1.0) * dpr).round() as u32;
+                    if bs.physical_width() != physical_w || bs.physical_height() != physical_h {
+                        if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
+                            *bs = new_pixmap;
+                            needs_present = true;
+                        }
+                    }
+                }
+
+                if !same_size || needs_present {
+                    {
+                        let mut root_borrow = root.borrow_mut();
+                        root_borrow.set_geometry(Rect::new(0, 0, size.width, size.height));
+                        if let Some(layout) = root_borrow.layout_mut() {
+                            layout.update_layout();
+                        }
+                        root_borrow.update();
+                    }
+
+                    let mut ev = Event::new_spontaneous(EventKind::Resize {
+                        width: size.width,
+                        height: size.height,
+                        old_width: 0,
+                        old_height: 0,
+                    });
+                    self.dispatcher.dispatch_event(&root, &mut ev);
+
+                    if let Some(cb) = self.resize_cb.lock().unwrap().as_ref() {
+                        cb(size);
+                    }
+
+                    if let Ok(mut pw) = self.platform_window.try_lock() {
+                        let mut bs = self.backing_store.lock().unwrap();
+                        do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
+                    }
                 }
             }
             WindowSystemEvent::KeyPress {
