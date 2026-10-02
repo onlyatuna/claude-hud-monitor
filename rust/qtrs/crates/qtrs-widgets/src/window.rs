@@ -155,11 +155,16 @@ impl Window {
             }
         }
 
-        self.root_widget
-            .borrow_mut()
-            .set_geometry(Rect::new(0, 0, rect.width, rect.height));
+        {
+            let mut root = self.root_widget.borrow_mut();
+            root.set_geometry(Rect::new(0, 0, rect.width, rect.height));
+            if let Some(layout) = root.layout_mut() {
+                layout.update_layout();
+            }
+            root.update();
+        }
+        self.render_and_present();
     }
-
     pub fn show(&mut self) {
         self.platform_window.lock().unwrap().show();
         self.render_and_present();
