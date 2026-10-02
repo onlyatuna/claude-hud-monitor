@@ -490,8 +490,8 @@ fn do_render_and_present(
         render_widget_recursive(root_widget, &mut painter, dirty);
     }
 
-    let opacity = platform_window.opacity();
-    let _ = platform_window.present_dirty(backing_store, opacity, phys_dirty);
+    let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
+    let _ = platform_window.present_region(backing_store, &dirty_region);
 }
 
 struct WindowEventHandler {

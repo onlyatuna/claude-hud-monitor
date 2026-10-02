@@ -517,29 +517,10 @@ impl DCompSurface {
 
         Ok(())
     }
-}
 
-impl PlatformSurface for DCompSurface {
-    fn width(&self) -> u32 {
-        self.width
-    }
-
-    fn height(&self) -> u32 {
-        self.height
-    }
-
-    fn resize(&mut self, width: u32, height: u32) -> Result<(), &'static str> {
-        self.resize(width, height)
-    }
-
-    fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {
-        let full_dirty = Rect::new(0, 0, self.width as i32, self.height as i32);
-        self.present_dirty(pixmap, opacity, full_dirty)
-    }
-
-    fn present_dirty(
+    pub fn present_dirty_ref(
         &mut self,
-        pixmap: &mut Pixmap,
+        pixmap: &Pixmap,
         _opacity: f32,
         dirty: Rect,
     ) -> Result<(), &'static str> {
@@ -583,40 +564,42 @@ impl PlatformSurface for DCompSurface {
             type PfnGetBuffer = unsafe extern "system" fn(
                 this: *mut c_void,
                 buffer: u32,
-                riid: *const GUID,
-                ppSurface: *mut *mut c_void,
+                riid: *const windows_sys::core::GUID,
+                pp_surface: *mut *mut c_void,
             ) -> HRESULT;
             let get_buffer_fn: PfnGetBuffer = std::mem::transmute(*sc_vtbl.add(9));
-
-            let mut dxgi_surface: *mut c_void = ptr::null_mut();
-            let hr = get_buffer_fn(self.swap_chain, 0, &IID_IDXGI_SURFACE1, &mut dxgi_surface);
-            if hr < 0 || dxgi_surface.is_null() {
-                return Err("Failed to get swap chain back buffer IDXGISurface1");
+            let iid_idxgi_surface1 = windows_sys::core::GUID {
+                data1: 0x4AE63092,
+                data2: 0x6327,
+                data3: 0x4827,
+                data4: [0x88, 0x2F, 0x20, 0x00, 0x57, 0xA3, 0xD0, 0x33],
+            };
+            let mut dxgi_surface1: *mut c_void = ptr::null_mut();
+            let hr = get_buffer_fn(self.swap_chain, 0, &iid_idxgi_surface1, &mut dxgi_surface1);
+            if hr < 0 || dxgi_surface1.is_null() {
+                return Err("IDXGISwapChain::GetBuffer(0, IDXGISurface1) failed");
             }
 
-            // 3. Acquire DC on DXGI surface: GetDC is slot 11 on IDXGISurface1
-            let surf_vtbl = *(dxgi_surface as *mut *mut usize);
+            // 3. Acquire HDC on DXGI Surface: GetDC is slot 11 on IDXGISurface1
+            let surf_vtbl = *(dxgi_surface1 as *mut *mut usize);
             type PfnGetDC = unsafe extern "system" fn(
                 this: *mut c_void,
                 discard: i32,
                 phdc: *mut HDC,
             ) -> HRESULT;
             let get_dc_fn: PfnGetDC = std::mem::transmute(*surf_vtbl.add(11));
-
-            let mut surface_dc: HDC = ptr::null_mut();
-            let hr = get_dc_fn(dxgi_surface, 0, &mut surface_dc);
-            if hr < 0 || surface_dc.is_null() {
-                com_release(dxgi_surface);
-                let u_hr = hr as u32;
-                if u_hr == 0x887A0005 || u_hr == 0x887A0007 {
-                    return Err("DXGI_ERROR_DEVICE_LOST");
-                }
+            let mut dxgi_dc: HDC = ptr::null_mut();
+            let hr_dc = get_dc_fn(dxgi_surface1, 0, &mut dxgi_dc);
+            if hr_dc < 0 || dxgi_dc.is_null() {
+                let release_fn: unsafe extern "system" fn(*mut c_void) -> u32 =
+                    std::mem::transmute(**(dxgi_surface1 as *mut *mut usize).add(2));
+                release_fn(dxgi_surface1);
                 return Err("IDXGISurface1::GetDC failed");
             }
 
-            // 4. Differential Blit: ONLY blit the dirty rectangle
+            // 4. BitBlt differential dirty rect from staging DIB to back buffer
             windows_sys::Win32::Graphics::Gdi::BitBlt(
-                surface_dc,
+                dxgi_dc,
                 clipped.x,
                 clipped.y,
                 clipped.width,
@@ -626,46 +609,49 @@ impl PlatformSurface for DCompSurface {
                 clipped.y,
                 windows_sys::Win32::Graphics::Gdi::SRCCOPY,
             );
-
-            // 5. Release DC with dirty rect: ReleaseDC is slot 12 on IDXGISurface1
-            let dirty_win_rect = RECT {
+            // 5. Release DC: ReleaseDC is slot 12 on IDXGISurface1
+            type PfnReleaseDC = unsafe extern "system" fn(
+                this: *mut c_void,
+                p_dirty_rect: *const RECT,
+            ) -> HRESULT;
+            let rel_dc_fn: PfnReleaseDC = std::mem::transmute(*surf_vtbl.add(12));
+            let dirty_gdi_rect = RECT {
                 left: clipped.x,
                 top: clipped.y,
                 right: clipped.x + clipped.width,
                 bottom: clipped.y + clipped.height,
             };
+            rel_dc_fn(dxgi_surface1, &dirty_gdi_rect);
 
-            type PfnReleaseDC = unsafe extern "system" fn(
-                this: *mut c_void,
-                pDirtyRect: *const RECT,
-            ) -> HRESULT;
-            let release_dc_fn: PfnReleaseDC = std::mem::transmute(*surf_vtbl.add(12));
-            let _ = release_dc_fn(dxgi_surface, &dirty_win_rect);
+            // Release dxgi_surface1 COM reference
+            let release_fn: unsafe extern "system" fn(*mut c_void) -> u32 =
+                std::mem::transmute(*surf_vtbl.add(2));
+            release_fn(dxgi_surface1);
 
-            com_release(dxgi_surface);
-
-            // 6. TRUE Hardware Differential Present: Present1 is slot 22 on IDXGISwapChain1
+            // 6. Present1 with pDirtyRects (slot 22 on IDXGISwapChain1)
             type PfnPresent1 = unsafe extern "system" fn(
                 this: *mut c_void,
-                syncInterval: u32,
-                presentFlags: u32,
-                pPresentParameters: *const DXGI_PRESENT_PARAMETERS,
+                sync_interval: u32,
+                present_flags: u32,
+                p_present_parameters: *const DXGI_PRESENT_PARAMETERS,
             ) -> HRESULT;
             let present1_fn: PfnPresent1 = std::mem::transmute(*sc_vtbl.add(22));
 
-            let params = DXGI_PRESENT_PARAMETERS {
+            let mut dxgi_dirty_rect = RECT {
+                left: clipped.x,
+                top: clipped.y,
+                right: clipped.x + clipped.width,
+                bottom: clipped.y + clipped.height,
+            };
+            let present_params = DXGI_PRESENT_PARAMETERS {
                 DirtyRectsCount: 1,
-                pDirtyRects: &dirty_win_rect,
-                pScrollRect: ptr::null(),
-                pScrollOffset: ptr::null(),
+                pDirtyRects: &mut dxgi_dirty_rect,
+                pScrollRect: ptr::null_mut(),
+                pScrollOffset: ptr::null_mut(),
             };
 
-            let hr = present1_fn(self.swap_chain, 0, 0, &params);
+            let hr = present1_fn(self.swap_chain, 0, 0, &present_params);
             if hr < 0 {
-                let u_hr = hr as u32;
-                if u_hr == 0x887A0005 || u_hr == 0x887A0007 {
-                    return Err("DXGI_ERROR_DEVICE_LOST");
-                }
                 return Err("IDXGISwapChain1::Present1 failed");
             }
 
@@ -680,6 +666,34 @@ impl PlatformSurface for DCompSurface {
         }
 
         Ok(())
+    }
+}
+
+impl PlatformSurface for DCompSurface {
+    fn width(&self) -> u32 {
+        self.width
+    }
+
+    fn height(&self) -> u32 {
+        self.height
+    }
+
+    fn resize(&mut self, width: u32, height: u32) -> Result<(), &'static str> {
+        self.resize(width, height)
+    }
+
+    fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {
+        let full_dirty = Rect::new(0, 0, self.width as i32, self.height as i32);
+        self.present_dirty(pixmap, opacity, full_dirty)
+    }
+
+    fn present_dirty(
+        &mut self,
+        pixmap: &mut Pixmap,
+        opacity: f32,
+        dirty: Rect,
+    ) -> Result<(), &'static str> {
+        self.present_dirty_ref(pixmap, opacity, dirty)
     }
 }
 

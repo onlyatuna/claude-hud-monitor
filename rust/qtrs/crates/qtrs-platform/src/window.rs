@@ -5,7 +5,8 @@ use crate::window_system_interface::{
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoopHandle;
 use qtrs_core::object::ObjectId;
-use qtrs_gui::geometry::primitives::{Point, Rect, Size};
+use qtrs_gui::geometry::primitives::{Rect, Size};
+use crate::presenter::SurfacePresenter;
 use crate::surface::PlatformSurface;
 use std::collections::HashMap;
 use std::ptr;
@@ -1003,6 +1004,7 @@ pub struct NativeWindow {
     opacity: f32,
     min_size: (i32, i32),
     layered_surface: Option<crate::surface::WindowsSurface>,
+    presenter: Option<crate::presenter::WindowsPresenter>,
 }
 
 #[cfg(windows)]
@@ -1109,6 +1111,7 @@ impl NativeWindow {
             opacity: 1.0,
             min_size: (0, 0),
             layered_surface,
+            presenter: None,
         })
     }
 
@@ -1189,6 +1192,11 @@ impl NativeWindow {
                 if let Some(surface) = &mut self.layered_surface {
                     if surface.resize(rect.width as u32, rect.height as u32).is_err() {
                         self.layered_surface = None;
+                    }
+                }
+                if let Some(presenter) = &mut self.presenter {
+                    if presenter.resize(rect.width as u32, rect.height as u32).is_err() {
+                        self.presenter = None;
                     }
                 }
             }
@@ -1324,8 +1332,41 @@ impl NativeWindow {
         Ok(self.layered_surface.as_mut().unwrap())
     }
 
+    pub fn get_or_create_presenter(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> Result<&mut crate::presenter::WindowsPresenter, &'static str> {
+        if self.presenter.is_none() {
+            let p = if self.flags.contains(WindowFlags::LAYERED) {
+                if let Ok(dcomp) = crate::surface::dcomp::DCompSurface::new(self.hwnd, width, height) {
+                    crate::presenter::WindowsPresenter::DirectComposition(dcomp)
+                } else {
+                    let layered = crate::presenter::Win32LayeredPresenter::new(
+                        self.hwnd,
+                        width,
+                        height,
+                        self.opacity,
+                    )?;
+                    crate::presenter::WindowsPresenter::Layered(layered)
+                }
+            } else {
+                let dc = crate::presenter::Win32DcPresenter::new(self.hwnd, width, height)?;
+                crate::presenter::WindowsPresenter::Dc(dc)
+            };
+            self.presenter = Some(p);
+        }
+        let p = self.presenter.as_mut().unwrap();
+        if let Err(e) = p.resize(width, height) {
+            self.presenter = None;
+            return Err(e);
+        }
+        Ok(self.presenter.as_mut().unwrap())
+    }
+
     pub fn close(&mut self) {
         self.layered_surface = None;
+        self.presenter = None;
         if !self.drop_target.is_null() {
             self.drop_target = std::ptr::null_mut();
         }
@@ -1401,11 +1442,14 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
     }
 
     fn set_opacity(&mut self, opacity: f32) {
-        self.set_opacity(opacity);
+        self.opacity = opacity.clamp(0.0, 1.0);
+        if let Some(p) = &mut self.presenter {
+            p.set_opacity(self.opacity);
+        }
     }
 
     fn opacity(&self) -> f32 {
-        self.opacity()
+        self.opacity
     }
 
     fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
@@ -1416,15 +1460,43 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         self.minimum_size()
     }
 
+    fn present_region(
+        &mut self,
+        pixmap: &qtrs_gui::paint::Pixmap,
+        dirty: &qtrs_gui::geometry::Region,
+    ) -> Result<(), &'static str> {
+        let width = pixmap.physical_width();
+        let height = pixmap.physical_height();
+        let opacity = self.opacity;
+        let res = match self.get_or_create_presenter(width, height) {
+            Ok(p) => {
+                p.set_opacity(opacity);
+                p.present(pixmap, dirty)
+            }
+            Err(e) => Err(e),
+        };
+
+        if res.is_err() {
+            self.presenter.take();
+            let p = self.get_or_create_presenter(width, height)?;
+            p.set_opacity(opacity);
+            let full = qtrs_gui::geometry::Region::from_coords(0, 0, width as i32, height as i32);
+            return p.present(pixmap, &full);
+        }
+
+        Ok(())
+    }
+
     fn present(
         &mut self,
         pixmap: &mut qtrs_gui::paint::Pixmap,
         opacity: f32,
     ) -> Result<(), &'static str> {
+        self.set_opacity(opacity);
         let width = pixmap.physical_width();
         let height = pixmap.physical_height();
-        let full_dirty = Rect::new(0, 0, width as i32, height as i32);
-        self.present_dirty(pixmap, opacity, full_dirty)
+        let full = qtrs_gui::geometry::Region::from_coords(0, 0, width as i32, height as i32);
+        self.present_region(pixmap, &full)
     }
 
     fn present_dirty(
@@ -1433,32 +1505,9 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         opacity: f32,
         dirty_rect: Rect,
     ) -> Result<(), &'static str> {
-        let width = pixmap.physical_width();
-        let height = pixmap.physical_height();
-
-        // 1. Attempt present with existing or new surface
-        let res = match self.get_or_create_layered_surface(width, height) {
-            Ok(surface) => surface.present_dirty(pixmap, opacity, dirty_rect),
-            Err(e) => Err(e),
-        };
-
-        // 2. If present or resize failed (e.g. Device Lost / TDR / sleep resume):
-        if res.is_err() {
-            // Drop damaged surface to release COM objects and unbind DComp target
-            self.layered_surface.take();
-
-            // Re-create surface: tries DComp first, gracefully falls back to Win32LayeredSurface (GDI)
-            let mut recovered = crate::surface::WindowsSurface::create(self.hwnd, width, height)?;
-
-            // Newly allocated swap chain or DIB is uninitialized; force full-window redraw to eliminate black artifacts
-            let full_rect = Rect::new(0, 0, width as i32, height as i32);
-            let retry_res = recovered.present_dirty(pixmap, opacity, full_rect);
-
-            self.layered_surface = Some(recovered);
-            return retry_res;
-        }
-
-        Ok(())
+        self.set_opacity(opacity);
+        let region = qtrs_gui::geometry::Region::from_rect(dirty_rect);
+        self.present_region(pixmap, &region)
     }
     fn set_event_handler(&mut self, handler: Box<dyn WindowSystemEventHandler>) {
         self.set_event_handler(handler);

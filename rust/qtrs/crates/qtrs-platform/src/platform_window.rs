@@ -48,6 +48,15 @@ pub trait PlatformWindow: Send + Sync {
     ) -> Result<(), &'static str> {
         self.present(pixmap, opacity)
     }
+    fn present_region(
+        &mut self,
+        pixmap: &Pixmap,
+        dirty: &qtrs_gui::geometry::Region,
+    ) -> Result<(), &'static str> {
+        let mut clone = (*pixmap).clone();
+        let opacity = self.opacity();
+        self.present_dirty(&mut clone, opacity, dirty.bounding_rect())
+    }
     fn set_event_handler(&mut self, handler: Box<dyn WindowSystemEventHandler>);
     fn native_handle(&self) -> isize;
     fn poll_events(&mut self) -> usize {

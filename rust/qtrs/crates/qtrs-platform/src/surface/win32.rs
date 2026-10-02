@@ -159,77 +159,18 @@ impl Win32LayeredSurface {
         Ok(())
     }
 
-    pub fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {
-        let p_width = pixmap.physical_width();
-        let p_height = pixmap.physical_height();
-
-        if p_width != self.width || p_height != self.height {
-            self.resize(p_width, p_height)?;
-        }
-
-        pixmap.convert_to_bgra_in_place();
-
-        unsafe {
-            let src_data = pixmap.data();
-            std::ptr::copy_nonoverlapping(
-                src_data.as_ptr(),
-                self.bits,
-                (p_width * p_height * 4) as usize,
-            );
-        }
-
-        unsafe {
-            let blend = BLENDFUNCTION {
-                BlendOp: AC_SRC_OVER as u8,
-                BlendFlags: 0,
-                SourceConstantAlpha: (opacity.clamp(0.0, 1.0) * 255.0).round() as u8,
-                AlphaFormat: AC_SRC_ALPHA as u8,
-            };
-
-            let mut pt_dst = POINT { x: 0, y: 0 };
-            let mut win_rect: RECT = std::mem::zeroed();
-            GetWindowRect(self.hwnd, &mut win_rect);
-            pt_dst.x = win_rect.left;
-            pt_dst.y = win_rect.top;
-
-            let size = SIZE {
-                cx: self.width as i32,
-                cy: self.height as i32,
-            };
-            let pt_src = POINT { x: 0, y: 0 };
-
-            let res = UpdateLayeredWindow(
-                self.hwnd,
-                ptr::null_mut(),
-                &pt_dst,
-                &size,
-                self.mem_dc,
-                &pt_src,
-                0,
-                &blend,
-                ULW_ALPHA,
-            );
-            if res == 0 {
-                let err = windows_sys::Win32::Foundation::GetLastError();
-                eprintln!("[Win32Surface] UpdateLayeredWindow failed, GetLastError = {}", err);
-                return Err("UpdateLayeredWindow call failed");
-            }
-
-            pixmap.convert_to_bgra_in_place();
-
-            if res == 0 {
-                let err = windows_sys::Win32::Foundation::GetLastError();
-                eprintln!("[Win32Surface] UpdateLayeredWindow failed, GetLastError = {}", err);
-                return Err("UpdateLayeredWindow call failed");
-            }
-        }
-
-        Ok(())
+    pub fn present_ref(&mut self, pixmap: &Pixmap, opacity: f32) -> Result<(), &'static str> {
+        let full = Rect::new(0, 0, self.width as i32, self.height as i32);
+        self.present_dirty_ref(pixmap, opacity, full)
     }
 
-    pub fn present_dirty(
+    pub fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {
+        self.present_ref(pixmap, opacity)
+    }
+
+    pub fn present_dirty_ref(
         &mut self,
-        pixmap: &mut Pixmap,
+        pixmap: &Pixmap,
         opacity: f32,
         dirty: Rect,
     ) -> Result<(), &'static str> {
@@ -247,9 +188,6 @@ impl Win32LayeredSurface {
             return Ok(());
         }
 
-        if clipped_dirty == full_window_rect {
-            return self.present(pixmap, opacity);
-        }
         let stride = (self.width * 4) as usize;
         let dirty_x = clipped_dirty.x as usize;
         let dirty_w = clipped_dirty.width as usize;
@@ -270,8 +208,7 @@ impl Win32LayeredSurface {
                     dst_chunk[3] = src_chunk[3]; // A
                 }
             }
-        }
-        unsafe {
+
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 BlendFlags: 0,
@@ -313,12 +250,36 @@ impl Win32LayeredSurface {
             let res = UpdateLayeredWindowIndirect(self.hwnd, &info);
             if res == 0 {
                 let err = windows_sys::Win32::Foundation::GetLastError();
-                eprintln!("[Win32Surface] UpdateLayeredWindowIndirect failed (GetLastError = {}), falling back to full present", err);
-                return self.present(pixmap, opacity);
+                eprintln!("[Win32Surface] UpdateLayeredWindowIndirect failed (GetLastError = {}), falling back to UpdateLayeredWindow", err);
+                let fallback_res = UpdateLayeredWindow(
+                    self.hwnd,
+                    ptr::null_mut(),
+                    &pt_dst,
+                    &size,
+                    self.mem_dc,
+                    &pt_src,
+                    0,
+                    &blend,
+                    ULW_ALPHA,
+                );
+                if fallback_res == 0 {
+                    let err2 = windows_sys::Win32::Foundation::GetLastError();
+                    eprintln!("[Win32Surface] Fallback UpdateLayeredWindow failed, GetLastError = {}", err2);
+                    return Err("UpdateLayeredWindowIndirect and fallback UpdateLayeredWindow both failed");
+                }
             }
         }
 
         Ok(())
+    }
+
+    pub fn present_dirty(
+        &mut self,
+        pixmap: &mut Pixmap,
+        opacity: f32,
+        dirty: Rect,
+    ) -> Result<(), &'static str> {
+        self.present_dirty_ref(pixmap, opacity, dirty)
     }
 }
 

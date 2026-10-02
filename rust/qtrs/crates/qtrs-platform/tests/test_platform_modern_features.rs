@@ -703,3 +703,93 @@ fn test_event_delivery_policies() {
         assert!(matches!(events.lock().unwrap().last().unwrap(), WindowSystemEvent::CloseRequest));
     }
 }
+
+#[test]
+fn test_surface_presenter_dc_and_layered_alignment() {
+    #[cfg(windows)]
+    {
+        use qtrs_gui::geometry::primitives::Rect;
+        use qtrs_gui::geometry::Region;
+        use qtrs_gui::paint::Pixmap;
+        use qtrs_gui::tiny_skia::Color;
+        use qtrs_platform::presenter::{SurfacePresenter, Win32DcPresenter, Win32LayeredPresenter};
+        use qtrs_platform::window::{NativeWindow, WindowFlags};
+        use qtrs_platform::PlatformWindow;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, GWL_EXSTYLE, WS_EX_LAYERED,
+        };
+
+        // 1. Test Standard/DC Presenter:
+        // Window MUST NOT have WS_EX_LAYERED, and presents via GDI BitBlt
+        let mut normal_win = NativeWindow::new(
+            "DC Presenter Test",
+            Rect::new(50, 50, 200, 150),
+            WindowFlags::NORMAL,
+        )
+        .expect("create normal native window");
+
+        let hwnd_normal = normal_win.hwnd();
+        let ex_style_normal = unsafe { GetWindowLongPtrW(hwnd_normal, GWL_EXSTYLE) };
+        assert_eq!(
+            (ex_style_normal as u32 & WS_EX_LAYERED),
+            0,
+            "Standard window must not have WS_EX_LAYERED before present"
+        );
+
+        let mut pixmap = Pixmap::new(200, 150).expect("allocate pixmap");
+        pixmap.fill(Color::from_rgba8(255, 0, 0, 255));
+
+        // Present to normal window via PlatformWindow::present_region
+        let dirty_region = Region::from_coords(10, 10, 80, 60);
+        let res = normal_win.present_region(&pixmap, &dirty_region);
+        assert!(res.is_ok(), "normal_win.present_region failed: {:?}", res);
+
+        let ex_style_after = unsafe { GetWindowLongPtrW(hwnd_normal, GWL_EXSTYLE) };
+        assert_eq!(
+            (ex_style_after as u32 & WS_EX_LAYERED),
+            0,
+            "Standard window must NOT be forced into WS_EX_LAYERED by DC presentation!"
+        );
+
+        // 2. Direct Win32DcPresenter test
+        let mut dc_presenter = Win32DcPresenter::new(hwnd_normal, 200, 150)
+            .expect("create Win32DcPresenter");
+        let dc_res = dc_presenter.present(&pixmap, &dirty_region);
+        assert!(dc_res.is_ok(), "Win32DcPresenter.present failed: {:?}", dc_res);
+
+        // 3. Test Layered Presenter:
+        // Window HAS WS_EX_LAYERED and uses UpdateLayeredWindowIndirect
+        let mut layered_win = NativeWindow::new(
+            "Layered Presenter Test",
+            Rect::new(100, 100, 200, 150),
+            WindowFlags::LAYERED | WindowFlags::FRAMELESS,
+        )
+        .expect("create layered native window");
+
+        let hwnd_layered = layered_win.hwnd();
+        let ex_style_layered = unsafe { GetWindowLongPtrW(hwnd_layered, GWL_EXSTYLE) };
+        assert_ne!(
+            (ex_style_layered as u32 & WS_EX_LAYERED),
+            0,
+            "Layered window must have WS_EX_LAYERED"
+        );
+
+        let res_layered = layered_win.present_region(&pixmap, &dirty_region);
+        assert!(
+            res_layered.is_ok(),
+            "layered_win.present_region failed: {:?}",
+            res_layered
+        );
+
+        // 4. Direct Win32LayeredPresenter test with dirty region
+        let mut layered_presenter = Win32LayeredPresenter::new(hwnd_layered, 200, 150, 0.85)
+            .expect("create Win32LayeredPresenter");
+        layered_presenter.set_opacity(0.9);
+        let lay_res = layered_presenter.present(&pixmap, &dirty_region);
+        assert!(
+            lay_res.is_ok(),
+            "Win32LayeredPresenter.present failed: {:?}",
+            lay_res
+        );
+    }
+}

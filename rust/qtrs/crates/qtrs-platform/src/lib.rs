@@ -22,6 +22,7 @@ pub mod menu;
 pub mod objc_runtime;
 pub mod platform_tray;
 pub mod platform_window;
+pub mod presenter;
 pub mod screen;
 pub mod surface;
 pub mod theme;
@@ -78,9 +79,11 @@ pub use platform_tray::{GenericTrayIcon, PlatformTrayIcon, TrayMessageIcon};
 pub use platform_window::{GenericWindow, PlatformWindow, WindowEdge, WindowEdges};
 pub use surface::PlatformSurface;
 #[cfg(windows)]
+pub use presenter::{Win32DcPresenter, Win32LayeredPresenter, WindowsPresenter};
+pub use presenter::SurfacePresenter;
+#[cfg(windows)]
 pub use surface::Win32LayeredSurface;
 pub use surface::{CocoaLayerSurface, WaylandShmSurface, X11ShmSurface};
-
 #[cfg(windows)]
 pub use screen::Win32Screen;
 pub use screen::{
