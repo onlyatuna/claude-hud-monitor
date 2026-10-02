@@ -651,10 +651,82 @@ impl<'a> Painter<'a> {
             let px = transform.sx * lx + transform.kx * ly + transform.tx;
             let py = transform.ky * lx + transform.sy * ly + transform.ty;
 
-            let font_face = match engines.get(glyph.font_index as usize) {
-                Some(e) => &e.fontdue,
-                None => &engines[0].fontdue,
+            let engine = match engines.get(glyph.font_index as usize) {
+                Some(e) => e,
+                None => &engines[0],
             };
+
+            // Qt 6 parity (QWindowsFontEngineDirectWrite::alphaRGBMapForGlyph):
+            // Check if this glyph is an OpenType COLRv0/CPAL color glyph (e.g. Segoe UI Emoji)
+            if let Some((color_metrics, color_pixmap)) =
+                engine.rasterize_color_glyph(glyph.glyph_id, font.size * dpr)
+            {
+                let start_x = (px + color_metrics.xmin as f32).round() as i32;
+                let start_y =
+                    (py - color_metrics.ymin as f32 - color_metrics.height as f32).round() as i32;
+                let c_w = color_metrics.width;
+                let c_h = color_metrics.height;
+                let color_data = color_pixmap.data();
+
+                for gy in 0..c_h {
+                    let dst_y = start_y + gy as i32;
+                    if dst_y < 0 || dst_y >= ph as i32 {
+                        continue;
+                    }
+                    if let Some(clip) = self.state.clip_rect {
+                        let cy0 = (clip.top() * dpr).floor() as i32;
+                        let cy1 = (clip.bottom() * dpr).ceil() as i32;
+                        if dst_y < cy0 || dst_y >= cy1 {
+                            continue;
+                        }
+                    }
+                    for gx in 0..c_w {
+                        let dst_x = start_x + gx as i32;
+                        if dst_x < 0 || dst_x >= pw as i32 {
+                            continue;
+                        }
+                        if let Some(clip) = self.state.clip_rect {
+                            let cx0 = (clip.left() * dpr).floor() as i32;
+                            let cx1 = (clip.right() * dpr).ceil() as i32;
+                            if dst_x < cx0 || dst_x >= cx1 {
+                                continue;
+                            }
+                        }
+
+                        let src_idx = (gy * c_w + gx) * 4;
+                        let src_raw_r = color_data[src_idx] as u32;
+                        let src_raw_g = color_data[src_idx + 1] as u32;
+                        let src_raw_b = color_data[src_idx + 2] as u32;
+                        let src_raw_a = color_data[src_idx + 3] as u32;
+                        if src_raw_a == 0 {
+                            continue;
+                        }
+
+                        let a_factor = (src_raw_a as f32 / 255.0) * self.state.opacity;
+                        let src_a = (a_factor * 255.0).round() as u32;
+                        let inv_a = 255 - src_a;
+
+                        // tiny-skia Pixmap is premultiplied RGBA
+                        let src_pr = ((src_raw_r as f32 * self.state.opacity).round() as u32).min(255);
+                        let src_pg = ((src_raw_g as f32 * self.state.opacity).round() as u32).min(255);
+                        let src_pb = ((src_raw_b as f32 * self.state.opacity).round() as u32).min(255);
+
+                        let dst_idx = ((dst_y as usize) * (pw as usize) + (dst_x as usize)) * 4;
+                        let cur_r = pix_data[dst_idx] as u32;
+                        let cur_g = pix_data[dst_idx + 1] as u32;
+                        let cur_b = pix_data[dst_idx + 2] as u32;
+                        let cur_a = pix_data[dst_idx + 3] as u32;
+
+                        pix_data[dst_idx] = ((src_pr + (cur_r * inv_a) / 255).min(255)) as u8;
+                        pix_data[dst_idx + 1] = ((src_pg + (cur_g * inv_a) / 255).min(255)) as u8;
+                        pix_data[dst_idx + 2] = ((src_pb + (cur_b * inv_a) / 255).min(255)) as u8;
+                        pix_data[dst_idx + 3] = ((src_a + (cur_a * inv_a) / 255).min(255)) as u8;
+                    }
+                }
+                continue;
+            }
+
+            let font_face = &engine.fontdue;
             let (metrics, bitmap) = font_face.rasterize_indexed(glyph.glyph_id, font.size * dpr);
             if metrics.width == 0 || metrics.height == 0 {
                 continue;

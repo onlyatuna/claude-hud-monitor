@@ -26,6 +26,8 @@ pub struct FontEngine {
     pub raw_data: Option<SharedFontData>,
     /// Font face index within a font collection (.ttc / .otc).
     pub face_index: u32,
+    /// Cached color glyphs: (glyph_id, px_size_key) -> (Metrics, Arc<Pixmap>)
+    color_cache: Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), Option<(fontdue::Metrics, Arc<tiny_skia::Pixmap>)>>>>,
 }
 
 impl FontEngine {
@@ -35,6 +37,7 @@ impl FontEngine {
             fontdue,
             raw_data: None,
             face_index: 0,
+            color_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -48,6 +51,45 @@ impl FontEngine {
     pub fn with_face_index(mut self, face_index: u32) -> Self {
         self.face_index = face_index;
         self
+    }
+    /// Checks whether `glyph_id` is an OpenType color glyph with COLRv0 layers.
+    pub fn is_color_glyph(&self, glyph_id: u16) -> bool {
+        if let Some(raw) = &self.raw_data {
+            crate::text::color_glyph::parse_colr_v0_layers(raw.as_slice(), self.face_index, glyph_id).is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Rasterizes an OpenType color glyph into a 32-bit premultiplied ARGB/RGBA `Pixmap`.
+    ///
+    /// Mirrors Qt6's `QWindowsFontEngineDirectWrite::alphaRGBMapForGlyph` / `renderColr0GlyphRun`.
+    pub fn rasterize_color_glyph(
+        &self,
+        glyph_id: u16,
+        px_size: f32,
+    ) -> Option<(fontdue::Metrics, Arc<tiny_skia::Pixmap>)> {
+        let key = (glyph_id, (px_size * 64.0).round() as u32);
+        if let Ok(guard) = self.color_cache.lock() {
+            if let Some(entry) = guard.get(&key) {
+                return entry.clone();
+            }
+        }
+
+        let raw = self.raw_data.as_ref()?;
+        let rendered = crate::text::color_glyph::rasterize_color_glyph(
+            raw.as_slice(),
+            self.face_index,
+            glyph_id,
+            &self.fontdue,
+            px_size,
+        ).map(|(m, p)| (m, Arc::new(p)));
+
+        if let Ok(mut guard) = self.color_cache.lock() {
+            guard.insert(key, rendered.clone());
+        }
+
+        rendered
     }
 }
 
@@ -89,11 +131,10 @@ impl GlyphLayout {
     /// partitions text into font runs and uses `rustybuzz` with fallback to `fontdue`.
     pub fn shape(text: &str, font: &Font, font_face: &fontdue::Font) -> Self {
         let primary = Arc::new(font_face.clone());
-        let engine = FontEngine {
-            fontdue: primary,
-            raw_data: font.font_data.clone(),
-            face_index: 0,
-        };
+        let mut engine = FontEngine::new(primary).with_face_index(0);
+        if let Some(raw) = &font.font_data {
+            engine = engine.with_raw_data(raw.clone());
+        }
         Self::shape_with_engines(text, font, &[engine])
     }
 

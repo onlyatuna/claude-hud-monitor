@@ -1,5 +1,6 @@
 pub mod block;
 pub mod block_data;
+pub mod color_glyph;
 pub mod cursor;
 pub mod document;
 pub mod document_fragment;
@@ -18,6 +19,7 @@ pub mod qcssparser;
 
 pub use block::*;
 pub use block_data::*;
+pub use color_glyph::*;
 pub use cursor::*;
 pub use document::*;
 pub use document_fragment::*;

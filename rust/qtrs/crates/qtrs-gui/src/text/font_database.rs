@@ -252,11 +252,11 @@ impl FontDatabase {
                 ..fontdue::FontSettings::default()
             };
             if let Ok(primary_due) = fontdue::Font::from_bytes(shared.as_slice(), settings) {
-                engines.push(FontEngine {
-                    fontdue: Arc::new(primary_due),
-                    raw_data: Some(shared.clone()),
-                    face_index: 0,
-                });
+                engines.push(
+                    FontEngine::new(Arc::new(primary_due))
+                        .with_raw_data(shared.clone())
+                        .with_face_index(0),
+                );
             }
         }
 
@@ -309,11 +309,11 @@ impl FontDatabase {
                 return false;
             }
             let raw_data = self.get_raw_font_data(fam);
-            engines.push(FontEngine {
-                fontdue: font_face,
-                raw_data,
-                face_index: 0,
-            });
+            let mut engine = FontEngine::new(font_face).with_face_index(0);
+            if let Some(raw) = raw_data {
+                engine = engine.with_raw_data(raw);
+            }
+            engines.push(engine);
             true
         } else {
             false
