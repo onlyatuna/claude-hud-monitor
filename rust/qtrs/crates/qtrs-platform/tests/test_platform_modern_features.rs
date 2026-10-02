@@ -1,0 +1,623 @@
+use qtrs_gui::geometry::primitives::{Point, Rect};
+use qtrs_platform::backdrop::{set_window_backdrop, BackdropType};
+use qtrs_platform::drag_drop::{DropAction, DropEvent};
+use qtrs_platform::ime::CompositionContext;
+use qtrs_platform::window_system_interface::{WindowSystemEvent, WindowSystemEventHandler};
+use qtrs_platform::{PlatformWindow, WindowFlags};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+#[test]
+fn test_backdrop_type_variants() {
+    let none = BackdropType::None;
+    let mica = BackdropType::Mica;
+    let mica_alt = BackdropType::MicaAlt;
+    let acrylic = BackdropType::Acrylic;
+    let blur_behind = BackdropType::BlurBehind;
+
+    assert_ne!(none, mica);
+    assert_ne!(mica, mica_alt);
+    assert_ne!(acrylic, blur_behind);
+
+    // Calling with a null/dummy handle should safely return false without crashing
+    #[cfg(windows)]
+    {
+        let null_hwnd = std::ptr::null_mut();
+        assert!(!set_window_backdrop(null_hwnd, BackdropType::Mica, true));
+        assert!(!set_window_backdrop(
+            null_hwnd,
+            BackdropType::Acrylic,
+            false
+        ));
+    }
+}
+
+#[test]
+fn test_ime_composition_context() {
+    let mut ctx = CompositionContext::default();
+    assert!(!ctx.is_composing);
+    assert_eq!(ctx.composition_string, "");
+    assert_eq!(ctx.cursor_position, 0);
+
+    ctx.is_composing = true;
+    ctx.composition_string = "nihao".to_string();
+    ctx.cursor_position = 5;
+
+    assert!(ctx.is_composing);
+    assert_eq!(ctx.composition_string, "nihao");
+    assert_eq!(ctx.cursor_position, 5);
+}
+
+#[test]
+fn test_drag_drop_actions_and_events() {
+    assert_eq!(DropAction::Ignore as u32, 0);
+    assert_eq!(DropAction::Copy as u32, 1);
+    assert_eq!(DropAction::Move as u32, 2);
+    assert_eq!(DropAction::Link as u32, 4);
+
+    let enter_ev = DropEvent::Enter {
+        pos: Point::new(100, 200),
+        formats: vec!["text/uri-list".to_string()],
+        effect: 1,
+    };
+
+    match enter_ev {
+        DropEvent::Enter {
+            pos,
+            formats,
+            effect,
+        } => {
+            assert_eq!(pos, Point::new(100, 200));
+            assert_eq!(formats, vec!["text/uri-list".to_string()]);
+            assert_eq!(effect, 1);
+        }
+        _ => panic!("Expected DropEvent::Enter"),
+    }
+}
+
+#[test]
+fn test_dpi_change_and_ime_events_in_window_system() {
+    struct MockEventHandler {
+        received_dpi: Arc<AtomicBool>,
+        received_ime: Arc<AtomicBool>,
+        received_drop: Arc<AtomicBool>,
+    }
+
+    impl WindowSystemEventHandler for MockEventHandler {
+        fn handle_window_event(&mut self, event: WindowSystemEvent) {
+            match event {
+                WindowSystemEvent::DpiChanged { dpi_x, dpi_y } => {
+                    if dpi_x == 192 && dpi_y == 192 {
+                        self.received_dpi.store(true, Ordering::SeqCst);
+                    }
+                }
+                WindowSystemEvent::InputMethod {
+                    commit_string,
+                    preedit_string,
+                    ..
+                } => {
+                    if commit_string == "你好" || preedit_string == "nihao" {
+                        self.received_ime.store(true, Ordering::SeqCst);
+                    }
+                }
+                WindowSystemEvent::Drop { pos, formats, .. }
+                    if pos == Point::new(50, 50) && formats.contains(&"text/plain".to_string()) =>
+                {
+                    self.received_drop.store(true, Ordering::SeqCst);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let dpi_flag = Arc::new(AtomicBool::new(false));
+    let ime_flag = Arc::new(AtomicBool::new(false));
+    let drop_flag = Arc::new(AtomicBool::new(false));
+
+    let mut handler = MockEventHandler {
+        received_dpi: dpi_flag.clone(),
+        received_ime: ime_flag.clone(),
+        received_drop: drop_flag.clone(),
+    };
+
+    // Dispatch DPI Changed
+    handler.handle_window_event(WindowSystemEvent::DpiChanged {
+        dpi_x: 192,
+        dpi_y: 192,
+    });
+    assert!(dpi_flag.load(Ordering::SeqCst));
+
+    // Dispatch IME event
+    handler.handle_window_event(WindowSystemEvent::InputMethod {
+        commit_string: "你好".to_string(),
+        preedit_string: "".to_string(),
+        cursor_position: 2,
+    });
+    assert!(ime_flag.load(Ordering::SeqCst));
+
+    // Dispatch Drop event
+    handler.handle_window_event(WindowSystemEvent::Drop {
+        pos: Point::new(50, 50),
+        formats: vec!["text/plain".to_string()],
+        data: vec![("text/plain".to_string(), b"hello".to_vec())],
+        drop_action: 1,
+    });
+    assert!(drop_flag.load(Ordering::SeqCst));
+}
+
+#[test]
+fn test_platform_window_advanced_features_support() {
+    let mut win = qtrs_platform::window::NativeWindow::new(
+        "TestAdvancedFeatures",
+        Rect::new(100, 100, 400, 300),
+        WindowFlags::FRAMELESS,
+    )
+    .expect("Window creation should succeed");
+
+    // Test backdrop call
+    let _ = win.set_backdrop(BackdropType::Mica, false);
+
+    // Test IME microfocus positioning
+    win.set_ime_focus(Point::new(120, 80));
+
+    // Test drop target toggle
+    let _ = win.enable_drop_target(true);
+    let _ = win.enable_drop_target(false);
+}
+
+#[test]
+fn test_cross_platform_screens_parity() {
+    use qtrs_platform::screen::{CocoaScreen, PlatformScreen, X11Screen};
+
+    // Test Cocoa screen
+    let cocoa_primary = CocoaScreen::primary();
+    assert!(cocoa_primary.is_primary());
+    assert_eq!(cocoa_primary.geometry().width, 1920);
+    assert_eq!(cocoa_primary.geometry().height, 1080);
+    assert!(cocoa_primary.available_geometry().height <= cocoa_primary.geometry().height);
+    assert_eq!(cocoa_primary.device_pixel_ratio(), 2.0);
+
+    let cocoa_screens = CocoaScreen::screens();
+    assert!(!cocoa_screens.is_empty());
+
+    let at_origin = CocoaScreen::screen_at(Point::new(100, 100));
+    assert!(at_origin.is_some());
+
+    // Test X11 screen
+    let x11_primary = X11Screen::primary();
+    assert!(x11_primary.is_primary());
+    assert_eq!(x11_primary.geometry().width, 1920);
+    assert_eq!(x11_primary.geometry().height, 1080);
+    assert_eq!(x11_primary.device_pixel_ratio(), 1.0);
+
+    let x11_screens = X11Screen::screens();
+    assert_eq!(x11_screens.len(), 1);
+
+    let x11_at = X11Screen::screen_at(Point::new(500, 500));
+    assert!(x11_at.is_some());
+}
+
+#[test]
+fn test_cross_platform_backdrop_and_click_through() {
+    use qtrs_platform::window_cocoa::CocoaNativeWindow;
+    use qtrs_platform::window_wayland::WaylandNativeWindow;
+    use qtrs_platform::window_x11::X11NativeWindow;
+
+    let rect = Rect::new(50, 50, 600, 400);
+
+    // Cocoa window
+    let mut cocoa_win = CocoaNativeWindow::new("CocoaHUD", rect, WindowFlags::FRAMELESS)
+        .expect("Cocoa window creation should succeed");
+    assert!(cocoa_win.set_backdrop(BackdropType::Acrylic, true));
+    assert!(cocoa_win.set_backdrop(BackdropType::None, false));
+    cocoa_win.set_click_through(true);
+    cocoa_win.set_click_through(false);
+
+    // X11 window
+    let mut x11_win = X11NativeWindow::new("X11HUD", rect, WindowFlags::FRAMELESS)
+        .expect("X11 window creation should succeed");
+    assert!(x11_win.set_backdrop(BackdropType::Acrylic, true));
+    assert!(x11_win.set_backdrop(BackdropType::None, false));
+    x11_win.set_click_through(true);
+    x11_win.set_click_through(false);
+
+    // Wayland window
+    let mut wayland_win = WaylandNativeWindow::new("WaylandHUD", rect, WindowFlags::FRAMELESS)
+        .expect("Wayland window creation should succeed");
+    assert!(wayland_win.set_backdrop(BackdropType::Acrylic, true));
+    assert!(wayland_win.set_backdrop(BackdropType::None, false));
+    wayland_win.set_click_through(true);
+    wayland_win.set_click_through(false);
+}
+
+#[test]
+fn test_cross_platform_theme_and_dynamic_detection() {
+    use qtrs_platform::theme::{CocoaTheme, ColorScheme, PlatformTheme, UnixTheme};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    // CocoaTheme
+    let cocoa_theme = CocoaTheme::new();
+    assert_ne!(cocoa_theme.color_scheme(), ColorScheme::Unknown);
+    let cocoa_count = Arc::new(AtomicUsize::new(0));
+    let c_cnt = cocoa_count.clone();
+    cocoa_theme.theme_changed().connect(move |_| {
+        c_cnt.fetch_add(1, Ordering::SeqCst);
+    });
+    cocoa_theme.set_color_scheme(ColorScheme::Light);
+    assert_eq!(cocoa_theme.color_scheme(), ColorScheme::Light);
+    cocoa_theme.set_color_scheme(ColorScheme::Dark);
+    assert_eq!(cocoa_theme.color_scheme(), ColorScheme::Dark);
+    assert!(cocoa_count.load(Ordering::SeqCst) >= 1);
+
+    // UnixTheme
+    let unix_theme = UnixTheme::new();
+    assert_ne!(unix_theme.color_scheme(), ColorScheme::Unknown);
+    let unix_count = Arc::new(AtomicUsize::new(0));
+    let u_cnt = unix_count.clone();
+    unix_theme.theme_changed().connect(move |_| {
+        u_cnt.fetch_add(1, Ordering::SeqCst);
+    });
+    unix_theme.set_color_scheme(ColorScheme::Light);
+    assert_eq!(unix_theme.color_scheme(), ColorScheme::Light);
+    unix_theme.set_color_scheme(ColorScheme::Dark);
+    assert_eq!(unix_theme.color_scheme(), ColorScheme::Dark);
+    assert!(unix_count.load(Ordering::SeqCst) >= 1);
+}
+
+#[test]
+fn test_cross_platform_cursor_shapes() {
+    use qtrs_platform::cursor::{CocoaCursor, CursorShape, PlatformCursor, UnixCursor};
+
+    let mut cocoa_cursor = CocoaCursor::new();
+    assert_eq!(cocoa_cursor.current_shape(), CursorShape::Arrow);
+    cocoa_cursor.change_cursor(CursorShape::SizeHor);
+    assert_eq!(cocoa_cursor.current_shape(), CursorShape::SizeHor);
+    cocoa_cursor.change_cursor(CursorShape::SizeVer);
+    assert_eq!(cocoa_cursor.current_shape(), CursorShape::SizeVer);
+    cocoa_cursor.change_cursor(CursorShape::PointingHand);
+    assert_eq!(cocoa_cursor.current_shape(), CursorShape::PointingHand);
+
+    let mut unix_cursor = UnixCursor::new();
+    assert_eq!(unix_cursor.current_shape(), CursorShape::Arrow);
+    unix_cursor.change_cursor(CursorShape::SizeHor);
+    assert_eq!(unix_cursor.current_shape(), CursorShape::SizeHor);
+    assert_eq!(UnixCursor::cursor_name(CursorShape::SizeHor), "ew-resize");
+    assert_eq!(UnixCursor::cursor_name(CursorShape::SizeVer), "ns-resize");
+    assert_eq!(
+        UnixCursor::cursor_name(CursorShape::SizeFDiag),
+        "nwse-resize"
+    );
+    assert_eq!(
+        UnixCursor::cursor_name(CursorShape::SizeBDiag),
+        "nesw-resize"
+    );
+    assert_eq!(
+        UnixCursor::cursor_name(CursorShape::PointingHand),
+        "pointer"
+    );
+    assert_eq!(UnixCursor::cursor_name(CursorShape::Arrow), "default");
+}
+
+#[test]
+fn test_cross_platform_hotkeys() {
+    use qtrs_platform::hotkey::{
+        CocoaHotkeyManager, HotkeyModifiers, PlatformHotkeyManager, UnixHotkeyManager,
+    };
+    use qtrs_platform::integration::{
+        CocoaPlatformIntegration, PlatformIntegration, UnixPlatformIntegration,
+    };
+
+    // Cocoa hotkeys
+    let cocoa_integration = CocoaPlatformIntegration::default();
+    let mut cocoa_mgr = cocoa_integration
+        .create_hotkey_manager()
+        .expect("Cocoa hotkey manager");
+    assert!(cocoa_mgr
+        .register_hotkey(9527, HotkeyModifiers::ALT, 8)
+        .is_ok());
+    assert!(cocoa_mgr
+        .register_hotkey(9528, HotkeyModifiers::ALT | HotkeyModifiers::SHIFT, 8)
+        .is_ok());
+    assert!(cocoa_mgr.unregister_hotkey(9527).is_ok());
+    assert!(cocoa_mgr.unregister_hotkey(9528).is_ok());
+
+    let mut standalone_cocoa = CocoaHotkeyManager::new();
+    assert!(standalone_cocoa
+        .register_hotkey(1, HotkeyModifiers::ALT, 8)
+        .is_ok());
+    assert_eq!(standalone_cocoa.registered_ids().len(), 1);
+
+    // Unix hotkeys
+    let unix_integration = UnixPlatformIntegration::default();
+    let mut unix_mgr = unix_integration
+        .create_hotkey_manager()
+        .expect("Unix hotkey manager");
+    assert!(unix_mgr
+        .register_hotkey(9527, HotkeyModifiers::ALT, 67)
+        .is_ok());
+    assert!(unix_mgr
+        .register_hotkey(9528, HotkeyModifiers::ALT | HotkeyModifiers::SHIFT, 67)
+        .is_ok());
+    assert!(unix_mgr.unregister_hotkey(9527).is_ok());
+    assert!(unix_mgr.unregister_hotkey(9528).is_ok());
+
+    let mut standalone_unix = UnixHotkeyManager::new();
+    assert!(standalone_unix
+        .register_hotkey(2, HotkeyModifiers::ALT, 67)
+        .is_ok());
+    assert_eq!(standalone_unix.registered_ids().len(), 1);
+}
+
+#[test]
+fn test_platform_window_move_resize_opacity_minsize() {
+    qtrs_core::object::ThreadContext::init_current(true, None);
+    use qtrs_platform::{
+        CocoaNativeWindow, GenericWindow, PlatformWindow, WaylandNativeWindow, WindowEdges,
+        X11NativeWindow,
+    };
+
+    // WindowEdges bitflags tests
+    assert_eq!(WindowEdges::LEFT.bits(), 0x01);
+    assert_eq!(WindowEdges::TOP.bits(), 0x02);
+    assert_eq!(WindowEdges::RIGHT.bits(), 0x04);
+    assert_eq!(WindowEdges::BOTTOM.bits(), 0x08);
+    assert_eq!(WindowEdges::TOP_LEFT, WindowEdges::TOP | WindowEdges::LEFT);
+    assert_eq!(
+        WindowEdges::BOTTOM_RIGHT,
+        WindowEdges::BOTTOM | WindowEdges::RIGHT
+    );
+
+    // GenericWindow tests
+    let mut gw = GenericWindow::new(
+        "Generic Test",
+        Rect::new(0, 0, 800, 600),
+        WindowFlags::empty(),
+    );
+    assert_eq!(gw.minimum_size(), (0, 0));
+    gw.set_minimum_size(300, 200);
+    assert_eq!(gw.minimum_size(), (300, 200));
+    assert_eq!(gw.opacity(), 1.0);
+    gw.set_opacity(0.85);
+    assert!((gw.opacity() - 0.85).abs() < 1e-4);
+    gw.set_opacity(1.5);
+    assert_eq!(gw.opacity(), 1.0);
+    gw.set_opacity(-0.5);
+    assert_eq!(gw.opacity(), 0.0);
+    assert!(gw.start_system_move());
+    assert!(gw.start_system_resize(WindowEdges::BOTTOM_RIGHT));
+
+    // CocoaNativeWindow tests
+    if let Ok(mut cocoa_win) = CocoaNativeWindow::new(
+        "Cocoa Test",
+        Rect::new(0, 0, 640, 480),
+        WindowFlags::empty(),
+    ) {
+        assert_eq!(cocoa_win.minimum_size(), (0, 0));
+        cocoa_win.set_minimum_size(200, 150);
+        assert_eq!(cocoa_win.minimum_size(), (200, 150));
+        cocoa_win.set_opacity(0.75);
+        assert!((cocoa_win.opacity() - 0.75).abs() < 1e-4);
+        assert!(cocoa_win.start_system_move());
+        assert!(cocoa_win.start_system_resize(WindowEdges::RIGHT));
+    }
+
+    // X11NativeWindow tests
+    let mut x11_win =
+        X11NativeWindow::new("X11 Test", Rect::new(0, 0, 640, 480), WindowFlags::empty()).unwrap();
+    assert_eq!(x11_win.minimum_size(), (0, 0));
+    x11_win.set_minimum_size(100, 100);
+    assert_eq!(x11_win.minimum_size(), (100, 100));
+    x11_win.set_opacity(0.5);
+    assert!((x11_win.opacity() - 0.5).abs() < 1e-4);
+    assert!(x11_win.start_system_move());
+    assert!(x11_win.start_system_resize(WindowEdges::BOTTOM));
+
+    // WaylandNativeWindow tests
+    let mut wl_win = WaylandNativeWindow::new(
+        "Wayland Test",
+        Rect::new(0, 0, 640, 480),
+        WindowFlags::empty(),
+    )
+    .unwrap();
+    assert_eq!(wl_win.minimum_size(), (0, 0));
+    wl_win.set_minimum_size(120, 80);
+    assert_eq!(wl_win.minimum_size(), (120, 80));
+    wl_win.set_opacity(0.9);
+    assert!((wl_win.opacity() - 0.9).abs() < 1e-4);
+    assert!(wl_win.start_system_move());
+    assert!(wl_win.start_system_resize(WindowEdges::TOP_RIGHT));
+
+    #[cfg(windows)]
+    {
+        use qtrs_platform::NativeWindow;
+        if let Ok(mut win) =
+            NativeWindow::new("Win Test", Rect::new(0, 0, 400, 300), WindowFlags::empty())
+        {
+            assert_eq!(win.minimum_size(), (0, 0));
+            win.set_minimum_size(250, 150);
+            assert_eq!(win.minimum_size(), (250, 150));
+            win.set_opacity(0.8);
+            assert!((win.opacity() - 0.8).abs() < 1e-4);
+        }
+    }
+}
+
+#[test]
+fn test_platform_tray_messages() {
+    qtrs_core::object::ThreadContext::init_current(true, None);
+    use qtrs_gui::paint::Pixmap;
+    use qtrs_platform::{
+        CocoaStatusItem, DbusStatusNotifierItem, GenericTrayIcon, PlatformTrayIcon, TrayMessageIcon,
+    };
+
+    // 1. Verify TrayMessageIcon variants
+    assert_eq!(TrayMessageIcon::NoIcon as u32, 0);
+    assert_eq!(TrayMessageIcon::Information as u32, 1);
+    assert_eq!(TrayMessageIcon::Warning as u32, 2);
+    assert_eq!(TrayMessageIcon::Critical as u32, 3);
+
+    // 2. GenericTrayIcon
+    let pm = Pixmap::new(16, 16).unwrap();
+    let mut generic_tray = GenericTrayIcon::new("Generic Tray", &pm);
+    assert!(generic_tray.supports_messages());
+    assert_eq!(generic_tray.last_message(), None);
+    assert!(generic_tray
+        .show_message("Title", "Body", TrayMessageIcon::Information, 5000)
+        .is_ok());
+    assert_eq!(
+        generic_tray.last_message(),
+        Some(("Title", "Body", TrayMessageIcon::Information, 5000))
+    );
+
+    // 3. CocoaStatusItem
+    let mut cocoa_tray = CocoaStatusItem::new(101);
+    assert!(cocoa_tray.supports_messages());
+    assert_eq!(cocoa_tray.last_message(), None);
+    assert!(cocoa_tray
+        .show_message("ClaudeHUD", "Quota reached", TrayMessageIcon::Warning, 8000)
+        .is_ok());
+    assert_eq!(
+        cocoa_tray.last_message(),
+        Some(("ClaudeHUD", "Quota reached", TrayMessageIcon::Warning, 8000))
+    );
+
+    // 4. DbusStatusNotifierItem
+    let mut dbus_tray = DbusStatusNotifierItem::new("claude-hud", "ClaudeHUD");
+    assert!(dbus_tray.supports_messages());
+    assert_eq!(dbus_tray.last_message(), None);
+    assert!(dbus_tray
+        .show_message("Alert", "Memory trimmed", TrayMessageIcon::Critical, 0)
+        .is_ok());
+    assert_eq!(
+        dbus_tray.last_message(),
+        Some(("Alert", "Memory trimmed", TrayMessageIcon::Critical, 10000))
+    );
+
+    // 5. Windows TrayIcon
+    #[cfg(windows)]
+    {
+        use qtrs_platform::tray_icon::TrayIcon;
+        let hicon = std::ptr::null_mut();
+        if let Ok(win_tray) = TrayIcon::new("WinTray", hicon) {
+            assert!(win_tray.supports_messages());
+            let clicked_signal = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = clicked_signal.clone();
+            let _conn = win_tray.on_message_clicked.connect(move |()| {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            win_tray.on_message_clicked.emit(&());
+            assert!(clicked_signal.load(std::sync::atomic::Ordering::SeqCst));
+        }
+    }
+}
+
+#[test]
+fn test_desktop_services() {
+    use qtrs_platform::{open_file, open_url, set_url_handler};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    // 1. Desktop services: custom URL handler interception
+    let intercepted = Arc::new(AtomicBool::new(false));
+    let flag = intercepted.clone();
+    set_url_handler(Some(Box::new(move |url: &str| {
+        if url == "https://claude.ai" {
+            flag.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    })));
+
+    assert!(open_url("https://claude.ai"));
+    assert!(intercepted.load(Ordering::SeqCst));
+    assert!(!open_url("")); // Empty url returns false
+
+    // Reset handler
+    set_url_handler(None);
+
+    // 2. Desktop services: open_file non-existent
+    assert!(!open_file(
+        "C:/non_existent_folder_xyz_12345/non_existent.txt"
+    ));
+}
+
+#[test]
+fn test_power_events_and_screen_clamping() {
+    qtrs_core::object::ThreadContext::init_current(true, None);
+    use qtrs_gui::geometry::primitives::Rect;
+    use qtrs_platform::{
+        clamp_window_rect_to_screens, ensure_within_screens, GenericScreen, PlatformScreen,
+        PowerEvent, WindowSystemEvent,
+    };
+
+    // 1. PowerEvent variants
+    let suspend = PowerEvent::Suspend;
+    let resume = PowerEvent::Resume;
+    assert_ne!(suspend, resume);
+
+    let power_ev = WindowSystemEvent::Power { event: resume };
+    match power_ev {
+        WindowSystemEvent::Power { event } => assert_eq!(event, PowerEvent::Resume),
+        _ => panic!("Expected Power event"),
+    }
+
+    // 2. ensure_within_screens testing
+    let screen1 = GenericScreen::new(
+        "Screen1",
+        Rect::new(0, 0, 1920, 1080),
+        Rect::new(0, 0, 1920, 1040),
+        true,
+        1.0,
+    );
+    let screen2 = GenericScreen::new(
+        "Screen2",
+        Rect::new(1920, 0, 1920, 1080),
+        Rect::new(1920, 0, 1920, 1040),
+        false,
+        1.0,
+    );
+    let screens: Vec<&dyn PlatformScreen> = vec![&screen1, &screen2];
+
+    // Case A: rect comfortably within screen1
+    let normal_rect = Rect::new(100, 100, 400, 300);
+    let clamped_normal = ensure_within_screens(normal_rect, &screens, 32);
+    assert_eq!(clamped_normal, normal_rect);
+
+    // Case B: rect overflowing right side of screen1 into screen2
+    let overflow_rect = Rect::new(1800, 100, 400, 300);
+    let clamped_b = ensure_within_screens(overflow_rect, &screens, 32);
+    assert!(clamped_b.x >= 1920 && clamped_b.x + clamped_b.width <= 3840);
+
+    // Case C: rect completely off-screen (e.g. disconnected monitor at 5000, 5000)
+    let disconnected_rect = Rect::new(5000, 5000, 400, 300);
+    let recovered = ensure_within_screens(disconnected_rect, &screens, 32);
+    // Must be safely relocated inside primary screen (screen1: 0..1920, 0..1040)
+    assert!(recovered.x >= 0 && recovered.x + recovered.width <= 1920);
+    assert!(recovered.y >= 0 && recovered.y + recovered.height <= 1040);
+    assert_eq!(recovered.width, 400);
+    assert_eq!(recovered.height, 300);
+
+    // 3. clamp_window_rect_to_screens live check
+    let live_clamped = clamp_window_rect_to_screens(Rect::new(100, 100, 300, 200));
+    assert!(live_clamped.width > 0 && live_clamped.height > 0);
+
+    // 4. Windows TrayIcon on_power_event check
+    #[cfg(windows)]
+    {
+        use qtrs_platform::tray_icon::TrayIcon;
+        let hicon = std::ptr::null_mut();
+        if let Ok(win_tray) = TrayIcon::new("PowerTray", hicon) {
+            let received = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = received.clone();
+            let _conn = win_tray.on_power_event.connect(move |ev| {
+                if *ev == PowerEvent::Resume {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+            });
+            win_tray.on_power_event.emit(&PowerEvent::Resume);
+            assert!(received.load(std::sync::atomic::Ordering::SeqCst));
+        }
+    }
+}

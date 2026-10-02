@@ -1,0 +1,20 @@
+[package]
+name = "qtrs-gui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+qtrs-core = { path = "../qtrs-core" }
+tiny-skia = "0.11"
+png = "0.17"
+fontdue = "0.9.4"
+rustybuzz = "0.20.1"
+unicode-segmentation = "1.12"
+serde = { version = "1.0", features = ["derive"], optional = true }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+serde_json = "1.0"

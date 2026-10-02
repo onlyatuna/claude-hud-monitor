@@ -1,0 +1,28 @@
+[package]
+name = "qtrs-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+qtrs-derive = { path = "../qtrs-derive", optional = true }
+
+[features]
+default = ["derive"]
+derive = ["dep:qtrs-derive"]
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_Graphics_Gdi",
+    "Win32_Media",
+    "Win32_Storage_FileSystem",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Future dependencies: libc, epoll platform event mechanisms
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Future dependencies: kqueue, core-foundation

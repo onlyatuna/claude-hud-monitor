@@ -11,4 +11,5 @@ pub use claude::ClaudeProvider;
 pub use codex::CodexProvider;
 
 /// IDs for all providers — order determines card display order.
+#[allow(dead_code)]
 pub const PROVIDER_IDS: &[&str] = &["claude", "agy", "codex"];

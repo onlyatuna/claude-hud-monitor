@@ -132,10 +132,5 @@ pub fn open_log_dir() {
     let dir = log_dir();
     let _ = std::fs::create_dir_all(&dir);
     info!("[Logger] Opening log dir: {:?}", dir);
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("explorer").arg(&dir).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(&dir).spawn();
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+    let _ = qtrs_platform::desktop_services::open_file(&dir);
 }

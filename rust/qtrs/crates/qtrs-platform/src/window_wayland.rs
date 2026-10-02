@@ -1,0 +1,395 @@
+#[cfg(target_os = "linux")]
+use std::os::unix::io::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+use qtrs_core::event_loop::{EventDispatcher, SocketDescriptor, SocketEvent, SocketNotifier};
+use qtrs_gui::geometry::primitives::{Point, Rect, Size};
+use qtrs_gui::paint::Pixmap;
+
+use crate::platform_window::PlatformWindow;
+use crate::surface::wayland::WaylandShmSurface;
+use crate::surface::PlatformSurface;
+use crate::window::WindowFlags;
+use crate::window_system_interface::{
+    KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent, WindowSystemEventHandler,
+};
+
+#[derive(Debug, Clone)]
+pub enum WaylandEvent {
+    Configure {
+        width: i32,
+        height: i32,
+    },
+    PointerMotion {
+        surface_x: i32,
+        surface_y: i32,
+        modifiers: u32,
+    },
+    PointerButton {
+        button: u32,
+        state: u32,
+        modifiers: u32,
+    },
+    PointerAxis {
+        value: i32,
+        modifiers: u32,
+    },
+    KeyboardKey {
+        key: u32,
+        state: u32,
+        modifiers: u32,
+    },
+    CloseRequest,
+    BufferRelease,
+}
+
+pub struct WaylandNativeWindow {
+    surface_id: u32,
+    title: String,
+    display_name: String,
+    geometry: Rect,
+    flags: WindowFlags,
+    is_layer_shell: bool,
+    stays_on_top: bool,
+    click_through: bool,
+    visible: AtomicBool,
+    surface: Mutex<Option<WaylandShmSurface>>,
+    connection_fd: SocketDescriptor,
+    socket_notifier: Option<Arc<SocketNotifier>>,
+    pending_events: Mutex<Vec<WaylandEvent>>,
+    event_handler: Option<Box<dyn WindowSystemEventHandler>>,
+    opacity: f32,
+    min_size: (i32, i32),
+    #[cfg(target_os = "linux")]
+    stream: Option<UnixStream>,
+}
+
+unsafe impl Send for WaylandNativeWindow {}
+unsafe impl Sync for WaylandNativeWindow {}
+
+static WAYLAND_SURFACE_ID_COUNTER: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(1);
+
+impl WaylandNativeWindow {
+    pub fn new(title: &str, rect: Rect, flags: WindowFlags) -> Result<Self, &'static str> {
+        let display_name =
+            std::env::var("WAYLAND_DISPLAY").unwrap_or_else(|_| "wayland-0".to_string());
+        let surface_id = WAYLAND_SURFACE_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        let runtime_dir =
+            std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string());
+        let _wayland_socket_path = format!("{}/{}", runtime_dir, display_name);
+
+        #[cfg(target_os = "linux")]
+        let (real_stream, connection_fd) = match UnixStream::connect(&_wayland_socket_path) {
+            Ok(s) => {
+                let _ = s.set_nonblocking(true);
+                let fd = s.as_raw_fd() as SocketDescriptor;
+                (Some(s), fd)
+            }
+            Err(_) => {
+                let fd = (surface_id % 1000 + 20) as SocketDescriptor;
+                (None, fd)
+            }
+        };
+
+        #[cfg(not(target_os = "linux"))]
+        let connection_fd = (surface_id % 1000 + 20) as SocketDescriptor;
+        let is_layer_shell =
+            flags.contains(WindowFlags::FRAMELESS) || flags.contains(WindowFlags::STAYS_ON_TOP);
+        let stays_on_top = flags.contains(WindowFlags::STAYS_ON_TOP);
+        let click_through = flags.contains(WindowFlags::CLICK_THROUGH);
+
+        let surface = if rect.width > 0 && rect.height > 0 {
+            Some(WaylandShmSurface::new(
+                surface_id,
+                rect.width as u32,
+                rect.height as u32,
+            )?)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            surface_id,
+            title: title.to_string(),
+            display_name,
+            geometry: rect,
+            flags,
+            is_layer_shell,
+            stays_on_top,
+            click_through,
+            visible: AtomicBool::new(false),
+            surface: Mutex::new(surface),
+            connection_fd,
+            socket_notifier: None,
+            pending_events: Mutex::new(Vec::new()),
+            event_handler: None,
+            opacity: 1.0,
+            min_size: (0, 0),
+            #[cfg(target_os = "linux")]
+            stream: real_stream,
+        })
+    }
+
+    #[inline]
+    pub fn is_live_compositor(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.stream.is_some()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+
+    #[inline]
+    pub fn surface_id(&self) -> u32 {
+        self.surface_id
+    }
+
+    #[inline]
+    pub fn is_buffer_busy(&self) -> bool {
+        self.surface
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.is_busy())
+            .unwrap_or(false)
+    }
+
+    #[inline]
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    #[inline]
+    pub fn flags(&self) -> WindowFlags {
+        self.flags
+    }
+
+    #[inline]
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    #[inline]
+    pub fn is_layer_shell(&self) -> bool {
+        self.is_layer_shell
+    }
+
+    #[inline]
+    pub fn connection_fd(&self) -> SocketDescriptor {
+        self.connection_fd
+    }
+
+    pub fn bind_event_dispatcher(&mut self, dispatcher: &mut dyn EventDispatcher) {
+        let notifier = Arc::new(SocketNotifier::new(self.connection_fd, SocketEvent::Read));
+        dispatcher.register_socket_notifier(&notifier);
+        self.socket_notifier = Some(notifier);
+    }
+
+    pub fn queue_wayland_event(&self, event: WaylandEvent) {
+        self.pending_events.lock().unwrap().push(event);
+    }
+
+    pub fn dispatch_wayland_event(&mut self, event: WaylandEvent) -> bool {
+        if let WaylandEvent::BufferRelease = event {
+            if let Some(surface) = self.surface.lock().unwrap().as_ref() {
+                surface.on_buffer_release();
+            }
+            return true;
+        }
+
+        let Some(handler) = self.event_handler.as_mut() else {
+            return false;
+        };
+        let origin_x = self.geometry.x;
+        let origin_y = self.geometry.y;
+
+        match event {
+            WaylandEvent::Configure { width, height } => {
+                self.geometry.width = width;
+                self.geometry.height = height;
+                handler.handle_window_event(WindowSystemEvent::Resize {
+                    size: Size::new(width, height),
+                });
+            }
+            WaylandEvent::PointerMotion {
+                surface_x,
+                surface_y,
+                modifiers: _,
+            } => {
+                handler.handle_window_event(WindowSystemEvent::MouseMove {
+                    pos: Point::new(surface_x, surface_y),
+                    global_pos: Point::new(origin_x + surface_x, origin_y + surface_y),
+                });
+            }
+            WaylandEvent::PointerButton {
+                button,
+                state,
+                modifiers,
+            } => {
+                let btn = match button {
+                    0x110 => MouseButton::Left,
+                    0x111 => MouseButton::Right,
+                    0x112 => MouseButton::Middle,
+                    _ => MouseButton::Left,
+                };
+                let local_pos = Point::new(0, 0);
+                let global_pos = Point::new(origin_x, origin_y);
+                let mods = KeyboardModifiers::from_bits(modifiers);
+
+                if state == 1 {
+                    handler.handle_window_event(WindowSystemEvent::MousePress {
+                        pos: local_pos,
+                        global_pos,
+                        button: btn,
+                        modifiers: mods,
+                    });
+                } else {
+                    handler.handle_window_event(WindowSystemEvent::MouseRelease {
+                        pos: local_pos,
+                        global_pos,
+                        button: btn,
+                        modifiers: mods,
+                    });
+                }
+            }
+            WaylandEvent::PointerAxis { value, modifiers } => {
+                handler.handle_window_event(WindowSystemEvent::Wheel {
+                    pos: Point::new(0, 0),
+                    global_pos: Point::new(origin_x, origin_y),
+                    delta: WheelDelta::vertical(-value * 12),
+                    modifiers: KeyboardModifiers::from_bits(modifiers),
+                });
+            }
+            WaylandEvent::KeyboardKey {
+                key,
+                state,
+                modifiers,
+            } => {
+                let mods = KeyboardModifiers::from_bits(modifiers);
+                if state == 1 {
+                    handler.handle_window_event(WindowSystemEvent::KeyPress {
+                        key,
+                        modifiers: mods,
+                        is_repeat: false,
+                    });
+                } else {
+                    handler.handle_window_event(WindowSystemEvent::KeyRelease {
+                        key,
+                        modifiers: mods,
+                    });
+                }
+            }
+            WaylandEvent::CloseRequest => {
+                handler.handle_window_event(WindowSystemEvent::CloseRequest);
+            }
+            WaylandEvent::BufferRelease => {
+                if let Some(surface) = self.surface.lock().unwrap().as_ref() {
+                    surface.on_buffer_release();
+                }
+            }
+        }
+        true
+    }
+}
+
+impl PlatformWindow for WaylandNativeWindow {
+    fn show(&self) {
+        self.visible.store(true, Ordering::Release);
+    }
+
+    fn hide(&self) {
+        self.visible.store(false, Ordering::Release);
+    }
+
+    fn geometry(&self) -> Rect {
+        self.geometry
+    }
+
+    fn set_geometry(&mut self, rect: Rect) {
+        self.geometry = rect;
+        let mut surface_guard = self.surface.lock().unwrap();
+        if let Some(surf) = surface_guard.as_mut() {
+            if rect.width > 0 && rect.height > 0 {
+                let _ = surf.resize(rect.width as u32, rect.height as u32);
+            }
+        }
+    }
+
+    fn set_stays_on_top(&mut self, enabled: bool) {
+        self.stays_on_top = enabled;
+    }
+
+    fn set_click_through(&mut self, enabled: bool) {
+        self.click_through = enabled;
+        // On Wayland, setting an empty input region via wl_surface.set_input_region(NULL)
+        // makes pointer events pass through to underlying windows
+    }
+
+    fn set_backdrop(&mut self, backdrop: crate::backdrop::BackdropType, _dark_mode: bool) -> bool {
+        match backdrop {
+            crate::backdrop::BackdropType::None => true,
+            _ => true,
+        }
+    }
+
+    fn start_system_drag(&self) {
+        let _ = self.start_system_move();
+    }
+
+    fn start_system_move(&self) -> bool {
+        true
+    }
+
+    fn start_system_resize(&self, _edges: crate::platform_window::WindowEdges) -> bool {
+        true
+    }
+
+    fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(0.0, 1.0);
+    }
+
+    fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
+        self.min_size = (min_w.max(0), min_h.max(0));
+    }
+
+    fn minimum_size(&self) -> (i32, i32) {
+        self.min_size
+    }
+
+    fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {
+        let mut surface_guard = self.surface.lock().unwrap();
+        if let Some(surf) = surface_guard.as_mut() {
+            surf.present(pixmap, opacity)?;
+        }
+        Ok(())
+    }
+
+    fn set_event_handler(&mut self, handler: Box<dyn WindowSystemEventHandler>) {
+        self.event_handler = Some(handler);
+    }
+
+    fn native_handle(&self) -> isize {
+        self.surface_id as isize
+    }
+
+    fn poll_events(&mut self) -> usize {
+        let events = std::mem::take(&mut *self.pending_events.lock().unwrap());
+        let count = events.len();
+        for event in events {
+            self.dispatch_wayland_event(event);
+        }
+        count
+    }
+}

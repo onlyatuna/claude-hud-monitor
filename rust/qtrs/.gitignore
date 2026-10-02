@@ -1,0 +1,6 @@
+/target
+**/*.rs.bk
+*.pdb
+*.obj
+QT_CPP_MAPPING.md
+.vscode/

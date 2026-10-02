@@ -29,7 +29,7 @@ pub fn percent_text(value: Option<f64>) -> String {
 
 /// Core data contract shared by all providers.
 /// `metric1_val` / `metric2_val` are Some(0.0..=100.0) or None (shown as "--").
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct UsageMetrics {
     pub provider_id: String,
@@ -55,6 +55,31 @@ pub struct UsageMetrics {
     pub stale: bool,
     pub last_success: Option<DateTime<Utc>>,
 }
+impl Default for UsageMetrics {
+    fn default() -> Self {
+        Self {
+            provider_id: String::new(),
+            provider_name: String::new(),
+            metric1_title: "SESSION 5H".to_string(),
+            metric1_val: None,
+            metric1_text: "--".to_string(),
+            metric1_reset: None,
+            metric2_title: "WEEKLY 7D".to_string(),
+            metric2_val: None,
+            metric2_text: "--".to_string(),
+            metric2_reset: None,
+            badge1_text: String::new(),
+            badge2_text: String::new(),
+            last_updated_time: String::new(),
+            error: None,
+            error_code: String::new(),
+            retry_after: None,
+            stale: false,
+            last_success: None,
+        }
+    }
+}
+
 
 impl UsageMetrics {
     pub fn error_result(

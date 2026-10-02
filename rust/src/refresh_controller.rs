@@ -42,7 +42,8 @@ pub struct RefreshController {
     pub states: HashMap<String, ProviderState>,
     result_tx: Sender<WorkerResult>,
     pub result_rx: Receiver<WorkerResult>,
-    egui_ctx: Option<egui::Context>,
+    pub updated: qtrs_core::signal::Signal<UsageMetrics>,
+    notify_callback: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl RefreshController {
@@ -53,16 +54,18 @@ impl RefreshController {
             states: HashMap::new(),
             result_tx: tx,
             result_rx: rx,
-            egui_ctx: None,
+            updated: qtrs_core::signal::Signal::new(),
+            notify_callback: None,
         }
     }
 
-    /// Store egui Context to immediately request repaint when workers complete.
-    pub fn set_egui_ctx(&mut self, ctx: egui::Context) {
-        self.egui_ctx = Some(ctx);
+    /// Store callback to immediately request repaint / notify event loop when workers complete.
+    #[allow(dead_code)]
+    pub fn set_notify_callback<F: Fn() + Send + Sync + 'static>(&mut self, cb: F) {
+        self.notify_callback = Some(Arc::new(cb));
     }
-
     /// Returns true if any provider worker is currently running.
+    #[allow(dead_code)]
     pub fn is_busy(&self) -> bool {
         self.states.values().any(|s| s.running)
     }
@@ -98,6 +101,7 @@ impl RefreshController {
     }
 
     /// Set a new interval and reset next-due timestamps.
+    #[allow(dead_code)]
     pub fn set_interval(&mut self, secs: u64) {
         self.interval = Duration::from_secs(secs.max(20));
         let now = Instant::now();
@@ -118,7 +122,7 @@ impl RefreshController {
 
         let tx = self.result_tx.clone();
         let id_owned = id.to_owned();
-        let ctx_opt = self.egui_ctx.clone();
+        let notify_opt = self.notify_callback.clone();
         thread::Builder::new()
             .name(format!("quota-{}", id))
             .spawn(move || {
@@ -180,8 +184,8 @@ impl RefreshController {
                     generation,
                     metrics,
                 });
-                if let Some(ctx) = ctx_opt {
-                    ctx.request_repaint();
+                if let Some(cb) = notify_opt {
+                    cb();
                 }
             })
             .expect("failed to spawn quota worker");
@@ -196,6 +200,7 @@ impl RefreshController {
         let mut updates = Vec::new();
         while let Ok(item) = self.result_rx.try_recv() {
             if let Some(result) = self.complete(item, providers) {
+                self.updated.emit(&result);
                 updates.push(result);
             }
         }

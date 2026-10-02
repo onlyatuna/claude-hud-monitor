@@ -1,0 +1,19 @@
+[package]
+name = "qtrs-widgets"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+qtrs-core = { path = "../qtrs-core" }
+qtrs-gui = { path = "../qtrs-gui" }
+qtrs-platform = { path = "../qtrs-platform" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[dev-dependencies]
+parking_lot = "0.12"

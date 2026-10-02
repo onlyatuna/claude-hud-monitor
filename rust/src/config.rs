@@ -18,6 +18,16 @@ pub struct Config {
     pub window_x: Option<i32>,
     #[serde(default)]
     pub window_y: Option<i32>,
+    #[serde(default = "default_ui_mode")]
+    pub ui_mode: String,
+    #[serde(default = "default_table_width")]
+    pub table_width: u32,
+    #[serde(default = "default_table_height")]
+    pub table_height: u32,
+    #[serde(default = "default_color_scheme")]
+    pub color_scheme: String,
+    #[serde(default = "default_appearance")]
+    pub appearance: String,
     #[serde(default = "default_layout_mode")]
     pub layout_mode: String,
     #[serde(default = "default_vertical_width")]
@@ -55,7 +65,7 @@ pub const MIN_VERTICAL_WIDTH: u32 = 250;
 pub const HUD_HEADER_HEIGHT: u32 = 16;
 pub const HUD_BODY_SPACING: u32 = 3;
 pub const HUD_FRAME_VERTICAL_MARGIN: u32 = 10;
-pub const VERTICAL_CARD_MIN_HEIGHT: u32 = 104;
+pub const VERTICAL_CARD_MIN_HEIGHT: u32 = 140;
 pub const VERTICAL_DIVIDER_SPACING: u32 = 3;
 pub const VERTICAL_DIVIDER_LINE_HEIGHT: u32 = 1;
 
@@ -73,7 +83,28 @@ pub const MIN_VERTICAL_HEIGHT: u32 = vertical_layout_min_height();
 pub const DEFAULT_HORIZONTAL_WIDTH: u32 = 690;
 pub const DEFAULT_HORIZONTAL_HEIGHT: u32 = 152;
 pub const DEFAULT_VERTICAL_WIDTH: u32 = 280;
-pub const DEFAULT_VERTICAL_HEIGHT: u32 = MIN_VERTICAL_HEIGHT + 40;
+pub const DEFAULT_VERTICAL_HEIGHT: u32 = 490;
+pub const MIN_TABLE_WIDTH: u32 = 380;
+pub const MIN_TABLE_HEIGHT: u32 = 280;
+pub const DEFAULT_TABLE_WIDTH: u32 = 450;
+pub const DEFAULT_TABLE_HEIGHT: u32 = 350;
+
+fn default_ui_mode() -> String {
+    "cards".to_owned()
+}
+fn default_table_width() -> u32 {
+    DEFAULT_TABLE_WIDTH
+}
+fn default_table_height() -> u32 {
+    DEFAULT_TABLE_HEIGHT
+}
+fn default_color_scheme() -> String {
+    "scale".to_owned()
+}
+fn default_appearance() -> String {
+    "auto".to_owned()
+}
+
 
 fn default_layout_mode() -> String {
     "vertical".to_owned()
@@ -111,6 +142,11 @@ impl Default for Config {
         Self {
             window_x: None,
             window_y: None,
+            ui_mode: default_ui_mode(),
+            table_width: default_table_width(),
+            table_height: default_table_height(),
+            color_scheme: default_color_scheme(),
+            appearance: default_appearance(),
             layout_mode: default_layout_mode(),
             vertical_width: default_vertical_width(),
             vertical_height: default_vertical_height(),
