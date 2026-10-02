@@ -4,7 +4,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::text::font::SharedFontData;
+use crate::text::font::{Font, SharedFontData};
+use crate::text::glyph_layout::FontEngine;
 
 use rustybuzz::ttf_parser::name::Table as NameTable;
 use rustybuzz::ttf_parser::{name_id, PlatformId};
@@ -48,6 +49,11 @@ pub fn with_global_font_database<R>(f: impl FnOnce(&mut FontDatabase) -> R) -> R
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     f(guard.get_or_insert_with(FontDatabase::new))
+}
+/// Resolves the primary font engine and its platform-aware fallback chain (`QFontEngineMulti` equivalent)
+/// using the process-wide global font database.
+pub fn resolve_font_engines_global(font: &Font) -> Vec<FontEngine> {
+    with_global_font_database(|db| db.resolve_font_engines(font))
 }
 
 impl FontDatabase {
@@ -229,6 +235,89 @@ impl FontDatabase {
         }
         self.load_font(family);
         self.raw_cache.get(&key).cloned()
+    }
+    /// Resolves the primary font engine and its platform-aware fallback chain (`QFontEngineMulti` equivalent).
+    ///
+    /// The resulting engines are ordered:
+    /// 1. Primary requested font (or in-memory custom font if provided in `font.font_data`)
+    /// 2. CJK / Multilingual script fallback fonts
+    /// 3. Symbol and Emoji fallback fonts
+    pub fn resolve_font_engines(&mut self, font: &Font) -> Vec<FontEngine> {
+        let mut engines: Vec<FontEngine> = Vec::with_capacity(4);
+
+        // 1. Primary in-memory font data if specified
+        if let Some(shared) = &font.font_data {
+            let settings = fontdue::FontSettings {
+                collection_index: 0,
+                ..fontdue::FontSettings::default()
+            };
+            if let Ok(primary_due) = fontdue::Font::from_bytes(shared.as_slice(), settings) {
+                engines.push(FontEngine {
+                    fontdue: Arc::new(primary_due),
+                    raw_data: Some(shared.clone()),
+                    face_index: 0,
+                });
+            }
+        }
+
+        // If no in-memory font or in-memory font failed to parse, load primary by family
+        if engines.is_empty() {
+            self.try_add_engine(&mut engines, &font.family);
+        }
+
+        // 2. Multilingual / CJK and Symbol / Emoji fallback candidates by platform
+        #[cfg(target_os = "windows")]
+        {
+            if !self.try_add_engine(&mut engines, "Microsoft JhengHei") {
+                self.try_add_engine(&mut engines, "Microsoft YaHei");
+            }
+            if !self.try_add_engine(&mut engines, "Segoe UI Emoji") {
+                self.try_add_engine(&mut engines, "Segoe UI Symbol");
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            if !self.try_add_engine(&mut engines, "PingFang TC") {
+                if !self.try_add_engine(&mut engines, "PingFang SC") {
+                    self.try_add_engine(&mut engines, "Heiti TC");
+                }
+            }
+            if !self.try_add_engine(&mut engines, "Apple Color Emoji") {
+                self.try_add_engine(&mut engines, "Apple Symbols");
+            }
+        }
+
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        {
+            if !self.try_add_engine(&mut engines, "Noto Sans CJK TC") {
+                if !self.try_add_engine(&mut engines, "Noto Sans CJK SC") {
+                    self.try_add_engine(&mut engines, "WenQuanYi Micro Hei");
+                }
+            }
+            if !self.try_add_engine(&mut engines, "Noto Color Emoji") {
+                self.try_add_engine(&mut engines, "DejaVu Sans");
+            }
+        }
+
+        engines
+    }
+
+    fn try_add_engine(&mut self, engines: &mut Vec<FontEngine>, fam: &str) -> bool {
+        if let Some(font_face) = self.load_font(fam) {
+            if engines.iter().any(|e| Arc::ptr_eq(&e.fontdue, &font_face)) {
+                return false;
+            }
+            let raw_data = self.get_raw_font_data(fam);
+            engines.push(FontEngine {
+                fontdue: font_face,
+                raw_data,
+                face_index: 0,
+            });
+            true
+        } else {
+            false
+        }
     }
 
     /// Returns the raw binary font data by canonical or relative file path.

@@ -12,9 +12,8 @@ use crate::paint::path::PainterPath;
 use crate::paint::pixmap::Pixmap;
 use crate::text::document::TextDocument;
 use crate::text::font::Font;
-use crate::text::font_database::with_global_font_database;
-use crate::text::glyph_layout::{FontEngine, GlyphLayout};
-use std::sync::Arc;
+use crate::text::font_database::resolve_font_engines_global;
+use crate::text::glyph_layout::GlyphLayout;
 use tiny_skia::{
     Color, FilterQuality, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, Pattern, Shader,
     SpreadMode, Stroke, Transform,
@@ -619,41 +618,7 @@ impl<'a> Painter<'a> {
         if text.is_empty() {
             return;
         }
-        let engines: Vec<FontEngine> = if let Some(data) = &font.font_data {
-            fontdue::Font::from_bytes(data.as_slice(), fontdue::FontSettings::default())
-                .ok()
-                .map(|f| {
-                    vec![FontEngine::new(Arc::new(f)).with_raw_data(data.clone())]
-                })
-                .unwrap_or_default()
-        } else {
-            with_global_font_database(|db| {
-                let mut list = Vec::new();
-                let mut add_engine = |db: &mut crate::text::font_database::FontDatabase, fam: &str| {
-                    if let Some(f) = db.load_font(fam) {
-                        let raw = db.get_raw_font_data(fam);
-                        list.push(FontEngine {
-                            fontdue: f,
-                            raw_data: raw,
-                            face_index: 0,
-                        });
-                        true
-                    } else {
-                        false
-                    }
-                };
-
-                add_engine(db, &font.family);
-                if !add_engine(db, "Microsoft JhengHei") {
-                    add_engine(db, "Microsoft YaHei");
-                }
-                if !add_engine(db, "Segoe UI Emoji") {
-                    add_engine(db, "Segoe UI Symbol");
-                }
-                list
-            })
-        };
-
+        let engines = resolve_font_engines_global(font);
         if engines.is_empty() {
             return;
         }

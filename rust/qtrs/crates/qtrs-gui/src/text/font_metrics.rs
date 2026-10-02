@@ -77,29 +77,19 @@ impl FontMetrics {
             return 0.0;
         }
 
-        let shaped_width = crate::text::font_database::with_global_font_database(|db| {
-            if let Some(font_face) = db.load_font(&font.family) {
-                let raw_data = db.get_raw_font_data(&font.family);
-                let engine = crate::text::glyph_layout::FontEngine {
-                    fontdue: font_face,
-                    raw_data,
-                    face_index: 0,
-                };
-                let layout = crate::text::glyph_layout::GlyphLayout::shape_with_engines(
-                    text,
-                    font,
-                    &[engine],
-                );
-                Some(layout.width)
-            } else {
-                None
+        let engines = crate::text::font_database::resolve_font_engines_global(font);
+        if !engines.is_empty() {
+            let layout = crate::text::glyph_layout::GlyphLayout::shape_with_engines(
+                text,
+                font,
+                &engines,
+            );
+            if layout.width > 0.0 {
+                return layout.width;
             }
-        });
-
-        match shaped_width {
-            Some(w) if w > 0.0 => w,
-            _ => self.horizontal_advance(text, font),
         }
+
+        self.horizontal_advance(text, font)
     }
 
     /// Calculates the exact bounding rectangle of a string using OpenType shaping.
