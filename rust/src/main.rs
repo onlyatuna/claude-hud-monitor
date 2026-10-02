@@ -448,7 +448,8 @@ fn main() {
         run_on_main_thread(main_thread_id, move |hud| {
             let updates = {
                 let mut ctrl = ctrl_clone.lock();
-                ctrl.drain_results(&hud.borrow().providers)
+                let providers = hud.borrow().providers.clone();
+                ctrl.drain_results(&providers)
             };
             for update in updates {
                 hud.borrow_mut().on_data_fetched(&update);
@@ -472,14 +473,19 @@ fn main() {
     unsafe { clock_timer.start() };
 
     let mut poll_timer = Timer::new();
-    poll_timer.set_interval(1000);
+    poll_timer.set_interval(100);
     let refresh_ctrl_poll = Arc::clone(&refresh_ctrl);
     poll_timer.timeout.connect(move |()| {
         MAIN_HUD.with(|cell| {
             if let Some(hud) = cell.borrow().as_ref() {
                 let providers = hud.borrow().providers.clone();
-                let mut ctrl = refresh_ctrl_poll.lock();
-                ctrl.poll(&providers);
+                let updates = {
+                    let mut ctrl = refresh_ctrl_poll.lock();
+                    ctrl.poll(&providers)
+                };
+                for update in updates {
+                    hud.borrow_mut().on_data_fetched(&update);
+                }
             }
         });
     });

@@ -43,7 +43,7 @@ pub struct RefreshController {
     result_tx: Sender<WorkerResult>,
     pub result_rx: Receiver<WorkerResult>,
     pub updated: qtrs_core::signal::Signal<UsageMetrics>,
-    notify_callback: Option<Arc<dyn Fn() + Send + Sync>>,
+    notify_callback: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
 }
 
 impl RefreshController {
@@ -55,14 +55,14 @@ impl RefreshController {
             result_tx: tx,
             result_rx: rx,
             updated: qtrs_core::signal::Signal::new(),
-            notify_callback: None,
+            notify_callback: Arc::new(parking_lot::Mutex::new(None)),
         }
     }
 
     /// Store callback to immediately request repaint / notify event loop when workers complete.
     #[allow(dead_code)]
     pub fn set_notify_callback<F: Fn() + Send + Sync + 'static>(&mut self, cb: F) {
-        self.notify_callback = Some(Arc::new(cb));
+        *self.notify_callback.lock() = Some(Arc::new(cb));
     }
     /// Returns true if any provider worker is currently running.
     #[allow(dead_code)]
@@ -72,7 +72,11 @@ impl RefreshController {
 
     /// Call regularly (e.g. every 1 second) from the UI thread to trigger
     /// scheduled refreshes and check for due providers.
-    pub fn poll(&mut self, providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>) {
+    pub fn poll(
+        &mut self,
+        providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
+    ) -> Vec<UsageMetrics> {
+        let updates = self.drain_results(providers);
         let now = Instant::now();
         let ids: Vec<String> = self.states.keys().cloned().collect();
         for id in ids {
@@ -84,6 +88,7 @@ impl RefreshController {
                 }
             }
         }
+        updates
     }
 
     /// Manual refresh: invalidate in-flight or schedule immediately.
@@ -122,7 +127,7 @@ impl RefreshController {
 
         let tx = self.result_tx.clone();
         let id_owned = id.to_owned();
-        let notify_opt = self.notify_callback.clone();
+        let notify_cb_shared = Arc::clone(&self.notify_callback);
         thread::Builder::new()
             .name(format!("quota-{}", id))
             .spawn(move || {
@@ -184,7 +189,7 @@ impl RefreshController {
                     generation,
                     metrics,
                 });
-                if let Some(cb) = notify_opt {
+                if let Some(cb) = notify_cb_shared.lock().as_ref() {
                     cb();
                 }
             })
@@ -380,5 +385,55 @@ mod tests {
         let mut ctrl = RefreshController::new(60);
         ctrl.set_interval(5); // Minimum is 20
         assert_eq!(ctrl.interval, Duration::from_secs(20));
+    }
+    struct MockInstantProvider;
+    impl Provider for MockInstantProvider {
+        fn provider_id(&self) -> &str {
+            "mock_instant"
+        }
+        fn display_name(&self) -> &str {
+            "Mock Instant"
+        }
+        fn fetch_usage(&self) -> UsageMetrics {
+            UsageMetrics {
+                provider_id: "mock_instant".to_string(),
+                metric1_text: "42%".to_string(),
+                ..Default::default()
+            }
+        }
+    }
+
+    #[test]
+    fn test_refresh_controller_pipeline_and_late_notify() {
+        let mut ctrl = RefreshController::new(60);
+        let mut providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::new();
+        let prov = Arc::new(MockInstantProvider);
+        providers.insert("mock_instant".to_string(), prov.clone());
+
+        ctrl.states
+            .insert("mock_instant".to_string(), ProviderState::default());
+
+        // 1. Launch before setting callback
+        ctrl.launch("mock_instant", prov);
+
+        // 2. Set callback late
+        let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let notified_clone = Arc::clone(&notified);
+        ctrl.set_notify_callback(move || {
+            notified_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        // 3. Wait briefly for thread to finish
+        std::thread::sleep(Duration::from_millis(150));
+
+        // 4. Callback should have been called even though set late!
+        assert!(notified.load(std::sync::atomic::Ordering::SeqCst));
+
+        // 5. Poll should drain and return the updates
+        let updates = ctrl.poll(&providers);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].provider_id, "mock_instant");
+        assert_eq!(updates[0].metric1_text, "42%");
+        assert!(!ctrl.states.get("mock_instant").unwrap().running);
     }
 }

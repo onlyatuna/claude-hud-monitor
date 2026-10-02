@@ -24,8 +24,10 @@ use super::provider_card::ProviderCardWidget;
 use super::styles::{get_theme, Theme};
 use super::usage_table::UsageTable;
 use crate::config::{
-    Config, MIN_HORIZONTAL_HEIGHT, MIN_HORIZONTAL_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH,
-    MIN_VERTICAL_HEIGHT, MIN_VERTICAL_WIDTH,
+    Config, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH, DEFAULT_TABLE_HEIGHT,
+    DEFAULT_TABLE_WIDTH, DEFAULT_VERTICAL_HEIGHT, DEFAULT_VERTICAL_WIDTH, MIN_HORIZONTAL_HEIGHT,
+    MIN_HORIZONTAL_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH, MIN_VERTICAL_HEIGHT,
+    MIN_VERTICAL_WIDTH,
 };
 use crate::providers::base::UsageMetrics;
 use crate::providers::{AgyProvider, ClaudeProvider, CodexProvider, Provider};
@@ -282,7 +284,8 @@ impl HUDWindow {
         let providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::from([
             (
                 "claude".to_string(),
-                Arc::new(ClaudeProvider::new()) as Arc<dyn Provider + Send + Sync>,
+                Arc::new(ClaudeProvider::with_config(Some(Arc::clone(&config))))
+                    as Arc<dyn Provider + Send + Sync>,
             ),
             (
                 "agy".to_string(),
@@ -571,5 +574,56 @@ impl HUDWindow {
     pub fn trigger_refresh(&mut self) {
         let mut ctrl = self.refresh_ctrl.lock();
         ctrl.refresh(&self.providers);
+    }
+    pub fn set_opacity(&mut self, opacity: f32) {
+        let val = opacity.clamp(0.1, 1.0);
+        {
+            let mut cfg = self.config.lock();
+            cfg.opacity = val;
+            crate::config::ConfigManager::save(&cfg);
+        }
+        self.window.set_opacity(val);
+        self.window.render_and_present();
+    }
+
+    pub fn set_refresh_interval(&mut self, seconds: u64) {
+        {
+            let mut cfg = self.config.lock();
+            cfg.refresh_interval_sec = seconds;
+            crate::config::ConfigManager::save(&cfg);
+        }
+        self.refresh_ctrl.lock().set_interval(seconds);
+    }
+
+    pub fn set_claude_profile(&mut self, profile_id: &str) {
+        {
+            let mut cfg = self.config.lock();
+            cfg.claude_profile = profile_id.to_string();
+            crate::config::ConfigManager::save(&cfg);
+        }
+        self.trigger_refresh();
+    }
+
+    pub fn reset_geometry(&mut self) {
+        let (w, h) = {
+            let cfg = self.config.lock();
+            if cfg.ui_mode == "table" {
+                (DEFAULT_TABLE_WIDTH as i32, DEFAULT_TABLE_HEIGHT as i32)
+            } else if cfg.layout_mode == "horizontal" {
+                (DEFAULT_HORIZONTAL_WIDTH as i32, DEFAULT_HORIZONTAL_HEIGHT as i32)
+            } else {
+                (DEFAULT_VERTICAL_WIDTH as i32, DEFAULT_VERTICAL_HEIGHT as i32)
+            }
+        };
+
+        let screen = qtrs_platform::platform().primary_screen();
+        let screen_geom = screen.available_geometry();
+        let target_x = screen_geom.x + screen_geom.width - w - 40;
+        let target_y = screen_geom.y + 50;
+        let (nx, ny) = self.ensure_within_screen(target_x, target_y, w, h);
+
+        self.window.set_geometry(Rect::new(nx, ny, w, h));
+        self.persist_geometry();
+        self.window.render_and_present();
     }
 }

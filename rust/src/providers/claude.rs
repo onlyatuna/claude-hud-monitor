@@ -11,7 +11,8 @@ use log::error;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 use ureq::OrAnyStatus;
 
@@ -330,8 +331,7 @@ impl Provider for ClaudeProvider {
         let preference = self
             .config
             .as_ref()
-            .and_then(|c| c.lock().ok())
-            .map(|c| c.claude_profile.clone())
+            .map(|c| c.lock().claude_profile.clone())
             .unwrap_or_else(|| "auto".to_string());
 
         let (active_profile, is_auto) = resolve_active_profile(&preference);
@@ -581,5 +581,15 @@ mod tests {
 
         let empty_json = serde_json::json!({});
         assert_eq!(extract_token(&empty_json), None);
+    }
+    #[test]
+    fn test_live_fetch_usage() {
+        let p = ClaudeProvider::new();
+        let m = p.fetch_usage();
+        eprintln!("[test_live_fetch_usage] provider_name: {}", m.provider_name);
+        eprintln!("[test_live_fetch_usage] metric1: {} = {}", m.metric1_title, m.metric1_text);
+        eprintln!("[test_live_fetch_usage] metric2: {} = {}", m.metric2_title, m.metric2_text);
+        eprintln!("[test_live_fetch_usage] error: {:?}", m.error);
+        eprintln!("[test_live_fetch_usage] error_code: {}", m.error_code);
     }
 }
