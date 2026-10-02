@@ -201,3 +201,51 @@ fn test_submenu_hover_and_signature_propagation() {
         "Hover signature must change when returning to parent menu"
     );
 }
+#[test]
+fn test_window_system_resize_event_and_backing_store_update() {
+    use qtrs_core::event::{Event, EventKind};
+    use qtrs_core::object::QObject;
+    use qtrs_gui::geometry::primitives::{Rect, Size};
+    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::sync::Arc;
+
+    let mut win = Window::new("Resize Test", Rect::new(0, 0, 400, 300), WindowFlags::empty())
+        .expect("create window");
+
+    assert_eq!(win.geometry().width, 400);
+    assert_eq!(win.geometry().height, 300);
+    let initial_store_w = win.backing_store().physical_width();
+    let initial_store_h = win.backing_store().physical_height();
+
+    let resized_w = Arc::new(AtomicI32::new(0));
+    let resized_h = Arc::new(AtomicI32::new(0));
+    let rw = Arc::clone(&resized_w);
+    let rh = Arc::clone(&resized_h);
+
+    win.set_resize_handler(move |size: Size| {
+        rw.store(size.width, Ordering::SeqCst);
+        rh.store(size.height, Ordering::SeqCst);
+    });
+
+    // Simulate system resize event (e.g. from WM_SIZE)
+    let mut resize_event = Event::new_spontaneous(EventKind::Resize {
+        width: 600,
+        height: 500,
+        old_width: 400,
+        old_height: 300,
+    });
+
+    assert!(win.event(&mut resize_event), "Window must handle EventKind::Resize");
+
+    // Verify window geometry is updated
+    assert_eq!(win.geometry().width, 600);
+    assert_eq!(win.geometry().height, 500);
+
+    // Verify resize callback was triggered
+    assert_eq!(resized_w.load(Ordering::SeqCst), 600);
+    assert_eq!(resized_h.load(Ordering::SeqCst), 500);
+
+    // Verify backing store was resized to the new dimensions
+    assert!(win.backing_store().physical_width() > initial_store_w);
+    assert!(win.backing_store().physical_height() > initial_store_h);
+}

@@ -280,6 +280,21 @@ impl HUDWindow {
             }
             false
         });
+        let cfg_resize = Arc::clone(&config);
+        window.set_resize_handler(move |size| {
+            let mut cfg = cfg_resize.lock();
+            if cfg.ui_mode == "table" {
+                cfg.table_width = size.width as u32;
+                cfg.table_height = size.height as u32;
+            } else if cfg.layout_mode == "horizontal" {
+                cfg.horizontal_width = size.width as u32;
+                cfg.horizontal_height = size.height as u32;
+            } else {
+                cfg.vertical_width = size.width as u32;
+                cfg.vertical_height = size.height as u32;
+            }
+            crate::config::ConfigManager::save(&cfg);
+        });
         // Initialize providers
         let providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::from([
             (

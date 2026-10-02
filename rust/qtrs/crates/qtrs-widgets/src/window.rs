@@ -1,7 +1,7 @@
 use crate::widget::{EmptyWidget, WidgetRef};
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::object::{register_qobject, unregister_qobject, ObjectData, ObjectId, QObject};
-use qtrs_gui::geometry::primitives::{Point, Rect, RectF};
+use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
 use qtrs_gui::paint::{PaintDevice, Painter, Pixmap};
 use qtrs_platform::{
     platform, PlatformWindow, WindowFlags, WindowSystemEvent, WindowSystemEventHandler,
@@ -20,6 +20,7 @@ pub struct Window {
     context_menu_cb: Arc<Mutex<Option<Box<dyn Fn(Point) + Send + Sync>>>>,
     mouse_press_cb: Arc<Mutex<Option<Box<dyn Fn(Point, qtrs_platform::MouseButton) -> bool + Send + Sync>>>>,
     mouse_move_cb: Arc<Mutex<Option<Box<dyn Fn(Point) + Send + Sync>>>>,
+    resize_cb: Arc<Mutex<Option<Box<dyn Fn(Size) + Send + Sync>>>>,
 }
 
 impl Window {
@@ -52,6 +53,7 @@ impl Window {
         let press_cb_clone = Arc::clone(&mouse_press_cb);
         let mouse_move_cb = Arc::new(Mutex::new(None));
         let move_cb_clone = Arc::clone(&mouse_move_cb);
+        let resize_cb = Arc::new(Mutex::new(None));
         let handler = WindowEventHandler {
             root: Arc::clone(&shared_root),
             dispatcher: EventTreeDispatcher::new(),
@@ -70,6 +72,7 @@ impl Window {
             context_menu_cb,
             mouse_press_cb,
             mouse_move_cb,
+            resize_cb,
         };
         crate::application::Application::register_window(window_id);
         Ok(win)
@@ -201,6 +204,10 @@ impl Window {
         let mut cb = self.mouse_move_cb.lock().unwrap();
         *cb = Some(Box::new(handler));
     }
+    pub fn set_resize_handler<F: Fn(Size) + Send + Sync + 'static>(&mut self, handler: F) {
+        let mut cb = self.resize_cb.lock().unwrap();
+        *cb = Some(Box::new(handler));
+    }
     pub fn set_backdrop(
         &mut self,
         backdrop: qtrs_platform::backdrop::BackdropType,
@@ -316,6 +323,33 @@ impl QObject for Window {
     fn event(&mut self, event: &mut Event) -> bool {
         match &event.kind {
             EventKind::UpdateRequest => {
+                self.render_and_present();
+                true
+            }
+            EventKind::Resize { width, height, .. } => {
+                let dpr = self.backing_store.device_pixel_ratio();
+                self.geometry.width = *width;
+                self.geometry.height = *height;
+                let physical_w = ((*width as f32).max(1.0) * dpr).round() as u32;
+                let physical_h = ((*height as f32).max(1.0) * dpr).round() as u32;
+                if self.backing_store.physical_width() != physical_w
+                    || self.backing_store.physical_height() != physical_h
+                {
+                    if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
+                        self.backing_store = new_pixmap;
+                    }
+                }
+                {
+                    let mut root = self.root_widget.borrow_mut();
+                    root.set_geometry(Rect::new(0, 0, *width, *height));
+                    if let Some(layout) = root.layout_mut() {
+                        layout.update_layout();
+                    }
+                    root.update();
+                }
+                if let Some(cb) = self.resize_cb.lock().unwrap().as_ref() {
+                    cb(Size::new(*width, *height));
+                }
                 self.render_and_present();
                 true
             }

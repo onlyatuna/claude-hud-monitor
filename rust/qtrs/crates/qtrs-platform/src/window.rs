@@ -164,7 +164,14 @@ pub fn set_window_event_handler(hwnd: HWND, handler: Box<dyn WindowSystemEventHa
 }
 
 fn dispatch_window_system_event(hwnd: HWND, event: WindowSystemEvent) {
-    let mut map = WINDOW_EVENT_HANDLERS.write().unwrap();
+    let mut map = match WINDOW_EVENT_HANDLERS.try_write() {
+        Ok(m) => m,
+        Err(_) => {
+            // Guard against reentrancy from the same UI thread:
+            // if already locked on this thread, drop the nested event rather than deadlocking
+            return;
+        }
+    };
     if let Some(handlers) = map.as_mut() {
         if let Some(handler) = handlers.get_mut(&(hwnd as isize)) {
             handler.handle_window_event(event);
@@ -1075,11 +1082,9 @@ impl NativeWindow {
         if !self.hwnd.is_null() {
             unsafe {
                 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-                use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    SendMessageW, HTCAPTION, WM_NCLBUTTONDOWN,
-                };
+                use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
                 ReleaseCapture();
-                SendMessageW(self.hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
+                PostMessageW(self.hwnd, WM_SYSCOMMAND, 0xF012 /*SC_DRAGMOVE*/, 0);
             }
             true
         } else {
@@ -1089,27 +1094,12 @@ impl NativeWindow {
 
     pub fn start_system_resize(&self, edges: crate::platform_window::WindowEdges) -> bool {
         if !self.hwnd.is_null() {
-            use crate::platform_window::WindowEdges;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP,
-                HTTOPLEFT, HTTOPRIGHT,
-            };
-            let cmd = match edges {
-                WindowEdges::LEFT => HTLEFT,
-                WindowEdges::RIGHT => HTRIGHT,
-                WindowEdges::TOP => HTTOP,
-                WindowEdges::TOP_LEFT => HTTOPLEFT,
-                WindowEdges::TOP_RIGHT => HTTOPRIGHT,
-                WindowEdges::BOTTOM => HTBOTTOM,
-                WindowEdges::BOTTOM_LEFT => HTBOTTOMLEFT,
-                WindowEdges::BOTTOM_RIGHT => HTBOTTOMRIGHT,
-                _ => HTCAPTION,
-            };
             unsafe {
                 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-                use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_NCLBUTTONDOWN};
+                use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
                 ReleaseCapture();
-                SendMessageW(self.hwnd, WM_NCLBUTTONDOWN, cmd as usize, 0);
+                let orientation = edges_to_win_orientation(edges);
+                PostMessageW(self.hwnd, WM_SYSCOMMAND, orientation, 0);
             }
             true
         } else {
@@ -1403,16 +1393,37 @@ impl Drop for NativeWindow {
 }
 #[cfg(not(windows))]
 pub type NativeWindow = crate::platform_window::GenericWindow;
+#[inline]
+pub(crate) fn edges_to_win_orientation(edges: crate::platform_window::WindowEdges) -> usize {
+    use crate::platform_window::WindowEdges;
+    if edges == WindowEdges::LEFT {
+        0xf001 // SC_SIZELEFT
+    } else if edges == WindowEdges::RIGHT {
+        0xf002 // SC_SIZERIGHT
+    } else if edges == WindowEdges::TOP {
+        0xf003 // SC_SIZETOP
+    } else if edges == (WindowEdges::TOP | WindowEdges::LEFT) {
+        0xf004 // SC_SIZETOPLEFT
+    } else if edges == (WindowEdges::TOP | WindowEdges::RIGHT) {
+        0xf005 // SC_SIZETOPRIGHT
+    } else if edges == WindowEdges::BOTTOM {
+        0xf006 // SC_SIZEBOTTOM
+    } else if edges == (WindowEdges::BOTTOM | WindowEdges::LEFT) {
+        0xf007 // SC_SIZEBOTTOMLEFT
+    } else if edges == (WindowEdges::BOTTOM | WindowEdges::RIGHT) {
+        0xf008 // SC_SIZEBOTTOMRIGHT
+    } else {
+        0xf000 // SC_SIZE
+    }
+}
 pub fn post_system_move(hwnd: isize) -> bool {
     #[cfg(windows)]
     if hwnd != 0 {
         unsafe {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                SendMessageW, HTCAPTION, WM_NCLBUTTONDOWN,
-            };
+            use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
             ReleaseCapture();
-            SendMessageW(hwnd as HWND, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0);
+            PostMessageW(hwnd as HWND, WM_SYSCOMMAND, 0xF012 /*SC_DRAGMOVE*/, 0);
         }
         return true;
     }
@@ -1422,27 +1433,12 @@ pub fn post_system_move(hwnd: isize) -> bool {
 pub fn post_system_resize(hwnd: isize, edges: crate::platform_window::WindowEdges) -> bool {
     #[cfg(windows)]
     if hwnd != 0 {
-        use crate::platform_window::WindowEdges;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{
-            HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT,
-            HTTOPRIGHT,
-        };
-        let cmd = match edges {
-            WindowEdges::LEFT => HTLEFT,
-            WindowEdges::RIGHT => HTRIGHT,
-            WindowEdges::TOP => HTTOP,
-            WindowEdges::TOP_LEFT => HTTOPLEFT,
-            WindowEdges::TOP_RIGHT => HTTOPRIGHT,
-            WindowEdges::BOTTOM => HTBOTTOM,
-            WindowEdges::BOTTOM_LEFT => HTBOTTOMLEFT,
-            WindowEdges::BOTTOM_RIGHT => HTBOTTOMRIGHT,
-            _ => HTCAPTION,
-        };
         unsafe {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
-            use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_NCLBUTTONDOWN};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
             ReleaseCapture();
-            SendMessageW(hwnd as HWND, WM_NCLBUTTONDOWN, cmd as usize, 0);
+            let orientation = edges_to_win_orientation(edges);
+            PostMessageW(hwnd as HWND, WM_SYSCOMMAND, orientation, 0);
         }
         return true;
     }
