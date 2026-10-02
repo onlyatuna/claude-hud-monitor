@@ -18,6 +18,25 @@ use crate::window_system_interface::{
     KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent, WindowSystemEventHandler,
 };
 
+/// Visual effect materials for macOS translucent vibrancy backgrounds (`NSVisualEffectView`).
+#[repr(i64)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CocoaVibrancyMaterial {
+    Titlebar = 3,
+    Selection = 4,
+    Menu = 5,
+    Popover = 6,
+    Sidebar = 7,
+    HeaderView = 10,
+    Sheet = 11,
+    WindowBackground = 12,
+    HudWindow = 13,
+    FullScreenUI = 15,
+    ToolTip = 17,
+    ContentBackground = 18,
+    UnderWindowBackground = 21,
+    UnderPageBackground = 22,
+}
 pub struct CocoaNativeWindow {
     ns_window: Id,
     ns_view: Id,
@@ -32,6 +51,8 @@ pub struct CocoaNativeWindow {
     event_handler: Option<Box<dyn WindowSystemEventHandler>>,
     opacity: f32,
     min_size: (i32, i32),
+    vibrancy_view: Option<Id>,
+    vibrancy_material: Option<CocoaVibrancyMaterial>,
 }
 
 unsafe impl Send for CocoaNativeWindow {}
@@ -129,6 +150,8 @@ impl CocoaNativeWindow {
             event_handler: None,
             opacity: 1.0,
             min_size: (0, 0),
+            vibrancy_view: None,
+            vibrancy_material: None,
         })
     }
 
@@ -140,6 +163,59 @@ impl CocoaNativeWindow {
     #[inline]
     pub fn ns_view(&self) -> Id {
         self.ns_view
+    }
+    #[inline]
+    pub fn vibrancy_material(&self) -> Option<CocoaVibrancyMaterial> {
+        self.vibrancy_material
+    }
+
+    /// Configures native macOS vibrancy material (`NSVisualEffectView`).
+    pub fn set_vibrancy(&mut self, material: Option<CocoaVibrancyMaterial>) {
+        self.vibrancy_material = material;
+        if let Some(mat) = material {
+            // 1. Make window transparent
+            ObjcMsg::send_bool(self.ns_window, Sel::register("setOpaque:"), false);
+            let color_class = Class::get("NSColor").unwrap_or(Class::NIL);
+            let clear_color = ObjcMsg::send_class_0(color_class, Sel::register("clearColor"));
+            ObjcMsg::send_id(self.ns_window, Sel::register("setBackgroundColor:"), clear_color);
+
+            // 2. Instantiate or configure NSVisualEffectView
+            if self.vibrancy_view.is_none() {
+                let effect_class = Class::get("NSVisualEffectView").unwrap_or(Class::NIL);
+                let effect_alloc = ObjcMsg::send_class_0(effect_class, Sel::register("alloc"));
+                let view_rect = CGRect::new(
+                    0.0,
+                    0.0,
+                    self.geometry.width as f64,
+                    self.geometry.height as f64,
+                );
+                let effect_view = ObjcMsg::send_window_init(
+                    effect_alloc,
+                    Sel::register("initWithFrame:"),
+                    view_rect,
+                    0,
+                    0,
+                    false,
+                );
+                if !effect_view.is_nil() {
+                    // NSVisualEffectBlendingModeBehindWindow = 0
+                    ObjcMsg::send_int(effect_view, Sel::register("setBlendingMode:"), 0);
+                    // NSVisualEffectStateActive = 1
+                    ObjcMsg::send_int(effect_view, Sel::register("setState:"), 1);
+                    ObjcMsg::send_id(self.ns_view, Sel::register("addSubview:"), effect_view);
+                    self.vibrancy_view = Some(effect_view);
+                }
+            }
+
+            if let Some(effect_view) = self.vibrancy_view {
+                ObjcMsg::send_int(effect_view, Sel::register("setMaterial:"), mat as isize);
+            }
+        } else {
+            ObjcMsg::send_bool(self.ns_window, Sel::register("setOpaque:"), true);
+            if let Some(effect_view) = self.vibrancy_view.take() {
+                ObjcMsg::send_0(effect_view, Sel::register("removeFromSuperview"));
+            }
+        }
     }
 
     #[inline]

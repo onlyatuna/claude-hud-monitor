@@ -12,6 +12,26 @@ pub const K_CF_RUN_LOOP_RUN_STOPPED: i32 = 2;
 pub const K_CF_RUN_LOOP_RUN_TIMED_OUT: i32 = 3;
 pub const K_CF_RUN_LOOP_RUN_HANDLED_SOURCE: i32 = 4;
 
+#[cfg(target_os = "macos")]
+mod macos_cf {
+    use std::ffi::c_void;
+
+    pub type CFRunLoopRef = *mut c_void;
+    pub type CFStringRef = *const c_void;
+    pub type CFTimeInterval = f64;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        pub fn CFRunLoopGetMain() -> CFRunLoopRef;
+        pub fn CFRunLoopGetCurrent() -> CFRunLoopRef;
+        pub fn CFRunLoopRunInMode(
+            mode: CFStringRef,
+            seconds: CFTimeInterval,
+            returnAfterSourceHandled: u8,
+        ) -> i32;
+        pub fn CFRunLoopWakeUp(rl: CFRunLoopRef);
+    }
+}
 pub struct CFRunLoopSource {
     signaled: AtomicBool,
 }
@@ -93,11 +113,18 @@ impl CFRunLoopEngine {
             lock: Mutex::new(false),
         }
     }
-
     pub fn wake_up(&self) {
         self.source.signal();
         let _guard = self.lock.lock().unwrap();
         self.cond.notify_all();
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+            let rl = macos_cf::CFRunLoopGetMain();
+            if !rl.is_null() {
+                macos_cf::CFRunLoopWakeUp(rl);
+            }
+        }
     }
 
     pub fn add_timer(&self, id: TimerId, interval: Duration, single_shot: bool) {

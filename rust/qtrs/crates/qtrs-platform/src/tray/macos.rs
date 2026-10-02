@@ -16,6 +16,7 @@ pub struct CocoaStatusItem {
     is_template: bool,
     menu: Option<Box<dyn PlatformMenu>>,
     last_message: Option<(String, String, crate::platform_tray::TrayMessageIcon, u32)>,
+    on_click: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 unsafe impl Send for CocoaStatusItem {}
@@ -45,6 +46,7 @@ impl CocoaStatusItem {
             is_template: true,
             menu: None,
             last_message: None,
+            on_click: None,
         }
     }
 
@@ -63,8 +65,39 @@ impl CocoaStatusItem {
 
     pub fn set_template(&mut self, is_template: bool) {
         self.is_template = is_template;
+        let button = ObjcMsg::send_0(self.status_item, Sel::register("button"));
+        if !button.is_nil() {
+            let image = ObjcMsg::send_0(button, Sel::register("image"));
+            if !image.is_nil() {
+                ObjcMsg::send_bool(image, Sel::register("setTemplate:"), is_template);
+            }
+        }
     }
 
+    /// Sets a callback invoked when the status bar item is clicked.
+    pub fn set_on_click<F>(&mut self, callback: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_click = Some(Box::new(callback));
+        let button = ObjcMsg::send_0(self.status_item, Sel::register("button"));
+        if !button.is_nil() {
+            // In AppKit: [button setTarget:self] & [button setAction:@selector(onStatusItemClick:)]
+            ObjcMsg::send_id(button, Sel::register("setTarget:"), self.status_item);
+            ObjcMsg::send_id(
+                button,
+                Sel::register("setAction:"),
+                Id(Sel::register("onStatusItemClick:").0 as *mut std::ffi::c_void),
+            );
+        }
+    }
+
+    /// Triggers the click action handler.
+    pub fn trigger_click(&self) {
+        if let Some(cb) = &self.on_click {
+            cb();
+        }
+    }
     pub fn tooltip(&self) -> &str {
         &self.tooltip
     }
@@ -93,12 +126,20 @@ impl PlatformTrayIcon for CocoaStatusItem {
         // Configure icon on status item button
         let button = ObjcMsg::send_0(self.status_item, Sel::register("button"));
         if !button.is_nil() {
-            // Update size/data in mock environment
-            let _ = button;
+            let image_class = Class::get("NSImage").unwrap_or(Class::NIL);
+            let image_alloc = ObjcMsg::send_class_0(image_class, Sel::register("alloc"));
+            let cg_size = crate::objc_runtime::CGSize::new(
+                self.icon_width as f64,
+                self.icon_height as f64,
+            );
+            let image = ObjcMsg::send_size(image_alloc, Sel::register("initWithSize:"), cg_size);
+            if !image.is_nil() {
+                ObjcMsg::send_bool(image, Sel::register("setTemplate:"), self.is_template);
+                ObjcMsg::send_id(button, Sel::register("setImage:"), image);
+            }
         }
         Ok(())
     }
-
     fn set_tooltip(&mut self, tooltip: &str) -> Result<(), &'static str> {
         self.tooltip = tooltip.to_string();
 

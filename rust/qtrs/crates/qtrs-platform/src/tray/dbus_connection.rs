@@ -408,6 +408,19 @@ impl DbusConnection {
         self.registered_names.push(service_name.to_string());
         Ok(true)
     }
+    pub fn add_match(&mut self, match_rule: &str) -> Result<bool, &'static str> {
+        let serial = self.next_serial();
+        let mut msg = DbusMessage::method_call(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "AddMatch",
+            serial,
+        );
+        msg.append_string(match_rule);
+        self.send_message(msg)?;
+        Ok(true)
+    }
 
     pub fn register_status_notifier_item(
         &mut self,

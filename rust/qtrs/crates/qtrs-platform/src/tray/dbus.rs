@@ -130,6 +130,28 @@ impl DbusStatusNotifierItem {
             .as_ref()
             .map(|(t, m, i, d)| (t.as_str(), m.as_str(), *i, *d))
     }
+    /// Handles NameOwnerChanged D-Bus broadcast to automatically re-register
+    /// if the system status notifier host (KDE Plasma, Waybar, etc.) restarts.
+    pub fn handle_name_owner_changed(&mut self, name: &str, _old_owner: &str, new_owner: &str) {
+        if name == "org.kde.StatusNotifierWatcher" && !new_owner.is_empty() {
+            let mut guard = self.connection.lock().unwrap();
+            if let Some(conn) = guard.as_mut() {
+                let service_name = format!("org.kde.StatusNotifierItem-{}-1", self.id);
+                let _ = conn.request_name(&service_name);
+                let _ = conn.register_status_notifier_item("/StatusNotifierItem");
+
+                let serial = conn.next_serial();
+                let mut sig = DbusMessage::signal(
+                    "/StatusNotifierItem",
+                    "org.kde.StatusNotifierItem",
+                    "NewStatus",
+                    serial,
+                );
+                sig.append_string(&self.status);
+                let _ = conn.send_message(sig);
+            }
+        }
+    }
 }
 
 impl PlatformTrayIcon for DbusStatusNotifierItem {
@@ -199,8 +221,10 @@ impl PlatformTrayIcon for DbusStatusNotifierItem {
             );
             sig.append_string("Active");
             let _ = conn.send_message(sig);
-        }
 
+            // Subscribe to NameOwnerChanged signals to detect panel restarts
+            let _ = conn.add_match("type='signal',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='org.kde.StatusNotifierWatcher'");
+        }
         self.is_registered = true;
         Ok(())
     }

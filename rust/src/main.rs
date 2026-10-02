@@ -250,47 +250,32 @@ fn main() {
         return;
     }
 
-    // Set Windows App User Model ID, single-instance mutex and process Dark Mode
+    // Single instance protection and IPC wake-up broadcast across all platforms
+    use qtrs_platform::{SingleInstance, SingleInstanceCommand, SingleInstanceResult};
+
+    let single_instance = SingleInstance::acquire("ClaudeHUDMonitorSingleInstance", SingleInstanceCommand::WakeUp);
+    let _instance_guard = match single_instance {
+        SingleInstanceResult::Primary(guard) => {
+            #[cfg(target_os = "windows")]
+            {
+                WAKE_MSG.store(guard.wake_message_id(), Ordering::Relaxed);
+            }
+            guard.on_command(|_cmd| {
+                log::info!("[SingleInstance] Received remote wake-up command from secondary instance");
+                WAKE_REQUESTED.store(true, Ordering::Relaxed);
+            });
+            guard
+        }
+        SingleInstanceResult::Secondary { command_sent } => {
+            log::warn!("[SingleInstance] Another instance is already running (wake command sent: {command_sent}). Exiting.");
+            return;
+        }
+    };
+
     #[cfg(target_os = "windows")]
     {
-        #[link(name = "kernel32")]
-        extern "system" {
-            fn CreateMutexW(
-                lpMutexAttributes: *const std::ffi::c_void,
-                bInitialOwner: i32,
-                lpName: *const u16,
-            ) -> isize;
-            fn GetLastError() -> u32;
-        }
-        #[link(name = "user32")]
-        extern "system" {
-            fn RegisterWindowMessageW(lpString: *const u16) -> u32;
-            fn PostMessageW(hWnd: isize, Msg: u32, wParam: usize, lParam: isize) -> i32;
-        }
         use std::ffi::OsStr;
         use std::os::windows::ffi::OsStrExt;
-
-        let mutex_name: Vec<u16> = OsStr::new("Local\\ClaudeHUDMonitorSingleInstanceMutex\0")
-            .encode_wide()
-            .collect();
-        let wake_name: Vec<u16> = OsStr::new("ClaudeHUD_WakeUp\0").encode_wide().collect();
-        unsafe {
-            let _handle = CreateMutexW(std::ptr::null(), 0, mutex_name.as_ptr());
-            let msg_id = RegisterWindowMessageW(wake_name.as_ptr());
-            if msg_id != 0 {
-                WAKE_MSG.store(msg_id, Ordering::Relaxed);
-            }
-            if GetLastError() == 183 {
-                // ERROR_ALREADY_EXISTS: broadcast wake-up message to restore existing instance
-                log::warn!("[SingleInstance] Another instance is already running. Waking it up and exiting.");
-                if msg_id != 0 {
-                    const HWND_BROADCAST: isize = 0xFFFF;
-                    PostMessageW(HWND_BROADCAST, msg_id, 0, 0);
-                }
-                return;
-            }
-        }
-
         ui::enable_win32_dark_mode(0);
         let wide: Vec<u16> = OsStr::new("ClaudeHUD.Monitor.App\0")
             .encode_wide()
@@ -299,41 +284,6 @@ fn main() {
             let _ = windows_set_appid(&wide);
         }
     }
-
-    // Unix single-instance protection using lock file (macOS / Linux)
-    #[cfg(not(target_os = "windows"))]
-    let _instance_lock = {
-        let lock_dir = config::ConfigManager::config_dir();
-        let _ = std::fs::create_dir_all(&lock_dir);
-        let lock_path = lock_dir.join("claude_hud.lock");
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-        {
-            Ok(file) => {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::io::AsRawFd;
-                    extern "C" {
-                        fn flock(fd: i32, operation: i32) -> i32;
-                    }
-                    const LOCK_EX: i32 = 2;
-                    const LOCK_NB: i32 = 4;
-                    if unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) } != 0 {
-                        log::warn!("[SingleInstance] Another instance is already running (locked {}). Exiting.", lock_path.display());
-                        return;
-                    }
-                }
-                Some(file)
-            }
-            Err(e) => {
-                log::warn!("[SingleInstance] Failed to open lock file: {e}");
-                None
-            }
-        }
-    };
 
     let config = Arc::new(Mutex::new(ConfigManager::load()));
     info!(

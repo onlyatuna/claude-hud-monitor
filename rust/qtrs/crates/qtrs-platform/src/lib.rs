@@ -32,6 +32,8 @@ pub mod window_cocoa;
 pub mod window_system_interface;
 pub mod window_wayland;
 pub mod window_x11;
+pub mod single_instance;
+pub use single_instance::*;
 
 #[cfg(windows)]
 pub use windows_sys::Win32::Foundation::HWND;

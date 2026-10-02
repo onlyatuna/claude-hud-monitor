@@ -46,6 +46,29 @@ pub enum WaylandEvent {
     BufferRelease,
 }
 
+/// Anchor edges for Wayland layer-shell surfaces (`zwlr_layer_shell_v1`).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaylandLayerAnchor {
+    Top = 1,
+    Bottom = 2,
+    Left = 4,
+    Right = 8,
+    TopRight = 1 | 8,
+    BottomRight = 2 | 8,
+    TopLeft = 1 | 4,
+    BottomLeft = 2 | 4,
+}
+
+/// Z-stacking level for Wayland layer-shell surfaces.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaylandLayerLevel {
+    Background = 0,
+    Bottom = 1,
+    Top = 2,
+    Overlay = 3,
+}
 pub struct WaylandNativeWindow {
     surface_id: u32,
     title: String,
@@ -53,6 +76,10 @@ pub struct WaylandNativeWindow {
     geometry: Rect,
     flags: WindowFlags,
     is_layer_shell: bool,
+    layer_level: WaylandLayerLevel,
+    layer_anchor: WaylandLayerAnchor,
+    layer_margin: (i32, i32, i32, i32),
+    layer_shell_fallback: bool,
     stays_on_top: bool,
     click_through: bool,
     visible: AtomicBool,
@@ -120,6 +147,10 @@ impl WaylandNativeWindow {
             geometry: rect,
             flags,
             is_layer_shell,
+            layer_level: WaylandLayerLevel::Overlay,
+            layer_anchor: WaylandLayerAnchor::TopRight,
+            layer_margin: (16, 16, 0, 0),
+            layer_shell_fallback: false,
             stays_on_top,
             click_through,
             visible: AtomicBool::new(false),
@@ -180,6 +211,43 @@ impl WaylandNativeWindow {
     #[inline]
     pub fn is_layer_shell(&self) -> bool {
         self.is_layer_shell
+    }
+    #[inline]
+    pub fn layer_level(&self) -> WaylandLayerLevel {
+        self.layer_level
+    }
+
+    pub fn set_layer_level(&mut self, level: WaylandLayerLevel) {
+        self.layer_level = level;
+    }
+
+    #[inline]
+    pub fn layer_anchor(&self) -> WaylandLayerAnchor {
+        self.layer_anchor
+    }
+
+    pub fn set_layer_anchor(&mut self, anchor: WaylandLayerAnchor) {
+        self.layer_anchor = anchor;
+    }
+
+    #[inline]
+    pub fn layer_margin(&self) -> (i32, i32, i32, i32) {
+        self.layer_margin
+    }
+
+    pub fn set_layer_margin(&mut self, top: i32, right: i32, bottom: i32, left: i32) {
+        self.layer_margin = (top, right, bottom, left);
+    }
+
+    #[inline]
+    pub fn is_layer_shell_fallback(&self) -> bool {
+        self.layer_shell_fallback
+    }
+
+    /// Degrades layer-shell surface to standard xdg_toplevel if compositor rejects protocol.
+    pub fn fallback_to_xdg_toplevel(&mut self) {
+        self.is_layer_shell = false;
+        self.layer_shell_fallback = true;
     }
 
     #[inline]
