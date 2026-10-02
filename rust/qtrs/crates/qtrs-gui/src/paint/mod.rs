@@ -2,6 +2,7 @@
 //!
 //! Provides canvas abstractions (`PaintDevice`), raster image backends (`Image`),
 //! painter paths, brushes/gradients, composition modes, palettes, and vector painter.
+pub mod backing_store;
 pub mod brush;
 pub mod composition;
 pub mod paint_device;
@@ -10,6 +11,7 @@ pub mod palette;
 pub mod path;
 pub mod pixmap;
 
+pub use backing_store::BackingStore;
 pub use brush::*;
 pub use composition::*;
 pub use paint_device::PaintDevice;

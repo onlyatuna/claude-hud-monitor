@@ -2,19 +2,17 @@ use crate::widget::{EmptyWidget, WidgetRef};
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::object::{register_qobject, unregister_qobject, ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
-use qtrs_gui::paint::{PaintDevice, Painter, Pixmap};
+use qtrs_gui::paint::{BackingStore, Painter};
 use qtrs_platform::{
     platform, PlatformWindow, WindowFlags, WindowSystemEvent, WindowSystemEventHandler,
 };
-use std::rc::Rc;
-use std::cell::{Cell, RefCell};
 use crate::hit_test::EventTreeDispatcher;
 
 pub struct Window {
     object_data: ObjectData,
     platform_window: std::rc::Rc<std::cell::RefCell<Box<dyn PlatformWindow>>>,
     root_widget: WidgetRef,
-    backing_store: std::rc::Rc<std::cell::RefCell<Pixmap>>,
+    backing_store: std::rc::Rc<std::cell::RefCell<BackingStore>>,
     geometry: std::rc::Rc<std::cell::Cell<Rect>>,
     context_menu_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>,
     mouse_press_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point, qtrs_platform::MouseButton) -> bool>>>>,
@@ -32,10 +30,8 @@ impl Window {
             geometry
         };
         let platform_win = p.create_window(title, native_rect, flags)?;
-        let physical_w = ((geometry.width.max(1) as f32) * dpr).round() as u32;
-        let physical_h = ((geometry.height.max(1) as f32) * dpr).round() as u32;
-        let backing_store = Pixmap::with_dpr(physical_w, physical_h, dpr)
-            .ok_or("Failed to create top-level window offscreen Pixmap backing store")?;
+        let backing_store = BackingStore::new(Size::new(geometry.width, geometry.height), dpr)
+            .ok_or("Failed to create top-level window offscreen BackingStore")?;
         let window_id = ObjectId::next();
 
         let root_widget: WidgetRef = std::rc::Rc::new(std::cell::RefCell::new(Box::new(
@@ -266,14 +262,12 @@ impl Window {
     pub fn present_custom<F: FnOnce(&mut Painter)>(&mut self, f: F) {
         let geom = self.geometry.get();
         let dpr = platform().primary_screen().device_pixel_ratio();
-        let physical_w = ((geom.width.max(1) as f32) * dpr).round() as u32;
-        let physical_h = ((geom.height.max(1) as f32) * dpr).round() as u32;
 
         let mut bs = self.backing_store.borrow_mut();
-        bs.resize_with_dpr(physical_w, physical_h, dpr);
+        bs.resize(Size::new(geom.width, geom.height), dpr);
         bs.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
         {
-            let mut painter = Painter::begin(&mut *bs);
+            let mut painter = Painter::begin(&mut **bs);
             f(&mut painter);
         }
         let mut pw = self.platform_window.borrow_mut();
@@ -284,13 +278,13 @@ impl Window {
             bs.physical_height() as i32,
         );
         let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
-        let _ = pw.present_region(&*bs, &dirty_region);
+        let _ = pw.present_region(&**bs, &dirty_region);
     }
 
-    pub fn backing_store(&self) -> std::cell::Ref<'_, Pixmap> {
+    pub fn backing_store(&self) -> std::cell::Ref<'_, BackingStore> {
         self.backing_store.borrow()
     }
-    pub fn backing_store_handle(&self) -> std::rc::Rc<std::cell::RefCell<Pixmap>> {
+    pub fn backing_store_handle(&self) -> std::rc::Rc<std::cell::RefCell<BackingStore>> {
         std::rc::Rc::clone(&self.backing_store)
     }
 
@@ -363,25 +357,21 @@ impl QObject for Window {
                 let old_dpr = self.backing_store.borrow().device_pixel_ratio();
                 let new_dpr = (*dpi_x as f32) / 96.0;
                 let cur_geom = self.geometry.get();
-                let physical_w = ((cur_geom.width.max(1) as f32) * new_dpr).round() as u32;
-                let physical_h = ((cur_geom.height.max(1) as f32) * new_dpr).round() as u32;
-                if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, new_dpr) {
-                    *self.backing_store.borrow_mut() = new_pixmap;
-                    // Propagate DPI changed recursively through the widget tree
-                    propagate_dpi_change_recursive(&self.root_widget, old_dpr, new_dpr);
+                let size = Size::new(cur_geom.width, cur_geom.height);
+                self.backing_store.borrow_mut().resize(size, new_dpr);
+                propagate_dpi_change_recursive(&self.root_widget, old_dpr, new_dpr);
 
-                    // Invalidate and re-layout root widget tree
-                    let mut root = self.root_widget.borrow_mut();
-                    let root_w = cur_geom.width;
-                    let root_h = cur_geom.height;
-                    root.set_geometry(Rect::new(0, 0, root_w, root_h));
-                    if let Some(layout) = root.layout_mut() {
-                        layout.update_layout();
-                    }
-                    root.update();
-                    drop(root);
-                    self.render_and_present();
+                // Invalidate and re-layout root widget tree
+                let mut root = self.root_widget.borrow_mut();
+                let root_w = cur_geom.width;
+                let root_h = cur_geom.height;
+                root.set_geometry(Rect::new(0, 0, root_w, root_h));
+                if let Some(layout) = root.layout_mut() {
+                    layout.update_layout();
                 }
+                root.update();
+                drop(root);
+                self.render_and_present();
                 true
             }
             _ => false,
@@ -467,18 +457,17 @@ pub fn collect_dirty_region(widget_ref: &WidgetRef, offset: Point) -> Option<Rec
 }
 fn do_render_and_present(
     platform_window: &mut dyn PlatformWindow,
-    backing_store: &mut Pixmap,
+    backing_store: &mut BackingStore,
     root_widget: &WidgetRef,
     geometry: Rect,
 ) {
     let dpr = platform().primary_screen().device_pixel_ratio();
-    let physical_w = ((geometry.width.max(1) as f32) * dpr).round() as u32;
-    let physical_h = ((geometry.height.max(1) as f32) * dpr).round() as u32;
+    let logical_size = Size::new(geometry.width, geometry.height);
 
     // --- Lazy Backing Store Resize (Qt QWidgetRepaintManager::paintAndFlush parity) ---
     // If the backing store dimensions or DPR differ from the required top-level size,
     // reallocate lazily here, and mark the entire window dirty so the new buffer is fully painted.
-    if backing_store.resize_with_dpr(physical_w, physical_h, dpr) {
+    if backing_store.resize(logical_size, dpr) {
         root_widget.borrow_mut().update();
     }
 
@@ -490,7 +479,6 @@ fn do_render_and_present(
         return;
     }
 
-    let dpr = platform().primary_screen().device_pixel_ratio();
     let phys_dirty = if dpr > 1.0 {
         qtrs_platform::high_dpi::to_native_rect(dirty, dpr)
     } else {
@@ -500,7 +488,7 @@ fn do_render_and_present(
     backing_store.clear_rect(phys_dirty);
 
     {
-        let mut painter = Painter::begin(backing_store);
+        let mut painter = Painter::begin(&mut **backing_store);
         painter.set_clip_rect(RectF::new(
             dirty.x as f32,
             dirty.y as f32,
@@ -511,12 +499,12 @@ fn do_render_and_present(
     }
 
     let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
-    let _ = platform_window.present_region(backing_store, &dirty_region);
+    let _ = platform_window.present_region(&**backing_store, &dirty_region);
 }
 
 struct WindowEventHandler {
     platform_window: std::rc::Rc<std::cell::RefCell<Box<dyn PlatformWindow>>>,
-    backing_store: std::rc::Rc<std::cell::RefCell<Pixmap>>,
+    backing_store: std::rc::Rc<std::cell::RefCell<BackingStore>>,
     geometry: std::rc::Rc<std::cell::Cell<Rect>>,
     root: WidgetRef,
     dispatcher: EventTreeDispatcher,
@@ -732,19 +720,16 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 let old_dpr = self.backing_store.borrow().device_pixel_ratio();
                 let new_dpr = (dpi_x as f32) / 96.0;
                 let cur_geom = self.geometry.get();
-                let physical_w = ((cur_geom.width.max(1) as f32) * new_dpr).round() as u32;
-                let physical_h = ((cur_geom.height.max(1) as f32) * new_dpr).round() as u32;
-                if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, new_dpr) {
-                    *self.backing_store.borrow_mut() = new_pixmap;
-                    propagate_dpi_change_recursive(&root, old_dpr, new_dpr);
+                let size = Size::new(cur_geom.width, cur_geom.height);
+                self.backing_store.borrow_mut().resize(size, new_dpr);
+                propagate_dpi_change_recursive(&root, old_dpr, new_dpr);
 
-                    let mut root_borrow = root.borrow_mut();
-                    root_borrow.set_geometry(Rect::new(0, 0, cur_geom.width, cur_geom.height));
-                    if let Some(layout) = root_borrow.layout_mut() {
-                        layout.update_layout();
-                    }
-                    root_borrow.update();
+                let mut root_borrow = root.borrow_mut();
+                root_borrow.set_geometry(Rect::new(0, 0, cur_geom.width, cur_geom.height));
+                if let Some(layout) = root_borrow.layout_mut() {
+                    layout.update_layout();
                 }
+                root_borrow.update();
 
                 let mut ev = Event::new_spontaneous(EventKind::DpiChanged { dpi_x, dpi_y });
                 self.dispatcher.dispatch_event(&root, &mut ev);
