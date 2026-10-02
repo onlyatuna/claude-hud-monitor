@@ -12,11 +12,11 @@ use crate::hit_test::EventTreeDispatcher;
 
 pub struct Window {
     object_data: ObjectData,
-    platform_window: Box<dyn PlatformWindow>,
+    platform_window: Arc<Mutex<Box<dyn PlatformWindow>>>,
     root_widget: WidgetRef,
     shared_root: Arc<Mutex<WidgetRef>>,
-    backing_store: Pixmap,
-    geometry: Rect,
+    backing_store: Arc<Mutex<Pixmap>>,
+    geometry: Arc<Mutex<Rect>>,
     context_menu_cb: Arc<Mutex<Option<Box<dyn Fn(Point) + Send + Sync>>>>,
     mouse_press_cb: Arc<Mutex<Option<Box<dyn Fn(Point, qtrs_platform::MouseButton) -> bool + Send + Sync>>>>,
     mouse_move_cb: Arc<Mutex<Option<Box<dyn Fn(Point) + Send + Sync>>>>,
@@ -32,7 +32,7 @@ impl Window {
         } else {
             geometry
         };
-        let mut platform_win = p.create_window(title, native_rect, flags)?;
+        let platform_win = p.create_window(title, native_rect, flags)?;
         let physical_w = ((geometry.width.max(1) as f32) * dpr).round() as u32;
         let physical_h = ((geometry.height.max(1) as f32) * dpr).round() as u32;
         let backing_store = Pixmap::with_dpr(physical_w, physical_h, dpr)
@@ -47,6 +47,7 @@ impl Window {
         let root_clone = std::rc::Rc::clone(&root_widget);
         #[allow(clippy::arc_with_non_send_sync)]
         let shared_root = Arc::new(Mutex::new(root_clone));
+        let root_for_handler = Arc::clone(&shared_root);
         let context_menu_cb = Arc::new(Mutex::new(None));
         let cb_clone = Arc::clone(&context_menu_cb);
         let mouse_press_cb = Arc::new(Mutex::new(None));
@@ -55,22 +56,35 @@ impl Window {
         let move_cb_clone = Arc::clone(&mouse_move_cb);
         let resize_cb = Arc::new(Mutex::new(None));
         let resize_cb_clone = Arc::clone(&resize_cb);
+
+        let bs_arc = Arc::new(Mutex::new(backing_store));
+        let bs_clone = Arc::clone(&bs_arc);
+        let geom_arc = Arc::new(Mutex::new(geometry));
+        let geom_clone = Arc::clone(&geom_arc);
+
+        let pw_arc = Arc::new(Mutex::new(platform_win));
+        let pw_clone = Arc::clone(&pw_arc);
+
         let handler = WindowEventHandler {
-            root: Arc::clone(&shared_root),
+            platform_window: pw_clone,
+            backing_store: bs_clone,
+            geometry: geom_clone,
+            root: root_for_handler,
             dispatcher: EventTreeDispatcher::new(),
             context_menu_cb: cb_clone,
             mouse_press_cb: press_cb_clone,
             mouse_move_cb: move_cb_clone,
             resize_cb: resize_cb_clone,
         };
-        platform_win.set_event_handler(Box::new(handler));
+        pw_arc.lock().unwrap().set_event_handler(Box::new(handler));
+
         let win = Self {
             object_data: ObjectData::new(window_id),
-            platform_window: platform_win,
+            platform_window: pw_arc,
             root_widget,
             shared_root,
-            backing_store,
-            geometry,
+            backing_store: bs_arc,
+            geometry: geom_arc,
             context_menu_cb,
             mouse_press_cb,
             mouse_move_cb,
@@ -99,9 +113,10 @@ impl Window {
     }
     pub fn set_root_widget(&mut self, widget: WidgetRef) {
         widget.borrow_mut().set_window_id(Some(self.object_data.id));
+        let geom = *self.geometry.lock().unwrap();
         widget
             .borrow_mut()
-            .set_geometry(Rect::new(0, 0, self.geometry.width, self.geometry.height));
+            .set_geometry(Rect::new(0, 0, geom.width, geom.height));
         *self.shared_root.lock().unwrap() = widget.clone();
         self.root_widget = widget;
     }
@@ -109,33 +124,34 @@ impl Window {
     pub fn geometry(&self) -> Rect {
         let dpr = platform().primary_screen().device_pixel_ratio();
         if dpr > 1.0 {
-            let phys = self.platform_window.geometry();
+            let phys = self.platform_window.lock().unwrap().geometry();
             qtrs_platform::high_dpi::from_native_rect(phys, dpr)
         } else {
-            self.platform_window.geometry()
+            self.platform_window.lock().unwrap().geometry()
         }
     }
 
     pub fn physical_geometry(&self) -> Rect {
-        self.platform_window.geometry()
+        self.platform_window.lock().unwrap().geometry()
     }
 
     pub fn set_geometry(&mut self, rect: Rect) {
-        self.geometry = rect;
+        *self.geometry.lock().unwrap() = rect;
         let dpr = platform().primary_screen().device_pixel_ratio();
         let native_rect = if dpr > 1.0 {
             qtrs_platform::high_dpi::to_native_rect(rect, dpr)
         } else {
             rect
         };
-        self.platform_window.set_geometry(native_rect);
+        self.platform_window.lock().unwrap().set_geometry(native_rect);
         let physical_w = ((rect.width.max(1) as f32) * dpr).round() as u32;
         let physical_h = ((rect.height.max(1) as f32) * dpr).round() as u32;
-        if self.backing_store.physical_width() != physical_w
-            || self.backing_store.physical_height() != physical_h
         {
-            if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
-                self.backing_store = new_pixmap;
+            let mut bs = self.backing_store.lock().unwrap();
+            if bs.physical_width() != physical_w || bs.physical_height() != physical_h {
+                if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
+                    *bs = new_pixmap;
+                }
             }
         }
 
@@ -145,24 +161,24 @@ impl Window {
     }
 
     pub fn show(&mut self) {
-        self.platform_window.show();
+        self.platform_window.lock().unwrap().show();
         self.render_and_present();
     }
 
     pub fn hide(&mut self) {
-        self.platform_window.hide();
+        self.platform_window.lock().unwrap().hide();
     }
 
     pub fn set_stays_on_top(&mut self, enabled: bool) {
-        self.platform_window.set_stays_on_top(enabled);
+        self.platform_window.lock().unwrap().set_stays_on_top(enabled);
     }
 
     pub fn set_click_through(&mut self, enabled: bool) {
-        self.platform_window.set_click_through(enabled);
+        self.platform_window.lock().unwrap().set_click_through(enabled);
     }
 
     pub fn set_opacity(&mut self, opacity: f32) {
-        self.platform_window.set_opacity(opacity);
+        self.platform_window.lock().unwrap().set_opacity(opacity);
         self.render_and_present();
     }
     pub fn set_style_sheet(&mut self, qss: &str) {
@@ -171,30 +187,30 @@ impl Window {
     }
 
     pub fn opacity(&self) -> f32 {
-        self.platform_window.opacity()
+        self.platform_window.lock().unwrap().opacity()
     }
 
     pub fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
-        self.platform_window.set_minimum_size(min_w, min_h);
+        self.platform_window.lock().unwrap().set_minimum_size(min_w, min_h);
     }
 
     pub fn minimum_size(&self) -> (i32, i32) {
-        self.platform_window.minimum_size()
+        self.platform_window.lock().unwrap().minimum_size()
     }
 
     pub fn start_system_drag(&self) {
-        self.platform_window.start_system_drag();
+        self.platform_window.lock().unwrap().start_system_drag();
     }
     pub fn start_system_move(&self) -> bool {
-        self.platform_window.start_system_move()
+        self.platform_window.lock().unwrap().start_system_move()
     }
 
     pub fn start_system_resize(&self, edges: qtrs_platform::platform_window::WindowEdges) -> bool {
-        self.platform_window.start_system_resize(edges)
+        self.platform_window.lock().unwrap().start_system_resize(edges)
     }
 
     pub fn set_cursor(&mut self, shape: qtrs_platform::cursor::CursorShape) {
-        self.platform_window.set_cursor(shape);
+        self.platform_window.lock().unwrap().set_cursor(shape);
     }
 
     pub fn set_mouse_press_handler<F: Fn(Point, qtrs_platform::MouseButton) -> bool + Send + Sync + 'static>(&mut self, handler: F) {
@@ -215,19 +231,19 @@ impl Window {
         backdrop: qtrs_platform::backdrop::BackdropType,
         dark_mode: bool,
     ) -> bool {
-        self.platform_window.set_backdrop(backdrop, dark_mode)
+        self.platform_window.lock().unwrap().set_backdrop(backdrop, dark_mode)
     }
 
     pub fn set_ime_focus(&mut self, pos: Point) {
-        self.platform_window.set_ime_focus(pos);
+        self.platform_window.lock().unwrap().set_ime_focus(pos);
     }
 
     pub fn enable_drop_target(&mut self, enabled: bool) -> bool {
-        self.platform_window.enable_drop_target(enabled)
+        self.platform_window.lock().unwrap().enable_drop_target(enabled)
     }
 
     pub fn native_handle(&self) -> isize {
-        self.platform_window.native_handle()
+        self.platform_window.lock().unwrap().native_handle()
     }
 
     pub fn set_context_menu_handler<F: Fn(Point) + Send + Sync + 'static>(&mut self, handler: F) {
@@ -236,64 +252,37 @@ impl Window {
     }
 
     pub fn render_and_present(&mut self) {
-        let root_geom = Rect::new(0, 0, self.geometry.width, self.geometry.height);
-        let dirty = collect_dirty_region(&self.root_widget, Point::new(0, 0))
-            .unwrap_or(root_geom)
-            .intersected(&root_geom);
-
-        if dirty.is_empty() {
-            return;
-        }
-
-        let dpr = platform().primary_screen().device_pixel_ratio();
-        let phys_dirty = if dpr > 1.0 {
-            qtrs_platform::high_dpi::to_native_rect(dirty, dpr)
-        } else {
-            dirty
-        };
-
-        self.backing_store.clear_rect(phys_dirty);
-
-        {
-            let mut painter = Painter::begin(&mut self.backing_store);
-            painter.set_clip_rect(RectF::new(
-                dirty.x as f32,
-                dirty.y as f32,
-                dirty.width as f32,
-                dirty.height as f32,
-            ));
-            render_widget_recursive(&self.root_widget, &mut painter, dirty);
-        }
-
-        let opacity = self.platform_window.opacity();
-        let _ = self
-            .platform_window
-            .present_dirty(&mut self.backing_store, opacity, phys_dirty);
+        let geom = *self.geometry.lock().unwrap();
+        let root = self.root_widget.clone();
+        let mut bs = self.backing_store.lock().unwrap();
+        let mut pw = self.platform_window.lock().unwrap();
+        do_render_and_present(&mut **pw, &mut *bs, &root, geom);
     }
+
     pub fn present_custom<F: FnOnce(&mut Painter)>(&mut self, f: F) {
-        self.backing_store
-            .fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
+        let mut bs = self.backing_store.lock().unwrap();
+        bs.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
         {
-            let mut painter = Painter::begin(&mut self.backing_store);
+            let mut painter = Painter::begin(&mut *bs);
             f(&mut painter);
         }
-        let opacity = self.platform_window.opacity();
+        let mut pw = self.platform_window.lock().unwrap();
+        let opacity = pw.opacity();
         let phys_dirty = Rect::new(
             0,
             0,
-            self.backing_store.physical_width() as i32,
-            self.backing_store.physical_height() as i32,
+            bs.physical_width() as i32,
+            bs.physical_height() as i32,
         );
-        let _ = self
-            .platform_window
-            .present_dirty(&mut self.backing_store, opacity, phys_dirty);
+        let _ = pw.present_dirty(&mut *bs, opacity, phys_dirty);
     }
-    pub fn backing_store(&self) -> &Pixmap {
-        &self.backing_store
+
+    pub fn backing_store(&self) -> std::sync::MutexGuard<'_, Pixmap> {
+        self.backing_store.lock().unwrap()
     }
 
     pub fn save_png(&self, path: &std::path::Path) -> Result<(), &'static str> {
-        self.backing_store.save_png(path).map_err(|_| "failed to save PNG")
+        self.backing_store.lock().unwrap().save_png(path).map_err(|_| "failed to save PNG")
     }
 }
 
@@ -329,16 +318,22 @@ impl QObject for Window {
                 true
             }
             EventKind::Resize { width, height, .. } => {
-                let dpr = self.backing_store.device_pixel_ratio();
-                self.geometry.width = *width;
-                self.geometry.height = *height;
-                let physical_w = ((*width as f32).max(1.0) * dpr).round() as u32;
-                let physical_h = ((*height as f32).max(1.0) * dpr).round() as u32;
-                if self.backing_store.physical_width() != physical_w
-                    || self.backing_store.physical_height() != physical_h
                 {
-                    if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
-                        self.backing_store = new_pixmap;
+                    let mut geom = self.geometry.lock().unwrap();
+                    geom.width = *width;
+                    geom.height = *height;
+                }
+                {
+                    let mut bs = self.backing_store.lock().unwrap();
+                    let dpr = bs.device_pixel_ratio();
+                    let physical_w = ((*width as f32).max(1.0) * dpr).round() as u32;
+                    let physical_h = ((*height as f32).max(1.0) * dpr).round() as u32;
+                    if bs.physical_width() != physical_w
+                        || bs.physical_height() != physical_h
+                    {
+                        if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
+                            *bs = new_pixmap;
+                        }
                     }
                 }
                 {
@@ -356,19 +351,20 @@ impl QObject for Window {
                 true
             }
             EventKind::DpiChanged { dpi_x, .. } => {
-                let old_dpr = self.backing_store.device_pixel_ratio();
+                let old_dpr = self.backing_store.lock().unwrap().device_pixel_ratio();
                 let new_dpr = (*dpi_x as f32) / 96.0;
-                let physical_w = ((self.geometry.width.max(1) as f32) * new_dpr).round() as u32;
-                let physical_h = ((self.geometry.height.max(1) as f32) * new_dpr).round() as u32;
+                let cur_geom = *self.geometry.lock().unwrap();
+                let physical_w = ((cur_geom.width.max(1) as f32) * new_dpr).round() as u32;
+                let physical_h = ((cur_geom.height.max(1) as f32) * new_dpr).round() as u32;
                 if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, new_dpr) {
-                    self.backing_store = new_pixmap;
+                    *self.backing_store.lock().unwrap() = new_pixmap;
                     // Propagate DPI changed recursively through the widget tree
                     propagate_dpi_change_recursive(&self.root_widget, old_dpr, new_dpr);
 
                     // Invalidate and re-layout root widget tree
                     let mut root = self.root_widget.borrow_mut();
-                    let root_w = self.geometry.width;
-                    let root_h = self.geometry.height;
+                    let root_w = cur_geom.width;
+                    let root_h = cur_geom.height;
                     root.set_geometry(Rect::new(0, 0, root_w, root_h));
                     if let Some(layout) = root.layout_mut() {
                         layout.update_layout();
@@ -460,8 +456,49 @@ pub fn collect_dirty_region(widget_ref: &WidgetRef, offset: Point) -> Option<Rec
 
     dirty_union
 }
+fn do_render_and_present(
+    platform_window: &mut dyn PlatformWindow,
+    backing_store: &mut Pixmap,
+    root_widget: &WidgetRef,
+    geometry: Rect,
+) {
+    let root_geom = Rect::new(0, 0, geometry.width, geometry.height);
+    let dirty = collect_dirty_region(root_widget, Point::new(0, 0))
+        .unwrap_or(root_geom)
+        .intersected(&root_geom);
+
+    if dirty.is_empty() {
+        return;
+    }
+
+    let dpr = platform().primary_screen().device_pixel_ratio();
+    let phys_dirty = if dpr > 1.0 {
+        qtrs_platform::high_dpi::to_native_rect(dirty, dpr)
+    } else {
+        dirty
+    };
+
+    backing_store.clear_rect(phys_dirty);
+
+    {
+        let mut painter = Painter::begin(backing_store);
+        painter.set_clip_rect(RectF::new(
+            dirty.x as f32,
+            dirty.y as f32,
+            dirty.width as f32,
+            dirty.height as f32,
+        ));
+        render_widget_recursive(root_widget, &mut painter, dirty);
+    }
+
+    let opacity = platform_window.opacity();
+    let _ = platform_window.present_dirty(backing_store, opacity, phys_dirty);
+}
 
 struct WindowEventHandler {
+    platform_window: Arc<Mutex<Box<dyn PlatformWindow>>>,
+    backing_store: Arc<Mutex<Pixmap>>,
+    geometry: Arc<Mutex<Rect>>,
     root: Arc<Mutex<WidgetRef>>,
     dispatcher: EventTreeDispatcher,
     context_menu_cb: Arc<Mutex<Option<Box<dyn Fn(Point) + Send + Sync>>>>,
@@ -469,7 +506,6 @@ struct WindowEventHandler {
     mouse_move_cb: Arc<Mutex<Option<Box<dyn Fn(Point) + Send + Sync>>>>,
     resize_cb: Arc<Mutex<Option<Box<dyn Fn(Size) + Send + Sync>>>>,
 }
-
 unsafe impl Send for WindowEventHandler {}
 unsafe impl Sync for WindowEventHandler {}
 
@@ -543,6 +579,34 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
             WindowSystemEvent::Resize { size } => {
+                let cur_geom = {
+                    let mut geom = self.geometry.lock().unwrap();
+                    geom.width = size.width;
+                    geom.height = size.height;
+                    *geom
+                };
+
+                {
+                    let mut bs = self.backing_store.lock().unwrap();
+                    let dpr = bs.device_pixel_ratio();
+                    let physical_w = ((size.width as f32).max(1.0) * dpr).round() as u32;
+                    let physical_h = ((size.height as f32).max(1.0) * dpr).round() as u32;
+                    if bs.physical_width() != physical_w || bs.physical_height() != physical_h {
+                        if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, dpr) {
+                            *bs = new_pixmap;
+                        }
+                    }
+                }
+
+                {
+                    let mut root_borrow = root.borrow_mut();
+                    root_borrow.set_geometry(Rect::new(0, 0, size.width, size.height));
+                    if let Some(layout) = root_borrow.layout_mut() {
+                        layout.update_layout();
+                    }
+                    root_borrow.update();
+                }
+
                 let mut ev = Event::new_spontaneous(EventKind::Resize {
                     width: size.width,
                     height: size.height,
@@ -550,8 +614,14 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     old_height: 0,
                 });
                 self.dispatcher.dispatch_event(&root, &mut ev);
+
                 if let Some(cb) = self.resize_cb.lock().unwrap().as_ref() {
                     cb(size);
+                }
+
+                if let Ok(mut pw) = self.platform_window.try_lock() {
+                    let mut bs = self.backing_store.lock().unwrap();
+                    do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
                 }
             }
             WindowSystemEvent::KeyPress {
@@ -586,8 +656,30 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
             WindowSystemEvent::DpiChanged { dpi_x, dpi_y } => {
+                let old_dpr = self.backing_store.lock().unwrap().device_pixel_ratio();
+                let new_dpr = (dpi_x as f32) / 96.0;
+                let cur_geom = *self.geometry.lock().unwrap();
+                let physical_w = ((cur_geom.width.max(1) as f32) * new_dpr).round() as u32;
+                let physical_h = ((cur_geom.height.max(1) as f32) * new_dpr).round() as u32;
+                if let Some(new_pixmap) = Pixmap::with_dpr(physical_w, physical_h, new_dpr) {
+                    *self.backing_store.lock().unwrap() = new_pixmap;
+                    propagate_dpi_change_recursive(&root, old_dpr, new_dpr);
+
+                    let mut root_borrow = root.borrow_mut();
+                    root_borrow.set_geometry(Rect::new(0, 0, cur_geom.width, cur_geom.height));
+                    if let Some(layout) = root_borrow.layout_mut() {
+                        layout.update_layout();
+                    }
+                    root_borrow.update();
+                }
+
                 let mut ev = Event::new_spontaneous(EventKind::DpiChanged { dpi_x, dpi_y });
                 self.dispatcher.dispatch_event(&root, &mut ev);
+
+                if let Ok(mut pw) = self.platform_window.try_lock() {
+                    let mut bs = self.backing_store.lock().unwrap();
+                    do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
+                }
             }
             WindowSystemEvent::InputMethod {
                 commit_string,
