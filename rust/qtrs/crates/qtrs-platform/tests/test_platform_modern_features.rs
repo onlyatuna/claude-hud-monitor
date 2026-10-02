@@ -781,15 +781,34 @@ fn test_surface_presenter_dc_and_layered_alignment() {
             res_layered
         );
 
-        // 4. Direct Win32LayeredPresenter test with dirty region
+        // 4. Direct Win32LayeredPresenter test with dirty region (exercising ULW_EX_NORESIZE)
         let mut layered_presenter = Win32LayeredPresenter::new(hwnd_layered, 200, 150, 0.85)
             .expect("create Win32LayeredPresenter");
         layered_presenter.set_opacity(0.9);
         let lay_res = layered_presenter.present(&pixmap, &dirty_region);
         assert!(
             lay_res.is_ok(),
-            "Win32LayeredPresenter.present failed: {:?}",
+            "Win32LayeredPresenter.present with dirty region (ULW_EX_NORESIZE) failed: {:?}",
             lay_res
+        );
+
+        // 5. Test resize transition (clears ULW_EX_NORESIZE and reallocates/re-bounds)
+        let mut resized_pixmap = Pixmap::new(240, 180).expect("create resized pixmap");
+        resized_pixmap.fill(Color::from_rgba8(50, 120, 220, 200));
+        let full_resized_region = Region::from_coords(0, 0, 240, 180);
+
+        let dc_resize_res = dc_presenter.present(&resized_pixmap, &full_resized_region);
+        assert!(
+            dc_resize_res.is_ok(),
+            "Win32DcPresenter resize presentation failed: {:?}",
+            dc_resize_res
+        );
+
+        let lay_resize_res = layered_presenter.present(&resized_pixmap, &full_resized_region);
+        assert!(
+            lay_resize_res.is_ok(),
+            "Win32LayeredPresenter resize presentation failed: {:?}",
+            lay_resize_res
         );
     }
 }

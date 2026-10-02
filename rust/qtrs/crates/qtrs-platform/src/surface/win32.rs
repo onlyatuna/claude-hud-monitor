@@ -13,6 +13,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     UpdateLayeredWindowIndirect, GWL_EXSTYLE, ULW_ALPHA, UPDATELAYEREDWINDOWINFO, WS_EX_LAYERED,
 };
 
+/// Introduced in Windows 8: tells DWM/compositor to ignore `psize` and avoid window resizing
+/// during incremental dirty region updates.
+const ULW_EX_NORESIZE: u32 = 0x00000008;
 pub struct Win32LayeredSurface {
     hwnd: HWND,
     width: u32,
@@ -177,8 +180,10 @@ impl Win32LayeredSurface {
         let p_width = pixmap.physical_width();
         let p_height = pixmap.physical_height();
 
+        let mut resized = false;
         if p_width != self.width || p_height != self.height {
             self.resize(p_width, p_height)?;
+            resized = true;
         }
 
         let full_window_rect = Rect::new(0, 0, self.width as i32, self.height as i32);
@@ -244,7 +249,12 @@ impl Win32LayeredSurface {
             info.pptSrc = &pt_src;
             info.crKey = 0;
             info.pblend = &blend;
-            info.dwFlags = ULW_ALPHA;
+            let dw_flags = if resized {
+                ULW_ALPHA
+            } else {
+                ULW_ALPHA | ULW_EX_NORESIZE
+            };
+            info.dwFlags = dw_flags;
             info.prcDirty = &mut dirty_win_rect;
 
             let res = UpdateLayeredWindowIndirect(self.hwnd, &info);
