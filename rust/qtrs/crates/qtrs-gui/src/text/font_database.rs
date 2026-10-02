@@ -4,6 +4,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use crate::text::font::SharedFontData;
+
 use rustybuzz::ttf_parser::name::Table as NameTable;
 use rustybuzz::ttf_parser::{name_id, PlatformId};
 
@@ -25,7 +27,8 @@ pub struct FontFamilyInfo {
 /// Searches, loads, and caches system fonts to avoid redundant disk I/O and parsing.
 pub struct FontDatabase {
     cache: HashMap<String, Arc<fontdue::Font>>,
-    raw_cache: HashMap<String, Arc<Vec<u8>>>,
+    raw_cache: HashMap<String, SharedFontData>,
+    file_cache: HashMap<PathBuf, SharedFontData>,
     search_paths: Vec<PathBuf>,
     /// Faces found by scanning `search_paths`; built lazily by [`FontDatabase::families`].
     system_faces: Option<Vec<FontFamilyInfo>>,
@@ -70,6 +73,7 @@ impl FontDatabase {
         let mut db = Self {
             cache: HashMap::new(),
             raw_cache: HashMap::new(),
+            file_cache: HashMap::new(),
             search_paths,
             system_faces: None,
             application_faces: Vec::new(),
@@ -89,13 +93,14 @@ impl FontDatabase {
     pub fn add_font_from_memory(
         &mut self,
         family: &str,
-        data: Arc<Vec<u8>>,
+        data: impl Into<SharedFontData>,
     ) -> Result<Arc<fontdue::Font>, String> {
-        let font = fontdue::Font::from_bytes(data.as_slice(), fontdue::FontSettings::default())
+        let shared = data.into();
+        let font = fontdue::Font::from_bytes(shared.as_slice(), fontdue::FontSettings::default())
             .map_err(|e| format!("Failed to parse font from memory: {}", e))?;
         let font_arc = Arc::new(font);
         let key = family.to_ascii_lowercase();
-        let fixed_pitch = read_faces(&mut std::io::Cursor::new(data.as_slice()))
+        let fixed_pitch = read_faces(&mut std::io::Cursor::new(shared.as_slice()))
             .first()
             .map(|face| face.fixed_pitch)
             .unwrap_or(false);
@@ -108,7 +113,7 @@ impl FontDatabase {
             fixed_pitch,
         });
         self.cache.insert(key.clone(), Arc::clone(&font_arc));
-        self.raw_cache.insert(key, data);
+        self.raw_cache.insert(key, shared);
         Ok(font_arc)
     }
 
@@ -200,7 +205,7 @@ impl FontDatabase {
         if let Some((raw_data, font)) = self.find_and_load_font_file(&key) {
             let font_arc = Arc::new(font);
             self.cache.insert(key.clone(), Arc::clone(&font_arc));
-            self.raw_cache.insert(key, Arc::new(raw_data));
+            self.raw_cache.insert(key, raw_data);
             return Some(font_arc);
         }
 
@@ -217,13 +222,56 @@ impl FontDatabase {
     }
 
     /// Returns the raw binary font data for OpenType shaping.
-    pub fn get_raw_font_data(&mut self, family: &str) -> Option<Arc<Vec<u8>>> {
+    pub fn get_raw_font_data(&mut self, family: &str) -> Option<SharedFontData> {
         let key = family.to_ascii_lowercase();
         if let Some(data) = self.raw_cache.get(&key) {
-            return Some(Arc::clone(data));
+            return Some(data.clone());
         }
         self.load_font(family);
         self.raw_cache.get(&key).cloned()
+    }
+
+    /// Returns the raw binary font data by canonical or relative file path.
+    pub fn get_raw_font_data_by_path(&mut self, path: &Path) -> Option<SharedFontData> {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if let Some(data) = self.file_cache.get(&canonical) {
+            return Some(data.clone());
+        }
+        if let Ok(bytes) = std::fs::read(&canonical) {
+            let shared = SharedFontData::from_vec(bytes);
+            self.file_cache.insert(canonical, shared.clone());
+            return Some(shared);
+        }
+        None
+    }
+
+    /// Returns the total bytes across all cached binary font files.
+    pub fn total_raw_bytes(&self) -> usize {
+        self.file_cache.values().map(|d| d.len()).sum()
+    }
+
+    /// Returns the number of distinct font files cached in memory.
+    pub fn cached_files_count(&self) -> usize {
+        self.file_cache.len()
+    }
+
+    /// Purges cached font data that is no longer referenced outside the database cache.
+    ///
+    /// Mirrors Qt's `QFontCache::decreaseCache`: inspects strong reference counts and
+    /// purges unused raw buffers from memory.
+    pub fn cleanup_unused_fonts(&mut self) -> usize {
+        let mut freed_bytes = 0;
+        self.file_cache.retain(|_path, data| {
+            if data.strong_count() <= 2 {
+                freed_bytes += data.len();
+                false
+            } else {
+                true
+            }
+        });
+        self.raw_cache.retain(|_fam, data| data.strong_count() > 1);
+        self.cache.retain(|_fam, font| Arc::strong_count(font) > 1);
+        freed_bytes
     }
 
     /// Preloads common default system fonts.
@@ -233,15 +281,15 @@ impl FontDatabase {
             if let Some((raw_data, font)) = self.find_and_load_font_file(fam) {
                 let font_arc = Arc::new(font);
                 self.cache.insert((*fam).to_string(), font_arc);
-                self.raw_cache
-                    .insert((*fam).to_string(), Arc::new(raw_data));
+                self.raw_cache.insert((*fam).to_string(), raw_data);
                 break;
             }
         }
     }
 
-    /// Searches search paths for a font file matching family key.
-    fn find_and_load_font_file(&self, family_key: &str) -> Option<(Vec<u8>, fontdue::Font)> {
+    /// Searches search paths for a font file matching family key, reusing existing
+    /// cached binary buffers from `file_cache` to eliminate redundant disk I/O and memory duplication.
+    fn find_and_load_font_file(&mut self, family_key: &str) -> Option<(SharedFontData, fontdue::Font)> {
         let candidate_filenames: Vec<String> = match family_key {
             "segoe ui" => vec!["segoeui.ttf".into(), "SegoeUI.ttf".into()],
             "segoe ui symbol" => vec!["seguisym.ttf".into()],
@@ -284,12 +332,23 @@ impl FontDatabase {
             for filename in &candidate_filenames {
                 let file_path = dir.join(filename);
                 if file_path.is_file() {
-                    if let Ok(bytes) = std::fs::read(&file_path) {
+                    let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
+                    if let Some(shared) = self.file_cache.get(&canonical) {
                         if let Ok(font) = fontdue::Font::from_bytes(
-                            bytes.as_slice(),
+                            shared.as_slice(),
                             fontdue::FontSettings::default(),
                         ) {
-                            return Some((bytes, font));
+                            return Some((shared.clone(), font));
+                        }
+                    }
+                    if let Ok(bytes) = std::fs::read(&canonical) {
+                        let shared = SharedFontData::from_vec(bytes);
+                        if let Ok(font) = fontdue::Font::from_bytes(
+                            shared.as_slice(),
+                            fontdue::FontSettings::default(),
+                        ) {
+                            self.file_cache.insert(canonical, shared.clone());
+                            return Some((shared, font));
                         }
                     }
                 }
@@ -297,18 +356,34 @@ impl FontDatabase {
         }
 
         // Fall back to the family index (file names rarely match family names, e.g. "Times New Roman" -> times.ttf).
-        let face = self
-            .system_faces
-            .iter()
-            .flatten()
-            .find(|face| face.family.eq_ignore_ascii_case(family_key) && face.path.is_some())?;
-        let bytes = std::fs::read(face.path.as_ref()?).ok()?;
+        if self.system_faces.is_none() {
+            self.system_faces = Some(scan_font_directories(&self.search_paths));
+        }
+        let (face_path, face_index) = {
+            let face = self
+                .system_faces
+                .as_ref()?
+                .iter()
+                .find(|face| face.family.eq_ignore_ascii_case(family_key) && face.path.is_some())?;
+            (face.path.as_ref()?.clone(), face.face_index)
+        };
+
+        let canonical = face_path.canonicalize().unwrap_or_else(|_| face_path.clone());
         let settings = fontdue::FontSettings {
-            collection_index: face.face_index,
+            collection_index: face_index,
             ..fontdue::FontSettings::default()
         };
-        let font = fontdue::Font::from_bytes(bytes.as_slice(), settings).ok()?;
-        Some((bytes, font))
+
+        if let Some(shared) = self.file_cache.get(&canonical) {
+            let font = fontdue::Font::from_bytes(shared.as_slice(), settings).ok()?;
+            return Some((shared.clone(), font));
+        }
+
+        let bytes = std::fs::read(&canonical).ok()?;
+        let shared = SharedFontData::from_vec(bytes);
+        let font = fontdue::Font::from_bytes(shared.as_slice(), settings).ok()?;
+        self.file_cache.insert(canonical, shared.clone());
+        Some((shared, font))
     }
 }
 

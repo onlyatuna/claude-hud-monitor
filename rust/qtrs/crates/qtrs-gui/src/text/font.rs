@@ -1,5 +1,97 @@
 use std::sync::Arc;
 
+/// Shared binary font data representation supporting zero-copy slicing and deduplication.
+///
+/// Encapsulates binary font data behind an `Arc`, ensuring multiple `FontEngine`
+/// or `Font` instances share the exact same underlying byte buffer without duplication.
+#[derive(Debug, Clone)]
+pub struct SharedFontData {
+    data: Arc<Vec<u8>>,
+}
+
+impl SharedFontData {
+    /// Creates a new `SharedFontData` from an owned byte vector.
+    pub fn from_vec(vec: Vec<u8>) -> Self {
+        Self {
+            data: Arc::new(vec),
+        }
+    }
+
+    /// Creates a `SharedFontData` wrapping an existing `Arc<Vec<u8>>`.
+    pub fn from_arc(data: Arc<Vec<u8>>) -> Self {
+        Self { data }
+    }
+
+    /// Returns the underlying byte slice.
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        self.data.as_slice()
+    }
+
+    /// Returns the inner `Arc<Vec<u8>>` for backwards compatibility.
+    #[inline]
+    pub fn to_arc(&self) -> Arc<Vec<u8>> {
+        Arc::clone(&self.data)
+    }
+
+    /// Returns the number of bytes in the font data.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Returns `true` if the font data is empty.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Returns the strong reference count of this shared font buffer.
+    #[inline]
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.data)
+    }
+
+    /// Checks if two `SharedFontData` share the exact same underlying memory buffer.
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.data, &other.data)
+    }
+}
+
+impl std::ops::Deref for SharedFontData {
+    type Target = [u8];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.data.as_slice()
+    }
+}
+
+impl AsRef<[u8]> for SharedFontData {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.data.as_slice()
+    }
+}
+
+impl PartialEq for SharedFontData {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.data, &other.data) || *self.data == *other.data
+    }
+}
+
+impl From<Vec<u8>> for SharedFontData {
+    fn from(v: Vec<u8>) -> Self {
+        Self::from_vec(v)
+    }
+}
+
+impl From<Arc<Vec<u8>>> for SharedFontData {
+    fn from(a: Arc<Vec<u8>>) -> Self {
+        Self::from_arc(a)
+    }
+}
 /// Font weight values matching Qt `QFont::Weight` and CSS standard numeric values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -38,7 +130,7 @@ pub struct Font {
     /// Enables OpenType 'tnum' (tabular numbers) feature.
     pub tabular_numbers: bool,
     /// In-memory binary font data.
-    pub font_data: Option<Arc<Vec<u8>>>,
+    pub font_data: Option<SharedFontData>,
 }
 
 impl Font {
@@ -112,8 +204,8 @@ impl Font {
     }
 
     /// Sets in-memory binary font data.
-    pub fn with_font_data(mut self, font_data: Arc<Vec<u8>>) -> Self {
-        self.font_data = Some(font_data);
+    pub fn with_font_data(mut self, font_data: impl Into<SharedFontData>) -> Self {
+        self.font_data = Some(font_data.into());
         self
     }
 }

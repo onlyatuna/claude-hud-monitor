@@ -623,7 +623,7 @@ impl<'a> Painter<'a> {
             fontdue::Font::from_bytes(data.as_slice(), fontdue::FontSettings::default())
                 .ok()
                 .map(|f| {
-                    vec![FontEngine::new(Arc::new(f)).with_raw_data(Arc::clone(data))]
+                    vec![FontEngine::new(Arc::new(f)).with_raw_data(data.clone())]
                 })
                 .unwrap_or_default()
         } else {

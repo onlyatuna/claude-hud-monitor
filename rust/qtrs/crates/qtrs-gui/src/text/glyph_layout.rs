@@ -1,4 +1,4 @@
-use crate::text::font::Font;
+use crate::text::font::{Font, SharedFontData};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ pub struct FontEngine {
     /// Fontdue font face for rasterization, metrics, and character-to-glyph mapping.
     pub fontdue: Arc<fontdue::Font>,
     /// Optional binary font file data for HarfBuzz / rustybuzz OpenType shaping.
-    pub raw_data: Option<Arc<Vec<u8>>>,
+    pub raw_data: Option<SharedFontData>,
     /// Font face index within a font collection (.ttc / .otc).
     pub face_index: u32,
 }
@@ -39,8 +39,8 @@ impl FontEngine {
     }
 
     /// Sets the raw binary font data for OpenType shaping.
-    pub fn with_raw_data(mut self, raw_data: Arc<Vec<u8>>) -> Self {
-        self.raw_data = Some(raw_data);
+    pub fn with_raw_data(mut self, raw_data: impl Into<SharedFontData>) -> Self {
+        self.raw_data = Some(raw_data.into());
         self
     }
 
@@ -162,7 +162,7 @@ impl GlyphLayout {
                 let mut engine = FontEngine::new(Arc::clone(f));
                 if idx == 0 {
                     if let Some(data) = &font.font_data {
-                        engine.raw_data = Some(Arc::clone(data));
+                        engine.raw_data = Some(data.clone());
                     }
                 }
                 engine
