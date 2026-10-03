@@ -195,8 +195,11 @@ impl ConfigManager {
 
     /// Sanitize and clamp configuration parameters to valid ranges.
     pub fn sanitize(cfg: &mut Config) {
-        if cfg.horizontal_height < MIN_HORIZONTAL_HEIGHT {
+        if cfg.horizontal_height < MIN_HORIZONTAL_HEIGHT || cfg.horizontal_height > 300 {
             cfg.horizontal_height = DEFAULT_HORIZONTAL_HEIGHT;
+            if cfg.horizontal_width < 600 {
+                cfg.horizontal_width = DEFAULT_HORIZONTAL_WIDTH;
+            }
         }
         if cfg.horizontal_width < MIN_HORIZONTAL_WIDTH {
             cfg.horizontal_width = DEFAULT_HORIZONTAL_WIDTH;
@@ -343,6 +346,15 @@ mod tests {
         assert_eq!(cfg.vertical_height, DEFAULT_VERTICAL_HEIGHT);
         assert_eq!(cfg.vertical_width, DEFAULT_VERTICAL_WIDTH);
 
+        // Test corrupted horizontal dimensions (e.g. from vertical leak)
+        let mut cfg_corrupt = Config {
+            horizontal_height: 463,
+            horizontal_width: 540,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg_corrupt);
+        assert_eq!(cfg_corrupt.horizontal_height, DEFAULT_HORIZONTAL_HEIGHT);
+        assert_eq!(cfg_corrupt.horizontal_width, DEFAULT_HORIZONTAL_WIDTH);
         // Test non-finite and negative opacity
         let mut cfg_neg = Config {
             opacity: -0.5,

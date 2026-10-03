@@ -544,6 +544,62 @@ mod tests {
         assert!(dial_claude.width >= 80 && dial_claude.height >= 80, "Dial must meet minimum size");
         assert_eq!(dial_claude.height, dial_codex.height, "Dials must have uniform height");
     }
+    #[test]
+    fn test_horizontal_triple_side_by_side_parity_and_switching() {
+        let mut cfg = crate::config::Config {
+            layout_mode: "vertical".to_string(),
+            horizontal_height: 463,
+            horizontal_width: 540,
+            ..Default::default()
+        };
+        crate::config::ConfigManager::sanitize(&mut cfg);
+        let config = std::sync::Arc::new(parking_lot::Mutex::new(cfg));
+        let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(crate::refresh_controller::RefreshController::new(60)));
+        let mut hud = crate::ui::hud_window::HUDWindow::new(config, refresh_ctrl).unwrap();
+
+        // 1. Initial state is vertical
+        assert_eq!(hud.config.lock().layout_mode, "vertical");
+        let c_claude_v = hud.cards["claude"].container.borrow().geometry();
+        let c_codex_v = hud.cards["codex"].container.borrow().geometry();
+        let c_agy_v = hud.cards["agy"].container.borrow().geometry();
+        assert_eq!(c_claude_v.x, c_codex_v.x);
+        assert_eq!(c_claude_v.x, c_agy_v.x);
+        assert!(c_claude_v.y < c_codex_v.y);
+        assert!(c_codex_v.y < c_agy_v.y);
+
+        // 2. Switch to Horizontal Triple mode
+        hud.apply_cards_layout_mode("horizontal");
+        assert_eq!(hud.config.lock().layout_mode, "horizontal");
+
+        let win_geom = hud.window.geometry();
+        assert_eq!(win_geom.width, crate::config::DEFAULT_HORIZONTAL_WIDTH as i32);
+        assert_eq!(win_geom.height, crate::config::DEFAULT_HORIZONTAL_HEIGHT as i32);
+
+        let c_claude_h = hud.cards["claude"].container.borrow().geometry();
+        let c_codex_h = hud.cards["codex"].container.borrow().geometry();
+        let c_agy_h = hud.cards["agy"].container.borrow().geometry();
+
+        // IN HORIZONTAL MODE: Y positions must be identical (side-by-side)
+        assert_eq!(c_claude_h.y, c_codex_h.y, "Horizontal cards must have same Y offset");
+        assert_eq!(c_claude_h.y, c_agy_h.y, "Horizontal cards must have same Y offset");
+
+        // IN HORIZONTAL MODE: X positions must be strictly increasing across the 3 columns
+        assert!(c_claude_h.x < c_codex_h.x, "Claude must be to the left of Codex");
+        assert!(c_codex_h.x < c_agy_h.x, "Codex must be to the left of Antigravity");
+
+        // Card widths must each occupy a substantial column (>= 200px)
+        assert!(c_claude_h.width >= 200);
+        assert!(c_codex_h.width >= 200);
+        assert!(c_agy_h.width >= 200);
+
+        // 3. Toggle back to vertical via toggle_cards_layout()
+        hud.toggle_cards_layout();
+        assert_eq!(hud.config.lock().layout_mode, "vertical");
+        let c_claude_v2 = hud.cards["claude"].container.borrow().geometry();
+        let c_codex_v2 = hud.cards["codex"].container.borrow().geometry();
+        assert_eq!(c_claude_v2.x, c_codex_v2.x);
+        assert!(c_claude_v2.y < c_codex_v2.y);
+    }
 
     #[test]
     fn test_inspect_card_layout_with_data() {

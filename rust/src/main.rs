@@ -343,6 +343,22 @@ fn main() {
         }
     });
 
+    // Connect title bar layout toggle button ("⇄")
+    if let Some(btn) = hud.borrow().layout_toggle_btn.borrow_mut().as_any_mut().downcast_mut::<qtrs_widgets::button::Button>() {
+        btn.clicked.connect(move |()| {
+            MAIN_HUD.with(|h_cell| {
+                if let Some(hud) = h_cell.borrow().as_ref() {
+                    hud.borrow_mut().toggle_cards_layout();
+                }
+            });
+            MAIN_TRAY.with(|t_cell| {
+                if let Some(tray) = t_cell.borrow().as_ref() {
+                    tray.borrow_mut().update_menu_state();
+                }
+            });
+        });
+    }
+
     // Helper to pop up the modern, styled HUD context menu (used by both HUD body and system tray)
     fn show_hud_popup_menu(global_pos: Point, config: &Arc<Mutex<Config>>) {
         let cfg = config.lock().clone();

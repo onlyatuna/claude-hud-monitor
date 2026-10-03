@@ -428,21 +428,11 @@ impl HUDTrayIcon {
                 self.update_menu_state();
             }
             ACTION_LAYOUT_HORIZONTAL => {
-                {
-                    let mut cfg = self.config.lock();
-                    cfg.layout_mode = "horizontal".to_string();
-                    crate::config::ConfigManager::save(&cfg);
-                }
-                hud.apply_ui_mode("cards");
+                hud.apply_cards_layout_mode("horizontal");
                 self.update_menu_state();
             }
             ACTION_LAYOUT_VERTICAL => {
-                {
-                    let mut cfg = self.config.lock();
-                    cfg.layout_mode = "vertical".to_string();
-                    crate::config::ConfigManager::save(&cfg);
-                }
-                hud.apply_ui_mode("cards");
+                hud.apply_cards_layout_mode("vertical");
                 self.update_menu_state();
             }
             ACTION_APPEARANCE_AUTO => {

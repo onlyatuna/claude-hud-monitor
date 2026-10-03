@@ -435,7 +435,38 @@ impl HUDWindow {
     }
 
     pub fn apply_ui_mode(&mut self, mode: &str) {
-        self.persist_geometry();
+        let (old_mode, old_layout) = {
+            let cfg = self.config.lock();
+            (cfg.ui_mode.clone(), cfg.layout_mode.clone())
+        };
+        let geom = self.window.geometry();
+        {
+            let mut cfg = self.config.lock();
+            cfg.window_x = Some(geom.x);
+            cfg.window_y = Some(geom.y);
+            if old_mode == "table" {
+                cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
+                cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+            } else if old_layout == "horizontal" {
+                cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
+                cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
+            } else {
+                cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
+                cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
+            }
+            cfg.ui_mode = mode.to_string();
+            crate::config::ConfigManager::save(&cfg);
+        }
+
+        if mode == "cards" {
+            let card_layout_mode = { self.config.lock().layout_mode.clone() };
+            Self::apply_cards_layout_inner(&self.cards_container, &self.cards, &card_layout_mode);
+        }
+
+        self.apply_ui_mode_internal(mode);
+    }
+
+    fn apply_ui_mode_internal(&mut self, mode: &str) {
         let (w, h) = if mode == "table" {
             if let Some(s) = self.stack.borrow_mut().as_any_mut().downcast_mut::<StackedWidget>() {
                 s.set_current_index(1);
@@ -475,15 +506,10 @@ impl HUDWindow {
             }
         };
 
-        {
-            let mut cfg = self.config.lock();
-            cfg.ui_mode = mode.to_string();
-        }
-
         let cur_geom = self.window.geometry();
         let (nx, ny) = self.ensure_within_screen(cur_geom.x, cur_geom.y, w, h);
-        self.window
-            .set_geometry(Rect::new(nx, ny, w, h));
+        self.window.set_geometry(Rect::new(nx, ny, w, h));
+        self.cards_container.borrow().update_layout();
         self.window.render_and_present();
     }
 
@@ -511,9 +537,31 @@ impl HUDWindow {
         (cur_x, cur_y)
     }
     pub fn apply_cards_layout_mode(&mut self, mode: &str) {
-        self.config.lock().layout_mode = mode.to_string();
+        let (old_mode, old_layout) = {
+            let cfg = self.config.lock();
+            (cfg.ui_mode.clone(), cfg.layout_mode.clone())
+        };
+        let geom = self.window.geometry();
+        {
+            let mut cfg = self.config.lock();
+            cfg.window_x = Some(geom.x);
+            cfg.window_y = Some(geom.y);
+            if old_mode == "table" {
+                cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
+                cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+            } else if old_layout == "horizontal" {
+                cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
+                cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
+            } else {
+                cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
+                cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
+            }
+            cfg.layout_mode = mode.to_string();
+            cfg.ui_mode = "cards".to_string();
+            crate::config::ConfigManager::save(&cfg);
+        }
         Self::apply_cards_layout_inner(&self.cards_container, &self.cards, mode);
-        self.apply_ui_mode("cards");
+        self.apply_ui_mode_internal("cards");
     }
 
     #[allow(dead_code)]
