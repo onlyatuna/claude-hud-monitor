@@ -315,7 +315,7 @@ impl GlyphLayout {
     /// Full Qt 6 `QTextEngine::shapeTextWithHarfbuzzNG` parity:
     /// Shapes text across multiple font engines by partitioning into runs,
     /// batch-shaping each run with `rustybuzz` (with full OpenType GSUB/GPOS feature support),
-    /// and falling back to `fontdue` metrics when binary font data is unavailable.
+    /// and falling back to the face's own per-glyph metrics when binary font data is unavailable.
     pub fn shape_with_engines(text: &str, font: &Font, engines: &[FontEngine]) -> Self {
         if text.is_empty() || engines.is_empty() {
             return Self::empty();
@@ -432,7 +432,7 @@ mod tests {
             }
         };
 
-        let face = parse_face(&data, 0).unwrap();
+        let face = parse_face(&SharedFontData::from_vec(data.clone()), 0).unwrap();
         (Arc::new(data), face)
     }
 
@@ -470,7 +470,7 @@ mod tests {
         let emoji_path = std::path::Path::new("C:/Windows/Fonts/seguiemj.ttf");
         if emoji_path.exists() {
             let emoji_data = std::fs::read(emoji_path).unwrap();
-            let emoji_font = parse_face(&emoji_data, 0).unwrap();
+            let emoji_font = parse_face(&SharedFontData::from_vec(emoji_data), 0).unwrap();
             let fonts = vec![font_face, emoji_font];
             let layout = GlyphLayout::shape_with_faces("🔄 立即", &font, &fonts);
             assert_eq!(layout.glyphs[0].font_index, 1, "Emoji should resolve to fallback engine 1");
@@ -501,7 +501,7 @@ mod tests {
         let emoji_path = std::path::Path::new("C:/Windows/Fonts/seguiemj.ttf");
         if emoji_path.exists() {
             let emoji_data = std::fs::read(emoji_path).unwrap();
-            let emoji_font = parse_face(&emoji_data, 0).unwrap();
+            let emoji_font = parse_face(&SharedFontData::from_vec(emoji_data), 0).unwrap();
             let engines = vec![
                 FontEngine::new(font_face),
                 FontEngine::new(emoji_font),
@@ -526,7 +526,7 @@ mod tests {
         let emoji_path = std::path::Path::new("C:/Windows/Fonts/seguiemj.ttf");
         if emoji_path.exists() {
             let emoji_data = std::fs::read(emoji_path).unwrap();
-            let emoji_font = parse_face(&emoji_data, 0).unwrap();
+            let emoji_font = parse_face(&SharedFontData::from_vec(emoji_data.clone()), 0).unwrap();
             let engines = vec![
                 FontEngine::new(font_face).with_raw_data(data),
                 FontEngine::new(emoji_font).with_raw_data(Arc::new(emoji_data)),

@@ -143,8 +143,8 @@ pub fn parse_colr_v0_layers(font_data: &[u8], face_index: u32, glyph_id: u16) ->
     Some(result)
 }
 
-struct SkiaPathBuilder {
-    builder: PathBuilder,
+pub(crate) struct SkiaPathBuilder {
+    pub(crate) builder: PathBuilder,
 }
 
 impl rustybuzz::ttf_parser::OutlineBuilder for SkiaPathBuilder {

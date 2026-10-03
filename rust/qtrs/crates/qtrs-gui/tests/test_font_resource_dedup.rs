@@ -64,7 +64,7 @@ fn test_font_engine_shaping_with_shared_data() {
         if font_path.exists() {
             let mut db = FontDatabase::new();
             let raw_data = db.get_raw_font_data_by_path(font_path).expect("load raw data");
-            let face = qtrs_gui::text::glyph_face::parse_face(raw_data.as_slice(), 0).expect("parse face");
+            let face = qtrs_gui::text::glyph_face::parse_face(&raw_data, 0).expect("parse face");
 
             let engine = FontEngine::new(face)
                 .with_raw_data(raw_data.clone())

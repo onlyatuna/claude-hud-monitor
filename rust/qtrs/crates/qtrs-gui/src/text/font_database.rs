@@ -71,7 +71,7 @@ pub fn resolve_font_engines_global(font: &Font) -> Vec<FontEngine> {
 
 /// Like [`resolve_font_engines_global`], but loads the fallback fonts only when `text` needs them.
 ///
-/// Parsing a CJK/emoji fallback costs 200-500 ms each the first time with the `fontdue` backend,
+/// Parsing a CJK/emoji fallback can cost hundreds of ms (and hundreds of MB) with an eager backend,
 /// and the fallbacks are only ever consulted for characters the primary font has no glyph for
 /// (`GlyphLayout::partition_into_runs`). Text the primary font fully covers is therefore shaped
 /// with the primary engine alone; anything else gets the same full chain as before.
@@ -128,7 +128,7 @@ impl FontDatabase {
         data: impl Into<SharedFontData>,
     ) -> Result<SharedGlyphFace, String> {
         let shared = data.into();
-        let font_arc = parse_face(shared.as_slice(), 0)
+        let font_arc = parse_face(&shared, 0)
             .map_err(|e| format!("Failed to parse font from memory: {e}"))?;
         let key = family.to_ascii_lowercase();
         let fixed_pitch = read_faces(&mut std::io::Cursor::new(shared.as_slice()))
@@ -292,7 +292,7 @@ impl FontDatabase {
 
         // 1. Primary in-memory font data if specified
         if let Some(shared) = &font.font_data {
-            if let Ok(face) = parse_face(shared.as_slice(), 0) {
+            if let Ok(face) = parse_face(shared, 0) {
                 engines.push(
                     FontEngine::new(face)
                         .with_raw_data(shared.clone())
@@ -477,7 +477,7 @@ impl FontDatabase {
                 if file_path.is_file() {
                     let canonical = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
                     if let Some(shared) = self.file_cache.get(&canonical) {
-                        if let Ok(face) = parse_face(shared.as_slice(), 0) {
+                        if let Ok(face) = parse_face(shared, 0) {
                             return Some((shared.clone(), face));
                         }
                     }
@@ -486,7 +486,7 @@ impl FontDatabase {
                         drop(read);
                         let _p = crate::startup_trace::span(|| format!("parse_face {} ({} KB)", canonical.display(), bytes.len() / 1024));
                         let shared = SharedFontData::from_vec(bytes);
-                        if let Ok(face) = parse_face(shared.as_slice(), 0) {
+                        if let Ok(face) = parse_face(&shared, 0) {
                             self.file_cache.insert(canonical, shared.clone());
                             return Some((shared, face));
                         }
@@ -512,14 +512,14 @@ impl FontDatabase {
         let canonical = face_path.canonicalize().unwrap_or_else(|_| face_path.clone());
 
         if let Some(shared) = self.file_cache.get(&canonical) {
-            let face = parse_face(shared.as_slice(), face_index).ok()?;
+            let face = parse_face(shared, face_index).ok()?;
             return Some((shared.clone(), face));
         }
 
         let _t = crate::startup_trace::span(|| format!("read+parse (family index) {}", canonical.display()));
         let bytes = std::fs::read(&canonical).ok()?;
         let shared = SharedFontData::from_vec(bytes);
-        let face = parse_face(shared.as_slice(), face_index).ok()?;
+        let face = parse_face(&shared, face_index).ok()?;
         self.file_cache.insert(canonical, shared.clone());
         Some((shared, face))
     }

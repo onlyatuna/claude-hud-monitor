@@ -7,7 +7,7 @@ edition = "2021"
 qtrs-core = { path = "../qtrs-core" }
 tiny-skia = "0.11"
 png = "0.17"
-fontdue = "0.9.4"
+ab_glyph_rasterizer = "0.1"
 rustybuzz = "0.20.1"
 unicode-segmentation = "1.12"
 serde = { version = "1.0", features = ["derive"], optional = true }
@@ -18,3 +18,5 @@ serde = ["dep:serde"]
 
 [dev-dependencies]
 serde_json = "1.0"
+# Reference rasterizer for tests/test_outline_face_parity.rs and examples/face_compare.rs only.
+fontdue = "0.9.4"

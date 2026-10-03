@@ -60,7 +60,7 @@ panic = "abort"
 opt-level = 3
 [profile.release.package.tiny-skia-path]
 opt-level = 3
-[profile.release.package.fontdue]
+[profile.release.package.ab_glyph_rasterizer]
 opt-level = 3
 [profile.release.package.rustybuzz]
 opt-level = 3

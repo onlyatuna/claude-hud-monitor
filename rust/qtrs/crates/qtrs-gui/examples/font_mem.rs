@@ -1,4 +1,4 @@
-//! Process commit charge added by loading each HUD font (raw file bytes + parsed `fontdue::Font`).
+//! Process commit charge added by loading each HUD font (raw file bytes + the parsed glyph face).
 use qtrs_gui::text::font_database::with_global_font_database;
 
 #[repr(C)]

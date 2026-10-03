@@ -67,7 +67,7 @@ fn test_draw_text_pixels_do_not_change_once_glyphs_are_cached() {
 fn test_reusing_engines_does_not_change_how_a_family_string_shapes() {
     use qtrs_gui::text::font_database::FontDatabase;
     // "'Segoe UI', sans-serif" and the plain "Segoe UI" load the same font, but the list string gets
-    // no raw font data and so shapes through fontdue, while the plain name shapes through rustybuzz.
+    // no raw font data and so shapes through per-glyph face metrics, while the plain name shapes through rustybuzz.
     // An engine shared per *font* would hand the list string the plain name's engine as soon as
     // anything resolved "Segoe UI" first, silently switching its shaping.
     let list_font = Font::new("'Segoe UI', 'SF Pro Display', sans-serif", 12.0);
