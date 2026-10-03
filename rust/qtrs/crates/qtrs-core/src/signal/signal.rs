@@ -38,7 +38,11 @@ impl SenderGuard {
 impl Drop for SenderGuard {
     fn drop(&mut self) {
         if self.0 {
-            CURRENT_SENDER_STACK.with(|stack| stack.borrow_mut().pop());
+            let _ = CURRENT_SENDER_STACK.try_with(|stack| {
+                if let Ok(mut borrow) = stack.try_borrow_mut() {
+                    borrow.pop();
+                }
+            });
         }
     }
 }

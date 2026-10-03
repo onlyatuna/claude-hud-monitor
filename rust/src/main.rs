@@ -516,11 +516,18 @@ fn main() {
 
     // Run Qt event loop
     let exit_code = _app.exec();
-    MAIN_HUD.with(|cell| {
-        *cell.borrow_mut() = None;
+    clock_timer.stop();
+    poll_timer.stop();
+    geom_timer.stop();
+    let _ = MAIN_HUD.try_with(|cell| {
+        if let Ok(mut borrow) = cell.try_borrow_mut() {
+            *borrow = None;
+        }
     });
-    MAIN_TRAY.with(|cell| {
-        *cell.borrow_mut() = None;
+    let _ = MAIN_TRAY.try_with(|cell| {
+        if let Ok(mut borrow) = cell.try_borrow_mut() {
+            *borrow = None;
+        }
     });
     info!("Claude HUD Monitor exited cleanly with code: {}", exit_code);
     std::process::exit(exit_code);

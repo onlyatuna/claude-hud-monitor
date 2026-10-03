@@ -74,17 +74,46 @@ pub fn create_default_tray_pixmap() -> Pixmap {
 pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMenu> {
     let mut menu = create_platform_menu(native_handle);
 
-    menu.add_action(ACTION_TOGGLE_VISIBILITY, "👁️ 顯示 / 隱藏 HUD (Alt+C)");
+    // 1. Refresh & Toggle
     menu.add_action(ACTION_REFRESH_ALL, "🔄 立即重新整理所有 AI (Refresh All)");
+    menu.add_action(ACTION_TOGGLE_VISIBILITY, "👁️ 顯示 / 隱藏 HUD (Alt+C)");
     menu.add_separator();
 
-    // 1. UI Style submenu
+    // 2. Claude Account Submenu
+    let mut claude_sub = create_platform_menu(native_handle);
+    let cur_profile = cfg.claude_profile.as_str();
+    let is_auto = cur_profile.is_empty() || cur_profile.eq_ignore_ascii_case("auto");
+    let (active_prof, _) = crate::providers::claude::resolve_active_profile(cur_profile);
+
+    let auto_title = if is_auto && active_prof.id != "default" {
+        format!("🎯 智慧自動追蹤 (目前: {})", active_prof.short_name)
+    } else {
+        "🎯 智慧自動追蹤 (最近活躍)".to_string()
+    };
+    claude_sub.add_checkable(ACTION_CLAUDE_PROFILE_AUTO, &auto_title, is_auto);
+    claude_sub.add_separator();
+
+    let profiles = crate::providers::claude::discover_profiles();
+    for (i, prof) in profiles.iter().take(40).enumerate() {
+        let is_selected = !is_auto
+            && (cur_profile.eq_ignore_ascii_case(&prof.id)
+                || (cur_profile == ".claude" && prof.id == "default"));
+        claude_sub.add_checkable(
+            ACTION_CLAUDE_PROFILE_BASE + i as u32,
+            &prof.display_name,
+            is_selected,
+        );
+    }
+    menu.add_submenu("✳️ Claude 帳號 (Claude Account)", claude_sub);
+    menu.add_separator();
+
+    // 3. UI Style submenu
     let mut style_sub = create_platform_menu(native_handle);
     style_sub.add_checkable(ACTION_MODE_CARDS, "🗂️ 傳統卡片 (Classic Cards)", cfg.ui_mode == "cards");
     style_sub.add_checkable(ACTION_MODE_TABLE, "📊 儀表表格 (Modern Table)", cfg.ui_mode == "table");
     menu.add_submenu("🎭 介面風格 (UI Style)", style_sub);
 
-    // 2. Layout submenu (only in cards mode)
+    // 4. Layout submenu (only in cards mode)
     if cfg.ui_mode == "cards" {
         let mut layout_sub = create_platform_menu(native_handle);
         layout_sub.add_checkable(
@@ -100,7 +129,7 @@ pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMe
         menu.add_submenu("📐 顯示佈局 (Layout)", layout_sub);
     }
 
-    // 3. Theme submenus
+    // 5. Theme submenus
     if cfg.ui_mode == "table" {
         let mut scheme_sub = create_platform_menu(native_handle);
         scheme_sub.add_checkable(ACTION_SCHEME_SCALE, "色階模式 (Scale)", cfg.color_scheme == "scale");
@@ -113,15 +142,62 @@ pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMe
     app_sub.add_checkable(ACTION_APPEARANCE_LIGHT, "淺色模式 (Light)", cfg.appearance == "light");
     app_sub.add_checkable(ACTION_APPEARANCE_DARK, "深色模式 (Dark)", cfg.appearance == "dark");
     menu.add_submenu("🌓 外觀 (Appearance)", app_sub);
-
     menu.add_separator();
 
+    // 6. Ghost Mode
     menu.add_checkable(ACTION_CLICK_THROUGH, "👻 滑鼠點擊穿透 (Alt+Shift+C)", cfg.click_through);
-    menu.add_checkable(ACTION_ALWAYS_ON_TOP, "📌 視窗永遠置頂", cfg.always_on_top);
-    menu.add_checkable(ACTION_AUTOSTART, "🚀 開機自動啟動", is_autostart_enabled());
+
+    // 7. Always on top
+    menu.add_checkable(ACTION_ALWAYS_ON_TOP, "📌 視窗永遠置頂 (Always on Top)", cfg.always_on_top);
+
+    // 8. Lock Drag
+    menu.add_checkable(ACTION_LOCK_DRAG, "🔒 鎖定視窗位置 (Lock Drag)", cfg.locked);
+
+    // 9. Opacity Submenu
+    let mut opacity_sub = create_platform_menu(native_handle);
+    let current_op = cfg.opacity;
+    for (id, pct, val) in [
+        (ACTION_OPACITY_100, 100, 1.00),
+        (ACTION_OPACITY_90, 90, 0.90),
+        (ACTION_OPACITY_80, 80, 0.80),
+        (ACTION_OPACITY_70, 70, 0.70),
+        (ACTION_OPACITY_50, 50, 0.50),
+        (ACTION_OPACITY_30, 30, 0.30),
+    ] {
+        let is_checked = (current_op - val as f32).abs() < 0.05;
+        opacity_sub.add_checkable(id, &format!("{}%", pct), is_checked);
+    }
+    menu.add_submenu("🌗 視窗透明度 (Opacity)", opacity_sub);
+
+    // 10. Interval Submenu
+    let mut interval_sub = create_platform_menu(native_handle);
+    let cur_int = cfg.refresh_interval_sec;
+    for (id, sec) in [
+        (ACTION_INTERVAL_30, 30),
+        (ACTION_INTERVAL_60, 60),
+        (ACTION_INTERVAL_120, 120),
+        (ACTION_INTERVAL_300, 300),
+    ] {
+        interval_sub.add_checkable(id, &format!("{} 秒", sec), cur_int == sec);
+    }
+    menu.add_submenu("⏱️ 更新頻率 (Interval)", interval_sub);
+
+    // 11. Autostart
+    menu.add_checkable(ACTION_AUTOSTART, "🚀 開機自動啟動 (Start on Boot)", is_autostart_enabled());
+    menu.add_separator();
+
+    // 12. Logs
     menu.add_action(ACTION_OPEN_LOGS, "📂 開啟記錄檔目錄 (Open Logs)");
 
+    // 13. Reset Geometry
+    menu.add_action(ACTION_RESET_GEOMETRY, "📐 重設預設尺寸與位置");
+
+    // 14. Hide HUD
+    menu.add_action(ACTION_HIDE_HUD, "👁️ 隱藏 HUD (Alt+C 重新喚出)");
+
     menu.add_separator();
+
+    // 15. Exit
     menu.add_action(ACTION_EXIT, "❌ 結束程式 (Exit)");
 
     menu

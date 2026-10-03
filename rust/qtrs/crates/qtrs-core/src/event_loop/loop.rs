@@ -1,6 +1,7 @@
 use crate::event::EventFilterChain;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
@@ -200,8 +201,8 @@ pub struct EventLoop {
     pub(crate) timer_registry: Arc<Mutex<TimerRegistry>>,
     pub(crate) compressor: Arc<dyn EventCompressor>,
     pub(crate) loop_level: usize,
-    pub(crate) exit_requested: bool,
-    pub(crate) return_code: i32,
+    pub(crate) exit_requested: Arc<AtomicBool>,
+    pub(crate) return_code: Arc<AtomicI32>,
     pub(crate) custom_timeout: Option<Duration>,
 }
 
@@ -224,8 +225,8 @@ impl EventLoop {
             timer_registry,
             compressor: Arc::new(CoreCompressor),
             loop_level: 0,
-            exit_requested: false,
-            return_code: 0,
+            exit_requested: Arc::new(AtomicBool::new(false)),
+            return_code: Arc::new(AtomicI32::new(0)),
             custom_timeout: None,
         };
         register_thread_event_loop(ThreadId::current(), el.handle());
@@ -251,8 +252,8 @@ impl EventLoop {
             timer_registry,
             compressor: Arc::new(CoreCompressor),
             loop_level: 0,
-            exit_requested: false,
-            return_code: 0,
+            exit_requested: Arc::new(AtomicBool::new(false)),
+            return_code: Arc::new(AtomicI32::new(0)),
             custom_timeout: None,
         };
         register_thread_event_loop(ThreadId::current(), el.handle());
@@ -276,11 +277,11 @@ impl EventLoop {
     }
 
     pub fn is_exit_requested(&self) -> bool {
-        self.exit_requested
+        self.exit_requested.load(Ordering::SeqCst)
     }
 
     pub fn return_code(&self) -> i32 {
-        self.return_code
+        self.return_code.load(Ordering::SeqCst)
     }
 
     pub fn next_timeout(&self) -> Option<Duration> {
@@ -334,8 +335,8 @@ impl EventLoop {
     pub fn send_posted_events(&mut self) -> usize {
         let (delivered, quit_code) = send_posted_events_for_queue(&self.queue, self.loop_level);
         if let Some(code) = quit_code {
-            self.exit_requested = true;
-            self.return_code = code;
+            self.exit_requested.store(true, Ordering::SeqCst);
+            self.return_code.store(code, Ordering::SeqCst);
         }
         delivered
     }
@@ -345,12 +346,12 @@ impl EventLoop {
         let had_posted = delivered > 0;
 
         let next_timeout = self.next_timeout();
-        let effective_wait = can_wait && !self.exit_requested;
+        let effective_wait = can_wait && !self.exit_requested.load(Ordering::SeqCst);
 
         let res = self.dispatcher.process_events(effective_wait, next_timeout);
         if let DispatchResult::Quit(code) = res {
-            self.exit_requested = true;
-            self.return_code = code;
+            self.exit_requested.store(true, Ordering::SeqCst);
+            self.return_code.store(code, Ordering::SeqCst);
         }
 
         let had_system_events = matches!(
@@ -363,20 +364,20 @@ impl EventLoop {
     pub fn exec(&mut self) -> i32 {
         self.loop_level += 1;
         // Note: Do not overwrite self.exit_requested to false if exit() was already invoked prior to exec()
-        while !self.exit_requested {
+        while !self.exit_requested.load(Ordering::SeqCst) {
             self.process_events(true);
         }
         self.loop_level -= 1;
-        self.return_code
+        self.return_code.load(Ordering::SeqCst)
     }
 
-    pub fn exit(&mut self, return_code: i32) {
-        self.exit_requested = true;
-        self.return_code = return_code;
+    pub fn exit(&self, return_code: i32) {
+        self.exit_requested.store(true, Ordering::SeqCst);
+        self.return_code.store(return_code, Ordering::SeqCst);
         self.dispatcher.wake_up();
     }
 
-    pub fn quit(&mut self) {
+    pub fn quit(&self) {
         self.exit(0);
     }
 
@@ -385,6 +386,8 @@ impl EventLoop {
             dispatcher: Arc::new(self.dispatcher.clone_handle()),
             queue: Arc::clone(&self.queue),
             compressor: Arc::clone(&self.compressor),
+            exit_requested: Arc::clone(&self.exit_requested),
+            return_code: Arc::clone(&self.return_code),
         }
     }
 
@@ -472,6 +475,8 @@ pub struct EventLoopHandle {
     pub dispatcher: Arc<dyn EventDispatcherHandle>,
     pub queue: Arc<Mutex<EventQueue>>,
     pub compressor: Arc<dyn EventCompressor>,
+    pub exit_requested: Arc<AtomicBool>,
+    pub return_code: Arc<AtomicI32>,
 }
 
 impl EventLoopHandle {
@@ -500,6 +505,16 @@ impl EventLoopHandle {
 
     pub fn wake_up(&self) {
         self.dispatcher.wake_up();
+    }
+
+    pub fn exit(&self, return_code: i32) {
+        self.exit_requested.store(true, Ordering::SeqCst);
+        self.return_code.store(return_code, Ordering::SeqCst);
+        self.dispatcher.wake_up();
+    }
+
+    pub fn quit(&self) {
+        self.exit(0);
     }
 }
 

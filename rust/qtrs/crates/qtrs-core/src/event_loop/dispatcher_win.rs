@@ -23,14 +23,20 @@ pub(crate) fn remove_posted_timer_event(hwnd: HWND, timer_id: u32) {
                 if msg.wParam as u32 == timer_id {
                     continue;
                 } else {
-                    PENDING_WM_TIMERS.with(|q| q.borrow_mut().push(msg.wParam as u32));
+                    let _ = PENDING_WM_TIMERS.try_with(|q| {
+                        if let Ok(mut borrow) = q.try_borrow_mut() {
+                            borrow.push(msg.wParam as u32);
+                        }
+                    });
                 }
             }
         }
     }
 
-    PENDING_WM_TIMERS.with(|q| {
-        q.borrow_mut().retain(|&id| id != timer_id);
+    let _ = PENDING_WM_TIMERS.try_with(|q| {
+        if let Ok(mut borrow) = q.try_borrow_mut() {
+            borrow.retain(|&id| id != timer_id);
+        }
     });
 }
 

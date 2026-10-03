@@ -160,8 +160,12 @@ impl CoreApplication {
     /// Processes pending events for the calling thread (`QCoreApplication::processEvents`).
     pub fn process_events(can_wait: bool) -> bool {
         LOCAL_EVENT_LOOP.with(|el| {
-            if let Some(loop_ref) = el.borrow_mut().as_mut() {
-                loop_ref.process_events(can_wait)
+            if let Ok(mut loop_ref) = el.try_borrow_mut() {
+                if let Some(loop_ref) = loop_ref.as_mut() {
+                    loop_ref.process_events(can_wait)
+                } else {
+                    false
+                }
             } else {
                 false
             }
@@ -170,11 +174,17 @@ impl CoreApplication {
 
     /// Tells the application to exit with a return code (`QCoreApplication::exit`).
     pub fn exit(return_code: i32) {
-        LOCAL_EVENT_LOOP.with(|el| {
-            if let Some(loop_ref) = el.borrow_mut().as_mut() {
-                loop_ref.exit(return_code);
-            }
-        });
+        if let Some(handle) = crate::event_loop::get_thread_event_sender(ThreadId::current()) {
+            handle.exit(return_code);
+        } else {
+            let _ = LOCAL_EVENT_LOOP.try_with(|el| {
+                if let Ok(loop_ref) = el.try_borrow() {
+                    if let Some(l) = loop_ref.as_ref() {
+                        l.exit(return_code);
+                    }
+                }
+            });
+        }
     }
 
     /// Tells the application to exit with return code 0 (`QCoreApplication::quit`).

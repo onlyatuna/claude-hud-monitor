@@ -237,13 +237,23 @@ pub fn register_thread_timer_context(
 }
 
 pub fn unregister_thread_timer_context() {
-    THREAD_TIMER_CONTEXT.with(|ctx| {
-        *ctx.borrow_mut() = None;
+    let _ = THREAD_TIMER_CONTEXT.try_with(|ctx| {
+        if let Ok(mut borrow) = ctx.try_borrow_mut() {
+            *borrow = None;
+        }
     });
 }
 
 pub fn has_thread_timer_context() -> bool {
-    THREAD_TIMER_CONTEXT.with(|ctx| ctx.borrow().is_some())
+    THREAD_TIMER_CONTEXT
+        .try_with(|ctx| {
+            if let Ok(borrow) = ctx.try_borrow() {
+                borrow.is_some()
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false)
 }
 
 pub fn with_thread_timer_context<R>(f: impl FnOnce(&ThreadTimerContext) -> R) -> Option<R> {
@@ -426,19 +436,21 @@ impl Timer {
         if self.is_active() {
             let id = self.id;
             let interval_ms = self.interval_ms;
-            THREAD_TIMER_CONTEXT.with(|ctx| {
-                if let Some(ctx) = ctx.borrow().as_ref() {
-                    let mut reg = ctx.registry.lock().unwrap();
-                    reg.unregister(id);
-                    if interval_ms > 0 {
-                        #[cfg(windows)]
-                        {
-                            if !ctx.internal_hwnd.is_null() {
-                                unsafe {
-                                    windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(
-                                        ctx.internal_hwnd,
-                                        id.0 as usize,
-                                    );
+            let _ = THREAD_TIMER_CONTEXT.try_with(|ctx| {
+                if let Ok(borrow) = ctx.try_borrow() {
+                    if let Some(ctx) = borrow.as_ref() {
+                        let mut reg = ctx.registry.lock().unwrap();
+                        reg.unregister(id);
+                        if interval_ms > 0 {
+                            #[cfg(windows)]
+                            {
+                                if !ctx.internal_hwnd.is_null() {
+                                    unsafe {
+                                        windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(
+                                            ctx.internal_hwnd,
+                                            id.0 as usize,
+                                        );
+                                    }
                                 }
                             }
                         }
