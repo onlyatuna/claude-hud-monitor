@@ -5,6 +5,7 @@ the real HUD, white text, one glyph per image at a pixel-aligned origin; the alp
 Rust side: examples/glyph_dump (uses the active backend, see text::glyph_face::parse_face).
 
 Usage: python qt_glyph_compare.py [dpr=1.25] [sizes=12,13,14,18,24] [family=Segoe UI] [font file]
+Env: GLYPH_CHARS (characters), GLYPH_DUMP (glyph_dump binary), GLYPH_HINTING (default|none|vertical|full).
 """
 import json, os, subprocess, sys
 import numpy as np
@@ -34,6 +35,11 @@ def qt_alpha(ch, size):
     p.scale(dpr, dpr)
     f = QFont(family)
     f.setPixelSize(int(size))
+    hint = os.environ.get("GLYPH_HINTING")  # default|none|vertical|full
+    if hint:
+        f.setHintingPreference(
+            {"default": QFont.PreferDefaultHinting, "none": QFont.PreferNoHinting,
+             "vertical": QFont.PreferVerticalHinting, "full": QFont.PreferFullHinting}[hint])
     p.setFont(f)
     p.setPen(QColor(255, 255, 255, 255))
     p.drawText(QPointF(OX / dpr, OY / dpr), ch)
