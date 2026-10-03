@@ -80,7 +80,6 @@ impl Default for UsageMetrics {
     }
 }
 
-
 impl UsageMetrics {
     pub fn error_result(
         provider_id: &str,

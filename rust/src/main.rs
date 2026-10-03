@@ -16,16 +16,15 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
+use config::{Config, ConfigManager};
+use hotkey::HotkeyManager;
 use log::info;
 use parking_lot::Mutex;
-use qtrs_core::application::CoreApplication;
 use qtrs_core::timer::Timer;
 use qtrs_gui::geometry::primitives::Point;
 use qtrs_platform::platform_tray::TrayMessageIcon;
 use qtrs_platform::tray_icon::TrayActivation;
 use qtrs_widgets::application::Application;
-use config::{Config, ConfigManager};
-use hotkey::HotkeyManager;
 use refresh_controller::RefreshController;
 use ui::hud_window::HUDWindow;
 use ui::tray_icon::HUDTrayIcon;
@@ -120,7 +119,8 @@ fn main() {
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
         let _app = Application::new(std::env::args().collect());
 
-        let mut hud = HUDWindow::new(Arc::clone(&config), refresh_ctrl).expect("Failed to initialize HUDWindow");
+        let mut hud = HUDWindow::new(Arc::clone(&config), refresh_ctrl)
+            .expect("Failed to initialize HUDWindow");
 
         // Realistic Mock metrics for Claude
         let claude_metrics = crate::providers::base::UsageMetrics {
@@ -129,7 +129,9 @@ fn main() {
             metric1_title: "SESSION 5H".to_string(),
             metric1_val: Some(42.5),
             metric1_text: "43%".to_string(),
-            metric1_reset: Some(chrono::Utc::now() + chrono::Duration::hours(2) + chrono::Duration::minutes(15)),
+            metric1_reset: Some(
+                chrono::Utc::now() + chrono::Duration::hours(2) + chrono::Duration::minutes(15),
+            ),
             metric2_title: "WEEKLY 7D".to_string(),
             metric2_val: Some(68.0),
             metric2_text: "68%".to_string(),
@@ -152,7 +154,9 @@ fn main() {
             metric1_title: "DAILY QUOTA".to_string(),
             metric1_val: Some(18.0),
             metric1_text: "18%".to_string(),
-            metric1_reset: Some(chrono::Utc::now() + chrono::Duration::hours(18) + chrono::Duration::minutes(40)),
+            metric1_reset: Some(
+                chrono::Utc::now() + chrono::Duration::hours(18) + chrono::Duration::minutes(40),
+            ),
             metric2_title: "BURST LIMIT".to_string(),
             metric2_val: Some(5.0),
             metric2_text: "5%".to_string(),
@@ -200,7 +204,9 @@ fn main() {
         let _ = qtrs_core::application::CoreApplication::process_events(false);
         hud.window.render_and_present();
         let table_path = out_dir.join("hud_table_mode.png");
-        hud.window.save_png(&table_path).expect("failed to save table png");
+        hud.window
+            .save_png(&table_path)
+            .expect("failed to save table png");
         info!("Saved table mode snapshot: {}", table_path.display());
 
         // 2. Cards mode horizontal snapshot
@@ -209,8 +215,13 @@ fn main() {
         let _ = qtrs_core::application::CoreApplication::process_events(false);
         hud.window.render_and_present();
         let cards_h_path = out_dir.join("hud_cards_horizontal.png");
-        hud.window.save_png(&cards_h_path).expect("failed to save cards h png");
-        info!("Saved cards horizontal snapshot: {}", cards_h_path.display());
+        hud.window
+            .save_png(&cards_h_path)
+            .expect("failed to save cards h png");
+        info!(
+            "Saved cards horizontal snapshot: {}",
+            cards_h_path.display()
+        );
 
         // 3. Cards mode vertical snapshot
         hud.apply_cards_layout_mode("vertical");
@@ -218,7 +229,9 @@ fn main() {
         let _ = qtrs_core::application::CoreApplication::process_events(false);
         hud.window.render_and_present();
         let cards_v_path = out_dir.join("hud_cards_vertical.png");
-        hud.window.save_png(&cards_v_path).expect("failed to save cards v png");
+        hud.window
+            .save_png(&cards_v_path)
+            .expect("failed to save cards v png");
         info!("Saved cards vertical snapshot: {}", cards_v_path.display());
         // 4. Context Menu snapshot
         use qtrs_gui::paint::{Painter, Pixmap};
@@ -234,8 +247,7 @@ fn main() {
             menu_size.width,
             menu_size.height,
         ));
-        let mut menu_pixmap =
-            Pixmap::new(menu_size.width as u32, menu_size.height as u32).unwrap();
+        let mut menu_pixmap = Pixmap::new(menu_size.width as u32, menu_size.height as u32).unwrap();
         menu_pixmap.fill(Color::TRANSPARENT);
         {
             let mut painter = Painter::begin(&mut menu_pixmap);
@@ -254,7 +266,10 @@ fn main() {
     // Single instance protection and IPC wake-up broadcast across all platforms
     use qtrs_platform::{SingleInstance, SingleInstanceCommand, SingleInstanceResult};
 
-    let single_instance = SingleInstance::acquire("ClaudeHUDMonitorSingleInstance", SingleInstanceCommand::WakeUp);
+    let single_instance = SingleInstance::acquire(
+        "ClaudeHUDMonitorSingleInstance",
+        SingleInstanceCommand::WakeUp,
+    );
     let _instance_guard = match single_instance {
         SingleInstanceResult::Primary(guard) => {
             #[cfg(target_os = "windows")]
@@ -262,7 +277,9 @@ fn main() {
                 WAKE_MSG.store(guard.wake_message_id(), Ordering::Relaxed);
             }
             guard.on_command(|_cmd| {
-                log::info!("[SingleInstance] Received remote wake-up command from secondary instance");
+                log::info!(
+                    "[SingleInstance] Received remote wake-up command from secondary instance"
+                );
                 WAKE_REQUESTED.store(true, Ordering::Relaxed);
             });
             guard
@@ -302,7 +319,7 @@ fn main() {
     let mut _app = Application::new(std::env::args().collect());
 
     #[cfg(target_os = "windows")]
-    CoreApplication::install_native_event_filter(Box::new(WakeFilter));
+    qtrs_core::application::CoreApplication::install_native_event_filter(Box::new(WakeFilter));
 
     let main_thread_id = qtrs_core::object::ThreadId::current();
 
@@ -333,18 +350,27 @@ fn main() {
     });
 
     // Connect tray activations
-    tray.borrow().tray.on_activated.connect(move |act: &TrayActivation| {
-        if *act == TrayActivation::Trigger {
-            MAIN_HUD.with(|cell| {
-                if let Some(hud) = cell.borrow().as_ref() {
-                    hud.borrow_mut().toggle_visibility();
-                }
-            });
-        }
-    });
+    tray.borrow()
+        .tray
+        .on_activated
+        .connect(move |act: &TrayActivation| {
+            if *act == TrayActivation::Trigger {
+                MAIN_HUD.with(|cell| {
+                    if let Some(hud) = cell.borrow().as_ref() {
+                        hud.borrow_mut().toggle_visibility();
+                    }
+                });
+            }
+        });
 
     // Connect title bar layout toggle button ("⇄")
-    if let Some(btn) = hud.borrow().layout_toggle_btn.borrow_mut().as_any_mut().downcast_mut::<qtrs_widgets::button::Button>() {
+    if let Some(btn) = hud
+        .borrow()
+        .layout_toggle_btn
+        .borrow_mut()
+        .as_any_mut()
+        .downcast_mut::<qtrs_widgets::button::Button>()
+    {
         btn.clicked.connect(move |()| {
             MAIN_HUD.with(|h_cell| {
                 if let Some(hud) = h_cell.borrow().as_ref() {
@@ -388,13 +414,16 @@ fn main() {
 
     // Connect system tray context menu request
     let config_clone = Arc::clone(&config);
-    tray.borrow().tray.on_context_menu_requested.connect(move |pos: &Point| {
-        let global_pos = *pos;
-        let cfg_clone = Arc::clone(&config_clone);
-        Timer::single_shot(0, move || {
-            show_hud_popup_menu(global_pos, &cfg_clone);
+    tray.borrow()
+        .tray
+        .on_context_menu_requested
+        .connect(move |pos: &Point| {
+            let global_pos = *pos;
+            let cfg_clone = Arc::clone(&config_clone);
+            Timer::single_shot(0, move || {
+                show_hud_popup_menu(global_pos, &cfg_clone);
+            });
         });
-    });
 
     // Fallback if platform menu action is emitted directly
     tray.borrow().tray.on_menu_action.connect(move |id: &u32| {
@@ -419,12 +448,14 @@ fn main() {
 
     // Connect window body right-click context menu (mirrors Python contextMenuEvent via QPainter Menu)
     let config_clone2 = Arc::clone(&config);
-    hud.borrow_mut().window.set_context_menu_handler(move |global_pos| {
-        let cfg_clone = Arc::clone(&config_clone2);
-        Timer::single_shot(0, move || {
-            show_hud_popup_menu(global_pos, &cfg_clone);
+    hud.borrow_mut()
+        .window
+        .set_context_menu_handler(move |global_pos| {
+            let cfg_clone = Arc::clone(&config_clone2);
+            Timer::single_shot(0, move || {
+                show_hud_popup_menu(global_pos, &cfg_clone);
+            });
         });
-    });
 
     // Global hotkey manager
     let hotkey_enabled = { config.lock().hotkey_enabled };
@@ -461,7 +492,9 @@ fn main() {
 
     // Safe click-through initialization: prevent lockout if hotkeys failed (mirrors Python _safe_init_click_through)
     if hotkey.is_none() && config.lock().click_through {
-        log::warn!("[HUD] Click-through mode disabled on startup: hotkeys unavailable to prevent lockout");
+        log::warn!(
+            "[HUD] Click-through mode disabled on startup: hotkeys unavailable to prevent lockout"
+        );
         config.lock().click_through = false;
         hud.borrow_mut().set_click_through(false);
         tray.borrow_mut().update_menu_state();

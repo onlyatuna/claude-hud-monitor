@@ -64,7 +64,7 @@ pub fn create_platform_menu(_native_handle: isize) -> Box<dyn PlatformMenu> {
     }
     #[cfg(target_os = "linux")]
     {
-        Box::new(DBusMenu::new("/MenuBar/1"))
+        Box::new(DBusMenu::new())
     }
     #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {

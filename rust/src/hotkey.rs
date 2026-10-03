@@ -11,10 +11,10 @@
 // cross-thread GUI calls.
 
 use log::{info, warn};
+use parking_lot::Mutex;
 #[cfg(target_os = "windows")]
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::{AtomicBool, Ordering};
-use parking_lot::Mutex;
 use std::sync::Arc;
 use std::thread;
 type HotkeyNotifyCallback = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
@@ -125,7 +125,9 @@ impl HotkeyManager {
             let tid_clone = Arc::clone(&thread_id);
             let handle = thread::Builder::new()
                 .name("hotkey-win32".to_owned())
-                .spawn(move || windows_hotkey_loop(t_flag, c_flag, notify_clone, tid_clone, mods, vk))
+                .spawn(move || {
+                    windows_hotkey_loop(t_flag, c_flag, notify_clone, tid_clone, mods, vk)
+                })
                 .map_err(|e| format!("Failed to start hotkey thread: {e}"))?;
             Ok(Self {
                 toggle_flag,

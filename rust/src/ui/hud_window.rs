@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use qtrs_core::QObject;
 use chrono::Local;
 use parking_lot::Mutex;
+use qtrs_core::QObject;
 use qtrs_gui::geometry::primitives::{Margins, Rect, RectF};
 use qtrs_gui::paint::{Brush, Pen};
 use qtrs_gui::tiny_skia::Color;
@@ -180,20 +180,24 @@ impl HUDWindow {
         header_layout.add_widget(time_label.clone());
 
         let header_widget = make_widget(EmptyWidget::new());
-        header_widget.borrow_mut().set_size_policy(qtrs_widgets::QSizePolicy::new(
-            qtrs_widgets::Policy::Expanding,
-            qtrs_widgets::Policy::Fixed,
-        ));
+        header_widget
+            .borrow_mut()
+            .set_size_policy(qtrs_widgets::QSizePolicy::new(
+                qtrs_widgets::Policy::Expanding,
+                qtrs_widgets::Policy::Fixed,
+            ));
         header_widget
             .borrow_mut()
             .set_layout(Box::new(header_layout));
 
         // Page 0: Cards mode
         let cards_container = make_widget(EmptyWidget::new());
-        cards_container.borrow_mut().set_size_policy(qtrs_widgets::QSizePolicy::new(
-            qtrs_widgets::Policy::Expanding,
-            qtrs_widgets::Policy::Expanding,
-        ));
+        cards_container
+            .borrow_mut()
+            .set_size_policy(qtrs_widgets::QSizePolicy::new(
+                qtrs_widgets::Policy::Expanding,
+                qtrs_widgets::Policy::Expanding,
+            ));
         let mut cards = HashMap::new();
         cards.insert("claude".to_string(), ProviderCardWidget::new("claude"));
         cards.insert("agy".to_string(), ProviderCardWidget::new("agy"));
@@ -208,7 +212,11 @@ impl HUDWindow {
 
         // Stacked container
         let stack: WidgetRef = make_widget(StackedWidget::new());
-        if let Some(s) = stack.borrow_mut().as_any_mut().downcast_mut::<StackedWidget>() {
+        if let Some(s) = stack
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<StackedWidget>()
+        {
             s.add_widget(cards_container.clone());
             s.add_widget(table.widget());
             let active_index = if ui_mode == "table" { 1 } else { 0 };
@@ -260,6 +268,8 @@ impl HUDWindow {
             };
             #[cfg(windows)]
             qtrs_platform::cursor::win32_cursor::Win32Cursor::set_shape(shape);
+            #[cfg(not(windows))]
+            let _ = shape;
         });
 
         let cfg_press = Arc::clone(&config);
@@ -414,9 +424,7 @@ impl HUDWindow {
     pub fn set_click_through(&mut self, enabled: bool) {
         self.is_click_through = enabled;
         self.window.set_click_through(enabled);
-        self.ghost_label
-            .borrow_mut()
-            .set_visible(enabled);
+        self.ghost_label.borrow_mut().set_visible(enabled);
         self.config.lock().click_through = enabled;
         self.window.render_and_present();
     }
@@ -468,7 +476,12 @@ impl HUDWindow {
 
     fn apply_ui_mode_internal(&mut self, mode: &str) {
         let (w, h) = if mode == "table" {
-            if let Some(s) = self.stack.borrow_mut().as_any_mut().downcast_mut::<StackedWidget>() {
+            if let Some(s) = self
+                .stack
+                .borrow_mut()
+                .as_any_mut()
+                .downcast_mut::<StackedWidget>()
+            {
                 s.set_current_index(1);
             }
             set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
@@ -481,17 +494,20 @@ impl HUDWindow {
                 cfg.table_height.max(MIN_TABLE_HEIGHT) as i32,
             )
         } else {
-            if let Some(s) = self.stack.borrow_mut().as_any_mut().downcast_mut::<StackedWidget>() {
+            if let Some(s) = self
+                .stack
+                .borrow_mut()
+                .as_any_mut()
+                .downcast_mut::<StackedWidget>()
+            {
                 s.set_current_index(0);
             }
             set_label_text(&self.title_label, "AI AGENT HUD");
             self.layout_toggle_btn.borrow_mut().set_visible(true);
             let cfg = self.config.lock();
             if cfg.layout_mode == "horizontal" {
-                self.window.set_minimum_size(
-                    MIN_HORIZONTAL_WIDTH as i32,
-                    MIN_HORIZONTAL_HEIGHT as i32,
-                );
+                self.window
+                    .set_minimum_size(MIN_HORIZONTAL_WIDTH as i32, MIN_HORIZONTAL_HEIGHT as i32);
                 (
                     cfg.horizontal_width.max(MIN_HORIZONTAL_WIDTH) as i32,
                     cfg.horizontal_height.max(MIN_HORIZONTAL_HEIGHT) as i32,
@@ -670,9 +686,15 @@ impl HUDWindow {
             if cfg.ui_mode == "table" {
                 (DEFAULT_TABLE_WIDTH as i32, DEFAULT_TABLE_HEIGHT as i32)
             } else if cfg.layout_mode == "horizontal" {
-                (DEFAULT_HORIZONTAL_WIDTH as i32, DEFAULT_HORIZONTAL_HEIGHT as i32)
+                (
+                    DEFAULT_HORIZONTAL_WIDTH as i32,
+                    DEFAULT_HORIZONTAL_HEIGHT as i32,
+                )
             } else {
-                (DEFAULT_VERTICAL_WIDTH as i32, DEFAULT_VERTICAL_HEIGHT as i32)
+                (
+                    DEFAULT_VERTICAL_WIDTH as i32,
+                    DEFAULT_VERTICAL_HEIGHT as i32,
+                )
             }
         };
 

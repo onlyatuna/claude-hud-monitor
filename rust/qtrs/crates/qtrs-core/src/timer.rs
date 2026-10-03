@@ -208,6 +208,14 @@ impl TimerRegistry {
     pub fn next_deadline(&self) -> Option<u64> {
         self.entries.values().map(|e| e.next_fire_ms).min()
     }
+
+    pub fn expired_timers(&self, now_ms: u64) -> Vec<TimerId> {
+        self.entries
+            .values()
+            .filter(|e| !e.in_timer_event && now_ms >= e.next_fire_ms)
+            .map(|e| e.id)
+            .collect()
+    }
 }
 
 #[derive(Clone)]
@@ -830,6 +838,7 @@ mod tests {
         assert!(!timer.is_active());
     }
 
+    #[cfg(windows)]
     fn spin_until(
         dispatcher: &mut crate::event_loop::Win32EventDispatcher,
         registry: &mut TimerRegistry,
@@ -847,6 +856,7 @@ mod tests {
         true
     }
 
+    #[cfg(windows)]
     #[test]
     fn test_single_shot_timer() {
         use crate::event_loop::Win32EventDispatcher;
@@ -888,6 +898,7 @@ mod tests {
         );
     }
 
+    #[cfg(windows)]
     #[test]
     fn test_timer_cancellation() {
         use crate::event_loop::Win32EventDispatcher;

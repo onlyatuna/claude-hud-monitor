@@ -1,3 +1,4 @@
+#[allow(unused_imports)]
 use qtrs_gui::geometry::primitives::Point;
 
 /// Representation of IME composition context.

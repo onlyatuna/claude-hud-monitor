@@ -105,7 +105,6 @@ fn default_appearance() -> String {
     "auto".to_owned()
 }
 
-
 fn default_layout_mode() -> String {
     "vertical".to_owned()
 }

@@ -41,6 +41,7 @@ pub struct SingleInstanceGuard {
     #[cfg(windows)]
     wake_msg_id: u32,
     #[cfg(not(windows))]
+    #[allow(dead_code)]
     lock_file: Option<std::fs::File>,
     #[cfg(not(windows))]
     socket_path: Option<std::path::PathBuf>,
@@ -242,7 +243,7 @@ impl SingleInstance {
 
         // Bind UnixListener
         let listener_stop = Arc::new(AtomicBool::new(false));
-        let command_callbacks = Arc::new(Mutex::new(Vec::new()));
+        let command_callbacks: Arc<Mutex<Vec<CommandCallback>>> = Arc::new(Mutex::new(Vec::new()));
 
         if let Ok(listener) = UnixListener::bind(&socket_path) {
             let _ = listener.set_nonblocking(true);

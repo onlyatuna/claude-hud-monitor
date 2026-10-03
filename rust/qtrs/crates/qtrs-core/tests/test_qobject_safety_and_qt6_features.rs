@@ -243,10 +243,9 @@ fn test_qobject_start_and_kill_timer() {
     // Initialize thread timer context
     let registry = Arc::new(std::sync::Mutex::new(qtrs_core::timer::TimerRegistry::new()));
     #[cfg(windows)]
-    let hwnd = std::ptr::null_mut();
+    qtrs_core::timer::register_thread_timer_context(registry.clone(), std::ptr::null_mut());
     #[cfg(not(windows))]
-    let hwnd = std::ptr::null_mut();
-    qtrs_core::timer::register_thread_timer_context(registry.clone(), hwnd);
+    qtrs_core::timer::register_thread_timer_context(registry.clone());
 
     let t1 = widget.start_timer(100, TimerType::Coarse);
     assert!(t1.is_valid());

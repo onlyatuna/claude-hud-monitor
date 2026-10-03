@@ -1,17 +1,16 @@
 //! System tray icon component matching Python ui/tray_icon.py.
 
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
+use crate::autostart::{is_autostart_enabled, set_autostart};
 use qtrs_gui::paint::pixmap::Pixmap;
 use qtrs_gui::tiny_skia::Color;
-use crate::autostart::{is_autostart_enabled, set_autostart};
 use qtrs_platform::menu::{create_platform_menu, PlatformMenu};
 use qtrs_platform::tray_icon::TrayIcon;
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;
-
 
 // Menu Action IDs
 pub const ACTION_TOGGLE_VISIBILITY: u32 = 1;
@@ -110,8 +109,16 @@ pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMe
 
     // 3. UI Style submenu
     let mut style_sub = create_platform_menu(native_handle);
-    style_sub.add_checkable(ACTION_MODE_CARDS, "🗂️ 傳統卡片 (Classic Cards)", cfg.ui_mode == "cards");
-    style_sub.add_checkable(ACTION_MODE_TABLE, "📊 儀表表格 (Modern Table)", cfg.ui_mode == "table");
+    style_sub.add_checkable(
+        ACTION_MODE_CARDS,
+        "🗂️ 傳統卡片 (Classic Cards)",
+        cfg.ui_mode == "cards",
+    );
+    style_sub.add_checkable(
+        ACTION_MODE_TABLE,
+        "📊 儀表表格 (Modern Table)",
+        cfg.ui_mode == "table",
+    );
     menu.add_submenu("🎭 介面風格 (UI Style)", style_sub);
 
     // 4. Layout submenu (only in cards mode)
@@ -133,23 +140,51 @@ pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMe
     // 5. Theme submenus
     if cfg.ui_mode == "table" {
         let mut scheme_sub = create_platform_menu(native_handle);
-        scheme_sub.add_checkable(ACTION_SCHEME_SCALE, "色階模式 (Scale)", cfg.color_scheme == "scale");
-        scheme_sub.add_checkable(ACTION_SCHEME_DUO, "雙色模式 (Duo)", cfg.color_scheme == "duo");
+        scheme_sub.add_checkable(
+            ACTION_SCHEME_SCALE,
+            "色階模式 (Scale)",
+            cfg.color_scheme == "scale",
+        );
+        scheme_sub.add_checkable(
+            ACTION_SCHEME_DUO,
+            "雙色模式 (Duo)",
+            cfg.color_scheme == "duo",
+        );
         menu.add_submenu("🎨 配色 (Colors)", scheme_sub);
     }
 
     let mut app_sub = create_platform_menu(native_handle);
-    app_sub.add_checkable(ACTION_APPEARANCE_AUTO, "跟隨系統 (Auto)", cfg.appearance == "auto");
-    app_sub.add_checkable(ACTION_APPEARANCE_LIGHT, "淺色模式 (Light)", cfg.appearance == "light");
-    app_sub.add_checkable(ACTION_APPEARANCE_DARK, "深色模式 (Dark)", cfg.appearance == "dark");
+    app_sub.add_checkable(
+        ACTION_APPEARANCE_AUTO,
+        "跟隨系統 (Auto)",
+        cfg.appearance == "auto",
+    );
+    app_sub.add_checkable(
+        ACTION_APPEARANCE_LIGHT,
+        "淺色模式 (Light)",
+        cfg.appearance == "light",
+    );
+    app_sub.add_checkable(
+        ACTION_APPEARANCE_DARK,
+        "深色模式 (Dark)",
+        cfg.appearance == "dark",
+    );
     menu.add_submenu("🌓 外觀 (Appearance)", app_sub);
     menu.add_separator();
 
     // 6. Ghost Mode
-    menu.add_checkable(ACTION_CLICK_THROUGH, "👻 滑鼠點擊穿透 (Alt+Shift+C)", cfg.click_through);
+    menu.add_checkable(
+        ACTION_CLICK_THROUGH,
+        "👻 滑鼠點擊穿透 (Alt+Shift+C)",
+        cfg.click_through,
+    );
 
     // 7. Always on top
-    menu.add_checkable(ACTION_ALWAYS_ON_TOP, "📌 視窗永遠置頂 (Always on Top)", cfg.always_on_top);
+    menu.add_checkable(
+        ACTION_ALWAYS_ON_TOP,
+        "📌 視窗永遠置頂 (Always on Top)",
+        cfg.always_on_top,
+    );
 
     // 8. Lock Drag
     menu.add_checkable(ACTION_LOCK_DRAG, "🔒 鎖定視窗位置 (Lock Drag)", cfg.locked);
@@ -184,7 +219,11 @@ pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMe
     menu.add_submenu("⏱️ 更新頻率 (Interval)", interval_sub);
 
     // 11. Autostart
-    menu.add_checkable(ACTION_AUTOSTART, "🚀 開機自動啟動 (Start on Boot)", is_autostart_enabled());
+    menu.add_checkable(
+        ACTION_AUTOSTART,
+        "🚀 開機自動啟動 (Start on Boot)",
+        is_autostart_enabled(),
+    );
     menu.add_separator();
 
     // 12. Logs
@@ -229,7 +268,11 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     };
 
     // 1. Refresh
-    add_item(&mut menu, ACTION_REFRESH_ALL, "🔄 立即重新整理所有 AI (Refresh All)");
+    add_item(
+        &mut menu,
+        ACTION_REFRESH_ALL,
+        "🔄 立即重新整理所有 AI (Refresh All)",
+    );
     menu.add_separator();
 
     // 2. Claude Account Submenu (PR 13)
@@ -272,8 +315,18 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     {
         let mut s = style_sub.borrow_mut();
         s.set_dark_mode(cfg.appearance != "light");
-        add_check(&mut s, ACTION_MODE_CARDS, "🗂️ 傳統卡片 (Classic Cards)", cfg.ui_mode == "cards");
-        add_check(&mut s, ACTION_MODE_TABLE, "📊 儀表表格 (Modern Table)", cfg.ui_mode == "table");
+        add_check(
+            &mut s,
+            ACTION_MODE_CARDS,
+            "🗂️ 傳統卡片 (Classic Cards)",
+            cfg.ui_mode == "cards",
+        );
+        add_check(
+            &mut s,
+            ACTION_MODE_TABLE,
+            "📊 儀表表格 (Modern Table)",
+            cfg.ui_mode == "table",
+        );
     }
     menu.add_menu_ref(&style_sub);
 
@@ -305,8 +358,18 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
         {
             let mut sc = scheme_sub.borrow_mut();
             sc.set_dark_mode(cfg.appearance != "light");
-            add_check(&mut sc, ACTION_SCHEME_SCALE, "色階模式 (Scale)", cfg.color_scheme == "scale");
-            add_check(&mut sc, ACTION_SCHEME_DUO, "雙色模式 (Duo)", cfg.color_scheme == "duo");
+            add_check(
+                &mut sc,
+                ACTION_SCHEME_SCALE,
+                "色階模式 (Scale)",
+                cfg.color_scheme == "scale",
+            );
+            add_check(
+                &mut sc,
+                ACTION_SCHEME_DUO,
+                "雙色模式 (Duo)",
+                cfg.color_scheme == "duo",
+            );
         }
         menu.add_menu_ref(&scheme_sub);
     }
@@ -315,20 +378,50 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     {
         let mut a = app_sub.borrow_mut();
         a.set_dark_mode(cfg.appearance != "light");
-        add_check(&mut a, ACTION_APPEARANCE_AUTO, "跟隨系統 (Auto)", cfg.appearance == "auto");
-        add_check(&mut a, ACTION_APPEARANCE_LIGHT, "淺色模式 (Light)", cfg.appearance == "light");
-        add_check(&mut a, ACTION_APPEARANCE_DARK, "深色模式 (Dark)", cfg.appearance == "dark");
+        add_check(
+            &mut a,
+            ACTION_APPEARANCE_AUTO,
+            "跟隨系統 (Auto)",
+            cfg.appearance == "auto",
+        );
+        add_check(
+            &mut a,
+            ACTION_APPEARANCE_LIGHT,
+            "淺色模式 (Light)",
+            cfg.appearance == "light",
+        );
+        add_check(
+            &mut a,
+            ACTION_APPEARANCE_DARK,
+            "深色模式 (Dark)",
+            cfg.appearance == "dark",
+        );
     }
     menu.add_menu_ref(&app_sub);
 
     // 6. Ghost Mode
-    add_check(&mut menu, ACTION_CLICK_THROUGH, "👻 滑鼠點擊穿透 (Alt+Shift+C)", cfg.click_through);
+    add_check(
+        &mut menu,
+        ACTION_CLICK_THROUGH,
+        "👻 滑鼠點擊穿透 (Alt+Shift+C)",
+        cfg.click_through,
+    );
 
     // 7. Always on top
-    add_check(&mut menu, ACTION_ALWAYS_ON_TOP, "📌 視窗永遠置頂 (Always on Top)", cfg.always_on_top);
+    add_check(
+        &mut menu,
+        ACTION_ALWAYS_ON_TOP,
+        "📌 視窗永遠置頂 (Always on Top)",
+        cfg.always_on_top,
+    );
 
     // 8. Lock Drag
-    add_check(&mut menu, ACTION_LOCK_DRAG, "🔒 鎖定視窗位置 (Lock Drag)", cfg.locked);
+    add_check(
+        &mut menu,
+        ACTION_LOCK_DRAG,
+        "🔒 鎖定視窗位置 (Lock Drag)",
+        cfg.locked,
+    );
 
     // 9. Opacity Submenu
     let opacity_sub = Menu::new_ref("🌗 視窗透明度 (Opacity)");
@@ -368,7 +461,12 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     menu.add_menu_ref(&interval_sub);
 
     // 11. Autostart
-    add_check(&mut menu, ACTION_AUTOSTART, "🚀 開機自動啟動 (Start on Boot)", is_autostart_enabled());
+    add_check(
+        &mut menu,
+        ACTION_AUTOSTART,
+        "🚀 開機自動啟動 (Start on Boot)",
+        is_autostart_enabled(),
+    );
 
     menu.add_separator();
 
@@ -591,7 +689,10 @@ mod tests {
         let menu_cards = build_hud_context_menu(&cfg_cards);
         let actions = menu_cards.actions();
         assert!(!actions.is_empty(), "Context menu must have actions");
-        assert_eq!(actions[0].borrow().text(), "🔄 立即重新整理所有 AI (Refresh All)");
+        assert_eq!(
+            actions[0].borrow().text(),
+            "🔄 立即重新整理所有 AI (Refresh All)"
+        );
 
         // 2. Table mode configuration
         let cfg_table = Config {
@@ -604,19 +705,29 @@ mod tests {
         let actions_table = menu_table.actions();
         assert!(!actions_table.is_empty());
 
-        let has_refresh = actions_table.iter().any(|a| a.borrow().data().to_u64() == Some(ACTION_REFRESH_ALL as u64));
+        let has_refresh = actions_table
+            .iter()
+            .any(|a| a.borrow().data().to_u64() == Some(ACTION_REFRESH_ALL as u64));
         assert!(has_refresh);
 
-        let has_lock = actions_table.iter().any(|a| a.borrow().data().to_u64() == Some(ACTION_LOCK_DRAG as u64));
+        let has_lock = actions_table
+            .iter()
+            .any(|a| a.borrow().data().to_u64() == Some(ACTION_LOCK_DRAG as u64));
         assert!(has_lock);
 
-        let has_reset = actions_table.iter().any(|a| a.borrow().data().to_u64() == Some(ACTION_RESET_GEOMETRY as u64));
+        let has_reset = actions_table
+            .iter()
+            .any(|a| a.borrow().data().to_u64() == Some(ACTION_RESET_GEOMETRY as u64));
         assert!(has_reset);
 
-        let has_hide = actions_table.iter().any(|a| a.borrow().data().to_u64() == Some(ACTION_HIDE_HUD as u64));
+        let has_hide = actions_table
+            .iter()
+            .any(|a| a.borrow().data().to_u64() == Some(ACTION_HIDE_HUD as u64));
         assert!(has_hide);
 
-        let has_exit = actions_table.iter().any(|a| a.borrow().data().to_u64() == Some(ACTION_EXIT as u64));
+        let has_exit = actions_table
+            .iter()
+            .any(|a| a.borrow().data().to_u64() == Some(ACTION_EXIT as u64));
         assert!(has_exit);
     }
 

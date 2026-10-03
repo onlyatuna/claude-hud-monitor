@@ -322,4 +322,3 @@ pub fn get_cards_stylesheet(dark: bool) -> &'static str {
         "#
     }
 }
-

@@ -19,7 +19,9 @@ use qtrs_gui::paint::painter::{Painter, Pen};
 use qtrs_gui::text::font::{Font, FontWeight};
 use qtrs_gui::text::font_metrics::FontMetrics;
 use qtrs_gui::tiny_skia::Color;
-use qtrs_widgets::{BoxLayout, EmptyWidget, GridLayout, Label, Layout, Widget, WidgetBase, WidgetRef};
+use qtrs_widgets::{
+    BoxLayout, EmptyWidget, GridLayout, Label, Layout, Widget, WidgetBase, WidgetRef,
+};
 
 use super::styles::{duo_colors, scale_colors, Theme};
 use crate::pace::{
@@ -291,8 +293,8 @@ impl Widget for UsageDial {
 
         // 4. Caption if provider window differs (e.g. "1D")
         if !self.caption.is_empty() {
-            let cap_font = Font::new("Segoe UI", (inner_side * 0.14).max(8.0))
-                .with_weight(FontWeight::Bold);
+            let cap_font =
+                Font::new("Segoe UI", (inner_side * 0.14).max(8.0)).with_weight(FontWeight::Bold);
             let cap_metrics = FontMetrics::from_font(&cap_font);
             let cap_w = cap_metrics.horizontal_advance(&self.caption, &cap_font);
             painter.set_pen(Pen::new(self.theme.text2, 1.0));
@@ -405,7 +407,12 @@ impl ProviderColumn {
     pub fn set_theme(&mut self, theme: Theme, scheme: &str) {
         self.theme = theme.clone();
         self.scheme = scheme.to_string();
-        if let Some(d) = self.dial.borrow_mut().as_any_mut().downcast_mut::<UsageDial>() {
+        if let Some(d) = self
+            .dial
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<UsageDial>()
+        {
             d.set_theme(theme);
         }
         let metrics = self.current_metrics.clone();
@@ -419,8 +426,19 @@ impl ProviderColumn {
         if is_offline {
             set_label_text(&self.badge, "OFFLINE");
             set_label_color(&self.badge, self.theme.scale_red);
-            if let Some(d) = self.dial.borrow_mut().as_any_mut().downcast_mut::<UsageDial>() {
-                d.set_values((None, None, Color::TRANSPARENT), "ERR", (None, None, Color::TRANSPARENT), "", true);
+            if let Some(d) = self
+                .dial
+                .borrow_mut()
+                .as_any_mut()
+                .downcast_mut::<UsageDial>()
+            {
+                d.set_values(
+                    (None, None, Color::TRANSPARENT),
+                    "ERR",
+                    (None, None, Color::TRANSPARENT),
+                    "",
+                    true,
+                );
             }
             set_label_text(&self.m2_val, "--");
             set_label_text(&self.m1_reset, "--:--");
@@ -480,7 +498,12 @@ impl ProviderColumn {
         };
 
         let cap1 = window_caption(&data.metric1_title, "5H");
-        if let Some(d) = self.dial.borrow_mut().as_any_mut().downcast_mut::<UsageDial>() {
+        if let Some(d) = self
+            .dial
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<UsageDial>()
+        {
             d.set_values(
                 (data.metric1_val, mark1, fill1),
                 &data.metric1_text,
@@ -522,7 +545,10 @@ impl UsageTable {
 
         let mut columns = HashMap::new();
         for pid in PROVIDER_ORDER {
-            columns.insert(pid.to_string(), ProviderColumn::new(pid, theme.clone(), scheme));
+            columns.insert(
+                pid.to_string(),
+                ProviderColumn::new(pid, theme.clone(), scheme),
+            );
         }
 
         // Row 1: Section title "5 小時"
@@ -632,7 +658,15 @@ mod tests {
             ..Default::default()
         });
         let col = table.columns.get("agy").unwrap();
-        assert_eq!(col.badge.borrow().as_any().downcast_ref::<Label>().unwrap().text(), "OFFLINE");
+        assert_eq!(
+            col.badge
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "OFFLINE"
+        );
 
         table.update_metrics(&UsageMetrics {
             provider_id: "agy".to_string(),
@@ -641,8 +675,24 @@ mod tests {
             ..Default::default()
         });
         let col = table.columns.get("agy").unwrap();
-        assert_ne!(col.badge.borrow().as_any().downcast_ref::<Label>().unwrap().text(), "OFFLINE");
-        assert_eq!(col.m2_val.borrow().as_any().downcast_ref::<Label>().unwrap().text(), "--");
+        assert_ne!(
+            col.badge
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "OFFLINE"
+        );
+        assert_eq!(
+            col.m2_val
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "--"
+        );
     }
 
     #[test]
@@ -654,15 +704,39 @@ mod tests {
             ..Default::default()
         });
         let col = table.columns.get("claude").unwrap();
-        assert_ne!(col.m2_countdown.borrow().as_any().downcast_ref::<Label>().unwrap().text(), "--:--:--");
+        assert_ne!(
+            col.m2_countdown
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "--:--:--"
+        );
 
         table.update_metrics(&UsageMetrics {
             provider_id: "claude".to_string(),
             ..Default::default()
         });
         let col = table.columns.get("claude").unwrap();
-        assert_eq!(col.m2_countdown.borrow().as_any().downcast_ref::<Label>().unwrap().text(), "--:--:--");
-        assert_eq!(col.m1_reset.borrow().as_any().downcast_ref::<Label>().unwrap().text(), "--:--");
+        assert_eq!(
+            col.m2_countdown
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "--:--:--"
+        );
+        assert_eq!(
+            col.m1_reset
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "--:--"
+        );
     }
 
     #[test]
@@ -680,8 +754,23 @@ mod tests {
             ..Default::default()
         });
         let col = table.columns.get("agy").unwrap();
-        assert_eq!(col.m2_val.borrow().as_any().downcast_ref::<Label>().unwrap().text(), "10 %");
-        assert!(col.badge.borrow().as_any().downcast_ref::<Label>().unwrap().text().contains("STALE"));
+        assert_eq!(
+            col.m2_val
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "10 %"
+        );
+        assert!(col
+            .badge
+            .borrow()
+            .as_any()
+            .downcast_ref::<Label>()
+            .unwrap()
+            .text()
+            .contains("STALE"));
     }
 
     #[test]
@@ -695,7 +784,14 @@ mod tests {
             ..Default::default()
         });
         let col = table.columns.get("codex").unwrap();
-        assert!(col.m2_val.borrow().as_any().downcast_ref::<Label>().unwrap().text().contains("▲48"));
+        assert!(col
+            .m2_val
+            .borrow()
+            .as_any()
+            .downcast_ref::<Label>()
+            .unwrap()
+            .text()
+            .contains("▲48"));
     }
 
     #[test]
@@ -712,6 +808,13 @@ mod tests {
             ..Default::default()
         });
         let col = table.columns.get("codex").unwrap();
-        assert!(col.m2_val.borrow().as_any().downcast_ref::<Label>().unwrap().text().contains("30D"));
+        assert!(col
+            .m2_val
+            .borrow()
+            .as_any()
+            .downcast_ref::<Label>()
+            .unwrap()
+            .text()
+            .contains("30D"));
     }
 }

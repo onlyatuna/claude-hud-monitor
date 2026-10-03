@@ -1,18 +1,26 @@
+#[allow(unused_imports)]
 use crate::window_system_interface::{
     Delivery, KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent,
     WindowSystemEventHandler,
 };
+#[allow(unused_imports)]
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoopHandle;
 use qtrs_core::object::ObjectId;
 use qtrs_gui::geometry::primitives::{Rect, Size};
+#[allow(unused_imports)]
 use crate::presenter::SurfacePresenter;
+#[allow(unused_imports)]
 use crate::surface::PlatformSurface;
 use std::collections::HashMap;
+#[allow(unused_imports)]
 use std::ptr;
+#[allow(unused_imports)]
 use std::sync::{Mutex, Once, RwLock};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+#[cfg(not(windows))]
+pub use crate::HWND;
 #[cfg(windows)]
 use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
 #[cfg(windows)]
@@ -101,7 +109,6 @@ impl Drop for SetGeometryGuard<'_> {
     }
 }
 
-#[cfg(windows)]
 static WINDOW_EVENT_BINDINGS: RwLock<Option<HashMap<isize, (EventLoopHandle, ObjectId)>>> =
     RwLock::new(None);
 
@@ -173,6 +180,7 @@ fn get_window_event_binding(hwnd: HWND) -> Option<(EventLoopHandle, ObjectId)> {
 }
 
 #[inline]
+#[allow(dead_code)]
 fn get_window_frameless_config(hwnd: HWND) -> Option<CustomFramelessConfig> {
     let map = WINDOW_FRAMELESS_CONFIGS.read().unwrap();
     map.as_ref().and_then(|m| m.get(&(hwnd as isize)).copied())
@@ -268,16 +276,24 @@ pub fn send_window_system_event_immediately(hwnd: HWND, event: WindowSystemEvent
     let _ = IS_DISPATCHING.try_with(|d| d.set(false));
 }
 fn is_window_thread(hwnd: HWND) -> bool {
-    if hwnd.is_null() {
-        return qtrs_core::object::ThreadContext::is_main_thread();
+    #[cfg(windows)]
+    {
+        if hwnd.is_null() {
+            return qtrs_core::object::ThreadContext::is_main_thread();
+        }
+        unsafe {
+            let win_tid = windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
+                hwnd,
+                ptr::null_mut(),
+            );
+            let cur_tid = windows_sys::Win32::System::Threading::GetCurrentThreadId();
+            win_tid == cur_tid
+        }
     }
-    unsafe {
-        let win_tid = windows_sys::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
-            hwnd,
-            ptr::null_mut(),
-        );
-        let cur_tid = windows_sys::Win32::System::Threading::GetCurrentThreadId();
-        win_tid == cur_tid
+    #[cfg(not(windows))]
+    {
+        let _ = hwnd;
+        qtrs_core::object::ThreadContext::is_main_thread()
     }
 }
 
@@ -321,6 +337,7 @@ pub fn handle_geometry_change(
     );
 }
 
+#[cfg(windows)]
 fn query_keyboard_modifiers() -> KeyboardModifiers {
     unsafe {
         let is_down = |vk: u16| -> bool { (GetKeyState(vk as i32) as u16 & 0x8000) != 0 };
@@ -333,6 +350,7 @@ fn query_keyboard_modifiers() -> KeyboardModifiers {
     }
 }
 
+#[cfg(windows)]
 fn get_cursor_global_pos() -> qtrs_gui::geometry::primitives::Point {
     unsafe {
         let mut pt: windows_sys::Win32::Foundation::POINT = std::mem::zeroed();
@@ -341,6 +359,7 @@ fn get_cursor_global_pos() -> qtrs_gui::geometry::primitives::Point {
     }
 }
 
+#[cfg(windows)]
 pub fn get_window_dpr(hwnd: HWND) -> f32 {
     unsafe {
         let dpi = windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd);
@@ -352,16 +371,17 @@ pub fn get_window_dpr(hwnd: HWND) -> f32 {
     }
 }
 
-#[inline]
+#[cfg(windows)]
 fn get_x_lparam(lparam: LPARAM) -> i32 {
     (lparam as usize & 0xffff) as i16 as i32
 }
 
-#[inline]
+#[cfg(windows)]
 fn get_y_lparam(lparam: LPARAM) -> i32 {
     ((lparam as usize >> 16) & 0xffff) as i16 as i32
 }
 
+#[cfg(windows)]
 /// Win32 Window Procedure (wndproc).
 unsafe extern "system" fn native_window_proc(
     hwnd: HWND,
@@ -986,12 +1006,14 @@ pub fn set_dpi_awareness() -> bool {
 
 #[cfg(windows)]
 static REGISTER_WINDOW_CLASS_ONCE: Once = Once::new();
+#[cfg(windows)]
 const NATIVE_WINDOW_CLASS_NAME: &[u16] = &[
     'Q' as u16, 't' as u16, 'r' as u16, 's' as u16, 'N' as u16, 'a' as u16, 't' as u16, 'i' as u16,
     'v' as u16, 'e' as u16, 'W' as u16, 'i' as u16, 'n' as u16, 'd' as u16, 'o' as u16, 'w' as u16,
     'C' as u16, 'l' as u16, 'a' as u16, 's' as u16, 's' as u16, 0,
 ];
 
+#[cfg(windows)]
 fn ensure_native_window_class_registered() {
     REGISTER_WINDOW_CLASS_ONCE.call_once(|| unsafe {
         let h_instance = GetModuleHandleW(ptr::null());
@@ -1664,46 +1686,46 @@ pub(crate) fn edges_to_win_orientation(edges: crate::platform_window::WindowEdge
         0xf000 // SC_SIZE
     }
 }
-pub fn post_system_move(hwnd: isize) -> bool {
+pub fn post_system_move(_hwnd: isize) -> bool {
     #[cfg(windows)]
-    if hwnd != 0 {
+    if _hwnd != 0 {
         unsafe {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
             use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
             ReleaseCapture();
-            PostMessageW(hwnd as HWND, WM_SYSCOMMAND, 0xF012 /*SC_DRAGMOVE*/, 0);
+            PostMessageW(_hwnd as HWND, WM_SYSCOMMAND, 0xF012 /*SC_DRAGMOVE*/, 0);
         }
         return true;
     }
     false
 }
 
-pub fn post_system_resize(hwnd: isize, edges: crate::platform_window::WindowEdges) -> bool {
+pub fn post_system_resize(_hwnd: isize, _edges: crate::platform_window::WindowEdges) -> bool {
     #[cfg(windows)]
-    if hwnd != 0 {
+    if _hwnd != 0 {
         unsafe {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
             use windows_sys::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_SYSCOMMAND};
             ReleaseCapture();
-            let orientation = edges_to_win_orientation(edges);
-            PostMessageW(hwnd as HWND, WM_SYSCOMMAND, orientation, 0);
+            let orientation = edges_to_win_orientation(_edges);
+            PostMessageW(_hwnd as HWND, WM_SYSCOMMAND, orientation, 0);
         }
         return true;
     }
     false
 }
 
-pub fn calc_frameless_edge(hwnd: isize, pos: qtrs_gui::geometry::primitives::Point, locked: bool) -> crate::platform_window::WindowEdges {
+pub fn calc_frameless_edge(_hwnd: isize, pos: qtrs_gui::geometry::primitives::Point, locked: bool) -> crate::platform_window::WindowEdges {
     if locked {
         return crate::platform_window::WindowEdges::empty();
     }
     const M: i32 = 8;
     #[cfg(windows)]
-    let (w, h) = if hwnd != 0 {
+    let (w, h) = if _hwnd != 0 {
         unsafe {
             use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
             let mut rect: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
-            GetClientRect(hwnd as HWND, &mut rect);
+            GetClientRect(_hwnd as HWND, &mut rect);
             let dpr = crate::integration::platform().primary_screen().device_pixel_ratio();
             (
                 ((rect.right - rect.left) as f32 / dpr).round() as i32,

@@ -8,10 +8,10 @@ use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
 use crate::config::Config;
 use chrono::{DateTime, Utc};
 use log::error;
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use parking_lot::Mutex;
 use std::sync::Arc;
 use std::time::Duration;
 use ureq::OrAnyStatus;
@@ -587,8 +587,14 @@ mod tests {
         let p = ClaudeProvider::new();
         let m = p.fetch_usage();
         eprintln!("[test_live_fetch_usage] provider_name: {}", m.provider_name);
-        eprintln!("[test_live_fetch_usage] metric1: {} = {}", m.metric1_title, m.metric1_text);
-        eprintln!("[test_live_fetch_usage] metric2: {} = {}", m.metric2_title, m.metric2_text);
+        eprintln!(
+            "[test_live_fetch_usage] metric1: {} = {}",
+            m.metric1_title, m.metric1_text
+        );
+        eprintln!(
+            "[test_live_fetch_usage] metric2: {} = {}",
+            m.metric2_title, m.metric2_text
+        );
         eprintln!("[test_live_fetch_usage] error: {:?}", m.error);
         eprintln!("[test_live_fetch_usage] error_code: {}", m.error_code);
     }

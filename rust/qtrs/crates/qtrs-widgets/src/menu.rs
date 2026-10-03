@@ -644,6 +644,11 @@ impl Menu {
         self.hide_menu();
         chosen
     }
+    #[cfg(not(windows))]
+    pub fn exec_popup(&mut self, pos: Point) -> Option<ActionRef> {
+        self.popup(pos);
+        self.last_triggered.clone()
+    }
 
     /// Hides the menu and every open sub-menu.
     pub fn hide_menu(&mut self) {

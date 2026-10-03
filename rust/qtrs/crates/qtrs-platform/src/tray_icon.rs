@@ -1,8 +1,11 @@
 use qtrs_core::signal::Signal;
 use qtrs_gui::geometry::primitives::Point;
 use qtrs_gui::paint::Pixmap;
+#[allow(unused_imports)]
 use std::collections::HashMap;
+#[allow(unused_imports)]
 use std::ptr;
+#[allow(unused_imports)]
 use std::sync::{Mutex, Once};
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
@@ -87,6 +87,7 @@ impl TimerFd {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 mod linux_epoll {
     use std::os::raw::c_int;
 
@@ -238,7 +239,6 @@ impl EpollReactor {
         timeout: Option<Duration>,
     ) -> (bool, Vec<TimerId>, Vec<(SocketDescriptor, SocketEvent)>) {
         let start = Instant::now();
-        let guard = self.lock.lock().unwrap();
         let pending_sockets = std::mem::take(&mut *self.pending_socket_events.lock().unwrap());
 
         // Check if eventfd is readable
@@ -274,20 +274,15 @@ impl EpollReactor {
         if sleep_duration.is_zero() {
             return (false, Vec::new(), Vec::new());
         }
+        let mut kernel_sockets: Vec<(SocketDescriptor, SocketEvent)> = Vec::new();
         #[cfg(target_os = "linux")]
         if self.epoll_fd >= 0 {
-            let timeout_ms = match sleep_duration {
-                d if d.is_zero() => 0,
-                d => (d.as_millis() as std::os::raw::c_int).min(i32::MAX as std::os::raw::c_int),
-            };
-
             let mut events = [linux_epoll::EpollEvent { events: 0, data: 0 }; 64];
             let nfds = unsafe {
-                linux_epoll::epoll_wait(self.epoll_fd, events.as_mut_ptr(), 64, timeout_ms)
+                linux_epoll::epoll_wait(self.epoll_fd, events.as_mut_ptr(), 64, 0)
             };
 
             if nfds > 0 {
-                let mut kernel_sockets = Vec::new();
                 for i in 0..nfds as usize {
                     let ev = events[i];
                     let fd = ev.data as SocketDescriptor;
@@ -305,29 +300,40 @@ impl EpollReactor {
                         kernel_sockets.push((fd, SocketEvent::Read));
                     }
                 }
-                let now = Instant::now();
-                let expired = self.collect_expired_timers(now);
-                let mut combined = pending_sockets;
-                combined.extend(kernel_sockets);
-                return (false, expired, combined);
             }
         }
 
+        if !kernel_sockets.is_empty() {
+            let now = Instant::now();
+            let expired = self.collect_expired_timers(now);
+            let mut combined = pending_sockets;
+            combined.extend(kernel_sockets);
+            return (false, expired, combined);
+        }
+
         // Wait on condition variable or timeout
-        let (_new_guard, _timeout_res) = self.cond.wait_timeout(guard, sleep_duration).unwrap();
-        let now = Instant::now();
+        let guard = self.lock.lock().unwrap();
+        if self.event_fd.is_readable() {
+            self.event_fd.read();
+            let now = Instant::now();
+            let expired = self.collect_expired_timers(now);
+            return (true, expired, pending_sockets);
+        }
+
+        let (guard, _timeout_res) = self.cond.wait_timeout(guard, sleep_duration).unwrap();
         let was_awoken = if self.event_fd.is_readable() {
             self.event_fd.read();
             true
         } else {
             false
         };
+        drop(guard);
 
+        let now = Instant::now();
         let expired = self.collect_expired_timers(now);
         let pending_sockets = std::mem::take(&mut *self.pending_socket_events.lock().unwrap());
         (was_awoken, expired, pending_sockets)
     }
-
     fn next_timer_delay(&self, now: Instant) -> Option<Duration> {
         let tfds = self.timer_fds.lock().unwrap();
         let mut min_delay: Option<Duration> = None;
@@ -370,20 +376,16 @@ impl Drop for EpollReactor {
 #[derive(Clone)]
 pub struct UnixEventDispatcherHandle {
     reactor: Arc<EpollReactor>,
-    wakeup_pending: Arc<AtomicBool>,
 }
 
 impl EventDispatcherHandle for UnixEventDispatcherHandle {
     fn wake_up(&self) {
-        if !self.wakeup_pending.swap(true, Ordering::Release) {
-            self.reactor.wake_up();
-        }
+        self.reactor.wake_up();
     }
 }
 
 pub struct UnixEventDispatcher {
     reactor: Arc<EpollReactor>,
-    wakeup_pending: Arc<AtomicBool>,
     pending_timers: Mutex<Vec<TimerId>>,
     native_filters: NativeEventFilterChain,
 }
@@ -398,7 +400,6 @@ impl UnixEventDispatcher {
     pub fn new() -> Self {
         Self {
             reactor: Arc::new(EpollReactor::new()),
-            wakeup_pending: Arc::new(AtomicBool::new(false)),
             pending_timers: Mutex::new(Vec::new()),
             native_filters: NativeEventFilterChain::new(),
         }
@@ -407,16 +408,13 @@ impl UnixEventDispatcher {
     pub fn clone_handle(&self) -> UnixEventDispatcherHandle {
         UnixEventDispatcherHandle {
             reactor: Arc::clone(&self.reactor),
-            wakeup_pending: Arc::clone(&self.wakeup_pending),
         }
     }
 }
 
 impl EventDispatcher for UnixEventDispatcher {
     fn wake_up(&self) {
-        if !self.wakeup_pending.swap(true, Ordering::Release) {
-            self.reactor.wake_up();
-        }
+        self.reactor.wake_up();
     }
 
     fn clone_handle(&self) -> Arc<dyn EventDispatcherHandle> {
@@ -441,7 +439,6 @@ impl EventDispatcher for UnixEventDispatcher {
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
     ) -> DispatchResult {
-        self.wakeup_pending.store(false, Ordering::Release);
 
         let timeout = if can_wait {
             next_timer_timeout
@@ -453,7 +450,7 @@ impl EventDispatcher for UnixEventDispatcher {
 
         if !triggered_sockets.is_empty() {
             let notifiers = self.reactor.socket_notifiers.lock().unwrap();
-            for (fd, ev) in triggered_sockets {
+            for &(fd, ev) in &triggered_sockets {
                 if let Some(notifier) = notifiers.get(&(fd, ev)) {
                     notifier.notify();
                 }
@@ -467,7 +464,12 @@ impl EventDispatcher for UnixEventDispatcher {
             self.pending_timers.lock().unwrap().extend(expired_timers);
             return DispatchResult::Normal;
         }
+        if !triggered_sockets.is_empty() {
+            return DispatchResult::Normal;
+        }
         if can_wait && next_timer_timeout.is_some() {
+            DispatchResult::Timeout
+        } else if !can_wait {
             DispatchResult::Timeout
         } else {
             DispatchResult::Normal
@@ -495,8 +497,17 @@ impl EventDispatcher for UnixEventDispatcher {
     }
 
     fn send_timer_events(&mut self, registry: &mut TimerRegistry) {
+        let now_ms = crate::timer::current_time_ms();
+        let mut expired_ids = registry.expired_timers(now_ms);
+
         let pending = std::mem::take(&mut *self.pending_timers.lock().unwrap());
         for id in pending {
+            if !expired_ids.contains(&id) {
+                expired_ids.push(id);
+            }
+        }
+
+        for id in expired_ids {
             let Some(entry) = registry.get(id) else {
                 continue;
             };
@@ -505,9 +516,16 @@ impl EventDispatcher for UnixEventDispatcher {
             }
             let receiver = entry.receiver;
             let single_shot = entry.single_shot;
+            let interval_ms = entry.interval_ms;
+            let mut timer_type = entry.timer_type;
 
             if let Some(entry) = registry.get_mut(id) {
                 entry.in_timer_event = true;
+                let (adjusted, next_fire) =
+                    crate::timer::calculate_next_timeout(&mut timer_type, interval_ms, now_ms);
+                entry.timer_type = timer_type;
+                entry.interval_ms = adjusted;
+                entry.next_fire_ms = next_fire;
             }
 
             let handled = crate::object::with_object_mut(receiver, |obj| {

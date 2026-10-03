@@ -38,6 +38,8 @@ pub use single_instance::*;
 
 #[cfg(windows)]
 pub use windows_sys::Win32::Foundation::HWND;
+#[cfg(not(windows))]
+pub type HWND = isize;
 #[cfg(windows)]
 pub use clipboard::Win32Clipboard;
 pub use clipboard::{Clipboard, GenericClipboard, MimeData, PlatformClipboard};

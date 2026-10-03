@@ -4,6 +4,7 @@
 //! presentation mechanisms (such as Win32 `UpdateLayeredWindowIndirect`, GDI `BitBlt`,
 //! DirectComposition, or Wayland/Cocoa surface presentation).
 
+#[allow(unused_imports)]
 use qtrs_gui::geometry::primitives::Rect;
 use qtrs_gui::geometry::Region;
 use qtrs_gui::paint::Pixmap;

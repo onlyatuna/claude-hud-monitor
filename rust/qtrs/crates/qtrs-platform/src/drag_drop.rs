@@ -1,4 +1,5 @@
 use qtrs_gui::geometry::primitives::Point;
+#[allow(unused_imports)]
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
