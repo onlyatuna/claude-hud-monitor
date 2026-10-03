@@ -567,19 +567,10 @@ unsafe extern "system" fn native_window_proc(
             };
             let logical_rect = Rect::new(x, y, logical_size.width, logical_size.height);
 
+            // The single canonical resize delivery: WindowSystemEvent::Resize (geometry, widget
+            // Resize, callback, layout, render). No second `EventKind::Resize` is posted to the
+            // bound QObject; it used to re-run the callback and a synchronous render.
             handle_geometry_change(Delivery::Default, hwnd, logical_rect);
-
-            if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
-                handle.post_event(
-                    receiver,
-                    Event::new_spontaneous(EventKind::Resize {
-                        width: logical_size.width,
-                        height: logical_size.height,
-                        old_width: 0,
-                        old_height: 0,
-                    }),
-                );
-            }
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MOVE => {

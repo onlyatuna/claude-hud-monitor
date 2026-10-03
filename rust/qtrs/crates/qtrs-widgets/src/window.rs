@@ -31,6 +31,15 @@ pub struct RenderStats {
     pub borrow_retry_count: u64,
     /// Synchronous renders performed while a native interactive sizing loop was active.
     pub interactive_render_count: u64,
+    /// Resize callbacks invoked (any path).
+    pub resize_callback_count: u64,
+    /// `EventKind::Resize` delivered straight to `Window::event` (posted/programmatic, not the
+    /// canonical `WindowSystemEvent::Resize` path).
+    pub event_resize_count: u64,
+    /// `Window::render_and_present` calls (synchronous, outside the deferred/interactive gate).
+    pub direct_render_count: u64,
+    /// Direct renders that painted and presented a non-empty region.
+    pub direct_present_count: u64,
 }
 
 thread_local! {
@@ -450,6 +459,7 @@ impl Window {
             });
             self.root_widget.borrow_mut().event(&mut ev);
             if let Some(cb) = self.resize_cb.borrow().as_ref() {
+                self.render_state.bump(|s| s.resize_callback_count += 1);
                 cb(Size::new(rect.width, rect.height));
             }
         }
@@ -573,7 +583,13 @@ impl Window {
         {
             let mut bs = self.backing_store.borrow_mut();
             let mut pw = self.platform_window.borrow_mut();
-            do_render_and_present(&mut **pw, &mut bs, &root, geom);
+            let presented = do_render_and_present(&mut **pw, &mut bs, &root, geom);
+            self.render_state.bump(|s| {
+                s.direct_render_count += 1;
+                if presented {
+                    s.direct_present_count += 1;
+                }
+            });
         }
         // Borrows released: recover a deferred render parked by a borrow conflict.
         self.render_state.rearm_if_parked();
@@ -671,7 +687,10 @@ impl QObject for Window {
                 }
                 true
             }
+            // Direct/programmatic entry only. Native `WM_SIZE` no longer posts this (see
+            // `WindowSystemEvent::Resize`, the canonical path); counted in `event_resize_count`.
             EventKind::Resize { width, height, .. } => {
+                self.render_state.bump(|s| s.event_resize_count += 1);
                 let mut cur = self.geometry.get();
                 cur.width = *width;
                 cur.height = *height;
@@ -684,6 +703,7 @@ impl QObject for Window {
 
                 // 2. Resize callback
                 if let Some(cb) = self.resize_cb.borrow().as_ref() {
+                    self.render_state.bump(|s| s.resize_callback_count += 1);
                     cb(Size::new(*width, *height));
                 }
 
@@ -982,6 +1002,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     self.dispatcher.dispatch_event(&root, &mut ev);
 
                     if let Some(cb) = self.resize_cb.borrow().as_ref() {
+                        self.render.bump(|s| s.resize_callback_count += 1);
                         cb(size);
                     }
 
