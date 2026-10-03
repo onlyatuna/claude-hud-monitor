@@ -5,6 +5,7 @@ pub mod color;
 pub mod geometry;
 pub mod image;
 pub mod paint;
+pub mod startup_trace;
 pub mod text;
 
 pub use application::*;

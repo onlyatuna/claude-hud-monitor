@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::text::font::{Font, SharedFontData};
@@ -35,6 +36,17 @@ pub struct FontDatabase {
     system_faces: Option<Vec<FontFamilyInfo>>,
     /// Faces registered through [`FontDatabase::add_font_from_memory`].
     application_faces: Vec<FontFamilyInfo>,
+    /// One engine per requested family string, shared so glyph caches persist across draw calls.
+    engines: HashMap<String, FontEngine>,
+}
+
+/// Bumped whenever the set of available fonts changes, so caches derived from font data
+/// (e.g. text advance widths) know to drop their entries.
+static FONT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Current font-set generation; changes whenever a search path or an in-memory font is added.
+pub fn font_generation() -> u64 {
+    FONT_GENERATION.load(Ordering::Relaxed)
 }
 
 /// Process-wide font database shared by the painter and font-selection widgets.
@@ -56,9 +68,20 @@ pub fn resolve_font_engines_global(font: &Font) -> Vec<FontEngine> {
     with_global_font_database(|db| db.resolve_font_engines(font))
 }
 
+/// Like [`resolve_font_engines_global`], but loads the fallback fonts only when `text` needs them.
+///
+/// Parsing a CJK/emoji fallback (`fontdue::Font::from_bytes`) costs 200-500 ms each the first time,
+/// and the fallbacks are only ever consulted for characters the primary font has no glyph for
+/// (`GlyphLayout::partition_into_runs`). Text the primary font fully covers is therefore shaped
+/// with the primary engine alone; anything else gets the same full chain as before.
+pub fn resolve_font_engines_for_text_global(font: &Font, text: &str) -> Vec<FontEngine> {
+    with_global_font_database(|db| db.resolve_font_engines_for_text(font, text))
+}
+
 impl FontDatabase {
     /// Creates a new font database and preloads default fonts.
     pub fn new() -> Self {
+        let _t = crate::startup_trace::span(|| "FontDatabase::new".into());
         let mut search_paths = Vec::new();
 
         #[cfg(target_os = "windows")]
@@ -83,6 +106,7 @@ impl FontDatabase {
             search_paths,
             system_faces: None,
             application_faces: Vec::new(),
+            engines: HashMap::new(),
         };
 
         db.preload_default_fonts();
@@ -93,6 +117,7 @@ impl FontDatabase {
     pub fn add_search_path<P: AsRef<Path>>(&mut self, path: P) {
         self.search_paths.push(path.as_ref().to_path_buf());
         self.system_faces = None;
+        FONT_GENERATION.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Registers a custom font from memory.
@@ -120,6 +145,7 @@ impl FontDatabase {
         });
         self.cache.insert(key.clone(), Arc::clone(&font_arc));
         self.raw_cache.insert(key, shared);
+        FONT_GENERATION.fetch_add(1, Ordering::Relaxed);
         Ok(font_arc)
     }
 
@@ -243,6 +269,26 @@ impl FontDatabase {
     /// 2. CJK / Multilingual script fallback fonts
     /// 3. Symbol and Emoji fallback fonts
     pub fn resolve_font_engines(&mut self, font: &Font) -> Vec<FontEngine> {
+        let _t = crate::startup_trace::span_min(0.5, || format!("resolve_font_engines({:?})", font.family));
+        let mut engines = self.resolve_primary_engine(font);
+        self.append_fallback_engines(&mut engines, None);
+        engines
+    }
+
+    /// [`resolve_font_engines`](Self::resolve_font_engines), but fallback fonts are loaded only
+    /// while `text` still has a character no engine resolved so far has a glyph for.
+    ///
+    /// The result is a prefix of the full chain, and `GlyphLayout::partition_into_runs` only
+    /// consults a fallback for characters the earlier engines lack, so shaping is unchanged.
+    pub fn resolve_font_engines_for_text(&mut self, font: &Font, text: &str) -> Vec<FontEngine> {
+        let _t = crate::startup_trace::span_min(0.5, || format!("resolve_font_engines_for_text({:?})", font.family));
+        let mut engines = self.resolve_primary_engine(font);
+        self.append_fallback_engines(&mut engines, Some(text));
+        engines
+    }
+
+    /// The font requested by `font` alone (empty when the family cannot be loaded).
+    fn resolve_primary_engine(&mut self, font: &Font) -> Vec<FontEngine> {
         let mut engines: Vec<FontEngine> = Vec::with_capacity(4);
 
         // 1. Primary in-memory font data if specified
@@ -264,43 +310,45 @@ impl FontDatabase {
         if engines.is_empty() {
             self.try_add_engine(&mut engines, &font.family);
         }
-
-        // 2. Multilingual / CJK and Symbol / Emoji fallback candidates by platform
-        #[cfg(target_os = "windows")]
-        {
-            if !self.try_add_engine(&mut engines, "Microsoft JhengHei") {
-                self.try_add_engine(&mut engines, "Microsoft YaHei");
-            }
-            if !self.try_add_engine(&mut engines, "Segoe UI Emoji") {
-                self.try_add_engine(&mut engines, "Segoe UI Symbol");
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            if !self.try_add_engine(&mut engines, "PingFang TC") {
-                if !self.try_add_engine(&mut engines, "PingFang SC") {
-                    self.try_add_engine(&mut engines, "Heiti TC");
-                }
-            }
-            if !self.try_add_engine(&mut engines, "Apple Color Emoji") {
-                self.try_add_engine(&mut engines, "Apple Symbols");
-            }
-        }
-
-        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-        {
-            if !self.try_add_engine(&mut engines, "Noto Sans CJK TC") {
-                if !self.try_add_engine(&mut engines, "Noto Sans CJK SC") {
-                    self.try_add_engine(&mut engines, "WenQuanYi Micro Hei");
-                }
-            }
-            if !self.try_add_engine(&mut engines, "Noto Color Emoji") {
-                self.try_add_engine(&mut engines, "DejaVu Sans");
-            }
-        }
-
         engines
+    }
+
+    /// Appends the platform's fallback fonts in priority order: CJK first, then emoji/symbols.
+    /// With `needed_for`, stops as soon as every character of that text has a glyph in `engines`.
+    fn append_fallback_engines(&mut self, engines: &mut Vec<FontEngine>, needed_for: Option<&str>) {
+        #[cfg(target_os = "windows")]
+        const SLOTS: &[&[&str]] = &[
+            &["Microsoft JhengHei", "Microsoft YaHei"],
+            &["Segoe UI Emoji", "Segoe UI Symbol"],
+        ];
+        #[cfg(target_os = "macos")]
+        const SLOTS: &[&[&str]] = &[
+            &["PingFang TC", "PingFang SC", "Heiti TC"],
+            &["Apple Color Emoji", "Apple Symbols"],
+        ];
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        const SLOTS: &[&[&str]] = &[
+            &["Noto Sans CJK TC", "Noto Sans CJK SC", "WenQuanYi Micro Hei"],
+            &["Noto Color Emoji", "DejaVu Sans"],
+        ];
+
+        for slot in SLOTS {
+            if let Some(text) = needed_for {
+                let covered = !engines.is_empty()
+                    && text.chars().all(|ch| {
+                        matches!(ch, ' ' | '\t' | '\n' | '\r' | '\u{200b}')
+                            || engines.iter().any(|e| e.fontdue.lookup_glyph_index(ch) != 0)
+                    });
+                if covered {
+                    break;
+                }
+            }
+            for family in *slot {
+                if self.try_add_engine(engines, family) {
+                    break;
+                }
+            }
+        }
     }
 
     fn try_add_engine(&mut self, engines: &mut Vec<FontEngine>, fam: &str) -> bool {
@@ -308,11 +356,22 @@ impl FontDatabase {
             if engines.iter().any(|e| Arc::ptr_eq(&e.fontdue, &font_face)) {
                 return false;
             }
+            // Reuse the engine built for this exact request so its glyph caches survive across calls
+            // (Qt keeps one QFontEngine per font and caches glyphs in it). Keyed by the requested
+            // family string, not by font: a CSS-style list such as "'Segoe UI', sans-serif" has no
+            // raw data while the plain name "Segoe UI" does, and the two shape differently
+            // (fontdue metrics vs rustybuzz). A replaced font has a new Arc, so a stale entry is
+            // never matched.
+            if let Some(engine) = self.engines.get(fam).filter(|e| Arc::ptr_eq(&e.fontdue, &font_face)) {
+                engines.push(engine.clone());
+                return true;
+            }
             let raw_data = self.get_raw_font_data(fam);
             let mut engine = FontEngine::new(font_face).with_face_index(0);
             if let Some(raw) = raw_data {
                 engine = engine.with_raw_data(raw);
             }
+            self.engines.insert(fam.to_string(), engine.clone());
             engines.push(engine);
             true
         } else {
@@ -379,6 +438,7 @@ impl FontDatabase {
     /// Searches search paths for a font file matching family key, reusing existing
     /// cached binary buffers from `file_cache` to eliminate redundant disk I/O and memory duplication.
     fn find_and_load_font_file(&mut self, family_key: &str) -> Option<(SharedFontData, fontdue::Font)> {
+        let _t = crate::startup_trace::span(|| format!("find_and_load_font_file({family_key:?})"));
         let candidate_filenames: Vec<String> = match family_key {
             "segoe ui" => vec!["segoeui.ttf".into(), "SegoeUI.ttf".into()],
             "segoe ui symbol" => vec!["seguisym.ttf".into()],
@@ -430,7 +490,10 @@ impl FontDatabase {
                             return Some((shared.clone(), font));
                         }
                     }
+                    let read = crate::startup_trace::span(|| format!("fs::read {}", canonical.display()));
                     if let Ok(bytes) = std::fs::read(&canonical) {
+                        drop(read);
+                        let _p = crate::startup_trace::span(|| format!("fontdue::from_bytes {} ({} KB)", canonical.display(), bytes.len() / 1024));
                         let shared = SharedFontData::from_vec(bytes);
                         if let Ok(font) = fontdue::Font::from_bytes(
                             shared.as_slice(),
@@ -446,6 +509,7 @@ impl FontDatabase {
 
         // Fall back to the family index (file names rarely match family names, e.g. "Times New Roman" -> times.ttf).
         if self.system_faces.is_none() {
+            let _t = crate::startup_trace::span(|| format!("scan_font_directories (needed by {family_key:?})"));
             self.system_faces = Some(scan_font_directories(&self.search_paths));
         }
         let (face_path, face_index) = {
@@ -468,6 +532,7 @@ impl FontDatabase {
             return Some((shared.clone(), font));
         }
 
+        let _t = crate::startup_trace::span(|| format!("read+parse (family index) {}", canonical.display()));
         let bytes = std::fs::read(&canonical).ok()?;
         let shared = SharedFontData::from_vec(bytes);
         let font = fontdue::Font::from_bytes(shared.as_slice(), settings).ok()?;

@@ -19,6 +19,9 @@ pub struct PositionedGlyph {
 /// raw binary data for OpenType layout (`rustybuzz`).
 /// Mirrors Qt's `QFontEngine`.
 type ColorGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), Option<(fontdue::Metrics, Arc<tiny_skia::Pixmap>)>>>>;
+type MonoGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), (fontdue::Metrics, Arc<[u8]>)>>>;
+/// Upper bound on cached glyph bitmaps per engine (a CJK font could otherwise grow without limit).
+const MONO_GLYPH_CACHE_LIMIT: usize = 4096;
 
 #[derive(Clone)]
 pub struct FontEngine {
@@ -30,6 +33,8 @@ pub struct FontEngine {
     pub face_index: u32,
     /// Cached color glyphs: (glyph_id, px_size_key) -> (Metrics, Arc<Pixmap>)
     color_cache: ColorGlyphCache,
+    /// Cached monochrome glyph bitmaps: (glyph_id, px_size bits) -> (Metrics, coverage bitmap)
+    mono_cache: MonoGlyphCache,
 }
 
 impl FontEngine {
@@ -40,6 +45,7 @@ impl FontEngine {
             raw_data: None,
             face_index: 0,
             color_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            mono_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -92,6 +98,29 @@ impl FontEngine {
         }
 
         rendered
+    }
+
+    /// Rasterizes a monochrome (alpha coverage) glyph, caching the bitmap per `(glyph, size)`.
+    ///
+    /// Mirrors Qt's `QFontEngineGlyphCache`: a glyph is rasterized once per size and then reused by
+    /// every later paint. The bitmap is identical to `fontdue::Font::rasterize_indexed`.
+    /// The cache is shared by every clone of this engine.
+    pub fn rasterize_glyph(&self, glyph_id: u16, px_size: f32) -> (fontdue::Metrics, Arc<[u8]>) {
+        let key = (glyph_id, px_size.to_bits());
+        if let Ok(guard) = self.mono_cache.lock() {
+            if let Some((metrics, bitmap)) = guard.get(&key) {
+                return (*metrics, bitmap.clone());
+            }
+        }
+        let (metrics, bitmap) = self.fontdue.rasterize_indexed(glyph_id, px_size);
+        let bitmap: Arc<[u8]> = bitmap.into();
+        if let Ok(mut guard) = self.mono_cache.lock() {
+            if guard.len() >= MONO_GLYPH_CACHE_LIMIT {
+                guard.clear();
+            }
+            guard.insert(key, (metrics, bitmap.clone()));
+        }
+        (metrics, bitmap)
     }
 }
 

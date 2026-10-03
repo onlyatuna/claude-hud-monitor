@@ -12,7 +12,7 @@ use crate::paint::path::PainterPath;
 use crate::paint::pixmap::Pixmap;
 use crate::text::document::TextDocument;
 use crate::text::font::Font;
-use crate::text::font_database::resolve_font_engines_global;
+use crate::text::font_database::resolve_font_engines_for_text_global;
 use crate::text::glyph_layout::GlyphLayout;
 use tiny_skia::{
     Color, FilterQuality, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, Pattern, Shader,
@@ -618,7 +618,7 @@ impl<'a> Painter<'a> {
         if text.is_empty() {
             return;
         }
-        let engines = resolve_font_engines_global(font);
+        let engines = resolve_font_engines_for_text_global(font, text);
         if engines.is_empty() {
             return;
         }
@@ -726,8 +726,7 @@ impl<'a> Painter<'a> {
                 continue;
             }
 
-            let font_face = &engine.fontdue;
-            let (metrics, bitmap) = font_face.rasterize_indexed(glyph.glyph_id, font.size * dpr);
+            let (metrics, bitmap) = engine.rasterize_glyph(glyph.glyph_id, font.size * dpr);
             if metrics.width == 0 || metrics.height == 0 {
                 continue;
             }

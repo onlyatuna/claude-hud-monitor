@@ -1,5 +1,31 @@
 use crate::geometry::primitives::RectF;
-use crate::text::font::Font;
+use crate::text::font::{Font, FontStyle, FontWeight};
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+/// Identity of a shaped-width query: everything `horizontal_advance_exact` depends on.
+#[derive(Hash, PartialEq, Eq)]
+struct AdvanceKey {
+    text: String,
+    family: String,
+    size_bits: u32,
+    weight: FontWeight,
+    style: FontStyle,
+    tabular_numbers: bool,
+}
+
+struct AdvanceCache {
+    generation: u64,
+    map: HashMap<AdvanceKey, f32>,
+}
+
+/// Upper bound on cached strings; the cache is simply cleared when it is exceeded.
+const ADVANCE_CACHE_MAX: usize = 4096;
+
+thread_local! {
+    static ADVANCE_CACHE: RefCell<AdvanceCache> =
+        RefCell::new(AdvanceCache { generation: 0, map: HashMap::new() });
+}
 
 /// Font metrics engine (`QFontMetrics` / `QFontMetricsF` equivalent).
 ///
@@ -76,8 +102,49 @@ impl FontMetrics {
         if text.is_empty() {
             return 0.0;
         }
+        // Shaping costs ~100 us per call and layout asks for the same widths on every pass.
+        // Fonts carrying in-memory data are not cached (their identity is not part of the key).
+        if font.font_data.is_some() {
+            return self.shape_advance(text, font);
+        }
+        let generation = crate::text::font_database::font_generation();
+        let key = AdvanceKey {
+            text: text.to_owned(),
+            family: font.family.clone(),
+            size_bits: font.size.to_bits(),
+            weight: font.weight,
+            style: font.style,
+            tabular_numbers: font.tabular_numbers,
+        };
+        let hit = ADVANCE_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.generation != generation {
+                c.map.clear();
+                c.generation = generation;
+            }
+            c.map.get(&key).copied()
+        });
+        if let Some(w) = hit {
+            return w;
+        }
+        let w = {
+            let _t = crate::startup_trace::span_min(0.5, || {
+                format!("shape_advance miss {:?} {:?} {}px", text, font.family, font.size)
+            });
+            self.shape_advance(text, font)
+        };
+        ADVANCE_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.map.len() >= ADVANCE_CACHE_MAX {
+                c.map.clear();
+            }
+            c.map.insert(key, w);
+        });
+        w
+    }
 
-        let engines = crate::text::font_database::resolve_font_engines_global(font);
+    fn shape_advance(&self, text: &str, font: &Font) -> f32 {
+        let engines = crate::text::font_database::resolve_font_engines_for_text_global(font, text);
         if !engines.is_empty() {
             let layout = crate::text::glyph_layout::GlyphLayout::shape_with_engines(
                 text,

@@ -67,3 +67,33 @@ fn test_memory_font_retains_fallback_chain() {
     // On systems with CJK/Emoji system fonts, engines should contain fallback entries
     assert!(!engines.is_empty(), "Resolved engines must not be empty");
 }
+
+#[test]
+fn test_fallback_chain_is_loaded_only_for_text_the_primary_cannot_cover() {
+    use qtrs_gui::text::font_database::resolve_font_engines_for_text_global;
+    let font = Font::new("Segoe UI", 14.0);
+    let full = resolve_font_engines_global(&font);
+    if full.len() < 2 {
+        return; // no system fallback fonts on this machine
+    }
+
+    let ascii = resolve_font_engines_for_text_global(&font, "Claude HUD 42% --");
+    assert_eq!(ascii.len(), 1, "ASCII text must not pull in CJK/emoji fallbacks");
+
+    if full.len() >= 3 {
+        // CJK-only text stops after the CJK slot; the emoji font is not parsed for it.
+        let cjk_only = resolve_font_engines_for_text_global(&font, "狀態");
+        assert_eq!(cjk_only.len(), 2, "CJK text must not load the emoji slot");
+    }
+
+    let cjk = resolve_font_engines_for_text_global(&font, "狀態: 🔄");
+    assert_eq!(cjk.len(), full.len(), "uncovered characters get the full fallback chain");
+
+    // Same shaping result as with the full chain, for covered and uncovered text alike.
+    for s in ["Claude HUD 42%", "5 小時 🔄"] {
+        let lazy = resolve_font_engines_for_text_global(&font, s);
+        let a = GlyphLayout::shape_with_engines(s, &font, &lazy);
+        let b = GlyphLayout::shape_with_engines(s, &font, &full);
+        assert!((a.width - b.width).abs() < 1e-4, "{s}: {} vs {}", a.width, b.width);
+    }
+}
