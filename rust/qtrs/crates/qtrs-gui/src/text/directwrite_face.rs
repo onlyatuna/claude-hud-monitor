@@ -202,6 +202,11 @@ impl GlyphFace for DirectWriteFace {
         self.base.glyph_index(ch)
     }
 
+    /// DirectWrite's ascent and descent (`DWRITE_FONT_METRICS`).
+    fn vertical_metrics(&self, px: f32) -> Option<(f32, f32)> {
+        Some(self.base.line_metrics(px, true))
+    }
+
     /// Outline metrics (advance widths are unhinted, as in Qt's natural layout). The placement of
     /// the DirectWrite bitmap itself is returned by the rasterize methods.
     fn metrics_indexed(&self, glyph_id: u16, px: f32) -> GlyphMetrics {

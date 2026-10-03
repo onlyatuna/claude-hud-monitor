@@ -44,6 +44,20 @@ impl OutlineFace {
         })
     }
 
+    /// Unrounded `(ascent, descent)` at `px`: DirectWrite's (`windows` = true) are the OS/2
+    /// typographic or Windows metrics, FreeType's are the `hhea` ones.
+    pub(crate) fn line_metrics(&self, px: f32, windows: bool) -> (f32, f32) {
+        let (asc, desc) = match self.face.tables().os2 {
+            Some(os2) if windows && os2.use_typographic_metrics() => {
+                (os2.typographic_ascender(), os2.typographic_descender())
+            }
+            Some(os2) if windows => (os2.windows_ascender(), os2.windows_descender()),
+            _ => (self.face.ascender(), self.face.descender()),
+        };
+        let scale = px / self.units_per_em;
+        (asc as f32 * scale, (-(desc as f32)).max(0.0) * scale)
+    }
+
     /// Placement of `glyph_id` at `px`, plus the sub-pixel offsets the outline is drawn with.
     fn layout(&self, glyph_id: u16, px: f32) -> Layout {
         let scale = px / self.units_per_em;
@@ -101,6 +115,11 @@ fn fract(x: f32) -> f32 {
 impl GlyphFace for OutlineFace {
     fn glyph_index(&self, ch: char) -> u16 {
         self.face.glyph_index(ch).map_or(0, |g| g.0)
+    }
+
+    /// FreeType's view: the `hhea` ascender and descender.
+    fn vertical_metrics(&self, px: f32) -> Option<(f32, f32)> {
+        Some(self.line_metrics(px, false))
     }
 
     fn metrics_indexed(&self, glyph_id: u16, px: f32) -> GlyphMetrics {

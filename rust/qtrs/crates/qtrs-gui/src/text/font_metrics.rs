@@ -26,6 +26,22 @@ const ADVANCE_CACHE_MAX: usize = 4096;
 thread_local! {
     static ADVANCE_CACHE: RefCell<AdvanceCache> =
         RefCell::new(AdvanceCache { generation: 0, map: HashMap::new() });
+    static LINE_CACHE: RefCell<LineCache> =
+        RefCell::new(LineCache { generation: 0, map: HashMap::new() });
+}
+
+/// Identity of a line-metrics query.
+#[derive(Hash, PartialEq, Eq)]
+struct LineKey {
+    family: String,
+    size_bits: u32,
+    weight: FontWeight,
+    style: FontStyle,
+}
+
+struct LineCache {
+    generation: u64,
+    map: HashMap<LineKey, Option<(f32, f32)>>,
 }
 
 /// Font metrics engine (`QFontMetrics` / `QFontMetricsF` equivalent).
@@ -61,11 +77,44 @@ impl FontMetrics {
     /// Derives standard font metrics from a `Font` instance.
     pub fn from_font(font: &Font) -> Self {
         let size = font.size;
+        let avg_width = size * 0.6;
+        if let Some((ascent, descent)) = Self::face_line_metrics(font) {
+            // QFontMetrics: the engine's ascent and descent rounded to whole pixels; leading
+            // is not part of `height()`.
+            return Self::new(ascent.round(), descent.round(), 0.0, avg_width);
+        }
         let ascent = size * 0.8;
         let descent = size * 0.2;
         let line_gap = size * 0.1;
-        let avg_width = size * 0.6;
         Self::new(ascent, descent, line_gap, avg_width)
+    }
+
+    /// Ascent and descent of the face `font` resolves to, from the font database.
+    fn face_line_metrics(font: &Font) -> Option<(f32, f32)> {
+        if font.font_data.is_some() || font.size <= 0.0 {
+            return None;
+        }
+        let generation = crate::text::font_database::font_generation();
+        let key = LineKey {
+            family: font.family.clone(),
+            size_bits: font.size.to_bits(),
+            weight: font.weight,
+            style: font.style,
+        };
+        let hit = LINE_CACHE.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.generation != generation {
+                c.map.clear();
+                c.generation = generation;
+            }
+            c.map.get(&key).copied()
+        });
+        if let Some(found) = hit {
+            return found;
+        }
+        let found = crate::text::font_database::primary_face_vertical_metrics(font);
+        LINE_CACHE.with(|c| c.borrow_mut().map.insert(key, found));
+        found
     }
     /// Interline leading spacing (`QFontMetrics::leading`).
     #[inline]
@@ -213,15 +262,17 @@ mod tests {
     use super::*;
     use crate::text::font::Font;
 
+    /// Whole-pixel ascent/descent of Segoe UI as `QFontMetrics` reports them (measured with
+    /// PySide6 6.11.2 on Windows: 11px -> 12/3 = 15, 12px -> 13/3 = 16).
     #[test]
-    fn test_font_metrics_basic_properties() {
-        let font = Font::new("Segoe UI", 20.0);
-        let metrics = FontMetrics::from_font(&font);
-
-        assert_eq!(metrics.ascent, 16.0);
-        assert_eq!(metrics.descent, 4.0);
-        assert_eq!(metrics.line_gap, 2.0);
-        assert_eq!(metrics.height, 22.0);
+    fn test_font_metrics_follow_the_face_like_qt() {
+        if !std::path::Path::new("C:/Windows/Fonts/segoeui.ttf").exists() {
+            return;
+        }
+        let m11 = FontMetrics::from_font(&Font::new("Segoe UI", 11.0));
+        assert_eq!((m11.ascent, m11.descent, m11.height), (12.0, 3.0, 15.0));
+        let m12 = FontMetrics::from_font(&Font::new("Segoe UI", 12.0));
+        assert_eq!((m12.ascent, m12.descent, m12.height), (13.0, 3.0, 16.0));
     }
 
     #[test]

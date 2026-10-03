@@ -23,6 +23,11 @@ pub trait PlatformTheme: Send + Sync {
     fn color_scheme(&self) -> ColorScheme;
     fn theme_changed(&self) -> &Signal<ColorScheme>;
     fn refresh(&self);
+    /// Family of the system menu font (`QPlatformTheme::MenuFont`), which Qt uses as the base
+    /// font of every `QMenu`. `None` when the platform has no such query.
+    fn menu_font_family(&self) -> Option<String> {
+        None
+    }
 }
 
 #[cfg(windows)]
@@ -104,6 +109,24 @@ pub mod win32_theme {
 
         fn theme_changed(&self) -> &Signal<ColorScheme> {
             &self.theme_changed_signal
+        }
+
+        fn menu_font_family(&self) -> Option<String> {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                SystemParametersInfoW, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS,
+            };
+            // SAFETY: `NONCLIENTMETRICSW` is plain data; `cbSize` is set as the API requires.
+            unsafe {
+                let mut ncm: NONCLIENTMETRICSW = std::mem::zeroed();
+                ncm.cbSize = std::mem::size_of::<NONCLIENTMETRICSW>() as u32;
+                if SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, ncm.cbSize, &mut ncm as *mut _ as *mut _, 0) == 0 {
+                    return None;
+                }
+                let face = &ncm.lfMenuFont.lfFaceName;
+                let len = face.iter().position(|&c| c == 0).unwrap_or(face.len());
+                let name = String::from_utf16_lossy(&face[..len]);
+                (!name.is_empty()).then_some(name)
+            }
         }
 
         fn refresh(&self) {

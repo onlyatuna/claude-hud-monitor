@@ -46,6 +46,13 @@ pub trait GlyphFace: Send + Sync {
     fn metrics(&self, ch: char, px: f32) -> GlyphMetrics {
         self.metrics_indexed(self.glyph_index(ch), px)
     }
+
+    /// Unrounded `(ascent, descent)` in pixels at `px` per em, both positive, as the platform
+    /// font engine reports them (Qt's `QFontEngine::ascent` / `descent` before rounding), or
+    /// `None` when the backend has no such data.
+    fn vertical_metrics(&self, _px: f32) -> Option<(f32, f32)> {
+        None
+    }
 }
 
 /// Shared handle to a face (Qt's ref-counted `QFontEngine*`).

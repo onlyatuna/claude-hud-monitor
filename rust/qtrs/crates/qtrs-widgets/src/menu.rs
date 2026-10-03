@@ -33,6 +33,35 @@ const MIN_WIDTH: i32 = 120;
 const SUBMENU_OVERLAP: i32 = 2;
 const ICON_SIZE: i32 = 16;
 
+/// Box model and palette of a style-sheet-driven menu (`QMenu`, `QMenu::item`,
+/// `QMenu::separator` rules). Without it a menu keeps its built-in look.
+///
+/// Geometry follows `QStyleSheetStyle`: a row is as tall as the *menu font* (`row_font`,
+/// not the item's `font-size`) plus the item padding, a menu is as wide as the widest text
+/// in `row_font` plus left/right padding and 20 px for the check column when any item is
+/// checkable, and the first row starts below the 1 px frame and the `QMenu` padding.
+#[derive(Clone, Debug)]
+pub struct MenuStyle {
+    /// Font the item text is drawn with (the `QMenu::item` `font-size`).
+    pub font: Font,
+    /// The menu's own font, which sizes rows and text widths.
+    pub row_font: Font,
+    pub background: Color,
+    pub border: Color,
+    pub text: Color,
+    pub disabled_text: Color,
+    pub hover_background: Color,
+    pub hover_text: Color,
+    pub separator: Color,
+    pub radius: f32,
+    /// `QMenu { padding }` above the first and below the last row.
+    pub padding_v: i32,
+    /// `QMenu::item { padding }` as top, right, bottom, left.
+    pub item_padding: [i32; 4],
+    /// `QMenu::separator { margin }` as vertical, horizontal; the line itself is 1 px.
+    pub separator_margin: [i32; 2],
+}
+
 /// Result of routing one input event through a chain of open menus.
 pub(crate) enum MenuOutcome {
     /// The event was not used by the menu chain.
@@ -79,6 +108,7 @@ pub struct Menu {
     last_mouse_pos: Option<Point>,
     last_covered: std::cell::Cell<Rect>,
     font: Font,
+    style: Option<MenuStyle>,
 
     background_color: Color,
     border_color: Color,
@@ -122,6 +152,7 @@ impl Menu {
             last_mouse_pos: None,
             last_covered: std::cell::Cell::new(Rect::default()),
             font: Font::new("Segoe UI, Microsoft JhengHei, Segoe UI Emoji", 12.0),
+            style: None,
 
             background_color: Color::from_rgba8(22, 25, 32, 250),
             border_color: Color::from_rgba8(255, 255, 255, 46),
@@ -209,6 +240,67 @@ impl Menu {
     pub fn set_font(&mut self, font: Font) {
         self.font = font;
         self.update();
+    }
+
+    /// Applies a style-sheet-like look (colours, fonts and box model) to this menu and, when
+    /// they open, its sub-menus.
+    pub fn set_style(&mut self, style: MenuStyle) {
+        self.font = style.font.clone();
+        self.background_color = style.background;
+        self.border_color = style.border;
+        self.text_color = style.text;
+        self.disabled_text_color = style.disabled_text;
+        self.highlight_color = style.hover_background;
+        self.highlight_text_color = style.hover_text;
+        self.separator_color = style.separator;
+        self.style = Some(style);
+        self.update();
+    }
+
+    fn top_inset(&self) -> i32 {
+        self.style.as_ref().map_or(V_PADDING, |s| FRAME + s.padding_v)
+    }
+
+    fn separator_height(&self) -> i32 {
+        self.style
+            .as_ref()
+            .map_or(SEPARATOR_HEIGHT, |s| 1 + 2 * s.separator_margin[0])
+    }
+
+    fn has_checkable(&self) -> bool {
+        self.actions.iter().any(|a| {
+            let a = a.borrow();
+            a.is_visible() && !a.is_separator() && a.is_checkable()
+        })
+    }
+
+    /// X of the item text in menu coordinates.
+    fn text_x(&self) -> f32 {
+        match &self.style {
+            Some(s) => {
+                (FRAME + s.item_padding[3] + if self.has_checkable() { 16 } else { 0 }) as f32
+            }
+            None => CHECK_COLUMN as f32,
+        }
+    }
+
+    fn measure_font(&self) -> &Font {
+        self.style.as_ref().map_or(&self.font, |s| &s.row_font)
+    }
+
+    fn width_for(&self, max_text: i32, shortcut_w: i32) -> i32 {
+        match &self.style {
+            Some(s) => {
+                2 * FRAME
+                    + s.item_padding[1]
+                    + s.item_padding[3]
+                    + if self.has_checkable() { 20 } else { 0 }
+                    + max_text
+                    + shortcut_w
+            }
+            None => (CHECK_COLUMN + max_text + shortcut_w + ARROW_COLUMN + RIGHT_PADDING)
+                .max(MIN_WIDTH),
+        }
     }
 
     /// Returns the action that represents `menu` inside a menu bar or parent menu
@@ -683,6 +775,10 @@ impl Menu {
     }
 
     fn item_height(&self) -> i32 {
+        if let Some(s) = &self.style {
+            let h = FontMetrics::from_font(&s.row_font).height.ceil() as i32;
+            return h + s.item_padding[0] + s.item_padding[2];
+        }
         let metrics = FontMetrics::from_font(&self.font);
         (metrics.height.ceil() as i32 + 8).max(24)
     }
@@ -690,7 +786,7 @@ impl Menu {
     fn item_rects(&self) -> Vec<Rect> {
         let width = self.base.geometry().width - 2 * FRAME;
         let item_h = self.item_height();
-        let mut y = V_PADDING;
+        let mut y = self.top_inset();
         self.actions
             .iter()
             .map(|action| {
@@ -699,7 +795,7 @@ impl Menu {
                     return Rect::new(FRAME, y, 0, 0);
                 }
                 let h = if a.is_separator() {
-                    SEPARATOR_HEIGHT
+                    self.separator_height()
                 } else {
                     item_h
                 };
@@ -819,11 +915,12 @@ impl Menu {
             sub.highlight_text_color = self.highlight_text_color;
             sub.separator_color = self.separator_color;
             sub.font = self.font.clone();
+            sub.style = self.style.clone();
             sub.about_to_show.emit(&());
             sub.popup_bounds = local_bounds;
             let size = sub.size_hint();
             let mut x = geom.width - SUBMENU_OVERLAP;
-            let mut y = item.y - V_PADDING;
+            let mut y = item.y - self.top_inset();
             if let Some(b) = local_bounds {
                 if x + size.width > b.right() {
                     x = (SUBMENU_OVERLAP - size.width).max(b.x);
@@ -1181,27 +1278,35 @@ impl Menu {
         let metrics = FontMetrics::from_font(&self.font);
         let width = self.base.geometry().width;
         if action.is_separator() {
-            let y = rect.y as f32 + rect.height as f32 / 2.0;
+            let (x0, x1, line_y) = match &self.style {
+                Some(s) => (
+                    (FRAME + s.separator_margin[1]) as f32,
+                    (width - FRAME - s.separator_margin[1]) as f32,
+                    (rect.y + s.separator_margin[0]) as f32 + 0.5,
+                ),
+                None => (
+                    CHECK_COLUMN as f32 - 4.0,
+                    (width - RIGHT_PADDING) as f32,
+                    rect.y as f32 + rect.height as f32 / 2.0,
+                ),
+            };
             painter.set_pen(Pen::new(self.separator_color, 1.0));
-            painter.draw_line(
-                PointF::new(CHECK_COLUMN as f32 - 4.0, y),
-                PointF::new((width - RIGHT_PADDING) as f32, y),
-            );
+            painter.draw_line(PointF::new(x0, line_y), PointF::new(x1, line_y));
             return;
         }
         let enabled = action.is_enabled();
         if active && enabled {
             painter.set_brush(Brush::Color(self.highlight_color));
             painter.set_pen(None);
+            let (hl, radius) = if self.style.is_some() {
+                (rect, 0.0)
+            } else {
+                (Rect::new(rect.x + 3, rect.y, rect.width - 6, rect.height), 4.0)
+            };
             painter.draw_rounded_rect(
-                RectF::new(
-                    rect.x as f32 + 3.0,
-                    rect.y as f32,
-                    rect.width as f32 - 6.0,
-                    rect.height as f32,
-                ),
-                4.0,
-                4.0,
+                RectF::new(hl.x as f32, hl.y as f32, hl.width as f32, hl.height as f32),
+                radius,
+                radius,
             );
         }
         let color = if !enabled {
@@ -1212,24 +1317,31 @@ impl Menu {
             self.text_color
         };
         let mid_y = rect.y as f32 + rect.height as f32 / 2.0;
+        let text_x = self.text_x();
 
         if action.is_checkable() && action.is_checked() {
-            let check_color = if active {
-                self.highlight_text_color
+            if self.style.is_some() && !action.is_exclusive_in_group() {
+                painter.set_pen(Pen::new(color, 1.6));
+                painter.draw_line(PointF::new(5.5, mid_y + 0.5), PointF::new(8.0, mid_y + 3.0));
+                painter.draw_line(PointF::new(8.0, mid_y + 3.0), PointF::new(12.5, mid_y - 3.0));
             } else {
-                Color::from_rgba8(56, 189, 248, 255)
-            };
-            if action.is_exclusive_in_group() {
-                painter.set_brush(Brush::Color(check_color));
-                painter.set_pen(None);
-                painter.draw_ellipse(RectF::new(10.0, mid_y - 4.0, 8.0, 8.0));
-            } else {
-                painter.set_pen(Pen::new(check_color, 2.0));
-                painter.draw_line(PointF::new(9.0, mid_y), PointF::new(12.5, mid_y + 3.5));
-                painter.draw_line(
-                    PointF::new(12.5, mid_y + 3.5),
-                    PointF::new(19.0, mid_y - 4.0),
-                );
+                let check_color = if active {
+                    self.highlight_text_color
+                } else {
+                    Color::from_rgba8(56, 189, 248, 255)
+                };
+                if action.is_exclusive_in_group() {
+                    painter.set_brush(Brush::Color(check_color));
+                    painter.set_pen(None);
+                    painter.draw_ellipse(RectF::new(10.0, mid_y - 4.0, 8.0, 8.0));
+                } else {
+                    painter.set_pen(Pen::new(check_color, 2.0));
+                    painter.draw_line(PointF::new(9.0, mid_y), PointF::new(12.5, mid_y + 3.5));
+                    painter.draw_line(
+                        PointF::new(12.5, mid_y + 3.5),
+                        PointF::new(19.0, mid_y - 4.0),
+                    );
+                }
             }
         } else if !action.icon().is_null() {
             let mode = if enabled {
@@ -1256,7 +1368,7 @@ impl Menu {
         let text = action.display_text();
         let baseline = mid_y - metrics.height / 2.0 + metrics.ascent;
         painter.draw_text_colored(
-            PointF::new(CHECK_COLUMN as f32, baseline),
+            PointF::new(text_x, baseline),
             &text,
             &self.font,
             color,
@@ -1268,8 +1380,8 @@ impl Menu {
             let underline_y = baseline + 2.0;
             painter.set_pen(Pen::new(color, 1.0));
             painter.draw_line(
-                PointF::new(CHECK_COLUMN as f32 + prefix_w, underline_y),
-                PointF::new(CHECK_COLUMN as f32 + prefix_w + ch_w, underline_y),
+                PointF::new(text_x + prefix_w, underline_y),
+                PointF::new(text_x + prefix_w + ch_w, underline_y),
             );
         }
 
@@ -1282,8 +1394,8 @@ impl Menu {
         }
 
         if action.menu().is_some() {
-            let ax = (width - 14) as f32;
-            painter.set_pen(Pen::new(color, 1.5));
+            let ax = (width - if self.style.is_some() { 17 } else { 14 }) as f32;
+            painter.set_pen(Pen::new(color, if self.style.is_some() { 1.3 } else { 1.5 }));
             painter.draw_line(PointF::new(ax, mid_y - 4.0), PointF::new(ax + 4.0, mid_y));
             painter.draw_line(PointF::new(ax + 4.0, mid_y), PointF::new(ax, mid_y + 4.0));
         }
@@ -1350,9 +1462,10 @@ impl Widget for Menu {
     }
 
     fn size_hint(&self) -> Size {
-        let metrics = FontMetrics::from_font(&self.font);
+        let measure = self.measure_font().clone();
+        let metrics = FontMetrics::from_font(&measure);
         let item_h = self.item_height();
-        let mut height = 2 * V_PADDING;
+        let mut height = 2 * self.top_inset();
         let mut max_text = 0i32;
         let mut max_shortcut = 0i32;
         for action in &self.actions {
@@ -1361,17 +1474,17 @@ impl Widget for Menu {
                 continue;
             }
             if a.is_separator() {
-                height += SEPARATOR_HEIGHT;
+                height += self.separator_height();
                 continue;
             }
             height += item_h;
             let text_w = metrics
-                .horizontal_advance(&a.display_text(), &self.font)
+                .horizontal_advance_exact(&a.display_text(), &measure)
                 .ceil() as i32;
             max_text = max_text.max(text_w);
             if !a.shortcut().is_empty() {
                 let sc_w = metrics
-                    .horizontal_advance(&a.shortcut().to_string(), &self.font)
+                    .horizontal_advance_exact(&a.shortcut().to_string(), &measure)
                     .ceil() as i32;
                 max_shortcut = max_shortcut.max(sc_w);
             }
@@ -1381,8 +1494,7 @@ impl Widget for Menu {
         } else {
             0
         };
-        let width =
-            (CHECK_COLUMN + max_text + shortcut_w + ARROW_COLUMN + RIGHT_PADDING).max(MIN_WIDTH);
+        let width = self.width_for(max_text, shortcut_w);
         Size::new(width, height)
     }
 
@@ -1538,8 +1650,8 @@ impl Widget for Menu {
                 g.width as f32 - 1.0,
                 g.height as f32 - 1.0,
             ),
-            6.0,
-            6.0,
+            self.style.as_ref().map_or(6.0, |s| s.radius),
+            self.style.as_ref().map_or(6.0, |s| s.radius),
         );
 
         let rects = self.item_rects();

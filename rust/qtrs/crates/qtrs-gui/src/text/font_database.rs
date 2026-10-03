@@ -134,6 +134,16 @@ pub fn resolve_font_engines_global(font: &Font) -> Vec<FontEngine> {
     with_global_font_database(|db| db.resolve_font_engines(font))
 }
 
+/// Ascent and descent in pixels of the face `font` resolves to (see [`GlyphFace::vertical_metrics`]).
+///
+/// [`GlyphFace::vertical_metrics`]: crate::text::glyph_face::GlyphFace::vertical_metrics
+pub fn primary_face_vertical_metrics(font: &Font) -> Option<(f32, f32)> {
+    with_global_font_database(|db| {
+        db.load_font_styled(&font.family, FaceStyle::of(font))
+            .and_then(|face| face.vertical_metrics(font.size))
+    })
+}
+
 /// Like [`resolve_font_engines_global`], but loads the fallback fonts only when `text` needs them.
 ///
 /// Parsing a CJK/emoji fallback can cost hundreds of ms (and hundreds of MB) with an eager backend,

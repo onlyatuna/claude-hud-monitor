@@ -241,6 +241,65 @@ pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMe
 
     menu
 }
+/// The `QMenu` rules of the Python HUD's active style sheet: the static cards sheet in cards
+/// mode, the theme sheet (`get_hud_stylesheet`) in table mode.
+fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
+    use qtrs_gui::text::font::Font;
+    let dark = crate::ui::resolve_is_dark(&cfg.appearance);
+    let table = cfg.ui_mode == "table";
+    // The menu's own font is the system menu font at 9pt (12px); it sizes the rows.
+    let family = qtrs_platform::platform()
+        .theme()
+        .menu_font_family()
+        .unwrap_or_else(|| "Segoe UI".to_string());
+    let family = format!("{family}, Segoe UI, Segoe UI Emoji");
+    let row_font = Font::new(family.clone(), 12.0);
+    let rgba = |r: u8, g: u8, b: u8, a: u8| Color::from_rgba8(r, g, b, a);
+    if table {
+        let (background, border, text, hover, disabled) = if dark {
+            (rgba(40, 40, 46, 247), rgba(255, 255, 255, 31), rgba(242, 242, 247, 255), rgba(255, 255, 255, 26), rgba(235, 235, 245, 82))
+        } else {
+            (rgba(250, 250, 252, 247), rgba(40, 40, 50, 36), rgba(31, 31, 36, 255), rgba(0, 0, 0, 18), rgba(40, 40, 50, 87))
+        };
+        qtrs_widgets::menu::MenuStyle {
+            font: Font::new(family, 12.0),
+            row_font,
+            background,
+            border,
+            text,
+            disabled_text: disabled,
+            hover_background: hover,
+            hover_text: text,
+            separator: border,
+            radius: 8.0,
+            padding_v: 5,
+            item_padding: [5, 26, 5, 22],
+            separator_margin: [5, 10],
+        }
+    } else {
+        let (background, border, text, hover, hover_text, separator) = if dark {
+            (rgba(22, 25, 32, 255), rgba(255, 255, 255, 46), rgba(226, 232, 240, 255), rgba(39, 47, 61, 255), rgba(56, 189, 248, 255), rgba(255, 255, 255, 31))
+        } else {
+            (rgba(248, 250, 252, 255), rgba(15, 23, 42, 46), rgba(23, 32, 51, 255), rgba(226, 232, 240, 255), rgba(3, 105, 161, 255), rgba(15, 23, 42, 31))
+        };
+        qtrs_widgets::menu::MenuStyle {
+            font: Font::new(family, 11.0),
+            row_font,
+            background,
+            border,
+            text,
+            disabled_text: rgba(100, 116, 139, 255),
+            hover_background: hover,
+            hover_text,
+            separator,
+            radius: 6.0,
+            padding_v: 4,
+            item_padding: [6, 24, 6, 20],
+            separator_margin: [4, 8],
+        }
+    }
+}
+
 pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     use qtrs_core::variant::Variant;
     use qtrs_widgets::action::Action;
@@ -248,6 +307,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
 
     let mut menu = Menu::new("");
     menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
+    menu.set_style(hud_menu_style(cfg));
 
     let add_item = |m: &mut Menu, id: u32, text: &str| {
         let act = Action::new_ref(text);
