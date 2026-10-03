@@ -226,6 +226,8 @@ impl Menu {
 pub enum TrayActivation {
     Trigger,
     DoubleClick,
+    Context,
+    MiddleClick,
 }
 
 #[cfg(windows)]
@@ -273,7 +275,12 @@ unsafe extern "system" fn tray_window_proc(
                 WM_RBUTTONUP | WM_CONTEXTMENU => {
                     let mut pt = POINT { x: 0, y: 0 };
                     GetCursorPos(&mut pt);
-                    tray.show_context_menu_at(Point::new(pt.x, pt.y));
+                    let pos = Point::new(pt.x, pt.y);
+                    tray.on_context_menu_requested.emit(&pos);
+                    tray.on_activated.emit(&TrayActivation::Context);
+                    if tray.menu.is_some() {
+                        tray.show_context_menu_at(pos);
+                    }
                     return 0;
                 }
                 0x0405 => {
@@ -335,6 +342,7 @@ pub struct TrayIcon {
     pub on_menu_action: Signal<u32>,
     pub on_message_clicked: Signal<()>,
     pub on_power_event: Signal<crate::window_system_interface::PowerEvent>,
+    pub on_context_menu_requested: Signal<Point>,
 }
 
 #[cfg(windows)]
@@ -386,6 +394,7 @@ impl TrayIcon {
             on_menu_action: Signal::new(),
             on_message_clicked: Signal::new(),
             on_power_event: Signal::new(),
+            on_context_menu_requested: Signal::new(),
         });
 
         // Register into global HWND router table
@@ -732,8 +741,8 @@ pub struct TrayIcon {
     inner: Box<dyn crate::platform_tray::PlatformTrayIcon>,
     pub on_menu_action: Signal<u32>,
     pub on_activated: Signal<TrayActivation>,
+    pub on_context_menu_requested: Signal<Point>,
 }
-
 #[cfg(not(windows))]
 impl TrayIcon {
     pub fn from_pixmap(tooltip: impl Into<String>, pixmap: &Pixmap) -> Result<Box<Self>, &'static str> {
@@ -744,6 +753,7 @@ impl TrayIcon {
             inner,
             on_menu_action: Signal::new(),
             on_activated: Signal::new(),
+            on_context_menu_requested: Signal::new(),
         }))
     }
 

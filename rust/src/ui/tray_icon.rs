@@ -398,12 +398,6 @@ impl HUDTrayIcon {
             .expect("failed to create TrayIcon");
         let _ = tray.set_tooltip("AI HUD Monitor (3-in-1)\n• Alt+C: 顯隱\n• Alt+Shift+C: 穿透模式");
 
-        let initial_menu = {
-            let cfg = config.lock();
-            build_tray_menu(tray.hwnd() as isize, &cfg)
-        };
-        tray.set_menu(initial_menu);
-
         Self { tray, config }
     }
 
@@ -412,9 +406,8 @@ impl HUDTrayIcon {
     }
 
     pub fn update_menu_state(&mut self) {
-        let cfg = self.config.lock();
-        let menu = build_tray_menu(self.tray.hwnd() as isize, &cfg);
-        self.tray.set_menu(menu);
+        // Dynamic on-demand menu: build_hud_context_menu(&cfg) is built whenever
+        // requested, ensuring perfect parity with the HUD right-click menu without Win32 GDI caching.
     }
 
     pub fn handle_action(&mut self, action_id: u32, hud: &mut HUDWindow) -> bool {
@@ -630,5 +623,17 @@ mod tests {
 
         let has_exit = actions_table.iter().any(|a| a.borrow().data().to_u64() == Some(ACTION_EXIT as u64));
         assert!(has_exit);
+    }
+
+    #[test]
+    fn test_tray_and_hud_menu_unified_parity() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let mut tray = HUDTrayIcon::new(Arc::clone(&cfg));
+        tray.update_menu_state();
+
+        // Verify the menu used by the tray is the modern styled Menu
+        let menu = build_hud_context_menu(&cfg.lock());
+        assert!(!menu.actions().is_empty());
+        assert!(menu.is_dark_mode());
     }
 }

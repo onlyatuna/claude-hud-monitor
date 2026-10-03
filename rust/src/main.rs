@@ -20,10 +20,11 @@ use log::info;
 use parking_lot::Mutex;
 use qtrs_core::application::CoreApplication;
 use qtrs_core::timer::Timer;
+use qtrs_gui::geometry::primitives::Point;
 use qtrs_platform::platform_tray::TrayMessageIcon;
 use qtrs_platform::tray_icon::TrayActivation;
 use qtrs_widgets::application::Application;
-use config::ConfigManager;
+use config::{Config, ConfigManager};
 use hotkey::HotkeyManager;
 use refresh_controller::RefreshController;
 use ui::hud_window::HUDWindow;
@@ -342,7 +343,44 @@ fn main() {
         }
     });
 
-    // Connect tray menu actions
+    // Helper to pop up the modern, styled HUD context menu (used by both HUD body and system tray)
+    fn show_hud_popup_menu(global_pos: Point, config: &Arc<Mutex<Config>>) {
+        let cfg = config.lock().clone();
+        let mut menu = ui::tray_icon::build_hud_context_menu(&cfg);
+        if let Some(action) = menu.exec_popup(global_pos) {
+            if let Some(id) = action.borrow().data().to_u64() {
+                let action_id = id as u32;
+                MAIN_TRAY.with(|t_cell| {
+                    if let Some(tray) = t_cell.borrow().as_ref() {
+                        MAIN_HUD.with(|h_cell| {
+                            if let Some(hud) = h_cell.borrow().as_ref() {
+                                let mut tray_ref = tray.borrow_mut();
+                                let mut hud_ref = hud.borrow_mut();
+                                if tray_ref.handle_action(action_id, &mut *hud_ref) {
+                                    hud_ref.persist_geometry();
+                                    hud_ref.window.hide();
+                                    info!("Exit requested from context menu. Exiting cleanly.");
+                                    Application::exit(0);
+                                }
+                            }
+                        });
+                    }
+                });
+            }
+        }
+    }
+
+    // Connect system tray context menu request
+    let config_clone = Arc::clone(&config);
+    tray.borrow().tray.on_context_menu_requested.connect(move |pos: &Point| {
+        let global_pos = *pos;
+        let cfg_clone = Arc::clone(&config_clone);
+        Timer::single_shot(0, move || {
+            show_hud_popup_menu(global_pos, &cfg_clone);
+        });
+    });
+
+    // Fallback if platform menu action is emitted directly
     tray.borrow().tray.on_menu_action.connect(move |id: &u32| {
         let action_id = *id;
         MAIN_TRAY.with(|t_cell| {
@@ -364,33 +402,11 @@ fn main() {
     });
 
     // Connect window body right-click context menu (mirrors Python contextMenuEvent via QPainter Menu)
-    let config_clone = Arc::clone(&config);
+    let config_clone2 = Arc::clone(&config);
     hud.borrow_mut().window.set_context_menu_handler(move |global_pos| {
-        let cfg_clone = Arc::clone(&config_clone);
+        let cfg_clone = Arc::clone(&config_clone2);
         Timer::single_shot(0, move || {
-            let cfg = cfg_clone.lock().clone();
-            let mut menu = ui::tray_icon::build_hud_context_menu(&cfg);
-            if let Some(action) = menu.exec_popup(global_pos) {
-                if let Some(id) = action.borrow().data().to_u64() {
-                    let action_id = id as u32;
-                    MAIN_TRAY.with(|t_cell| {
-                        if let Some(tray) = t_cell.borrow().as_ref() {
-                            MAIN_HUD.with(|h_cell| {
-                                if let Some(hud) = h_cell.borrow().as_ref() {
-                                    let mut tray_ref = tray.borrow_mut();
-                                    let mut hud_ref = hud.borrow_mut();
-                                    if tray_ref.handle_action(action_id, &mut *hud_ref) {
-                                        hud_ref.persist_geometry();
-                                        hud_ref.window.hide();
-                                        info!("Exit requested from context menu. Exiting cleanly.");
-                                        Application::exit(0);
-                                    }
-                                }
-                            });
-                        }
-                    });
-                }
-            }
+            show_hud_popup_menu(global_pos, &cfg_clone);
         });
     });
 

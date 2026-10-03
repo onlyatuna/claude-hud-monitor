@@ -182,6 +182,9 @@ impl Menu {
         self.update();
     }
 
+    pub fn is_dark_mode(&self) -> bool {
+        self.background_color.red() < 0.5
+    }
     pub fn icon(&self) -> &Icon {
         &self.icon
     }
@@ -425,7 +428,7 @@ impl Menu {
         self.last_triggered = None;
         let size = self.size_hint();
         let screen = platform().primary_screen();
-        let s_geom = screen.geometry();
+        let s_geom = screen.available_geometry();
 
         let mut x = pos.x;
         let mut y = pos.y;
@@ -434,14 +437,13 @@ impl Menu {
         }
         if y + size.height > s_geom.bottom() {
             y = if pos.y - size.height >= s_geom.y {
-                pos.y - size.height
+                (pos.y - size.height).min(s_geom.bottom() - size.height)
             } else {
                 (s_geom.bottom() - size.height).max(s_geom.y)
             };
         }
         x = x.max(s_geom.x);
         y = y.max(s_geom.y);
-
         let initial_rect = Rect::new(x, y, size.width, size.height);
         self.popup_bounds = Some(Rect::new(0, 0, s_geom.width, s_geom.height));
         self.popup_at(Point::new(0, 0), None);
