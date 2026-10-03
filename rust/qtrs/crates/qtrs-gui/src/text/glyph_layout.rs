@@ -1,4 +1,5 @@
 use crate::text::font::{Font, SharedFontData};
+use crate::text::glyph_face::{GlyphMetrics, SharedGlyphFace};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -15,18 +16,18 @@ pub struct PositionedGlyph {
     pub y: f32,
 }
 
-/// A single font engine instance combining metrics/rasterization (`fontdue`) and optional
-/// raw binary data for OpenType layout (`rustybuzz`).
-/// Mirrors Qt's `QFontEngine`.
-type ColorGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), Option<(fontdue::Metrics, Arc<tiny_skia::Pixmap>)>>>>;
-type MonoGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), (fontdue::Metrics, Arc<[u8]>)>>>;
+/// A single font engine instance combining the glyph source (metrics, coverage bitmaps and
+/// character mapping, see [`GlyphFace`]) and optional raw binary data for OpenType layout
+/// (`rustybuzz`). Mirrors Qt's `QFontEngine`.
+type ColorGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), Option<(GlyphMetrics, Arc<tiny_skia::Pixmap>)>>>>;
+type MonoGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), (GlyphMetrics, Arc<[u8]>)>>>;
 /// Upper bound on cached glyph bitmaps per engine (a CJK font could otherwise grow without limit).
 const MONO_GLYPH_CACHE_LIMIT: usize = 4096;
 
 #[derive(Clone)]
 pub struct FontEngine {
-    /// Fontdue font face for rasterization, metrics, and character-to-glyph mapping.
-    pub fontdue: Arc<fontdue::Font>,
+    /// Glyph source for rasterization, metrics, and character-to-glyph mapping.
+    pub face: SharedGlyphFace,
     /// Optional binary font file data for HarfBuzz / rustybuzz OpenType shaping.
     pub raw_data: Option<SharedFontData>,
     /// Font face index within a font collection (.ttc / .otc).
@@ -38,10 +39,10 @@ pub struct FontEngine {
 }
 
 impl FontEngine {
-    /// Creates a new engine backed by a `fontdue::Font`.
-    pub fn new(fontdue: Arc<fontdue::Font>) -> Self {
+    /// Creates a new engine backed by a glyph face.
+    pub fn new(face: SharedGlyphFace) -> Self {
         Self {
-            fontdue,
+            face,
             raw_data: None,
             face_index: 0,
             color_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
@@ -76,7 +77,7 @@ impl FontEngine {
         &self,
         glyph_id: u16,
         px_size: f32,
-    ) -> Option<(fontdue::Metrics, Arc<tiny_skia::Pixmap>)> {
+    ) -> Option<(GlyphMetrics, Arc<tiny_skia::Pixmap>)> {
         let key = (glyph_id, (px_size * 64.0).round() as u32);
         if let Ok(guard) = self.color_cache.lock() {
             if let Some(entry) = guard.get(&key) {
@@ -89,7 +90,7 @@ impl FontEngine {
             raw.as_slice(),
             self.face_index,
             glyph_id,
-            &self.fontdue,
+            self.face.as_ref(),
             px_size,
         ).map(|(m, p)| (m, Arc::new(p)));
 
@@ -103,16 +104,16 @@ impl FontEngine {
     /// Rasterizes a monochrome (alpha coverage) glyph, caching the bitmap per `(glyph, size)`.
     ///
     /// Mirrors Qt's `QFontEngineGlyphCache`: a glyph is rasterized once per size and then reused by
-    /// every later paint. The bitmap is identical to `fontdue::Font::rasterize_indexed`.
+    /// every later paint. The bitmap is identical to the face's own `rasterize_indexed`.
     /// The cache is shared by every clone of this engine.
-    pub fn rasterize_glyph(&self, glyph_id: u16, px_size: f32) -> (fontdue::Metrics, Arc<[u8]>) {
+    pub fn rasterize_glyph(&self, glyph_id: u16, px_size: f32) -> (GlyphMetrics, Arc<[u8]>) {
         let key = (glyph_id, px_size.to_bits());
         if let Ok(guard) = self.mono_cache.lock() {
             if let Some((metrics, bitmap)) = guard.get(&key) {
                 return (*metrics, bitmap.clone());
             }
         }
-        let (metrics, bitmap) = self.fontdue.rasterize_indexed(glyph_id, px_size);
+        let (metrics, bitmap) = self.face.rasterize_indexed(glyph_id, px_size);
         let bitmap: Arc<[u8]> = bitmap.into();
         if let Ok(mut guard) = self.mono_cache.lock() {
             if guard.len() >= MONO_GLYPH_CACHE_LIMIT {
@@ -124,9 +125,9 @@ impl FontEngine {
     }
 }
 
-impl From<Arc<fontdue::Font>> for FontEngine {
-    fn from(f: Arc<fontdue::Font>) -> Self {
-        Self::new(f)
+impl From<SharedGlyphFace> for FontEngine {
+    fn from(face: SharedGlyphFace) -> Self {
+        Self::new(face)
     }
 }
 
@@ -159,10 +160,9 @@ impl GlyphLayout {
     }
 
     /// Shapes and positions text using Qt 6 Run-based architecture:
-    /// partitions text into font runs and uses `rustybuzz` with fallback to `fontdue`.
-    pub fn shape(text: &str, font: &Font, font_face: &fontdue::Font) -> Self {
-        let primary = Arc::new(font_face.clone());
-        let mut engine = FontEngine::new(primary).with_face_index(0);
+    /// partitions text into font runs and uses `rustybuzz` with fallback to face metrics.
+    pub fn shape(text: &str, font: &Font, face: SharedGlyphFace) -> Self {
+        let mut engine = FontEngine::new(face).with_face_index(0);
         if let Some(raw) = &font.font_data {
             engine = engine.with_raw_data(raw.clone());
         }
@@ -213,21 +213,16 @@ impl GlyphLayout {
         }
     }
 
-    /// Fallback shaping using fontdue per-character metrics.
-    pub fn shape_with_fontdue(text: &str, font: &Font, font_face: &fontdue::Font) -> Self {
-        let primary = Arc::new(font_face.clone());
-        let engine = FontEngine::new(primary);
+    /// Fallback shaping using per-glyph face metrics.
+    pub fn shape_with_face(text: &str, font: &Font, face: SharedGlyphFace) -> Self {
+        let engine = FontEngine::new(face);
         Self::shape_with_engines(text, font, &[engine])
     }
 
     /// True Qt `QFontEngineMulti` parity: shapes text using primary font engine,
     /// dynamically falling back to secondary font engines on a per-glyph basis.
-    pub fn shape_with_fontdue_multi(
-        text: &str,
-        font: &Font,
-        fonts: &[Arc<fontdue::Font>],
-    ) -> Self {
-        let engines: Vec<FontEngine> = fonts
+    pub fn shape_with_faces(text: &str, font: &Font, faces: &[SharedGlyphFace]) -> Self {
+        let engines: Vec<FontEngine> = faces
             .iter()
             .enumerate()
             .map(|(idx, f)| {
@@ -251,13 +246,13 @@ impl GlyphLayout {
             return Vec::new();
         }
 
-        let primary = &engines[0].fontdue;
+        let primary = &engines[0].face;
         let mut char_engine_indices = Vec::with_capacity(text.len());
         let mut last_fallback_idx = 0usize;
 
         for ch in text.chars() {
             let mut resolved_idx = 0usize;
-            let gid = primary.lookup_glyph_index(ch);
+            let gid = primary.glyph_index(ch);
 
             // Qt parity: if primary engine has no glyph (0) and character is not whitespace/ignorable,
             // query fallback engines.
@@ -268,7 +263,7 @@ impl GlyphLayout {
                 // consecutive characters in multi-language text (CJK/Emoji) usually share the same font.
                 if last_fallback_idx > 0
                     && last_fallback_idx < engines.len()
-                    && engines[last_fallback_idx].fontdue.lookup_glyph_index(ch) != 0
+                    && engines[last_fallback_idx].face.glyph_index(ch) != 0
                 {
                     resolved_idx = last_fallback_idx;
                     found = true;
@@ -279,7 +274,7 @@ impl GlyphLayout {
                         if idx == last_fallback_idx {
                             continue;
                         }
-                        if fb_engine.fontdue.lookup_glyph_index(ch) != 0 {
+                        if fb_engine.face.glyph_index(ch) != 0 {
                             resolved_idx = idx;
                             last_fallback_idx = idx;
                             break;
@@ -378,22 +373,22 @@ impl GlyphLayout {
                     current_y += (pos.y_advance as f32) * scale;
                 }
             } else {
-                // Fallback `fontdue` path for runs without raw binary font data:
+                // Fallback path (per-glyph face metrics) for runs without raw binary font data:
                 let tnum_width = if font.tabular_numbers {
                     Some(
                         engine
-                            .fontdue
+                            .face
                             .metrics('0', font.size)
                             .advance_width
-                            .max(engine.fontdue.metrics('8', font.size).advance_width),
+                            .max(engine.face.metrics('8', font.size).advance_width),
                     )
                 } else {
                     None
                 };
 
                 for ch in run.text.chars() {
-                    let gid = engine.fontdue.lookup_glyph_index(ch);
-                    let metrics = engine.fontdue.metrics(ch, font.size);
+                    let gid = engine.face.glyph_index(ch);
+                    let metrics = engine.face.metrics(ch, font.size);
                     let adv_x = if ch.is_ascii_digit() && run.engine_index == 0 {
                         tnum_width.unwrap_or(metrics.advance_width)
                     } else {
@@ -422,8 +417,9 @@ impl GlyphLayout {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use crate::text::glyph_face::parse_face;
 
-    fn get_test_font() -> (Arc<Vec<u8>>, fontdue::Font) {
+    fn get_test_font() -> (Arc<Vec<u8>>, SharedGlyphFace) {
         let path = std::path::Path::new("C:/Windows/Fonts/arial.ttf");
         let data = if path.exists() {
             std::fs::read(path).unwrap()
@@ -436,9 +432,8 @@ mod tests {
             }
         };
 
-        let font =
-            fontdue::Font::from_bytes(data.clone(), fontdue::FontSettings::default()).unwrap();
-        (Arc::new(data), font)
+        let face = parse_face(&data, 0).unwrap();
+        (Arc::new(data), face)
     }
 
     #[test]
@@ -446,7 +441,7 @@ mod tests {
         let (data, font_face) = get_test_font();
         let font = Font::new("Arial", 16.0).with_font_data(data);
 
-        let layout = GlyphLayout::shape("HUD 100%", &font, &font_face);
+        let layout = GlyphLayout::shape("HUD 100%", &font, font_face);
         assert!(!layout.glyphs.is_empty());
         assert!(layout.width > 0.0);
         assert_eq!(layout.glyphs[0].x, 0.0);
@@ -460,8 +455,8 @@ mod tests {
             .with_tabular_numbers(true)
             .with_font_data(data);
 
-        let layout_1111 = GlyphLayout::shape("1111", &font_tnum, &font_face);
-        let layout_8888 = GlyphLayout::shape("8888", &font_tnum, &font_face);
+        let layout_1111 = GlyphLayout::shape("1111", &font_tnum, font_face.clone());
+        let layout_8888 = GlyphLayout::shape("8888", &font_tnum, font_face);
 
         assert_eq!(layout_1111.glyphs.len(), 4);
         assert_eq!(layout_8888.glyphs.len(), 4);
@@ -475,9 +470,9 @@ mod tests {
         let emoji_path = std::path::Path::new("C:/Windows/Fonts/seguiemj.ttf");
         if emoji_path.exists() {
             let emoji_data = std::fs::read(emoji_path).unwrap();
-            let emoji_font = fontdue::Font::from_bytes(emoji_data, fontdue::FontSettings::default()).unwrap();
-            let fonts = vec![Arc::new(font_face), Arc::new(emoji_font)];
-            let layout = GlyphLayout::shape_with_fontdue_multi("🔄 立即", &font, &fonts);
+            let emoji_font = parse_face(&emoji_data, 0).unwrap();
+            let fonts = vec![font_face, emoji_font];
+            let layout = GlyphLayout::shape_with_faces("🔄 立即", &font, &fonts);
             assert_eq!(layout.glyphs[0].font_index, 1, "Emoji should resolve to fallback engine 1");
             let (metrics, bitmap) = fonts[1].rasterize_indexed(layout.glyphs[0].glyph_id, 16.0);
             assert!(metrics.width > 0);
@@ -491,11 +486,11 @@ mod tests {
         let (data, font_face) = get_test_font();
         let font = Font::new("Arial", 16.0).with_font_data(data);
 
-        let layout_empty = GlyphLayout::shape("", &font, &font_face);
+        let layout_empty = GlyphLayout::shape("", &font, font_face.clone());
         assert!(layout_empty.glyphs.is_empty());
         assert_eq!(layout_empty.width, 0.0);
 
-        let layout_space = GlyphLayout::shape("   ", &font, &font_face);
+        let layout_space = GlyphLayout::shape("   ", &font, font_face);
         assert_eq!(layout_space.glyphs.len(), 3);
         assert!(layout_space.width > 0.0);
     }
@@ -506,10 +501,10 @@ mod tests {
         let emoji_path = std::path::Path::new("C:/Windows/Fonts/seguiemj.ttf");
         if emoji_path.exists() {
             let emoji_data = std::fs::read(emoji_path).unwrap();
-            let emoji_font = fontdue::Font::from_bytes(emoji_data, fontdue::FontSettings::default()).unwrap();
+            let emoji_font = parse_face(&emoji_data, 0).unwrap();
             let engines = vec![
-                FontEngine::new(Arc::new(font_face)),
-                FontEngine::new(Arc::new(emoji_font)),
+                FontEngine::new(font_face),
+                FontEngine::new(emoji_font),
             ];
 
             // "OK 🔄 OK" -> Run 0: "OK ", Run 1: "🔄", Run 2: " OK"
@@ -531,10 +526,10 @@ mod tests {
         let emoji_path = std::path::Path::new("C:/Windows/Fonts/seguiemj.ttf");
         if emoji_path.exists() {
             let emoji_data = std::fs::read(emoji_path).unwrap();
-            let emoji_font = fontdue::Font::from_bytes(emoji_data.clone(), fontdue::FontSettings::default()).unwrap();
+            let emoji_font = parse_face(&emoji_data, 0).unwrap();
             let engines = vec![
-                FontEngine::new(Arc::new(font_face)).with_raw_data(data),
-                FontEngine::new(Arc::new(emoji_font)).with_raw_data(Arc::new(emoji_data)),
+                FontEngine::new(font_face).with_raw_data(data),
+                FontEngine::new(emoji_font).with_raw_data(Arc::new(emoji_data)),
             ];
 
             let layout = GlyphLayout::shape_with_engines("Status: 🔄 Active", &font, &engines);

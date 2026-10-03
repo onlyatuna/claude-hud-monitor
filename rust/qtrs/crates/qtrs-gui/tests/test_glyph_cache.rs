@@ -20,10 +20,10 @@ fn test_cached_glyph_bitmap_is_identical_to_direct_rasterization_and_reused() {
     let (engine, gid) = first_glyph("Wg", &font);
     let px = 16.25;
 
-    let (direct_m, direct_bitmap) = engine.fontdue.rasterize_indexed(gid, px);
+    let (direct_m, direct_bitmap) = engine.face.rasterize_indexed(gid, px);
     let (m1, b1) = engine.rasterize_glyph(gid, px);
     assert_eq!((m1.width, m1.height, m1.xmin, m1.ymin), (direct_m.width, direct_m.height, direct_m.xmin, direct_m.ymin));
-    assert_eq!(&*b1, direct_bitmap.as_slice(), "cached bitmap must equal fontdue's output");
+    assert_eq!(&*b1, direct_bitmap.as_slice(), "cached bitmap must equal the face's own output");
 
     let (_, b2) = engine.rasterize_glyph(gid, px);
     assert!(Arc::ptr_eq(&b1, &b2), "second request must reuse the cached bitmap");
@@ -31,7 +31,7 @@ fn test_cached_glyph_bitmap_is_identical_to_direct_rasterization_and_reused() {
     // A size that differs only below 1/64 px is still a different raster: no key collisions.
     let (_, b3) = engine.rasterize_glyph(gid, px + 0.001);
     assert!(!Arc::ptr_eq(&b1, &b3));
-    assert_eq!(&*b3, engine.fontdue.rasterize_indexed(gid, px + 0.001).1.as_slice());
+    assert_eq!(&*b3, engine.face.rasterize_indexed(gid, px + 0.001).1.as_slice());
 }
 
 #[test]

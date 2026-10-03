@@ -55,7 +55,7 @@ fn main() {
     let per_frame = t.elapsed().as_secs_f64() * 1e3 / n as f64;
 
     // Same glyphs, rasterisation only (what a glyph cache would remove).
-    let mut glyphs: Vec<(usize, u16, std::sync::Arc<fontdue::Font>)> = Vec::new();
+    let mut glyphs: Vec<(usize, u16, qtrs_gui::text::glyph_face::SharedGlyphFace)> = Vec::new();
     let mut unique = HashSet::new();
     let mut total_glyphs = 0usize;
     for l in LINES {
@@ -65,7 +65,7 @@ fn main() {
             let e = engines.get(g.font_index as usize).unwrap_or(&engines[0]);
             total_glyphs += 1;
             unique.insert((g.font_index, g.glyph_id));
-            glyphs.push((g.font_index as usize, g.glyph_id, e.fontdue.clone()));
+            glyphs.push((g.font_index as usize, g.glyph_id, e.face.clone()));
         }
     }
     let t = Instant::now();

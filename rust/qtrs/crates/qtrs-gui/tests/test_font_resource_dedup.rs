@@ -2,7 +2,6 @@ use qtrs_gui::text::font::{Font, SharedFontData};
 use qtrs_gui::text::font_database::FontDatabase;
 use qtrs_gui::text::glyph_layout::{FontEngine, GlyphLayout};
 use std::path::Path;
-use std::sync::Arc;
 
 #[test]
 fn test_shared_font_data_pointer_equality() {
@@ -65,13 +64,9 @@ fn test_font_engine_shaping_with_shared_data() {
         if font_path.exists() {
             let mut db = FontDatabase::new();
             let raw_data = db.get_raw_font_data_by_path(font_path).expect("load raw data");
-            let fontdue_font = fontdue::Font::from_bytes(
-                raw_data.as_slice(),
-                fontdue::FontSettings::default(),
-            )
-            .expect("parse fontdue");
+            let face = qtrs_gui::text::glyph_face::parse_face(raw_data.as_slice(), 0).expect("parse face");
 
-            let engine = FontEngine::new(Arc::new(fontdue_font))
+            let engine = FontEngine::new(face)
                 .with_raw_data(raw_data.clone())
                 .with_face_index(0);
 

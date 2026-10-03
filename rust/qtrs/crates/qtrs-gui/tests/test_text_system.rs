@@ -310,7 +310,7 @@ fn test_load_chinese_font() {
     let f1 = db.load_font("Microsoft JhengHei");
     println!("Microsoft JhengHei: {:?}", f1.is_some());
     if let Some(font) = &f1 {
-        let idx = font.lookup_glyph_index('重');
+        let idx = font.glyph_index('重');
         println!("Glyph for '重': {}", idx);
     }
     let f2 = db.load_font("Microsoft YaHei");

@@ -1,4 +1,5 @@
 use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Transform};
+use crate::text::glyph_face::{GlyphFace, GlyphMetrics};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColorLayer {
@@ -171,9 +172,9 @@ pub fn rasterize_color_glyph(
     font_data: &[u8],
     face_index: u32,
     glyph_id: u16,
-    fontdue_font: &fontdue::Font,
+    face_metrics: &dyn GlyphFace,
     px_size: f32,
-) -> Option<(fontdue::Metrics, Pixmap)> {
+) -> Option<(GlyphMetrics, Pixmap)> {
     let layers = parse_colr_v0_layers(font_data, face_index, glyph_id)?;
     if layers.is_empty() {
         return None;
@@ -185,7 +186,7 @@ pub fn rasterize_color_glyph(
         return None;
     }
 
-    let metrics = fontdue_font.metrics_indexed(glyph_id, px_size);
+    let metrics = face_metrics.metrics_indexed(glyph_id, px_size);
 
     let (width, height, xmin, ymin) = if metrics.width > 0 && metrics.height > 0 {
         (metrics.width, metrics.height, metrics.xmin, metrics.ymin)
@@ -222,14 +223,13 @@ pub fn rasterize_color_glyph(
         }
     }
 
-    let effective_metrics = fontdue::Metrics {
+    let effective_metrics = GlyphMetrics {
         xmin,
         ymin,
         width,
         height,
         advance_width: metrics.advance_width,
         advance_height: metrics.advance_height,
-        bounds: metrics.bounds,
     };
 
     Some((effective_metrics, pixmap))
