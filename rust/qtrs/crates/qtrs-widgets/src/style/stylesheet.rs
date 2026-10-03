@@ -189,7 +189,7 @@ fn selector_matches(selector: &QCssBasicSelector, ctx: &WidgetStyleContext) -> b
 
     // 3. Type name match (e.g. `QLabel`, `QProgressBar`)
     if let Some(elem) = &selector.element_name {
-        if elem != ctx.type_name && elem != "QWidget" {
+        if elem != "*" && elem != ctx.type_name && elem != "QWidget" {
             return false;
         }
     }

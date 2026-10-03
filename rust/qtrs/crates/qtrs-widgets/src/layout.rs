@@ -98,12 +98,64 @@ pub fn distribute_1d_space(
         }
 
         let stretch_space = (available_span - non_stretch_sum).max(0);
-        let mut allocated_stretch = 0i32;
 
+        // `qGeomCalc`: an item whose proportional share is below its minimum is pinned at the
+        // minimum, and the space left is divided again among the remaining stretch items.
+        let mut pinned = vec![false; count];
+        loop {
+            let pinned_min: i32 = items
+                .iter()
+                .enumerate()
+                .filter(|(i, it)| it.4 > 0 && pinned[*i])
+                .map(|(_, it)| it.1.min(it.2))
+                .sum();
+            let live_stretch: u32 = items
+                .iter()
+                .enumerate()
+                .filter(|(i, it)| it.4 > 0 && !pinned[*i])
+                .map(|(_, it)| it.4)
+                .sum();
+            if live_stretch == 0 {
+                break;
+            }
+            let free = (stretch_space - pinned_min).max(0);
+            let mut changed = false;
+            for (i, &(_, min_sz, _, _, stretch)) in items.iter().enumerate() {
+                if stretch > 0 && !pinned[i] {
+                    let share = ((free as i64 * stretch as i64) / live_stretch as i64) as i32;
+                    if share < min_sz {
+                        pinned[i] = true;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        let pinned_min: i32 = items
+            .iter()
+            .enumerate()
+            .filter(|(i, it)| it.4 > 0 && pinned[*i])
+            .map(|(_, it)| it.1.min(it.2))
+            .sum();
+        let live_stretch: u32 = items
+            .iter()
+            .enumerate()
+            .filter(|(i, it)| it.4 > 0 && !pinned[*i])
+            .map(|(_, it)| it.4)
+            .sum();
+        let free = (stretch_space - pinned_min).max(0);
+
+        let mut allocated_stretch = 0i32;
         for (i, &(_, min_sz, max_sz, _, stretch)) in items.iter().enumerate() {
             if stretch > 0 {
-                let s =
-                    ((stretch_space as i64 * stretch as i64) / explicit_stretch_sum as i64) as i32;
+                let s = if pinned[i] {
+                    min_sz
+                } else {
+                    ((free as i64 * stretch as i64) / live_stretch as i64) as i32
+                };
                 let clamped = s.clamp(min_sz, max_sz);
                 sizes[i] = clamped;
                 allocated_stretch += clamped;
@@ -113,7 +165,7 @@ pub fn distribute_1d_space(
         let mut rem_slack = stretch_space - allocated_stretch;
         if rem_slack > 0 {
             for (i, &(_, _, max_sz, _, stretch)) in items.iter().enumerate() {
-                if stretch > 0 && sizes[i] < max_sz && rem_slack > 0 {
+                if stretch > 0 && !pinned[i] && sizes[i] < max_sz && rem_slack > 0 {
                     sizes[i] += 1;
                     rem_slack -= 1;
                 }

@@ -329,11 +329,15 @@ impl WidgetBase {
         );
     }
 
+    /// Sets this widget's own style sheet. As in Qt, a string without a rule block
+    /// (`"color: red;"`) is a declaration list for the widget itself, i.e. `* { … }`.
     pub fn set_style_sheet(&self, qss: &str) {
         if qss.trim().is_empty() {
             *self.style_sheet.borrow_mut() = None;
-        } else {
+        } else if qss.contains('{') {
             *self.style_sheet.borrow_mut() = Some(QStyleSheetStyle::parse(qss));
+        } else {
+            *self.style_sheet.borrow_mut() = Some(QStyleSheetStyle::parse(&format!("* {{ {qss} }}")));
         }
         self.dirty.set(Some(self.geometry.get()));
     }

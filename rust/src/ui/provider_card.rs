@@ -89,21 +89,34 @@ fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
     }
 }
 
-fn set_label_color(w: &WidgetRef, color: Color) {
+use crate::ui::set_label_color;
+
+/// Provider title style, as the Python card sets it:
+/// `color: <accent>; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;`.
+fn set_title_style(w: &WidgetRef, color: Color) {
     if let Some(lbl) = w.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+        let c = color.to_color_u8();
         lbl.set_color(color);
+        lbl.set_style_sheet(&format!(
+            "color: rgba({}, {}, {}, {}); font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;",
+            c.red(),
+            c.green(),
+            c.blue(),
+            c.alpha()
+        ));
     }
 }
 
 fn set_progress_val(w: &WidgetRef, val: i32, color: Color) {
     if let Some(bar) = w.borrow_mut().as_any_mut().downcast_mut::<ProgressBar>() {
         bar.set_value(val);
+        let c = color.to_color_u8();
         let qss = format!(
             "QProgressBar::chunk {{ background-color: rgba({}, {}, {}, {}); }}",
-            color.red(),
-            color.green(),
-            color.blue(),
-            color.alpha()
+            c.red(),
+            c.green(),
+            c.blue(),
+            c.alpha()
         );
         bar.set_style_sheet(&qss);
     }
@@ -157,6 +170,8 @@ impl ProviderCardWidget {
         title_lbl.set_font(Font::new("Segoe UI", 9.5).with_weight(FontWeight::Bold));
         let title = make_widget(title_lbl);
         title.borrow_mut().set_object_name("CardTitle");
+        set_title_style(&title, theme_color);
+        set_label_color(&dot, theme_color);
         header_layout.add_widget(title.clone());
 
         header_layout.add_stretch(1);
@@ -287,7 +302,7 @@ impl ProviderCardWidget {
     pub fn set_appearance(&mut self, dark: bool) {
         self.dark = dark;
         let c = provider_accent_color(&self.provider_id, dark);
-        set_label_color(&self.title, c);
+        set_title_style(&self.title, c);
         let metrics = self.current_metrics.clone();
         self.update_metrics(&metrics);
     }
@@ -657,6 +672,54 @@ mod tests {
         );
     }
     #[test]
+    fn test_horizontal_cards_fit_the_window_with_populated_badges() {
+        let mut cfg = crate::config::Config { layout_mode: "horizontal".to_string(), ..Default::default() };
+        crate::config::ConfigManager::sanitize(&mut cfg);
+        let config = std::sync::Arc::new(parking_lot::Mutex::new(cfg));
+        let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
+            crate::refresh_controller::RefreshController::new(60),
+        ));
+        let mut hud = crate::ui::hud_window::HUDWindow::new(config, refresh_ctrl).unwrap();
+        hud.apply_cards_layout_mode("horizontal");
+        for (pid, name, b1, b2) in [
+            ("claude", "Claude Code", "Code: 100%", "Chat: 0%"),
+            ("agy", "Antigravity", "C/G: 55%", "Gemini Models"),
+            ("codex", "OpenAI Codex", "Plan: Free", ""),
+        ] {
+            let m = UsageMetrics {
+                provider_id: pid.to_string(),
+                provider_name: name.to_string(),
+                badge1_text: b1.to_string(),
+                badge2_text: b2.to_string(),
+                metric1_title: "SESSION 5H".to_string(),
+                metric1_text: "68%".to_string(),
+                metric1_val: Some(68.0),
+                metric2_title: "WEEKLY 7D".to_string(),
+                metric2_text: "100%".to_string(),
+                metric2_val: Some(100.0),
+                ..Default::default()
+            };
+            hud.cards.get_mut(pid).unwrap().update_metrics(&m);
+        }
+        hud.cards_container.borrow().update_layout();
+        let container_w = hud.cards_container.borrow().geometry().width;
+        let mut prev_right = i32::MIN;
+        for pid in ["claude", "agy", "codex"] {
+            let c = &hud.cards[pid];
+            let g = c.container.borrow().geometry();
+            assert!(g.x >= prev_right, "{pid} overlaps the previous card: {g:?}");
+            assert!(
+                g.x + g.width <= container_w,
+                "{pid} card ({g:?}) is pushed out of the {container_w}px container"
+            );
+            assert!(
+                g.width >= c.container.borrow().minimum_size().width,
+                "{pid} card is narrower than its content"
+            );
+            prev_right = g.x + g.width;
+        }
+    }
+    #[test]
     fn test_horizontal_triple_side_by_side_parity_and_switching() {
         let mut cfg = crate::config::Config {
             layout_mode: "vertical".to_string(),
@@ -678,8 +741,8 @@ mod tests {
         let c_agy_v = hud.cards["agy"].container.borrow().geometry();
         assert_eq!(c_claude_v.x, c_codex_v.x);
         assert_eq!(c_claude_v.x, c_agy_v.x);
-        assert!(c_claude_v.y < c_codex_v.y);
-        assert!(c_codex_v.y < c_agy_v.y);
+        assert!(c_claude_v.y < c_agy_v.y);
+        assert!(c_agy_v.y < c_codex_v.y);
 
         // 2. Switch to Horizontal Triple mode
         hud.apply_cards_layout_mode("horizontal");
@@ -711,12 +774,12 @@ mod tests {
 
         // IN HORIZONTAL MODE: X positions must be strictly increasing across the 3 columns
         assert!(
-            c_claude_h.x < c_codex_h.x,
-            "Claude must be to the left of Codex"
+            c_claude_h.x < c_agy_h.x,
+            "Claude must be to the left of Antigravity"
         );
         assert!(
-            c_codex_h.x < c_agy_h.x,
-            "Codex must be to the left of Antigravity"
+            c_agy_h.x < c_codex_h.x,
+            "Antigravity must be to the left of Codex"
         );
 
         // Card widths must each occupy a substantial column (>= 200px)

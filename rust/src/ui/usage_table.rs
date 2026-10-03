@@ -42,11 +42,7 @@ fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
     }
 }
 
-fn set_label_color(w: &WidgetRef, color: Color) {
-    if let Some(lbl) = w.borrow_mut().as_any_mut().downcast_mut::<Label>() {
-        lbl.set_color(color);
-    }
-}
+use crate::ui::set_label_color;
 
 /// Custom dial drawing matching Python `UsageDial`.
 pub struct UsageDial {

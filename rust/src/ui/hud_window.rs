@@ -13,7 +13,6 @@ use parking_lot::Mutex;
 use qtrs_core::QObject;
 use qtrs_gui::geometry::primitives::{Margins, Rect, RectF};
 use qtrs_gui::paint::{Brush, Pen};
-use qtrs_gui::tiny_skia::Color;
 use qtrs_platform::backdrop::BackdropType;
 use qtrs_platform::WindowFlags;
 use qtrs_widgets::{
@@ -43,9 +42,15 @@ fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
     }
 }
 
-fn set_label_color(w: &WidgetRef, color: Color) {
-    if let Some(lbl) = w.borrow_mut().as_any_mut().downcast_mut::<Label>() {
-        lbl.set_color(color);
+use crate::ui::set_label_color;
+
+/// Header status dot: `#10b981` normally, `#f59e0b` while a provider reports an error
+/// (Python `_on_busy_changed`).
+fn status_dot_color(any_error: bool) -> qtrs_gui::tiny_skia::Color {
+    if any_error {
+        qtrs_gui::tiny_skia::Color::from_rgba8(245, 158, 11, 255)
+    } else {
+        qtrs_gui::tiny_skia::Color::from_rgba8(16, 185, 129, 255)
     }
 }
 
@@ -153,11 +158,11 @@ impl HUDWindow {
         let theme = get_theme(dark);
 
         // Header bar widgets
-        let mut dot = Label::new("●");
-        dot.set_color(theme.scale_green);
+        let dot = Label::new("●");
         let status_dot = make_widget(dot);
+        set_label_color(&status_dot, status_dot_color(false));
 
-        let mut title = Label::new("AI AGENT HUD");
+        let mut title = Label::new("AI AGENT HUD (3-IN-1)");
         title.set_object_name("HeaderTitle");
         let title_label = make_widget(title);
 
@@ -374,7 +379,10 @@ impl HUDWindow {
             Box::new(BoxLayout::vertical())
         };
 
-        for (idx, pid) in super::usage_table::PROVIDER_ORDER.iter().enumerate() {
+        // Card order of the Python HUD (`provider_ids` in `_apply_cards_layout`); the table
+        // mode has its own order (`usage_table::PROVIDER_ORDER`).
+        const CARDS_ORDER: [&str; 3] = ["claude", "agy", "codex"];
+        for (idx, pid) in CARDS_ORDER.iter().enumerate() {
             if let Some(card) = cards.get(*pid) {
                 if idx > 0 {
                     if is_horizontal {
@@ -526,7 +534,7 @@ impl HUDWindow {
             {
                 s.set_current_index(0);
             }
-            set_label_text(&self.title_label, "AI AGENT HUD");
+            set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
             self.layout_toggle_btn.borrow_mut().set_visible(true);
             let cfg = self.config.lock();
             if cfg.layout_mode == "horizontal" {
@@ -654,13 +662,16 @@ impl HUDWindow {
             card.update_metrics(data);
         }
         self.table.update_metrics(data);
+        // Python `_on_data_fetched`: the header time is the time of the last fetch, and the
+        // status dot is amber while any provider reports an error, green otherwise.
+        set_label_text(&self.time_label, Local::now().format("%H:%M:%S").to_string());
+        let any_error = self.cards.values().any(|card| card.current_metrics.error.is_some());
+        set_label_color(&self.status_dot, status_dot_color(any_error));
         self.cards_container.borrow().update_layout();
         self.window.render_and_present();
     }
 
     pub fn update_clock(&mut self) {
-        let now = Local::now().format("%H:%M:%S").to_string();
-        set_label_text(&self.time_label, now);
 
         for card in self.cards.values_mut() {
             card.update_countdown();

@@ -346,6 +346,10 @@ impl Widget for Label {
         self
     }
 
+    fn set_style_sheet(&self, qss: &str) {
+        self.base.set_style_sheet(qss);
+    }
+
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
     }

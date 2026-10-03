@@ -82,3 +82,28 @@ pub fn enable_win32_dark_mode(hwnd: isize) {
         }
     }
 }
+
+/// Sets a label's text colour the way the Python HUD does (`label.setStyleSheet("color: …;")`):
+/// a widget-local style sheet, which outranks the application's `QLabel { color }` rule.
+/// `Label::set_color` is the palette colour, which that rule overrides.
+pub(crate) fn set_label_color(
+    w: &qtrs_widgets::WidgetRef,
+    color: qtrs_gui::tiny_skia::Color,
+) {
+    if let Some(lbl) = w
+        .borrow_mut()
+        .as_any_mut()
+        .downcast_mut::<qtrs_widgets::Label>()
+    {
+        use qtrs_widgets::Widget;
+        lbl.set_color(color);
+        let c = color.to_color_u8();
+        lbl.set_style_sheet(&format!(
+            "color: rgba({}, {}, {}, {});",
+            c.red(),
+            c.green(),
+            c.blue(),
+            c.alpha()
+        ));
+    }
+}
