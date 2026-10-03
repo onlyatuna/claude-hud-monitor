@@ -601,38 +601,16 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
             WindowSystemEvent::GeometryChange { geometry } => {
-                let size = Size::new(geometry.width, geometry.height);
-                let (old_pos, old_size) = {
-                    let cur = self.geometry.get();
+                let (old_pos, _) = {
+                    let mut cur = self.geometry.get();
                     let old_pos = Point::new(cur.x, cur.y);
-                    let old_size = Size::new(cur.width, cur.height);
-                    self.geometry.set(geometry);
-                    (old_pos, old_size)
+                    cur.x = geometry.x;
+                    cur.y = geometry.y;
+                    self.geometry.set(cur);
+                    (old_pos, ())
                 };
 
-                let size_changed = old_size.width != geometry.width || old_size.height != geometry.height;
                 let pos_changed = old_pos.x != geometry.x || old_pos.y != geometry.y;
-
-                // 1. Update root widget geometry (widget geometry = new size)
-                root.borrow_mut().set_geometry(Rect::new(0, 0, geometry.width, geometry.height));
-
-                // 2. Dispatch Resize and Move events to widgets and callbacks.
-                // In Qt (QWidgetWindow::handleResizeEvent):
-                // Events are delivered to widgets BEFORE backing store synchronization and layout activation,
-                // allowing callbacks to inspect/adjust state with the new geometry.
-                if size_changed {
-                    let mut ev = Event::new_spontaneous(EventKind::Resize {
-                        width: geometry.width,
-                        height: geometry.height,
-                        old_width: old_size.width,
-                        old_height: old_size.height,
-                    });
-                    self.dispatcher.dispatch_event(&root, &mut ev);
-
-                    if let Some(cb) = self.resize_cb.borrow().as_ref() {
-                        cb(size);
-                    }
-                }
 
                 if pos_changed {
                     let mut ev = Event::new_spontaneous(EventKind::Move {
@@ -642,22 +620,6 @@ impl WindowSystemEventHandler for WindowEventHandler {
                         old_y: old_pos.y,
                     });
                     self.dispatcher.dispatch_event(&root, &mut ev);
-                }
-
-                // 3. Layout Invalidation & Activation via LayoutScheduler
-                if size_changed {
-                    crate::layout_scheduler::LayoutScheduler::invalidate(&root);
-                    crate::layout_scheduler::LayoutScheduler::activate_pending();
-                }
-
-                // 4. Paint and present: Lazy Backing Store Resize occurs inside do_render_and_present
-                // matching Qt's paintAndFlush() (store->resize() check at paint time).
-                if let Ok(mut pw) = self.platform_window.try_borrow_mut() {
-                    if !pw.is_within_set_geometry() {
-                        let cur_geom = self.geometry.get();
-                        let mut bs = self.backing_store.borrow_mut();
-                        do_render_and_present(&mut **pw, &mut bs, &root, cur_geom);
-                    }
                 }
             }
             WindowSystemEvent::Resize { size } => {
@@ -809,6 +771,73 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_native_geometry_change_dispatches_resize_callback_exactly_once() {
+        let mut win = Window::new(
+            "Single Resize Test",
+            Rect::new(0, 0, 300, 200),
+            WindowFlags::empty(),
+        )
+        .expect("create test window");
+
+        let resize_count = Arc::new(AtomicU32::new(0));
+        let count_cb = Arc::clone(&resize_count);
+        win.set_resize_handler(move |_size: Size| {
+            count_cb.fetch_add(1, Ordering::SeqCst);
+        });
+
+        #[cfg(windows)]
+        {
+            use qtrs_platform::handle_geometry_change;
+            use qtrs_platform::window_system_interface::Delivery;
+
+            let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
+
+            // 1. Initial geometry change (both pos and size change: 0,0,300,200 -> 50,60,500,400)
+            handle_geometry_change(Delivery::Default, hwnd, Rect::new(50, 60, 500, 400));
+            assert_eq!(win.geometry().x, 50);
+            assert_eq!(win.geometry().y, 60);
+            assert_eq!(win.geometry().width, 500);
+            assert_eq!(win.geometry().height, 400);
+            assert_eq!(
+                resize_count.load(Ordering::SeqCst),
+                1,
+                "Resize callback must be executed exactly once per native resize event"
+            );
+
+            // 2. Position-only change (50,60,500,400 -> 100,120,500,400)
+            handle_geometry_change(Delivery::Default, hwnd, Rect::new(100, 120, 500, 400));
+            assert_eq!(win.geometry().x, 100);
+            assert_eq!(win.geometry().y, 120);
+            assert_eq!(win.geometry().width, 500);
+            assert_eq!(win.geometry().height, 400);
+            assert_eq!(
+                resize_count.load(Ordering::SeqCst),
+                1,
+                "Position-only geometry change must NOT trigger resize callback"
+            );
+
+            // 3. Second resize change (100,120,500,400 -> 100,120,600,450)
+            handle_geometry_change(Delivery::Default, hwnd, Rect::new(100, 120, 600, 450));
+            assert_eq!(win.geometry().x, 100);
+            assert_eq!(win.geometry().y, 120);
+            assert_eq!(win.geometry().width, 600);
+            assert_eq!(win.geometry().height, 450);
+            assert_eq!(
+                resize_count.load(Ordering::SeqCst),
+                2,
+                "Second resize change must increment callback execution by exactly once"
+            );
         }
     }
 }
