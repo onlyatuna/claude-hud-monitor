@@ -57,6 +57,46 @@ fn status_dot_color(busy: bool, any_error: bool) -> qtrs_gui::tiny_skia::Color {
     qtrs_gui::tiny_skia::Color::from_rgba8(r, g, b, 255)
 }
 
+/// Background, border colour and corner radius of the window panel. In cards mode they come from
+/// the application style sheet's `QWidget#CentralWidget` rule, as in the Python HUD; the table
+/// mode (and a sheet without that rule) uses the theme.
+fn panel_look(cards_mode: bool, theme: &Theme) -> (qtrs_gui::tiny_skia::Color, qtrs_gui::tiny_skia::Color, f32) {
+    let themed = (theme.panel_bg, theme.panel_border, 10.0);
+    if !cards_mode {
+        return themed;
+    }
+    let Some(sheet) = qtrs_widgets::application::Application::style_sheet() else {
+        return themed;
+    };
+    let ctx = qtrs_widgets::style::stylesheet::WidgetStyleContext {
+        type_name: "QWidget",
+        object_name: "CentralWidget",
+        pseudo_states: &[],
+        sub_control: None,
+        attributes: &[],
+    };
+    let style = sheet.resolve(&ctx);
+    match (style.background_color, style.border_color) {
+        (Some(bg), Some(border)) => (bg, border, style.border_radius.unwrap_or(9.0)),
+        _ => themed,
+    }
+}
+
+fn install_panel_painter(root: &WidgetRef, theme: &Theme, config: Arc<Mutex<Config>>) {
+    let theme = theme.clone();
+    if let Some(empty) = root.borrow_mut().as_any_mut().downcast_mut::<EmptyWidget>() {
+        empty.set_paint_handler(move |painter| {
+            let (bg, border, radius) = panel_look(config.lock().ui_mode != "table", &theme);
+            let w = painter.device().width();
+            let h = painter.device().height();
+            let rect_f = RectF::new(0.5, 0.5, w - 1.0, h - 1.0);
+            painter.set_brush(Brush::Color(bg));
+            painter.set_pen(Pen::new(border, 1.0));
+            painter.draw_rounded_rect(rect_f, radius, radius);
+        });
+    }
+}
+
 pub struct HUDWindow {
     pub config: Arc<Mutex<Config>>,
     pub refresh_ctrl: Arc<Mutex<RefreshController>>,
@@ -167,7 +207,11 @@ impl HUDWindow {
         let status_dot = make_widget(dot);
         set_label_color(&status_dot, status_dot_color(false, false));
 
-        let mut title = Label::new("AI AGENT HUD (3-IN-1)");
+        let mut title = Label::new(if ui_mode == "table" {
+            "AI AGENT HUD (TABLE)"
+        } else {
+            "AI AGENT HUD (3-IN-1)"
+        });
         title.set_object_name("HeaderTitle");
         let title_label = make_widget(title);
 
@@ -244,18 +288,7 @@ impl HUDWindow {
         root_layout.add_widget(header_widget);
         root_layout.add_widget_with_stretch(stack.clone(), 1);
         let root = window.root_widget();
-        let bg = theme.panel_bg;
-        let border = theme.panel_border;
-        if let Some(empty) = root.borrow_mut().as_any_mut().downcast_mut::<EmptyWidget>() {
-            empty.set_paint_handler(move |painter| {
-                let w = painter.device().width();
-                let h = painter.device().height();
-                let rect_f = RectF::new(0.5, 0.5, w - 1.0, h - 1.0);
-                painter.set_brush(Brush::Color(bg));
-                painter.set_pen(Pen::new(border, 1.0));
-                painter.draw_rounded_rect(rect_f, 10.0, 10.0);
-            });
-        }
+        install_panel_painter(&root, &theme, Arc::clone(&config));
         root.borrow_mut().set_layout(Box::new(root_layout));
         // Connect frameless window dragging and edge resizing
         let hwnd = window.native_handle();
@@ -647,19 +680,8 @@ impl HUDWindow {
 
         let scheme = { self.config.lock().color_scheme.clone() };
         self.table.set_theme(self.theme.clone(), &scheme);
-        let bg = self.theme.panel_bg;
-        let border = self.theme.panel_border;
         let root = self.window.root_widget();
-        if let Some(empty) = root.borrow_mut().as_any_mut().downcast_mut::<EmptyWidget>() {
-            empty.set_paint_handler(move |painter| {
-                let w = painter.device().width();
-                let h = painter.device().height();
-                let rect_f = RectF::new(0.5, 0.5, w - 1.0, h - 1.0);
-                painter.set_brush(Brush::Color(bg));
-                painter.set_pen(Pen::new(border, 1.0));
-                painter.draw_rounded_rect(rect_f, 10.0, 10.0);
-            });
-        }
+        install_panel_painter(&root, &self.theme, Arc::clone(&self.config));
         self.window.render_and_present();
     }
 

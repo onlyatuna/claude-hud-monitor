@@ -470,7 +470,11 @@ impl Widget for Button {
                 font: &self.font,
                 state: self.state,
                 enabled: self.base.is_enabled(),
-                focused: self.has_focus(),
+                // `QStyleSheetStyle` draws the box of a button the style sheet gives a background
+                // or border to, and no focus rectangle.
+                focused: self.has_focus()
+                    && style.background_color.is_none()
+                    && style.border_color.is_none(),
                 normal_color: normal_bg,
                 hover_color: self.hover_bg,
                 pressed_color: self.press_bg,

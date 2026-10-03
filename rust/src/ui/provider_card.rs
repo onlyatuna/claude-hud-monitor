@@ -111,8 +111,11 @@ fn set_progress_val(w: &WidgetRef, val: i32, color: Color) {
     if let Some(bar) = w.borrow_mut().as_any_mut().downcast_mut::<ProgressBar>() {
         bar.set_value(val);
         let c = color.to_color_u8();
+        // The Python card's bar is square: its widget-local sheet replaces the application's
+        // rounded `QProgressBar` rules for both the groove and the chunk.
         let qss = format!(
-            "QProgressBar::chunk {{ background-color: rgba({}, {}, {}, {}); }}",
+            "QProgressBar {{ border-radius: 0px; }} \
+             QProgressBar::chunk {{ background-color: rgba({}, {}, {}, {}); border-radius: 0px; }}",
             c.red(),
             c.green(),
             c.blue(),

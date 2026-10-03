@@ -92,11 +92,37 @@ impl Label {
         self.alignment = alignment;
         self.update();
     }
+    /// Left, right, top and bottom space `QLabel` keeps around its text under a style sheet:
+    /// border plus padding, and, once the label has a box, the advance of `'x'` as indent
+    /// (`QLabelPrivate::sizeForWidth`; measured against PySide6: a 9px Consolas badge with
+    /// `padding: 1px 4px; border: 1px` is the text plus 15 px wide, 4 px taller than the font).
+    /// A label without padding or border has none of it.
+    fn box_insets(
+        style: &crate::style::stylesheet::ResolvedStyle,
+        metrics: &FontMetrics,
+        font: &qtrs_gui::text::Font,
+    ) -> (f32, f32, f32, f32) {
+        let border = style.border_width.unwrap_or(0.0).max(0.0);
+        let [pt, pr, pb, pl] = style.padding.unwrap_or([0.0; 4]);
+        if border == 0.0 && pt + pr + pb + pl == 0.0 {
+            return (0.0, 0.0, 0.0, 0.0);
+        }
+        let indent = metrics.horizontal_advance_exact("x", font).round();
+        let left_indent = (indent / 2.0).floor();
+        (
+            border + pl + left_indent,
+            border + pr + (indent - left_indent),
+            border + pt,
+            border + pb,
+        )
+    }
+
     /// The label's font with the stylesheet's size, family, weight and letter spacing applied.
     fn styled_font(&self, style: &crate::style::stylesheet::ResolvedStyle) -> qtrs_gui::text::Font {
         let mut font = self.font.clone();
         if let Some(sz) = style.font_size {
-            font.size = sz;
+            // `QCss` applies `font-size: Npx` with `QFont::setPixelSize(int)`, so 10.5px is 11px.
+            font.size = sz.round();
         }
         if let Some(fam) = &style.font_family {
             font.family = fam.clone();
@@ -176,8 +202,10 @@ impl Widget for Label {
         let style = self.resolved_style();
         let font = self.styled_font(&style);
         let metrics = FontMetrics::from_font(&font);
-        let text_w = metrics.horizontal_advance_exact(&self.text, &font).ceil() as i32 + 8;
-        let text_h = metrics.height.ceil() as i32 + 4;
+        let (box_l, box_r, box_t, box_b) = Self::box_insets(&style, &metrics, &font);
+        let text_w = metrics.horizontal_advance_exact(&self.text, &font).ceil() as i32
+            + (box_l + box_r).round() as i32;
+        let text_h = metrics.height.ceil() as i32 + (box_t + box_b).round() as i32;
         let w = style.min_width.unwrap_or(text_w);
         let h = style.max_height.or(style.min_height).unwrap_or(text_h);
         Size::new(w, h)
@@ -313,33 +341,31 @@ impl Widget for Label {
         let text_color = style.color.unwrap_or(self.color);
         painter.set_pen(Pen::new(text_color, 1.0));
 
+        let (box_l, box_r, box_t, box_b) = Self::box_insets(&style, &metrics, &font);
+        let content_w = (geom.width as f32 - box_l - box_r).max(0.0);
+        let content_h = (geom.height as f32 - box_t - box_b).max(0.0);
+        let x_for = |text_w: f32| match self.alignment {
+            Alignment::Left => box_l,
+            Alignment::Center => box_l + ((content_w - text_w) / 2.0).max(0.0),
+            Alignment::Right => (geom.width as f32 - box_r - text_w).max(box_l),
+        };
+
         if self.text.contains('\n') {
             let lines: Vec<&str> = self.text.split('\n').collect();
             let line_height = metrics.height;
             let total_text_h = line_height * lines.len() as f32;
-            let mut start_y = ((geom.height as f32 - total_text_h) / 2.0).max(0.0) + metrics.ascent;
+            let mut start_y = box_t + ((content_h - total_text_h) / 2.0).max(0.0) + metrics.ascent;
 
             for line in lines {
                 let line_w = metrics.horizontal_advance_exact(line, &font);
-                let x = match self.alignment {
-                    Alignment::Left => 4.0,
-                    Alignment::Center => ((geom.width as f32 - line_w) / 2.0).max(0.0),
-                    Alignment::Right => (geom.width as f32 - line_w - 4.0).max(0.0),
-                };
-                painter.draw_text(PointF::new(x, start_y), line, &font);
+                painter.draw_text(PointF::new(x_for(line_w), start_y), line, &font);
                 start_y += line_height;
             }
         } else {
             let text_w = metrics.horizontal_advance_exact(&self.text, &font);
             let text_h = metrics.height;
-            let x = match self.alignment {
-                Alignment::Left => 4.0,
-                Alignment::Center => ((geom.width as f32 - text_w) / 2.0).max(0.0),
-                Alignment::Right => (geom.width as f32 - text_w - 4.0).max(0.0),
-            };
-
-            let baseline_y = ((geom.height as f32 - text_h) / 2.0).max(0.0) + metrics.ascent;
-            painter.draw_text(PointF::new(x, baseline_y), &self.text, &font);
+            let baseline_y = box_t + ((content_h - text_h) / 2.0).max(0.0) + metrics.ascent;
+            painter.draw_text(PointF::new(x_for(text_w), baseline_y), &self.text, &font);
         }
     }
     fn as_any(&self) -> &dyn std::any::Any {
