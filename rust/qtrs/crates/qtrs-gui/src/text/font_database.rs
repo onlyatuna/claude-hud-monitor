@@ -5,12 +5,73 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::text::font::{Font, SharedFontData};
+use crate::text::font::{Font, FontStyle, SharedFontData};
 use crate::text::glyph_face::{parse_face, SharedGlyphFace};
 use crate::text::glyph_layout::FontEngine;
 
 use rustybuzz::ttf_parser::name::Table as NameTable;
 use rustybuzz::ttf_parser::{name_id, PlatformId};
+
+/// Weight and slant requested from the font database (`QFontDatabase::bestStyle` key).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FaceStyle {
+    /// CSS/Qt numeric weight, 1..=1000.
+    pub weight: u16,
+    pub italic: bool,
+}
+
+impl FaceStyle {
+    pub const REGULAR: Self = Self { weight: 400, italic: false };
+
+    /// The style `font` asks for.
+    pub fn of(font: &Font) -> Self {
+        Self {
+            weight: font.weight as u16,
+            italic: font.style != FontStyle::Normal,
+        }
+    }
+
+    /// `bestStyle` distance to a face: weight difference in steps of 10, plus 0x1000 for the
+    /// wrong slant. Zero is an exact match.
+    fn distance(self, weight: u16, italic: bool) -> u32 {
+        let w = (i32::from(self.weight) - i32::from(weight)).unsigned_abs() / 10;
+        w + if self.italic != italic { 0x1000 } else { 0 }
+    }
+
+    /// Cache key of `family` at this style; the regular style keeps the plain family key.
+    fn cache_key(self, family: &str) -> String {
+        if self == Self::REGULAR {
+            family.to_string()
+        } else {
+            format!("{family}\u{1}{}{}", self.weight, u8::from(self.italic))
+        }
+    }
+}
+
+/// Windows file names of the bold/italic face of the families loaded by name without a directory
+/// scan. `Some(&[])` means the family is known but has no such face (the caller falls back to
+/// its regular file); `None` means the family is not known by name.
+fn known_styled_filenames(family_key: &str, style: FaceStyle) -> Option<&'static [&'static str]> {
+    // Of the faces these families ship, regular (400) and bold (700) are the nearest to any weight.
+    let bold = style.weight >= 550;
+    Some(match (family_key, bold, style.italic) {
+        ("segoe ui", true, false) => &["segoeuib.ttf"],
+        ("segoe ui", false, true) => &["segoeuii.ttf"],
+        ("segoe ui", true, true) => &["segoeuiz.ttf"],
+        ("arial", true, false) => &["arialbd.ttf"],
+        ("arial", false, true) => &["ariali.ttf"],
+        ("arial", true, true) => &["arialbi.ttf"],
+        ("consolas", true, false) => &["consolab.ttf"],
+        ("consolas", false, true) => &["consolai.ttf"],
+        ("consolas", true, true) => &["consolaz.ttf"],
+        ("tahoma", true, _) => &["tahomabd.ttf"],
+        ("microsoft jhenghei" | "msjh", true, _) => &["msjhbd.ttc"],
+        ("microsoft yahei" | "msyh", true, _) => &["msyhbd.ttc"],
+        ("segoe ui" | "arial" | "consolas" | "tahoma" | "microsoft jhenghei" | "msjh"
+            | "microsoft yahei" | "msyh" | "segoe ui symbol" | "segoe ui emoji" | "ms gothic", _, _) => &[],
+        _ => return None,
+    })
+}
 
 /// Family metadata discovered from a font face's `name` and `post` tables.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +84,10 @@ pub struct FontFamilyInfo {
     pub face_index: u32,
     /// `post.isFixedPitch`: every glyph has the same advance (monospaced).
     pub fixed_pitch: bool,
+    /// `OS/2.usWeightClass` (400 when the face has no OS/2 table).
+    pub weight: u16,
+    /// `OS/2.fsSelection` italic or oblique bit.
+    pub italic: bool,
 }
 
 /// System font cache database (`QFontDatabase` equivalent).
@@ -131,10 +196,10 @@ impl FontDatabase {
         let font_arc = parse_face(&shared, 0)
             .map_err(|e| format!("Failed to parse font from memory: {e}"))?;
         let key = family.to_ascii_lowercase();
-        let fixed_pitch = read_faces(&mut std::io::Cursor::new(shared.as_slice()))
+        let (fixed_pitch, weight, italic) = read_faces(&mut std::io::Cursor::new(shared.as_slice()))
             .first()
-            .map(|face| face.fixed_pitch)
-            .unwrap_or(false);
+            .map(|face| (face.fixed_pitch, face.weight, face.italic))
+            .unwrap_or((false, 400, false));
         self.application_faces
             .retain(|face| !face.family.eq_ignore_ascii_case(family));
         self.application_faces.push(FontFamilyInfo {
@@ -142,6 +207,8 @@ impl FontDatabase {
             path: None,
             face_index: 0,
             fixed_pitch,
+            weight,
+            italic,
         });
         self.cache.insert(key.clone(), Arc::clone(&font_arc));
         self.raw_cache.insert(key, shared);
@@ -211,8 +278,14 @@ impl FontDatabase {
         names
     }
 
-    /// Loads a font by family name, caching the result.
+    /// Loads the regular face of a family, caching the result.
     pub fn load_font(&mut self, family: &str) -> Option<SharedGlyphFace> {
+        self.load_font_styled(family, FaceStyle::REGULAR)
+    }
+
+    /// Loads the face of `family` nearest to `style` (`QFontDatabase::bestStyle`), caching the result.
+    /// A family without a face for that style yields its nearest one (e.g. regular for bold).
+    pub fn load_font_styled(&mut self, family: &str, style: FaceStyle) -> Option<SharedGlyphFace> {
         if family.contains(',') {
             for candidate in family.split(',') {
                 let clean = candidate.trim().trim_matches('\'').trim_matches('"');
@@ -223,27 +296,39 @@ impl FontDatabase {
                 {
                     continue;
                 }
-                if let Some(f) = self.load_font(clean) {
+                if let Some(f) = self.load_font_styled(clean, style) {
                     return Some(f);
                 }
             }
         }
 
         let key = family.to_ascii_lowercase();
-        if let Some(font) = self.cache.get(&key) {
+        let style_key = style.cache_key(&key);
+        if let Some(font) = self.cache.get(&style_key) {
             return Some(Arc::clone(font));
         }
 
-        if let Some((raw_data, face)) = self.find_and_load_font_file(&key) {
-            self.cache.insert(key.clone(), Arc::clone(&face));
-            self.raw_cache.insert(key, raw_data);
+        if let Some((raw_data, face)) = self.find_and_load_font_file(&key, style) {
+            self.cache.insert(style_key.clone(), Arc::clone(&face));
+            self.raw_cache.insert(style_key, raw_data);
             return Some(face);
+        }
+
+        // An in-memory (application) font has a single face: use it for any style.
+        if style != FaceStyle::REGULAR {
+            if let Some(face) = self.cache.get(&key).cloned() {
+                self.cache.insert(style_key.clone(), Arc::clone(&face));
+                if let Some(raw) = self.raw_cache.get(&key).cloned() {
+                    self.raw_cache.insert(style_key, raw);
+                }
+                return Some(face);
+            }
         }
 
         if key != "segoe ui" && key != "arial" {
             if let Some(fallback) = self
-                .load_font("segoe ui")
-                .or_else(|| self.load_font("arial"))
+                .load_font_styled("segoe ui", style)
+                .or_else(|| self.load_font_styled("arial", style))
             {
                 return Some(fallback);
             }
@@ -252,13 +337,18 @@ impl FontDatabase {
         None
     }
 
-    /// Returns the raw binary font data for OpenType shaping.
+    /// Returns the raw binary font data of the regular face for OpenType shaping.
     pub fn get_raw_font_data(&mut self, family: &str) -> Option<SharedFontData> {
-        let key = family.to_ascii_lowercase();
+        self.get_raw_font_data_styled(family, FaceStyle::REGULAR)
+    }
+
+    /// Returns the raw binary font data of the face [`load_font_styled`](Self::load_font_styled) picks.
+    pub fn get_raw_font_data_styled(&mut self, family: &str, style: FaceStyle) -> Option<SharedFontData> {
+        let key = style.cache_key(&family.to_ascii_lowercase());
         if let Some(data) = self.raw_cache.get(&key) {
             return Some(data.clone());
         }
-        self.load_font(family);
+        self.load_font_styled(family, style);
         self.raw_cache.get(&key).cloned()
     }
     /// Resolves the primary font engine and its platform-aware fallback chain (`QFontEngineMulti` equivalent).
@@ -270,7 +360,7 @@ impl FontDatabase {
     pub fn resolve_font_engines(&mut self, font: &Font) -> Vec<FontEngine> {
         let _t = crate::startup_trace::span_min(0.5, || format!("resolve_font_engines({:?})", font.family));
         let mut engines = self.resolve_primary_engine(font);
-        self.append_fallback_engines(&mut engines, None);
+        self.append_fallback_engines(&mut engines, None, FaceStyle::of(font));
         engines
     }
 
@@ -282,7 +372,7 @@ impl FontDatabase {
     pub fn resolve_font_engines_for_text(&mut self, font: &Font, text: &str) -> Vec<FontEngine> {
         let _t = crate::startup_trace::span_min(0.5, || format!("resolve_font_engines_for_text({:?})", font.family));
         let mut engines = self.resolve_primary_engine(font);
-        self.append_fallback_engines(&mut engines, Some(text));
+        self.append_fallback_engines(&mut engines, Some(text), FaceStyle::of(font));
         engines
     }
 
@@ -303,14 +393,14 @@ impl FontDatabase {
 
         // If no in-memory font or in-memory font failed to parse, load primary by family
         if engines.is_empty() {
-            self.try_add_engine(&mut engines, &font.family);
+            self.try_add_engine(&mut engines, &font.family, FaceStyle::of(font));
         }
         engines
     }
 
     /// Appends the platform's fallback fonts in priority order: CJK first, then emoji/symbols.
     /// With `needed_for`, stops as soon as every character of that text has a glyph in `engines`.
-    fn append_fallback_engines(&mut self, engines: &mut Vec<FontEngine>, needed_for: Option<&str>) {
+    fn append_fallback_engines(&mut self, engines: &mut Vec<FontEngine>, needed_for: Option<&str>, style: FaceStyle) {
         #[cfg(target_os = "windows")]
         const SLOTS: &[&[&str]] = &[
             &["Microsoft JhengHei", "Microsoft YaHei"],
@@ -339,34 +429,35 @@ impl FontDatabase {
                 }
             }
             for family in *slot {
-                if self.try_add_engine(engines, family) {
+                if self.try_add_engine(engines, family, style) {
                     break;
                 }
             }
         }
     }
 
-    fn try_add_engine(&mut self, engines: &mut Vec<FontEngine>, fam: &str) -> bool {
-        if let Some(font_face) = self.load_font(fam) {
+    fn try_add_engine(&mut self, engines: &mut Vec<FontEngine>, fam: &str, style: FaceStyle) -> bool {
+        if let Some(font_face) = self.load_font_styled(fam, style) {
             if engines.iter().any(|e| Arc::ptr_eq(&e.face, &font_face)) {
                 return false;
             }
             // Reuse the engine built for this exact request so its glyph caches survive across calls
             // (Qt keeps one QFontEngine per font and caches glyphs in it). Keyed by the requested
-            // family string, not by font: a CSS-style list such as "'Segoe UI', sans-serif" has no
-            // raw data while the plain name "Segoe UI" does, and the two shape differently
+            // family string and style, not by font: a CSS-style list such as "'Segoe UI', sans-serif"
+            // has no raw data while the plain name "Segoe UI" does, and the two shape differently
             // (face metrics vs rustybuzz). A replaced font has a new Arc, so a stale entry is
             // never matched.
-            if let Some(engine) = self.engines.get(fam).filter(|e| Arc::ptr_eq(&e.face, &font_face)) {
+            let engine_key = style.cache_key(fam);
+            if let Some(engine) = self.engines.get(&engine_key).filter(|e| Arc::ptr_eq(&e.face, &font_face)) {
                 engines.push(engine.clone());
                 return true;
             }
-            let raw_data = self.get_raw_font_data(fam);
+            let raw_data = self.get_raw_font_data_styled(fam, style);
             let mut engine = FontEngine::new(font_face).with_face_index(0);
             if let Some(raw) = raw_data {
                 engine = engine.with_raw_data(raw);
             }
-            self.engines.insert(fam.to_string(), engine.clone());
+            self.engines.insert(engine_key, engine.clone());
             engines.push(engine);
             true
         } else {
@@ -421,7 +512,7 @@ impl FontDatabase {
     fn preload_default_fonts(&mut self) {
         let default_families = ["segoe ui", "arial", "consolas"];
         for fam in &default_families {
-            if let Some((raw_data, face)) = self.find_and_load_font_file(fam) {
+            if let Some((raw_data, face)) = self.find_and_load_font_file(fam, FaceStyle::REGULAR) {
                 self.cache.insert((*fam).to_string(), face);
                 self.raw_cache.insert((*fam).to_string(), raw_data);
                 break;
@@ -431,9 +522,13 @@ impl FontDatabase {
 
     /// Searches search paths for a font file matching family key, reusing existing
     /// cached binary buffers from `file_cache` to eliminate redundant disk I/O and memory duplication.
-    fn find_and_load_font_file(&mut self, family_key: &str) -> Option<(SharedFontData, SharedGlyphFace)> {
+    fn find_and_load_font_file(
+        &mut self,
+        family_key: &str,
+        style: FaceStyle,
+    ) -> Option<(SharedFontData, SharedGlyphFace)> {
         let _t = crate::startup_trace::span(|| format!("find_and_load_font_file({family_key:?})"));
-        let candidate_filenames: Vec<String> = match family_key {
+        let regular_filenames: Vec<String> = match family_key {
             "segoe ui" => vec!["segoeui.ttf".into(), "SegoeUI.ttf".into()],
             "segoe ui symbol" => vec!["seguisym.ttf".into()],
             "segoe ui emoji" => vec!["seguiemj.ttf".into()],
@@ -466,10 +561,22 @@ impl FontDatabase {
                     format!("{}.otf", no_space),
                 ]
             }
-        }
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
+        };
+        // A styled request first tries the family's bold/italic file by name (no directory scan),
+        // then the regular file: the nearest face, like `QFontDatabase::bestStyle`, for the
+        // families that ship no such variant. Families not known by name go to the face index.
+        let candidate_filenames: Vec<String> = if style == FaceStyle::REGULAR {
+            regular_filenames
+        } else {
+            match known_styled_filenames(family_key, style) {
+                Some(styled) => styled
+                    .iter()
+                    .map(|name| (*name).to_string())
+                    .chain(regular_filenames)
+                    .collect(),
+                None => Vec::new(),
+            }
+        };
 
         for dir in &self.search_paths {
             for filename in &candidate_filenames {
@@ -501,11 +608,14 @@ impl FontDatabase {
             self.system_faces = Some(scan_font_directories(&self.search_paths));
         }
         let (face_path, face_index) = {
+            // `QFontDatabase::bestStyle`: the face of the family with the smallest style distance
+            // (first one wins a tie).
             let face = self
                 .system_faces
                 .as_ref()?
                 .iter()
-                .find(|face| face.family.eq_ignore_ascii_case(family_key) && face.path.is_some())?;
+                .filter(|face| face.path.is_some() && face.family.eq_ignore_ascii_case(family_key))
+                .min_by_key(|face| style.distance(face.weight, face.italic))?;
             (face.path.as_ref()?.clone(), face.face_index)
         };
 
@@ -622,6 +732,7 @@ fn read_face<R: Read + Seek>(
     let records = read_exact_at(reader, offset + 12, num_tables * 16)?;
     let mut name_table = None;
     let mut post_table = None;
+    let mut os2_table = None;
     for i in 0..num_tables {
         let record = &records[i * 16..i * 16 + 16];
         let table_offset = be_u32(record, 8)?;
@@ -629,6 +740,7 @@ fn read_face<R: Read + Seek>(
         match &record[0..4] {
             b"name" => name_table = Some((table_offset, table_len)),
             b"post" => post_table = Some((table_offset, table_len)),
+            b"OS/2" => os2_table = Some((table_offset, table_len)),
             _ => {}
         }
     }
@@ -645,11 +757,23 @@ fn read_face<R: Read + Seek>(
         .and_then(|bytes| be_u32(&bytes, 0))
         .map(|flag| flag != 0)
         .unwrap_or(false);
+    // OS/2 table: usWeightClass at 4, fsSelection at 62 (bit 0 italic, bit 9 oblique).
+    let (weight, italic) = os2_table
+        .filter(|&(_, len)| len >= 64)
+        .and_then(|(os2_offset, _)| read_exact_at(reader, os2_offset as u64, 64))
+        .map(|os2| {
+            let weight = be_u16(&os2, 4).unwrap_or(400);
+            let selection = be_u16(&os2, 62).unwrap_or(0);
+            (weight, selection & ((1 << 0) | (1 << 9)) != 0)
+        })
+        .unwrap_or((400, false));
     Some(FontFamilyInfo {
         family,
         path: None,
         face_index,
         fixed_pitch,
+        weight,
+        italic,
     })
 }
 

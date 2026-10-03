@@ -12,6 +12,7 @@ struct AdvanceKey {
     weight: FontWeight,
     style: FontStyle,
     tabular_numbers: bool,
+    letter_spacing_bits: u32,
 }
 
 struct AdvanceCache {
@@ -115,6 +116,7 @@ impl FontMetrics {
             weight: font.weight,
             style: font.style,
             tabular_numbers: font.tabular_numbers,
+            letter_spacing_bits: font.letter_spacing.to_bits(),
         };
         let hit = ADVANCE_CACHE.with(|c| {
             let mut c = c.borrow_mut();

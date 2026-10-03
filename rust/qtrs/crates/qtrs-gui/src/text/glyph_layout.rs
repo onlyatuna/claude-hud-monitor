@@ -355,6 +355,14 @@ impl GlyphLayout {
                 if let Ok(f) = rustybuzz::Feature::from_str("kern") {
                     features.push(f);
                 }
+                // Qt passes `letterSpacing != 0` to disable ligatures (`shapeTextWithHarfbuzzNG`).
+                if font.letter_spacing != 0.0 {
+                    for tag in ["liga=0", "clig=0"] {
+                        if let Ok(f) = rustybuzz::Feature::from_str(tag) {
+                            features.push(f);
+                        }
+                    }
+                }
 
                 let glyph_buffer = rustybuzz::shape(rb_face, &features, buffer);
                 let upem = rb_face.units_per_em() as f32;
@@ -363,7 +371,7 @@ impl GlyphLayout {
                 let infos = glyph_buffer.glyph_infos();
                 let positions = glyph_buffer.glyph_positions();
 
-                for (info, pos) in infos.iter().zip(positions.iter()) {
+                for (i, (info, pos)) in infos.iter().zip(positions.iter()).enumerate() {
                     glyphs.push(PositionedGlyph {
                         glyph_id: info.glyph_id as u16,
                         font_index: run.engine_index as u8,
@@ -372,6 +380,10 @@ impl GlyphLayout {
                     });
                     current_x += (pos.x_advance as f32) * scale;
                     current_y += (pos.y_advance as f32) * scale;
+                    // `QTextEngine::shapeText`: spacing goes after the last glyph of every cluster.
+                    if infos.get(i + 1).is_none_or(|next| next.cluster != info.cluster) {
+                        current_x += font.letter_spacing;
+                    }
                 }
             } else {
                 // Fallback path (per-glyph face metrics) for runs without raw binary font data:
@@ -402,7 +414,7 @@ impl GlyphLayout {
                         x: current_x,
                         y: current_y,
                     });
-                    current_x += adv_x;
+                    current_x += adv_x + font.letter_spacing;
                 }
             }
         }

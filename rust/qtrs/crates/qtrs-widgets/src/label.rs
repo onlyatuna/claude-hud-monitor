@@ -92,6 +92,29 @@ impl Label {
         self.alignment = alignment;
         self.update();
     }
+    /// The label's font with the stylesheet's size, family, weight and letter spacing applied.
+    fn styled_font(&self, style: &crate::style::stylesheet::ResolvedStyle) -> qtrs_gui::text::Font {
+        let mut font = self.font.clone();
+        if let Some(sz) = style.font_size {
+            font.size = sz;
+        }
+        if let Some(fam) = &style.font_family {
+            font.family = fam.clone();
+        }
+        if let Some(w) = style.font_weight {
+            font.weight = match w {
+                800..=900 => qtrs_gui::text::FontWeight::Black,
+                700..=799 => qtrs_gui::text::FontWeight::Bold,
+                600..=699 => qtrs_gui::text::FontWeight::SemiBold,
+                _ => qtrs_gui::text::FontWeight::Normal,
+            };
+        }
+        if let Some(spacing) = style.letter_spacing {
+            font.letter_spacing = spacing;
+        }
+        font
+    }
+
     pub fn resolved_style(&self) -> crate::style::stylesheet::ResolvedStyle {
         let props = self.base.properties.borrow();
         let attrs: Vec<(&str, &str)> = props
@@ -151,10 +174,7 @@ impl Widget for Label {
 
     fn size_hint(&self) -> Size {
         let style = self.resolved_style();
-        let mut font = self.font.clone();
-        if let Some(sz) = style.font_size {
-            font.size = sz;
-        }
+        let font = self.styled_font(&style);
         let metrics = FontMetrics::from_font(&font);
         let text_w = metrics.horizontal_advance_exact(&self.text, &font).ceil() as i32 + 8;
         let text_h = metrics.height.ceil() as i32 + 4;
@@ -287,21 +307,7 @@ impl Widget for Label {
             return;
         }
 
-        let mut font = self.font.clone();
-        if let Some(sz) = style.font_size {
-            font.size = sz;
-        }
-        if let Some(fam) = &style.font_family {
-            font.family = fam.clone();
-        }
-        if let Some(w) = style.font_weight {
-            font.weight = match w {
-                800..=900 => qtrs_gui::text::FontWeight::Black,
-                700..=799 => qtrs_gui::text::FontWeight::Bold,
-                600..=699 => qtrs_gui::text::FontWeight::SemiBold,
-                _ => qtrs_gui::text::FontWeight::Normal,
-            };
-        }
+        let font = self.styled_font(&style);
 
         let metrics = FontMetrics::from_font(&font);
         let text_color = style.color.unwrap_or(self.color);

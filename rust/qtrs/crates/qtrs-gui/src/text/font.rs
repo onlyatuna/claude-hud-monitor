@@ -129,6 +129,9 @@ pub struct Font {
     pub style: FontStyle,
     /// Enables OpenType 'tnum' (tabular numbers) feature.
     pub tabular_numbers: bool,
+    /// Extra advance in logical pixels added after every glyph cluster
+    /// (`QFont::setLetterSpacing(AbsoluteSpacing, …)`, which QSS `letter-spacing` maps to).
+    pub letter_spacing: f32,
     /// In-memory binary font data.
     pub font_data: Option<SharedFontData>,
 }
@@ -142,6 +145,7 @@ impl Font {
             weight: FontWeight::Normal,
             style: FontStyle::Normal,
             tabular_numbers: false,
+            letter_spacing: 0.0,
             font_data: None,
         }
     }
@@ -200,6 +204,12 @@ impl Font {
     /// Sets whether tabular numbers ('tnum') are enabled.
     pub fn with_tabular_numbers(mut self, enabled: bool) -> Self {
         self.tabular_numbers = enabled;
+        self
+    }
+
+    /// Sets the absolute letter spacing in logical pixels.
+    pub fn with_letter_spacing(mut self, spacing: f32) -> Self {
+        self.letter_spacing = spacing;
         self
     }
 
@@ -273,6 +283,7 @@ impl FontDescription {
             weight: self.weight.unwrap_or(parent.weight),
             style: self.style.unwrap_or(parent.style),
             tabular_numbers: self.tabular_numbers.unwrap_or(parent.tabular_numbers),
+            letter_spacing: parent.letter_spacing,
             font_data: parent.font_data.clone(),
         }
     }
