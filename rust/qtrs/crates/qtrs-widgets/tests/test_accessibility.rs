@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
 fn widget_snapshot_uses_widget_semantics_and_focus_state() {
-    let mut button = Button::new("Save");
+    let button = Button::new("Save");
     button.set_has_focus(true);
     let widget: WidgetRef = std::rc::Rc::new(RefCell::new(Box::new(button)));
 

@@ -213,11 +213,7 @@ pub fn post_window_system_event(hwnd: HWND, event: WindowSystemEvent) {
 pub fn flush_window_system_events() -> bool {
     let events: Vec<(isize, WindowSystemEvent)> = {
         let mut queue = WINDOW_SYSTEM_EVENT_QUEUE.lock().unwrap();
-        if let Some(q) = queue.as_mut() {
-            q.drain(..).collect()
-        } else {
-            Vec::new()
-        }
+        queue.as_mut().map(std::mem::take).unwrap_or_default()
     };
 
     if events.is_empty() {
@@ -231,8 +227,8 @@ pub fn flush_window_system_events() -> bool {
 }
 
 thread_local! {
-    static NESTED_EVENTS: std::cell::RefCell<Vec<(HWND, WindowSystemEvent)>> = std::cell::RefCell::new(Vec::new());
-    static IS_DISPATCHING: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    static NESTED_EVENTS: std::cell::RefCell<Vec<(HWND, WindowSystemEvent)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static IS_DISPATCHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub fn send_window_system_event_immediately(hwnd: HWND, event: WindowSystemEvent) {

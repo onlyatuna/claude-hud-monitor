@@ -391,11 +391,13 @@ impl Default for WidgetBase {
 
 pub type PaintHandler = Box<dyn FnMut(&mut Painter) + 'static>;
 
+pub type ResizeHandler = Box<dyn FnMut(Size, Size) + 'static>;
+
 pub struct EmptyWidget {
     pub base: WidgetBase,
     pub background_color: Option<qtrs_gui::tiny_skia::Color>,
     pub paint_handler: Option<PaintHandler>,
-    pub resize_handler: RefCell<Option<Box<dyn FnMut(Size, Size) + 'static>>>,
+    pub resize_handler: RefCell<Option<ResizeHandler>>,
 }
 
 pub type CustomWidget = EmptyWidget;

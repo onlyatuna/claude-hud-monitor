@@ -36,6 +36,7 @@ pub struct WorkerResult {
     pub generation: u64,
     pub metrics: UsageMetrics,
 }
+type NotifyCallback = Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 
 pub struct RefreshController {
     pub interval: Duration,
@@ -43,7 +44,7 @@ pub struct RefreshController {
     result_tx: Sender<WorkerResult>,
     pub result_rx: Receiver<WorkerResult>,
     pub updated: qtrs_core::signal::Signal<UsageMetrics>,
-    notify_callback: Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    notify_callback: NotifyCallback,
 }
 
 impl RefreshController {

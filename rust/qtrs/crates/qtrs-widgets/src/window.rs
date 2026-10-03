@@ -7,6 +7,10 @@ use qtrs_platform::{
     platform, PlatformWindow, WindowFlags, WindowSystemEvent, WindowSystemEventHandler,
 };
 use crate::hit_test::EventTreeDispatcher;
+type ContextMenuCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>;
+type MousePressCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point, qtrs_platform::MouseButton) -> bool>>>>;
+type MouseMoveCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>;
+type ResizeCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Size)>>>>;
 
 pub struct Window {
     object_data: ObjectData,
@@ -14,10 +18,10 @@ pub struct Window {
     root_widget: WidgetRef,
     backing_store: std::rc::Rc<std::cell::RefCell<BackingStore>>,
     geometry: std::rc::Rc<std::cell::Cell<Rect>>,
-    context_menu_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>,
-    mouse_press_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point, qtrs_platform::MouseButton) -> bool>>>>,
-    mouse_move_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>,
-    resize_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Size)>>>>,
+    context_menu_cb: ContextMenuCallback,
+    mouse_press_cb: MousePressCallback,
+    mouse_move_cb: MouseMoveCallback,
+    resize_cb: ResizeCallback,
 }
 
 impl Window {
@@ -269,7 +273,7 @@ impl Window {
         let root = self.root_widget.clone();
         let mut bs = self.backing_store.borrow_mut();
         let mut pw = self.platform_window.borrow_mut();
-        do_render_and_present(&mut **pw, &mut *bs, &root, geom);
+        do_render_and_present(&mut **pw, &mut bs, &root, geom);
     }
 
     pub fn present_custom<F: FnOnce(&mut Painter)>(&mut self, f: F) {
@@ -291,7 +295,7 @@ impl Window {
             bs.physical_height() as i32,
         );
         let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
-        let _ = pw.present_region(&**bs, &dirty_region);
+        let _ = pw.present_region(&bs, &dirty_region);
     }
 
     pub fn backing_store(&self) -> std::cell::Ref<'_, BackingStore> {
@@ -440,7 +444,7 @@ fn render_widget_recursive(widget_ref: &WidgetRef, painter: &mut Painter, dirty_
 
 /// Recursively collects and unifies dirty rectangles across the widget tree.
 pub fn collect_dirty_region(widget_ref: &WidgetRef, offset: Point) -> Option<Rect> {
-    let mut w = widget_ref.borrow_mut();
+    let w = widget_ref.borrow_mut();
     let geom = w.geometry();
     let current_offset = Point::new(offset.x + geom.x, offset.y + geom.y);
 
@@ -512,7 +516,7 @@ fn do_render_and_present(
     }
 
     let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
-    let _ = platform_window.present_region(&**backing_store, &dirty_region);
+    let _ = platform_window.present_region(backing_store, &dirty_region);
 }
 
 struct WindowEventHandler {
@@ -521,10 +525,10 @@ struct WindowEventHandler {
     geometry: std::rc::Rc<std::cell::Cell<Rect>>,
     root: WidgetRef,
     dispatcher: EventTreeDispatcher,
-    context_menu_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>,
-    mouse_press_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point, qtrs_platform::MouseButton) -> bool>>>>,
-    mouse_move_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>,
-    resize_cb: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Size)>>>>,
+    context_menu_cb: ContextMenuCallback,
+    mouse_press_cb: MousePressCallback,
+    mouse_move_cb: MouseMoveCallback,
+    resize_cb: ResizeCallback,
 }
 
 impl WindowSystemEventHandler for WindowEventHandler {
@@ -652,7 +656,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     if !pw.is_within_set_geometry() {
                         let cur_geom = self.geometry.get();
                         let mut bs = self.backing_store.borrow_mut();
-                        do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
+                        do_render_and_present(&mut **pw, &mut bs, &root, cur_geom);
                     }
                 }
             }
@@ -693,7 +697,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     if let Ok(mut pw) = self.platform_window.try_borrow_mut() {
                         if !pw.is_within_set_geometry() {
                             let mut bs = self.backing_store.borrow_mut();
-                            do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
+                            do_render_and_present(&mut **pw, &mut bs, &root, cur_geom);
                         }
                     }
                 }
@@ -749,7 +753,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
 
                 if let Ok(mut pw) = self.platform_window.try_borrow_mut() {
                     let mut bs = self.backing_store.borrow_mut();
-                    do_render_and_present(&mut **pw, &mut *bs, &root, cur_geom);
+                    do_render_and_present(&mut **pw, &mut bs, &root, cur_geom);
                 }
             }
             WindowSystemEvent::InputMethod {

@@ -17,12 +17,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use std::thread;
+type HotkeyNotifyCallback = Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 
 pub struct HotkeyManager {
     toggle_flag: Arc<AtomicBool>,
     clickthrough_flag: Arc<AtomicBool>,
     #[allow(dead_code)]
-    notify_cb: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    notify_cb: HotkeyNotifyCallback,
     #[cfg(target_os = "windows")]
     thread_id: Arc<AtomicU32>,
     _thread: Option<thread::JoinHandle<()>>,
@@ -191,7 +192,7 @@ pub fn compute_ct_mods(mods: u32) -> u32 {
 fn windows_hotkey_loop(
     toggle_flag: Arc<AtomicBool>,
     ct_flag: Arc<AtomicBool>,
-    notify_cb: Arc<Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>,
+    notify_cb: HotkeyNotifyCallback,
     thread_id: Arc<AtomicU32>,
     mods: u32,
     vk: u32,

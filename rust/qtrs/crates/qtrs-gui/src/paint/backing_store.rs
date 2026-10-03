@@ -164,7 +164,7 @@ impl BackingStore {
     pub fn has_static_contents(&self) -> bool {
         self.static_contents
             .as_ref()
-            .map_or(false, |r| !r.is_empty())
+            .is_some_and(|r| !r.is_empty())
     }
 
     /// Scrolls the specified area by `(dx, dy)` (`QBackingStore::scroll()`).

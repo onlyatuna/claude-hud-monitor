@@ -409,7 +409,7 @@ pub struct ScrollArea {
 impl ScrollArea {
     /// Creates a new scroll area.
     pub fn new() -> Self {
-        let mut base = WidgetBase::new();
+        let base = WidgetBase::new();
         base.set_size_policy(QSizePolicy::new(Policy::Expanding, Policy::Expanding));
 
         let h_bar = ScrollBar::new(Orientation::Horizontal);

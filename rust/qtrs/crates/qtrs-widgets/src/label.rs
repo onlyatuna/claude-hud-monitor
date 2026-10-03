@@ -33,7 +33,7 @@ impl Label {
             "Segoe UI"
         };
         let font = Font::new(family, 13.0);
-        let mut base = WidgetBase::new();
+        let base = WidgetBase::new();
         let metrics = FontMetrics::from_font(&font);
         let text_w = metrics.horizontal_advance(&text_str, &font).ceil() as i32 + 10;
         let text_h = metrics.height.ceil() as i32 + 6;

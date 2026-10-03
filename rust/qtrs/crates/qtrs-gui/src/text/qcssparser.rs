@@ -45,8 +45,16 @@ pub enum QCssProperty {
     Custom(String),
 }
 
+impl std::str::FromStr for QCssProperty {
+    type Err = std::convert::Infallible;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Ok(Self::from_name(name))
+    }
+}
+
 impl QCssProperty {
-    pub fn from_str(name: &str) -> Self {
+    pub fn from_name(name: &str) -> Self {
         let name = name.trim().to_ascii_lowercase();
         match name.as_str() {
             "background-color" | "background" => Self::BackgroundColor,
@@ -322,7 +330,7 @@ fn parse_declarations(input: &str) -> Vec<QCssDeclaration> {
         let Some((prop_str, val_str)) = item.split_once(':') else {
             continue;
         };
-        let prop = QCssProperty::from_str(prop_str.trim());
+        let prop = QCssProperty::from_name(prop_str.trim());
         let val = parse_value(&prop, val_str.trim());
         decls.push(QCssDeclaration {
             property: prop,

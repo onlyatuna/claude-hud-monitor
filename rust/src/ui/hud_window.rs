@@ -79,10 +79,7 @@ impl HUDWindow {
     ) -> Result<Self, &'static str> {
         let (init_x, init_y, init_w, init_h, opacity, aot, ct, ui_mode, dark) = {
             let cfg = config.lock();
-            let is_dark = match cfg.appearance.as_str() {
-                "light" => false,
-                _ => true,
-            };
+            let is_dark = cfg.appearance != "light";
             let (w, h) = if cfg.ui_mode == "table" {
                 (
                     cfg.table_width.max(MIN_TABLE_WIDTH) as i32,

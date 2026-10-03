@@ -22,7 +22,7 @@ pub trait Layout: 'static {
 
     fn add_widget_with_stretch(&mut self, widget: WidgetRef, stretch: u32);
     fn add_stretch(&mut self, stretch: u32) {
-        let mut widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
+        let widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
         widget.set_size_policy(crate::size_policy::QSizePolicy::new(
             crate::size_policy::Policy::Expanding,
             crate::size_policy::Policy::Expanding,

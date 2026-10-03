@@ -1,9 +1,6 @@
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use qtrs_core::event::{Event, EventKind};
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Rect, RectF};
 use qtrs_gui::paint::pixmap::Pixmap;

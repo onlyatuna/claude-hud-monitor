@@ -7,7 +7,7 @@
 //! mode and animates a moving chunk driven by [`ProgressBar::advance_busy_indicator`].
 
 use qtrs_core::event::{Event, FocusReason};
-use qtrs_core::object::{ObjectId, QObject};
+use qtrs_core::object::QObject;
 use qtrs_core::signal::Signal;
 use qtrs_gui::geometry::primitives::{PointF, Rect, RectF, Size};
 use qtrs_gui::paint::brush::Brush;
@@ -61,7 +61,7 @@ const DEFAULT_FORMAT: &str = "%p%";
 impl ProgressBar {
     /// Creates a horizontal bar with range `0..=100` and no progress (`value == -1`).
     pub fn new() -> Self {
-        let mut base = WidgetBase::with_geometry(Rect::new(0, 0, 160, 22));
+        let base = WidgetBase::with_geometry(Rect::new(0, 0, 160, 22));
         base.set_focus_policy(FocusPolicy::NoFocus);
         base.set_size_policy(QSizePolicy::new(Policy::Expanding, Policy::Fixed));
         Self {

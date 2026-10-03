@@ -660,7 +660,7 @@ impl Default for KeySequenceEdit {
 
 impl KeySequenceEdit {
     pub fn new() -> Self {
-        let mut base = WidgetBase::new();
+        let base = WidgetBase::new();
         base.set_focus_policy(FocusPolicy::StrongFocus);
         base.set_size_policy(QSizePolicy::new(Policy::Expanding, Policy::Fixed));
         base.set_geometry(Rect::new(0, 0, 160, 28));

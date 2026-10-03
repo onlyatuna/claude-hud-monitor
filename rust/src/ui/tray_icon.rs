@@ -566,7 +566,7 @@ impl HUDTrayIcon {
                 hud.set_claude_profile("auto");
                 self.update_menu_state();
             }
-            id if id >= ACTION_CLAUDE_PROFILE_BASE && id < ACTION_CLAUDE_PROFILE_BASE + 100 => {
+            id if (ACTION_CLAUDE_PROFILE_BASE..ACTION_CLAUDE_PROFILE_BASE + 100).contains(&id) => {
                 let idx = (id - ACTION_CLAUDE_PROFILE_BASE) as usize;
                 let profiles = crate::providers::claude::discover_profiles();
                 if let Some(prof) = profiles.get(idx) {
@@ -589,12 +589,14 @@ mod tests {
     #[test]
     fn test_context_menu_parity_cards_and_table_modes() {
         // 1. Cards mode configuration
-        let mut cfg_cards = Config::default();
-        cfg_cards.ui_mode = "cards".to_string();
-        cfg_cards.layout_mode = "horizontal".to_string();
-        cfg_cards.opacity = 0.90;
-        cfg_cards.refresh_interval_sec = 60;
-        cfg_cards.claude_profile = "auto".to_string();
+        let cfg_cards = Config {
+            ui_mode: "cards".to_string(),
+            layout_mode: "horizontal".to_string(),
+            opacity: 0.90,
+            refresh_interval_sec: 60,
+            claude_profile: "auto".to_string(),
+            ..Config::default()
+        };
 
         let menu_cards = build_hud_context_menu(&cfg_cards);
         let actions = menu_cards.actions();
@@ -602,9 +604,11 @@ mod tests {
         assert_eq!(actions[0].borrow().text(), "🔄 立即重新整理所有 AI (Refresh All)");
 
         // 2. Table mode configuration
-        let mut cfg_table = Config::default();
-        cfg_table.ui_mode = "table".to_string();
-        cfg_table.color_scheme = "scale".to_string();
+        let cfg_table = Config {
+            ui_mode: "table".to_string(),
+            color_scheme: "scale".to_string(),
+            ..Config::default()
+        };
 
         let menu_table = build_hud_context_menu(&cfg_table);
         let actions_table = menu_table.actions();

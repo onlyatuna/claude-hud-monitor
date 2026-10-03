@@ -60,9 +60,8 @@ fn test_metrics_and_painter_shaping_exact_parity() {
 #[test]
 fn test_memory_font_retains_fallback_chain() {
     // Test with custom in-memory font buffer
-    let font_bytes = vec![0u8; 128];
     let mut font = Font::new("CustomIconFont", 14.0);
-    font.font_data = Some(qtrs_gui::text::font::SharedFontData::from_vec(font_bytes.to_vec()));
+    font.font_data = Some(qtrs_gui::text::font::SharedFontData::from_vec(vec![0u8; 128]));
 
     let engines = resolve_font_engines_global(&font);
     // On systems with CJK/Emoji system fonts, engines should contain fallback entries

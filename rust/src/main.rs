@@ -356,7 +356,7 @@ fn main() {
                             if let Some(hud) = h_cell.borrow().as_ref() {
                                 let mut tray_ref = tray.borrow_mut();
                                 let mut hud_ref = hud.borrow_mut();
-                                if tray_ref.handle_action(action_id, &mut *hud_ref) {
+                                if tray_ref.handle_action(action_id, &mut hud_ref) {
                                     hud_ref.persist_geometry();
                                     hud_ref.window.hide();
                                     info!("Exit requested from context menu. Exiting cleanly.");
@@ -389,7 +389,7 @@ fn main() {
                     if let Some(hud) = h_cell.borrow().as_ref() {
                         let mut tray_ref = tray.borrow_mut();
                         let mut hud_ref = hud.borrow_mut();
-                        if tray_ref.handle_action(action_id, &mut *hud_ref) {
+                        if tray_ref.handle_action(action_id, &mut hud_ref) {
                             hud_ref.persist_geometry();
                             hud_ref.window.hide();
                             info!("Exit requested from tray menu. Exiting cleanly.");

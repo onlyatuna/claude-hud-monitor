@@ -32,6 +32,8 @@ pub enum SingleInstanceResult {
     Secondary { command_sent: bool },
 }
 
+type CommandCallback = Box<dyn Fn(SingleInstanceCommand) + Send + Sync>;
+
 /// Guard holding the platform single instance lock and IPC listener.
 pub struct SingleInstanceGuard {
     #[cfg(windows)]
@@ -46,7 +48,7 @@ pub struct SingleInstanceGuard {
     lock_path: Option<std::path::PathBuf>,
     #[cfg(not(windows))]
     listener_stop: Arc<AtomicBool>,
-    command_callbacks: Arc<Mutex<Vec<Box<dyn Fn(SingleInstanceCommand) + Send + Sync>>>>,
+    command_callbacks: Arc<Mutex<Vec<CommandCallback>>>,
 }
 
 impl SingleInstanceGuard {

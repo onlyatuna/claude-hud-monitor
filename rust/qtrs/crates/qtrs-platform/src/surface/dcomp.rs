@@ -180,18 +180,18 @@ impl DCompSurface {
 
         unsafe {
             // 1. Dynamically load runtime DLLs
-            let d3d11_mod = LoadLibraryA(b"d3d11.dll\0".as_ptr());
+            let d3d11_mod = LoadLibraryA(c"d3d11.dll".as_ptr() as *const u8);
             if d3d11_mod.is_null() {
                 return Err("Failed to load d3d11.dll");
             }
 
-            let dxgi_mod = LoadLibraryA(b"dxgi.dll\0".as_ptr());
+            let dxgi_mod = LoadLibraryA(c"dxgi.dll".as_ptr() as *const u8);
             if dxgi_mod.is_null() {
                 FreeLibrary(d3d11_mod);
                 return Err("Failed to load dxgi.dll");
             }
 
-            let dcomp_mod = LoadLibraryA(b"dcomp.dll\0".as_ptr());
+            let dcomp_mod = LoadLibraryA(c"dcomp.dll".as_ptr() as *const u8);
             if dcomp_mod.is_null() {
                 FreeLibrary(dxgi_mod);
                 FreeLibrary(d3d11_mod);
@@ -199,9 +199,9 @@ impl DCompSurface {
             }
 
             // 2. Resolve entry points
-            let d3d11_create_device_ptr = GetProcAddress(d3d11_mod, b"D3D11CreateDevice\0".as_ptr());
-            let create_dxgi_factory_ptr = GetProcAddress(dxgi_mod, b"CreateDXGIFactory1\0".as_ptr());
-            let dcomp_create_device_ptr = GetProcAddress(dcomp_mod, b"DCompositionCreateDevice\0".as_ptr());
+            let d3d11_create_device_ptr = GetProcAddress(d3d11_mod, c"D3D11CreateDevice".as_ptr() as *const u8);
+            let create_dxgi_factory_ptr = GetProcAddress(dxgi_mod, c"CreateDXGIFactory1".as_ptr() as *const u8);
+            let dcomp_create_device_ptr = GetProcAddress(dcomp_mod, c"DCompositionCreateDevice".as_ptr() as *const u8);
 
             if d3d11_create_device_ptr.is_none()
                 || create_dxgi_factory_ptr.is_none()
@@ -551,7 +551,9 @@ impl DCompSurface {
                 let src_row = std::slice::from_raw_parts(src_data.as_ptr().add(row_offset), copy_bytes);
                 let dst_row = std::slice::from_raw_parts_mut(self.staging_bits.add(row_offset), copy_bytes);
 
-                for (src_chunk, dst_chunk) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                let (src_chunks, _) = src_row.as_chunks::<4>();
+                let (dst_chunks, _) = dst_row.as_chunks_mut::<4>();
+                for (src_chunk, dst_chunk) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
                     dst_chunk[0] = src_chunk[2]; // B
                     dst_chunk[1] = src_chunk[1]; // G
                     dst_chunk[2] = src_chunk[0]; // R

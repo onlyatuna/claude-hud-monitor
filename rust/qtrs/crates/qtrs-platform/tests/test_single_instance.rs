@@ -1,6 +1,4 @@
-use qtrs_platform::{
-    SingleInstance, SingleInstanceCommand, SingleInstanceGuard, SingleInstanceResult,
-};
+use qtrs_platform::{SingleInstance, SingleInstanceCommand, SingleInstanceResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 

@@ -206,7 +206,9 @@ impl Win32LayeredSurface {
                 let src_row = std::slice::from_raw_parts(src_data.as_ptr().add(row_offset), copy_bytes);
                 let dst_row = std::slice::from_raw_parts_mut(self.bits.add(row_offset), copy_bytes);
 
-                for (src_chunk, dst_chunk) in src_row.chunks_exact(4).zip(dst_row.chunks_exact_mut(4)) {
+                let (src_chunks, _) = src_row.as_chunks::<4>();
+                let (dst_chunks, _) = dst_row.as_chunks_mut::<4>();
+                for (src_chunk, dst_chunk) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
                     dst_chunk[0] = src_chunk[2]; // B
                     dst_chunk[1] = src_chunk[1]; // G
                     dst_chunk[2] = src_chunk[0]; // R

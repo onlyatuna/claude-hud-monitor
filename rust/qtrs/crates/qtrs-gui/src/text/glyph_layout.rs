@@ -18,6 +18,8 @@ pub struct PositionedGlyph {
 /// A single font engine instance combining metrics/rasterization (`fontdue`) and optional
 /// raw binary data for OpenType layout (`rustybuzz`).
 /// Mirrors Qt's `QFontEngine`.
+type ColorGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), Option<(fontdue::Metrics, Arc<tiny_skia::Pixmap>)>>>>;
+
 #[derive(Clone)]
 pub struct FontEngine {
     /// Fontdue font face for rasterization, metrics, and character-to-glyph mapping.
@@ -27,7 +29,7 @@ pub struct FontEngine {
     /// Font face index within a font collection (.ttc / .otc).
     pub face_index: u32,
     /// Cached color glyphs: (glyph_id, px_size_key) -> (Metrics, Arc<Pixmap>)
-    color_cache: Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), Option<(fontdue::Metrics, Arc<tiny_skia::Pixmap>)>>>>,
+    color_cache: ColorGlyphCache,
 }
 
 impl FontEngine {
@@ -235,11 +237,12 @@ impl GlyphLayout {
 
                 // Locality heuristic (Qt `lastFallback` in `stringToCMap`):
                 // consecutive characters in multi-language text (CJK/Emoji) usually share the same font.
-                if last_fallback_idx > 0 && last_fallback_idx < engines.len() {
-                    if engines[last_fallback_idx].fontdue.lookup_glyph_index(ch) != 0 {
-                        resolved_idx = last_fallback_idx;
-                        found = true;
-                    }
+                if last_fallback_idx > 0
+                    && last_fallback_idx < engines.len()
+                    && engines[last_fallback_idx].fontdue.lookup_glyph_index(ch) != 0
+                {
+                    resolved_idx = last_fallback_idx;
+                    found = true;
                 }
 
                 if !found {

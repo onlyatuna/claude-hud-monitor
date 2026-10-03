@@ -39,7 +39,7 @@ impl Button {
     pub fn new(text: impl Into<String>) -> Self {
         let text_str = text.into();
         let font = Font::new("Segoe UI", 13.0);
-        let mut base = WidgetBase::new();
+        let base = WidgetBase::new();
         base.set_focus_policy(crate::focus::FocusPolicy::StrongFocus);
         base.set_size_policy(crate::size_policy::QSizePolicy::new(
             crate::size_policy::Policy::Minimum,
