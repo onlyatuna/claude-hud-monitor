@@ -21,6 +21,7 @@ impl GlyphFace for Fontdue {
     }
 }
 
+#[cfg(windows)]
 #[repr(C)]
 struct Pmc {
     cb: u32,
@@ -34,16 +35,25 @@ struct Pmc {
     pagefile: usize,
     peak_pagefile: usize,
 }
+#[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
     fn GetCurrentProcess() -> isize;
     fn K32GetProcessMemoryInfo(p: isize, c: *mut Pmc, cb: u32) -> i32;
 }
+#[cfg(windows)]
 fn commit_mb() -> f64 {
     let mut m: Pmc = unsafe { std::mem::zeroed() };
     m.cb = std::mem::size_of::<Pmc>() as u32;
     unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut m, m.cb) };
     m.pagefile as f64 / 1048576.0
+}
+/// Non-Windows: resident set from /proc/self/statm (no commit equivalent).
+#[cfg(not(windows))]
+fn commit_mb() -> f64 {
+    let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
+    let pages: f64 = statm.split_whitespace().nth(1).and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    pages * 4096.0 / 1048576.0
 }
 
 const FONTS: &[(&str, &str)] = &[
