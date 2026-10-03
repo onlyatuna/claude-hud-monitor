@@ -13,6 +13,7 @@ use crate::event::{
 use crate::object::{send_event, EventSender, ObjectData, ObjectId, QObject};
 use crate::timer::TimerRegistry;
 
+use crate::event_loop::dispatcher::EventDispatcher;
 thread_local! {
     static APPLICATION_EVENT_FILTERS: RefCell<EventFilterChain> = RefCell::new(EventFilterChain::new());
 }

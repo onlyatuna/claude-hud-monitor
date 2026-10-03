@@ -612,7 +612,7 @@ impl Timer {
         let receiver = ObjectId::next();
         register_single_shot_callback(receiver, callback);
         with_thread_timer_context(|ctx| {
-            let timer_id = ctx.registry.lock().unwrap().register(
+            let _timer_id = ctx.registry.lock().unwrap().register(
                 receiver,
                 interval_ms,
                 TimerType::Coarse,
@@ -623,7 +623,7 @@ impl Timer {
                 unsafe {
                     windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
                         ctx.internal_hwnd,
-                        timer_id.0 as usize,
+                        _timer_id.0 as usize,
                         interval_ms.min(u32::MAX as u64) as u32,
                         None,
                     );
