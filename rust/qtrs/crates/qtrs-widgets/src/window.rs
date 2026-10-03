@@ -160,6 +160,19 @@ impl Window {
         // 4. Backing store invalidation & paint (Lazy Resize in do_render_and_present)
         self.render_and_present();
     }
+
+    pub fn set_geometry_silent(&mut self, rect: Rect) {
+        let p = platform();
+        let dpr = p.primary_screen().device_pixel_ratio();
+        let native_rect = if dpr > 1.0 {
+            qtrs_platform::high_dpi::to_native_rect(rect, dpr)
+        } else {
+            rect
+        };
+        self.geometry.set(rect);
+        self.platform_window.borrow_mut().set_geometry(native_rect);
+    }
+
     pub fn show(&mut self) {
         self.platform_window.borrow_mut().show();
         self.render_and_present();

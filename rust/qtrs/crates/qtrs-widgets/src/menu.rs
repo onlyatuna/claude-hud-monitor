@@ -505,7 +505,7 @@ impl Menu {
                             let win_h = covered.height.max(size.height);
                             let current_log = window.geometry();
                             if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
-                                window.set_geometry(Rect::new(win_x, win_y, win_w, win_h));
+                                window.set_geometry_silent(Rect::new(win_x, win_y, win_w, win_h));
                             }
                             window.present_custom(|painter| {
                                 painter.save();
@@ -535,7 +535,7 @@ impl Menu {
                         let win_h = covered.height.max(size.height);
                         let current_log = window.geometry();
                         if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
-                            window.set_geometry(Rect::new(win_x, win_y, win_w, win_h));
+                            window.set_geometry_silent(Rect::new(win_x, win_y, win_w, win_h));
                         }
                         window.present_custom(|painter| {
                             painter.save();
@@ -597,7 +597,7 @@ impl Menu {
                         let win_h = covered.height.max(size.height);
                         let current_log = window.geometry();
                         if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
-                            window.set_geometry(Rect::new(win_x, win_y, win_w, win_h));
+                            window.set_geometry_silent(Rect::new(win_x, win_y, win_w, win_h));
                         }
                         window.present_custom(|painter| {
                             painter.save();
@@ -1032,6 +1032,48 @@ impl Menu {
         MenuOutcome::Handled
     }
 
+    /// Returns true if `pos` (in this menu's coordinates) is in the transition corridor
+    /// between the active parent item and the open submenu.
+    ///
+    /// Mirrors Qt's `QMenuPrivate::sloppyState` (qmenu.cpp:3514), preventing premature
+    /// submenu closing or item hopping while the user moves the mouse diagonally towards
+    /// the submenu.
+    fn is_in_submenu_corridor(&self, pos: Point) -> bool {
+        let Some((idx, submenu)) = &self.open_submenu else {
+            return false;
+        };
+        let Ok(sub) = submenu.try_borrow() else {
+            return false;
+        };
+        let rects = self.item_rects();
+        let Some(&item) = rects.get(*idx) else {
+            return false;
+        };
+        let sg = sub.base.geometry();
+
+        // If submenu is on the right:
+        if sg.x >= item.right() - SUBMENU_OVERLAP - 4 {
+            let corridor_min_x = item.x + item.width / 4;
+            let corridor_max_x = sg.x + sg.width;
+            let corridor_min_y = item.y.min(sg.y) - 8;
+            let corridor_max_y = (item.y + item.height).max(sg.y + sg.height) + 8;
+            pos.x >= corridor_min_x
+                && pos.x <= corridor_max_x
+                && pos.y >= corridor_min_y
+                && pos.y <= corridor_max_y
+        } else {
+            // Submenu is on the left:
+            let corridor_min_x = sg.x;
+            let corridor_max_x = item.right() - item.width / 4;
+            let corridor_min_y = item.y.min(sg.y) - 8;
+            let corridor_max_y = (item.y + item.height).max(sg.y + sg.height) + 8;
+            pos.x >= corridor_min_x
+                && pos.x <= corridor_max_x
+                && pos.y >= corridor_min_y
+                && pos.y <= corridor_max_y
+        }
+    }
+
     pub(crate) fn handle_mouse_move(&mut self, pos: Point) -> MenuOutcome {
         if let Some(outcome) = self.route_to_submenu(pos, |s, p| s.handle_mouse_move(p)) {
             return outcome;
@@ -1042,6 +1084,11 @@ impl Menu {
             if let Ok(mut sub) = submenu.try_borrow_mut() {
                 sub.set_active_index(None);
             }
+        }
+        // If moving within the corridor between the active item and the open submenu,
+        // preserve the open submenu and don't switch items (mirrors Qt's sloppyState / submenu corridor).
+        if self.is_in_submenu_corridor(pos) {
+            return MenuOutcome::Handled;
         }
         if let Some(idx) = self.index_at(pos) {
             if self.is_selectable(idx) && self.active != Some(idx) {

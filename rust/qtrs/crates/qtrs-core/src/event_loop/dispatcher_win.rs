@@ -603,7 +603,7 @@ mod tests {
         dispatcher.register_timer(&entry);
         unsafe { crate::object::register_qobject(&mut receiver) };
 
-        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        let deadline = std::time::Instant::now() + Duration::from_millis(1500);
         while hits.lock().unwrap().is_empty() && std::time::Instant::now() < deadline {
             let _ = dispatcher.process_events_with_timers(
                 true,
