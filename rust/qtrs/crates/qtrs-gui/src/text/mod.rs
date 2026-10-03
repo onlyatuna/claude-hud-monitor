@@ -2,6 +2,8 @@ pub mod block;
 pub mod block_data;
 pub mod color_glyph;
 pub mod cursor;
+#[cfg(windows)]
+pub mod directwrite_face;
 pub mod document;
 pub mod document_fragment;
 pub mod font;

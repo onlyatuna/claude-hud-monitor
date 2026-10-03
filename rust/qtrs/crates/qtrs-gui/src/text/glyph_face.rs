@@ -34,6 +34,14 @@ pub trait GlyphFace: Send + Sync {
     /// Metrics and 8-bit coverage bitmap (row-major, top row first) of `glyph_id` at `px`.
     fn rasterize_indexed(&self, glyph_id: u16, px: f32) -> (GlyphMetrics, Vec<u8>);
 
+    /// Like [`rasterize_indexed`](Self::rasterize_indexed) for a font of `size` pixels drawn
+    /// through a uniform scale (the device pixel ratio), as Qt does: the glyph run keeps its logical
+    /// em size and the transform scales it. Backends that hint or pick a rendering mode from the
+    /// logical size override this; the default simply rasterizes at `size * scale`.
+    fn rasterize_scaled(&self, glyph_id: u16, size: f32, scale: f32) -> (GlyphMetrics, Vec<u8>) {
+        self.rasterize_indexed(glyph_id, size * scale)
+    }
+
     /// Metrics of the glyph for `ch` at `px`.
     fn metrics(&self, ch: char, px: f32) -> GlyphMetrics {
         self.metrics_indexed(self.glyph_index(ch), px)
@@ -43,11 +51,31 @@ pub trait GlyphFace: Send + Sync {
 /// Shared handle to a face (Qt's ref-counted `QFontEngine*`).
 pub type SharedGlyphFace = Arc<dyn GlyphFace>;
 
+/// Which rasterizer backend [`parse_face`] uses (Qt's per-platform font engine choice).
+///
+/// Windows uses DirectWrite, like Qt; every other platform, and Windows without DirectWrite, uses
+/// [`OutlineFace`] (Qt's FreeType role). `QTRS_FONT_ENGINE=outline` forces the generic backend
+/// (Qt's `QT_QPA_PLATFORM=windows:fontengine=freetype`), for comparing the two.
+#[cfg(windows)]
+fn use_directwrite() -> bool {
+    static CHOICE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+        let forced_generic = std::env::var("QTRS_FONT_ENGINE").is_ok_and(|v| v.eq_ignore_ascii_case("outline"));
+        !forced_generic && crate::text::directwrite_face::is_available()
+    });
+    *CHOICE
+}
+
 /// Builds the glyph face for face `face_index` of the font file `data`.
 ///
-/// This is the only place that selects a rasterizer backend. Today every platform uses
-/// [`OutlineFace`] (Qt's FreeType role); a platform rasterizer (DirectWrite, CoreText) would be
-/// chosen here.
+/// This is the only place that selects a rasterizer backend.
 pub fn parse_face(data: &SharedFontData, face_index: u32) -> Result<SharedGlyphFace, String> {
+    #[cfg(windows)]
+    if use_directwrite() {
+        match crate::text::directwrite_face::DirectWriteFace::new(data.clone(), face_index) {
+            Ok(face) => return Ok(Arc::new(face)),
+            // A font DirectWrite cannot open is still drawn by the generic backend.
+            Err(_) => {}
+        }
+    }
     OutlineFace::new(data.clone(), face_index).map(|f| Arc::new(f) as SharedGlyphFace)
 }

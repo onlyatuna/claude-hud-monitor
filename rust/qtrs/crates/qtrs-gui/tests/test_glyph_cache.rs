@@ -21,15 +21,15 @@ fn test_cached_glyph_bitmap_is_identical_to_direct_rasterization_and_reused() {
     let px = 16.25;
 
     let (direct_m, direct_bitmap) = engine.face.rasterize_indexed(gid, px);
-    let (m1, b1) = engine.rasterize_glyph(gid, px);
+    let (m1, b1) = engine.rasterize_glyph(gid, px, 1.0);
     assert_eq!((m1.width, m1.height, m1.xmin, m1.ymin), (direct_m.width, direct_m.height, direct_m.xmin, direct_m.ymin));
     assert_eq!(&*b1, direct_bitmap.as_slice(), "cached bitmap must equal the face's own output");
 
-    let (_, b2) = engine.rasterize_glyph(gid, px);
+    let (_, b2) = engine.rasterize_glyph(gid, px, 1.0);
     assert!(Arc::ptr_eq(&b1, &b2), "second request must reuse the cached bitmap");
 
     // A size that differs only below 1/64 px is still a different raster: no key collisions.
-    let (_, b3) = engine.rasterize_glyph(gid, px + 0.001);
+    let (_, b3) = engine.rasterize_glyph(gid, px + 0.001, 1.0);
     assert!(!Arc::ptr_eq(&b1, &b3));
     assert_eq!(&*b3, engine.face.rasterize_indexed(gid, px + 0.001).1.as_slice());
 }
@@ -40,8 +40,8 @@ fn test_glyph_cache_survives_separate_font_resolutions() {
     let font = Font::new("Segoe UI", 13.0);
     let (a, gid) = first_glyph("Wg", &font);
     let (b, _) = first_glyph("Wg", &font);
-    let (_, ba) = a.rasterize_glyph(gid, 15.0);
-    let (_, bb) = b.rasterize_glyph(gid, 15.0);
+    let (_, ba) = a.rasterize_glyph(gid, 12.0, 1.25);
+    let (_, bb) = b.rasterize_glyph(gid, 12.0, 1.25);
     assert!(Arc::ptr_eq(&ba, &bb), "engines resolved by two calls must share one glyph cache");
 }
 

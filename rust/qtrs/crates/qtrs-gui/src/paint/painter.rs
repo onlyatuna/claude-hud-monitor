@@ -726,7 +726,7 @@ impl<'a> Painter<'a> {
                 continue;
             }
 
-            let (metrics, bitmap) = engine.rasterize_glyph(glyph.glyph_id, font.size * dpr);
+            let (metrics, bitmap) = engine.rasterize_glyph(glyph.glyph_id, font.size, dpr);
             if metrics.width == 0 || metrics.height == 0 {
                 continue;
             }
