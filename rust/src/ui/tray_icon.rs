@@ -71,6 +71,7 @@ pub fn create_default_tray_pixmap() -> Pixmap {
     pm
 }
 
+#[allow(dead_code)]
 pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMenu> {
     let mut menu = create_platform_menu(native_handle);
 
