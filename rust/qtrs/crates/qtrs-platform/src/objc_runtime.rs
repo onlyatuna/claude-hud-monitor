@@ -498,7 +498,8 @@ impl ObjcMsg {
     }
 
     /// Sends a message with 1 string argument (e.g., initWithTitle:, setTitle:)
-    pub fn send_str(receiver: Id, _sel: Sel, text: &str) -> Id {
+    #[allow(unused_variables)]
+    pub fn send_str(receiver: Id, sel: Sel, text: &str) -> Id {
         if receiver.is_nil() {
             return Id::NIL;
         }
@@ -741,13 +742,14 @@ impl ObjcMsg {
     }
 
     /// Sends window initialization message (initWithContentRect:styleMask:backing:defer:)
+    #[allow(unused_variables)]
     pub fn send_window_init(
         receiver: Id,
-        _sel: Sel,
+        sel: Sel,
         rect: CGRect,
-        _style_mask: NSUInteger,
-        _backing: NSUInteger,
-        _defer_flag: bool,
+        style_mask: NSUInteger,
+        backing: NSUInteger,
+        defer_flag: bool,
     ) -> Id {
         if receiver.is_nil() {
             return Id::NIL;

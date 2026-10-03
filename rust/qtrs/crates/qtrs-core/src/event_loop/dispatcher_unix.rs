@@ -274,6 +274,7 @@ impl EpollReactor {
         if sleep_duration.is_zero() {
             return (false, Vec::new(), Vec::new());
         }
+        #[allow(unused_mut)]
         let mut kernel_sockets: Vec<(SocketDescriptor, SocketEvent)> = Vec::new();
         #[cfg(target_os = "linux")]
         if self.epoll_fd >= 0 {

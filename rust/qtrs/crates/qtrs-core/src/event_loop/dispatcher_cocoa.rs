@@ -13,6 +13,7 @@ pub const K_CF_RUN_LOOP_RUN_TIMED_OUT: i32 = 3;
 pub const K_CF_RUN_LOOP_RUN_HANDLED_SOURCE: i32 = 4;
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 mod macos_cf {
     use std::ffi::c_void;
 
