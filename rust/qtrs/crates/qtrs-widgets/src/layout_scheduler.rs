@@ -17,9 +17,10 @@ thread_local! {
 pub struct LayoutScheduler;
 
 impl LayoutScheduler {
-    /// Marks the given widget's layout as dirty and queues it for activation.
     pub fn invalidate(widget: &WidgetRef) {
-        let w = widget.borrow();
+        let Ok(w) = widget.try_borrow() else {
+            return;
+        };
         if let Some(mut layout) = w.layout_ref_mut() {
             layout.invalidate();
         }
@@ -60,7 +61,10 @@ impl LayoutScheduler {
 
             for (_id, weak) in items {
                 if let Some(widget_ref) = weak.upgrade() {
-                    let widget = widget_ref.borrow();
+                    let Ok(widget) = widget_ref.try_borrow() else {
+                        // Already borrowed on the current stack; its layout pass is already active.
+                        continue;
+                    };
                     let g = widget.geometry();
                     if let Some(mut layout) = widget.layout_ref_mut() {
                         if layout.is_dirty() || layout.geometry().size() != Size::new(g.width, g.height) {

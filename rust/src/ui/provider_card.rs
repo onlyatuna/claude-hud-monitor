@@ -414,7 +414,7 @@ impl ProviderCardWidget {
             set_label_text(&self.badge, "STALE");
         }
         // Re-layout container so labels with updated text lengths receive their exact sizes
-        self.container.borrow_mut().update_layout();
+        self.container.borrow().update_layout();
     }
 
     pub fn update_countdown(&mut self) {

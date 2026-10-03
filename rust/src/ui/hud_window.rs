@@ -571,7 +571,7 @@ impl HUDWindow {
             card.update_metrics(data);
         }
         self.table.update_metrics(data);
-        self.cards_container.borrow_mut().update_layout();
+        self.cards_container.borrow().update_layout();
         self.window.render_and_present();
     }
 
