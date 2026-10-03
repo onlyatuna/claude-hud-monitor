@@ -57,13 +57,12 @@ pub const ACTION_CLAUDE_PROFILE_BASE: u32 = 1000;
 pub const ACTION_EXIT: u32 = 99;
 pub fn create_default_tray_pixmap() -> Pixmap {
     const ICON_PNG_BYTES: &[u8] = include_bytes!("../../assets/app_icon.png");
-    if let Ok(img) = image::load_from_memory(ICON_PNG_BYTES) {
-        let rgba = img.to_rgba8();
-        let (w, h) = rgba.dimensions();
-        if let Some(mut pm) = Pixmap::new(w, h) {
-            pm.data_mut().copy_from_slice(rgba.as_raw());
-            return pm;
-        }
+    // `Pixmap::from_image` premultiplies alpha, as the pixmap format requires.
+    if let Some(pm) = qtrs_gui::image::io::ImageReader::read_from_memory(ICON_PNG_BYTES)
+        .ok()
+        .and_then(|img| Pixmap::from_image(&img))
+    {
+        return pm;
     }
     let mut pm = Pixmap::new(16, 16).unwrap();
     pm.fill(Color::from_rgba8(56, 189, 248, 255));

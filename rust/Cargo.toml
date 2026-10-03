@@ -31,7 +31,6 @@ chrono = { version = "0.4", features = ["serde"] }
 log = { version = "0.4", features = ["std"] }
 
 # Image loading for tray icon
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
@@ -45,11 +44,34 @@ winres = "0.1"
 
 [profile.release]
 opt-level = "z"
-lto = true
-codegen-units = 1
+# Measured on this repo (clean build / paint ms per Mpx): lto=true,cgu=1 219 s / 21.9; lto="thin" 122 s / 22.4;
+# lto=false,cgu=16 100 s / 11.8. Likely cause (not verified): LTO re-optimises the rendering crates at the
+# profile's opt-level="z", overriding the per-package opt-level=3 below.
+lto = false
+codegen-units = 16
 incremental = false
 strip = true
 panic = "abort"
+
+# The size-optimised default (`opt-level = "z"`) makes the software rasteriser 5-13x slower
+# (1100x470 rounded rect: 3.8 ms at 3, 19 ms at z), which shows up as lag while resizing.
+# Keep "z" for everything else and speed-optimise only the paint / text / layout / present path.
+[profile.release.package.tiny-skia]
+opt-level = 3
+[profile.release.package.tiny-skia-path]
+opt-level = 3
+[profile.release.package.fontdue]
+opt-level = 3
+[profile.release.package.rustybuzz]
+opt-level = 3
+[profile.release.package.ttf-parser]
+opt-level = 3
+[profile.release.package.qtrs-gui]
+opt-level = 3
+[profile.release.package.qtrs-widgets]
+opt-level = 3
+[profile.release.package.qtrs-platform]
+opt-level = 3
 
 [profile.dev]
 opt-level = 1
