@@ -317,10 +317,20 @@ pub mod cocoa {
     use crate::clipboard::GenericClipboard;
     use crate::cursor::CocoaCursor;
     use crate::hotkey::CocoaHotkeyManager;
+    use crate::platform_tray::GenericTrayIcon;
+    use crate::platform_window::GenericWindow;
     use crate::theme::CocoaTheme;
     use crate::tray::CocoaStatusItem;
     use crate::window_cocoa::CocoaNativeWindow;
 
+    impl CocoaPlatformIntegration {
+        pub fn is_headless() -> bool {
+            std::env::var("CI").is_ok()
+                || std::env::var("GITHUB_ACTIONS").is_ok()
+                || std::env::var("QT_QPA_PLATFORM").as_deref() == Ok("offscreen")
+                || std::env::var("QTRS_HEADLESS").is_ok()
+        }
+    }
     pub struct CocoaPlatformIntegration {
         screen_changed_signal: Signal<()>,
         theme: Arc<CocoaTheme>,
@@ -342,6 +352,9 @@ pub mod cocoa {
             rect: Rect,
             flags: WindowFlags,
         ) -> Result<Box<dyn PlatformWindow>, &'static str> {
+            if Self::is_headless() {
+                return Ok(Box::new(GenericWindow::new(title, rect, flags)));
+            }
             let win = CocoaNativeWindow::new(title, rect, flags)?;
             Ok(Box::new(win))
         }
@@ -351,6 +364,9 @@ pub mod cocoa {
             tooltip: &str,
             pixmap: &Pixmap,
         ) -> Result<Box<dyn PlatformTrayIcon>, &'static str> {
+            if Self::is_headless() {
+                return Ok(Box::new(GenericTrayIcon::new(tooltip, pixmap)));
+            }
             let mut item = CocoaStatusItem::new(1);
             let _ = item.set_icon(pixmap);
             let _ = item.set_tooltip(tooltip);
