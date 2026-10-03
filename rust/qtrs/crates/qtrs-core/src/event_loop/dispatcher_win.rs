@@ -48,6 +48,8 @@ use crate::timer::{calculate_next_timeout, current_time_ms, TimerEntry, TimerId,
 
 thread_local! {
     static PENDING_WM_TIMERS: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    /// `wakeup_pending` flags of this thread's dispatchers, keyed by internal HWND.
+    static WAKEUP_FLAGS: RefCell<HashMap<usize, Arc<AtomicBool>>> = RefCell::new(HashMap::new());
 }
 
 pub const WM_QTRS_WAKEUP: u32 = 0x0400 + 101;
@@ -71,6 +73,18 @@ unsafe extern "system" fn internal_wnd_proc(
         } else {
             PENDING_WM_TIMERS.with(|q| q.borrow_mut().push(timer_id));
         }
+        return 0;
+    }
+
+    if msg == WM_QTRS_WAKEUP {
+        // Reached only when a native modal loop (e.g. sizing) dispatches the wake-up
+        // message itself; the regular `process_events` consumes it via PeekMessage.
+        let _ = WAKEUP_FLAGS.try_with(|flags| {
+            if let Some(flag) = flags.borrow().get(&(hwnd as usize)) {
+                flag.store(false, Ordering::Release);
+            }
+        });
+        let _ = crate::event_loop::pump_posted_events_modal();
         return 0;
     }
 
@@ -206,9 +220,16 @@ impl Win32EventDispatcher {
             }
         }
 
+        let wakeup_pending = Arc::new(AtomicBool::new(false));
+        let _ = WAKEUP_FLAGS.try_with(|flags| {
+            flags
+                .borrow_mut()
+                .insert(internal_hwnd as usize, Arc::clone(&wakeup_pending));
+        });
+
         Self {
             internal_hwnd,
-            wakeup_pending: Arc::new(AtomicBool::new(false)),
+            wakeup_pending,
             native_filters: NativeEventFilterChain::new(),
         }
     }
@@ -482,6 +503,10 @@ unsafe impl Sync for Win32EventDispatcher {}
 impl Drop for Win32EventDispatcher {
     fn drop(&mut self) {
         if !self.internal_hwnd.is_null() {
+            let key = self.internal_hwnd as usize;
+            let _ = WAKEUP_FLAGS.try_with(|flags| {
+                flags.borrow_mut().remove(&key);
+            });
             unsafe {
                 DestroyWindow(self.internal_hwnd);
             }
@@ -666,5 +691,96 @@ mod tests {
         ));
 
         assert!(intercepted.load(Ordering::Acquire));
+    }
+
+    /// Removes and counts the `WM_QTRS_WAKEUP` messages queued for `hwnd`, returning the last.
+    fn take_wakeup_messages(hwnd: HWND) -> (usize, Option<MSG>) {
+        let mut count = 0;
+        let mut last = None;
+        unsafe {
+            let mut msg: MSG = std::mem::zeroed();
+            while PeekMessageW(&mut msg, hwnd, WM_QTRS_WAKEUP, WM_QTRS_WAKEUP, PM_REMOVE) != 0 {
+                count += 1;
+                last = Some(msg);
+            }
+        }
+        (count, last)
+    }
+
+    fn counting_metacall(counter: &Arc<std::sync::atomic::AtomicUsize>) -> crate::event::Event {
+        let counter = Arc::clone(counter);
+        crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(move |_| {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })))
+    }
+
+    #[test]
+    fn test_wakeup_message_is_deduplicated_and_pumped_by_wnd_proc() {
+        let el = crate::event_loop::EventLoop::new();
+        let hwnd = el.dispatcher.internal_hwnd;
+        let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        el.post_event(ObjectId(900_002), counting_metacall(&delivered));
+        el.post_event(ObjectId(900_002), counting_metacall(&delivered));
+
+        let (count, msg) = take_wakeup_messages(hwnd);
+        assert_eq!(count, 1, "two posts share one wake-up message");
+        assert!(el.dispatcher.wakeup_pending.load(Ordering::Acquire));
+
+        // Simulate the native modal loop dispatching the wake-up message itself.
+        unsafe {
+            DispatchMessageW(&msg.unwrap());
+        }
+        assert_eq!(delivered.load(Ordering::SeqCst), 2);
+        assert!(
+            !el.dispatcher.wakeup_pending.load(Ordering::Acquire),
+            "wnd_proc must clear wakeup_pending"
+        );
+
+        // A later post wakes again (pending was reset).
+        el.post_event(ObjectId(900_002), counting_metacall(&delivered));
+        let (count, msg) = take_wakeup_messages(hwnd);
+        assert_eq!(count, 1);
+        unsafe {
+            DispatchMessageW(&msg.unwrap());
+        }
+        assert_eq!(delivered.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn test_wnd_proc_pump_defers_events_posted_during_dispatch() {
+        let el = crate::event_loop::EventLoop::new();
+        let hwnd = el.dispatcher.internal_hwnd;
+        let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let inner = Arc::clone(&delivered);
+        el.post_event(
+            ObjectId(900_003),
+            crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(move |_| {
+                // Posts during dispatch: lands in the next turn and triggers a new wake-up.
+                let _ = crate::event_loop::post_event_to_thread(
+                    crate::object::ThreadId::current(),
+                    ObjectId(900_003),
+                    counting_metacall(&inner),
+                );
+            }))),
+        );
+
+        let (_, msg) = take_wakeup_messages(hwnd);
+        unsafe {
+            DispatchMessageW(&msg.unwrap());
+        }
+        assert_eq!(
+            delivered.load(Ordering::SeqCst),
+            0,
+            "same-turn post not delivered"
+        );
+
+        let (count, msg) = take_wakeup_messages(hwnd);
+        assert_eq!(count, 1, "new post re-armed the wake-up");
+        unsafe {
+            DispatchMessageW(&msg.unwrap());
+        }
+        assert_eq!(delivered.load(Ordering::SeqCst), 1);
     }
 }

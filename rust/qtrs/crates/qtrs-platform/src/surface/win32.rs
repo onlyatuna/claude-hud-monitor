@@ -1,3 +1,4 @@
+use crate::resize_trace::{record as trace_record, TraceKind};
 use crate::surface::PlatformSurface;
 use qtrs_gui::geometry::Rect;
 use qtrs_gui::paint::Pixmap;
@@ -16,15 +17,107 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 /// Introduced in Windows 8: tells DWM/compositor to ignore `psize` and avoid window resizing
 /// during incremental dirty region updates.
 const ULW_EX_NORESIZE: u32 = 0x00000008;
+
+/// Largest capacity (in pixels) the interactive-resize headroom may allocate (128 MiB of BGRA).
+/// Beyond this the DIB is sized exactly instead.
+const MAX_CAPACITY_PIXELS: u64 = 32 * 1024 * 1024;
+
+/// DIB extent used for a visible extent `n` while persistent capacity is active: 1.5x headroom
+/// rounded up to a multiple of 64.
+fn capacity_for(n: u32) -> u32 {
+    (n.saturating_mul(3) / 2)
+        .div_ceil(64)
+        .saturating_mul(64)
+        .max(n)
+}
+
+/// `(w, h)` allocation for a visible size, falling back to exact when headroom is too large.
+fn capacity_size(w: u32, h: u32) -> (u32, u32) {
+    let (cw, ch) = (capacity_for(w), capacity_for(h));
+    if u64::from(cw) * u64::from(ch) > MAX_CAPACITY_PIXELS {
+        (w, h)
+    } else {
+        (cw, ch)
+    }
+}
+
+#[cfg(debug_assertions)]
+type Tick = std::time::Instant;
+#[cfg(not(debug_assertions))]
+#[derive(Clone, Copy)]
+struct Tick;
+
+#[inline]
+fn tick() -> Tick {
+    #[cfg(debug_assertions)]
+    {
+        std::time::Instant::now()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        Tick
+    }
+}
+
+/// Nanoseconds since `t`; always 0 in release builds (timing is compiled out).
+#[inline]
+fn ns_since(t: Tick) -> u64 {
+    #[cfg(debug_assertions)]
+    {
+        t.elapsed().as_nanos() as u64
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = t;
+        0
+    }
+}
+
+/// Counters for A/B measurement and tests. The `*_ns` fields are only accumulated in debug
+/// builds; counts are always maintained.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayeredStats {
+    /// Visible-size changes applied by `resize`.
+    pub visible_resize_count: u64,
+    /// `CreateDIBSection` calls made after construction.
+    pub dib_realloc_count: u64,
+    /// Presents that reached `UpdateLayeredWindow*`.
+    pub present_count: u64,
+    /// Times `UpdateLayeredWindowIndirect` failed and the plain `UpdateLayeredWindow` was used.
+    pub ulw_fallback_count: u64,
+    /// Pixels copied (RGBA -> premultiplied BGRA) into the DIB.
+    pub copied_pixels: u64,
+    /// Area of the last rectangle copied/passed as `prcDirty`.
+    pub last_copied_width: u32,
+    pub last_copied_height: u32,
+    /// Debug builds only: time in `resize` (incl. `CreateDIBSection`).
+    pub resize_ns: u64,
+    /// Debug builds only: time in the CPU pixel copy.
+    pub pixel_copy_ns: u64,
+    /// Debug builds only: time in `UpdateLayeredWindowIndirect` (and its fallback).
+    pub ulw_ns: u64,
+}
+
 pub struct Win32LayeredSurface {
     hwnd: HWND,
+    /// Visible size: what is presented (`psize`) and the size of the source pixmap.
     width: u32,
     height: u32,
+    /// DIB allocation. `>=` the visible size; rows are `alloc_width * 4` bytes apart.
+    alloc_width: u32,
+    alloc_height: u32,
     screen_dc: HDC,
     mem_dc: HDC,
     hbitmap: HBITMAP,
     old_hbitmap: HGDIOBJ,
     bits: *mut u8,
+    /// Native interactive sizing loop active (see [`Self::set_interactive_resize`]).
+    interactive: bool,
+    /// Policy switch for A/B comparison: when `false`, the DIB is always sized exactly.
+    persistent_capacity: bool,
+    /// The DIB holds stale/uninitialised pixels in the visible area; next present copies it all.
+    force_full: bool,
+    stats: LayeredStats,
 }
 
 unsafe impl Send for Win32LayeredSurface {}
@@ -54,23 +147,11 @@ impl Win32LayeredSurface {
                 return Err("Failed to create compatible DC (CreateCompatibleDC)");
             }
 
-            let mut bmi: BITMAPINFO = std::mem::zeroed();
-            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = width.max(1) as i32;
-            bmi.bmiHeader.biHeight = -(height.max(1) as i32); // Top-down
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
-
-            let mut bits: *mut core::ffi::c_void = ptr::null_mut();
-            let hbitmap =
-                CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
-
-            if hbitmap.is_null() || bits.is_null() {
+            let Some((hbitmap, bits)) = create_dib(mem_dc, width, height) else {
                 ReleaseDC(ptr::null_mut(), screen_dc);
                 DeleteDC(mem_dc);
                 return Err("CreateDIBSection failed to create layered bitmap");
-            }
+            };
 
             let old_hbitmap = SelectObject(mem_dc, hbitmap);
 
@@ -78,23 +159,52 @@ impl Win32LayeredSurface {
                 hwnd,
                 width,
                 height,
+                alloc_width: width,
+                alloc_height: height,
                 screen_dc,
                 mem_dc,
                 hbitmap,
                 old_hbitmap,
-                bits: bits as *mut u8,
+                bits,
+                interactive: false,
+                persistent_capacity: true,
+                force_full: true,
+                stats: LayeredStats::default(),
             })
         }
     }
 
+    /// Visible width.
     #[inline]
     pub fn width(&self) -> u32 {
         self.width
     }
 
+    /// Visible height.
     #[inline]
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    /// DIB allocation width (`>= width()`).
+    #[inline]
+    pub fn allocated_width(&self) -> u32 {
+        self.alloc_width
+    }
+
+    /// DIB allocation height (`>= height()`).
+    #[inline]
+    pub fn allocated_height(&self) -> u32 {
+        self.alloc_height
+    }
+
+    #[inline]
+    pub fn stats(&self) -> LayeredStats {
+        self.stats
+    }
+
+    pub fn reset_stats(&mut self) {
+        self.stats = LayeredStats::default();
     }
 
     #[inline]
@@ -107,18 +217,74 @@ impl Win32LayeredSurface {
         self.bits
     }
 
+    /// Whole DIB allocation (`allocated_width * allocated_height * 4` bytes). Equals the visible
+    /// area exactly unless persistent capacity is in effect; rows are `allocated_width * 4` apart.
     #[inline]
     pub fn buffer(&self) -> &[u8] {
-        let len = (self.width * self.height * 4) as usize;
+        let len = (self.alloc_width as usize) * (self.alloc_height as usize) * 4;
         unsafe { std::slice::from_raw_parts(self.bits, len) }
     }
 
     #[inline]
     pub fn buffer_mut(&mut self) -> &mut [u8] {
-        let len = (self.width * self.height * 4) as usize;
+        let len = (self.alloc_width as usize) * (self.alloc_height as usize) * 4;
         unsafe { std::slice::from_raw_parts_mut(self.bits, len) }
     }
 
+    /// Enables/disables the persistent-capacity policy (default: enabled). Disabled, the DIB is
+    /// always exactly the visible size (the pre-3A-7 behaviour, kept for A/B measurement).
+    pub fn set_persistent_capacity(&mut self, enabled: bool) {
+        self.persistent_capacity = enabled;
+    }
+
+    /// Marks the native interactive sizing loop (`WM_ENTERSIZEMOVE`..`WM_EXITSIZEMOVE`).
+    ///
+    /// While active (and persistent capacity is enabled), `resize` keeps the existing DIB whenever
+    /// the new visible size fits in it, and entering allocates the headroom once up front. Outside
+    /// the loop the DIB is sized exactly, as before; leaving the loop does not itself reallocate —
+    /// the next differing `resize` does.
+    pub fn set_interactive_resize(&mut self, active: bool) {
+        if self.interactive == active {
+            return;
+        }
+        self.interactive = active;
+        if active && self.persistent_capacity {
+            let (cw, ch) = capacity_size(self.width, self.height);
+            if cw > self.alloc_width || ch > self.alloc_height {
+                // Best effort: on failure the surface keeps working with its current DIB.
+                let _ = self.realloc_dib(cw.max(self.alloc_width), ch.max(self.alloc_height));
+            }
+        }
+    }
+
+    #[inline]
+    pub fn is_interactive_resize(&self) -> bool {
+        self.interactive
+    }
+
+    /// Replaces the DIB with a `w`x`h` allocation. The new bitmap is uninitialised, so the next
+    /// present repaints the whole visible area.
+    fn realloc_dib(&mut self, w: u32, h: u32) -> Result<(), &'static str> {
+        let Some((new_hbitmap, new_bits)) = (unsafe { create_dib(self.mem_dc, w, h) }) else {
+            return Err("CreateDIBSection failed during resize");
+        };
+        unsafe {
+            SelectObject(self.mem_dc, new_hbitmap);
+            DeleteObject(self.hbitmap);
+        }
+        self.alloc_width = w;
+        self.alloc_height = h;
+        self.hbitmap = new_hbitmap;
+        self.bits = new_bits;
+        self.force_full = true;
+        self.stats.dib_realloc_count += 1;
+        Ok(())
+    }
+
+    /// Sets the visible size. Reallocates the DIB only when the policy requires it:
+    /// - interactive + persistent capacity: only if the size exceeds the allocation (growing with
+    ///   headroom);
+    /// - otherwise: whenever the allocation differs from the requested size.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), &'static str> {
         if width == 0 || height == 0 {
             return Err("Width and height must be greater than 0");
@@ -127,39 +293,41 @@ impl Win32LayeredSurface {
             return Ok(());
         }
 
-        unsafe {
-            let mut bmi: BITMAPINFO = std::mem::zeroed();
-            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = width.max(1) as i32;
-            bmi.bmiHeader.biHeight = -(height.max(1) as i32); // Top-down
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
+        let t = tick();
+        trace_record(
+            TraceKind::LayeredResizeStart,
+            self.hwnd as usize,
+            (0, 0),
+            (width, height),
+        );
 
-            let mut new_bits: *mut core::ffi::c_void = ptr::null_mut();
-            let new_hbitmap = CreateDIBSection(
-                self.mem_dc,
-                &bmi,
-                DIB_RGB_COLORS,
-                &mut new_bits,
-                ptr::null_mut(),
-                0,
-            );
-
-            if new_hbitmap.is_null() || new_bits.is_null() {
-                return Err("CreateDIBSection failed during resize");
+        let result = if self.interactive && self.persistent_capacity {
+            if width <= self.alloc_width && height <= self.alloc_height {
+                Ok(())
+            } else {
+                let (cw, ch) = capacity_size(width, height);
+                self.realloc_dib(cw.max(self.alloc_width), ch.max(self.alloc_height))
             }
+        } else if width != self.alloc_width || height != self.alloc_height {
+            self.realloc_dib(width, height)
+        } else {
+            Ok(())
+        };
 
-            SelectObject(self.mem_dc, new_hbitmap);
-            DeleteObject(self.hbitmap);
-
+        if result.is_ok() {
             self.width = width;
             self.height = height;
-            self.hbitmap = new_hbitmap;
-            self.bits = new_bits as *mut u8;
+            self.force_full = true;
+            self.stats.visible_resize_count += 1;
         }
-
-        Ok(())
+        self.stats.resize_ns += ns_since(t);
+        trace_record(
+            TraceKind::LayeredResizeEnd,
+            self.hwnd as usize,
+            (0, 0),
+            (width, height),
+        );
+        result
     }
 
     pub fn present_ref(&mut self, pixmap: &Pixmap, opacity: f32) -> Result<(), &'static str> {
@@ -187,24 +355,45 @@ impl Win32LayeredSurface {
         }
 
         let full_window_rect = Rect::new(0, 0, self.width as i32, self.height as i32);
-        let clipped_dirty = full_window_rect.intersected(&dirty);
+        // After a (re)allocation or visible-size change the DIB's visible area is stale, so the
+        // whole of it is repainted regardless of what the caller marked dirty.
+        let clipped_dirty = if self.force_full {
+            full_window_rect
+        } else {
+            full_window_rect.intersected(&dirty)
+        };
 
         if clipped_dirty.is_empty() {
             return Ok(());
         }
 
-        let stride = (self.width * 4) as usize;
+        let src_stride = (p_width as usize) * 4;
+        let dst_stride = (self.alloc_width as usize) * 4;
         let dirty_x = clipped_dirty.x as usize;
         let dirty_w = clipped_dirty.width as usize;
+        let hwnd_id = self.hwnd as usize;
+        let phys = (p_width, p_height);
 
+        trace_record(
+            TraceKind::PixelCopyStart,
+            hwnd_id,
+            (0, 0),
+            (clipped_dirty.width as u32, clipped_dirty.height as u32),
+        );
+        let t_copy = tick();
         unsafe {
             let src_data = pixmap.data();
             for y in clipped_dirty.y..(clipped_dirty.y + clipped_dirty.height) {
                 let y = y as usize;
-                let row_offset = y * stride + dirty_x * 4;
                 let copy_bytes = dirty_w * 4;
-                let src_row = std::slice::from_raw_parts(src_data.as_ptr().add(row_offset), copy_bytes);
-                let dst_row = std::slice::from_raw_parts_mut(self.bits.add(row_offset), copy_bytes);
+                let src_row = std::slice::from_raw_parts(
+                    src_data.as_ptr().add(y * src_stride + dirty_x * 4),
+                    copy_bytes,
+                );
+                let dst_row = std::slice::from_raw_parts_mut(
+                    self.bits.add(y * dst_stride + dirty_x * 4),
+                    copy_bytes,
+                );
 
                 let (src_chunks, _) = src_row.as_chunks::<4>();
                 let (dst_chunks, _) = dst_row.as_chunks_mut::<4>();
@@ -215,7 +404,14 @@ impl Win32LayeredSurface {
                     dst_chunk[3] = src_chunk[3]; // A
                 }
             }
+        }
+        self.stats.pixel_copy_ns += ns_since(t_copy);
+        self.stats.copied_pixels += (clipped_dirty.width as u64) * (clipped_dirty.height as u64);
+        self.stats.last_copied_width = clipped_dirty.width as u32;
+        self.stats.last_copied_height = clipped_dirty.height as u32;
+        trace_record(TraceKind::PixelCopyEnd, hwnd_id, (0, 0), phys);
 
+        unsafe {
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 BlendFlags: 0,
@@ -229,6 +425,7 @@ impl Win32LayeredSurface {
             pt_dst.x = win_rect.left;
             pt_dst.y = win_rect.top;
 
+            // `psize` is the visible size; the (possibly larger) DIB is read from (0,0).
             let size = SIZE {
                 cx: self.width as i32,
                 cy: self.height as i32,
@@ -259,10 +456,14 @@ impl Win32LayeredSurface {
             info.dwFlags = dw_flags;
             info.prcDirty = &mut dirty_win_rect;
 
+            trace_record(TraceKind::UpdateLayeredWindowStart, hwnd_id, (0, 0), phys);
+            let t_ulw = tick();
             let res = UpdateLayeredWindowIndirect(self.hwnd, &info);
+            let mut outcome = Ok(());
             if res == 0 {
                 let err = windows_sys::Win32::Foundation::GetLastError();
                 eprintln!("[Win32Surface] UpdateLayeredWindowIndirect failed (GetLastError = {}), falling back to UpdateLayeredWindow", err);
+                self.stats.ulw_fallback_count += 1;
                 let fallback_res = UpdateLayeredWindow(
                     self.hwnd,
                     ptr::null_mut(),
@@ -276,12 +477,22 @@ impl Win32LayeredSurface {
                 );
                 if fallback_res == 0 {
                     let err2 = windows_sys::Win32::Foundation::GetLastError();
-                    eprintln!("[Win32Surface] Fallback UpdateLayeredWindow failed, GetLastError = {}", err2);
-                    return Err("UpdateLayeredWindowIndirect and fallback UpdateLayeredWindow both failed");
+                    eprintln!(
+                        "[Win32Surface] Fallback UpdateLayeredWindow failed, GetLastError = {}",
+                        err2
+                    );
+                    outcome = Err(
+                        "UpdateLayeredWindowIndirect and fallback UpdateLayeredWindow both failed",
+                    );
                 }
             }
+            self.stats.ulw_ns += ns_since(t_ulw);
+            trace_record(TraceKind::UpdateLayeredWindowEnd, hwnd_id, (0, 0), phys);
+            outcome?;
         }
 
+        self.force_full = false;
+        self.stats.present_count += 1;
         Ok(())
     }
 
@@ -292,6 +503,25 @@ impl Win32LayeredSurface {
         dirty: Rect,
     ) -> Result<(), &'static str> {
         self.present_dirty_ref(pixmap, opacity, dirty)
+    }
+}
+
+/// Creates a top-down 32-bit DIB section of `w`x`h` compatible with `dc`.
+unsafe fn create_dib(dc: HDC, w: u32, h: u32) -> Option<(HBITMAP, *mut u8)> {
+    let mut bmi: BITMAPINFO = std::mem::zeroed();
+    bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+    bmi.bmiHeader.biWidth = w.max(1) as i32;
+    bmi.bmiHeader.biHeight = -(h.max(1) as i32); // Top-down
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+
+    let mut bits: *mut core::ffi::c_void = ptr::null_mut();
+    let hbitmap = CreateDIBSection(dc, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
+    if hbitmap.is_null() || bits.is_null() {
+        None
+    } else {
+        Some((hbitmap, bits as *mut u8))
     }
 }
 

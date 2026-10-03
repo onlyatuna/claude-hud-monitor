@@ -169,6 +169,14 @@ fn test_asynchronous_update_request_and_event_loop_compression() {
 
     let had_events = el.process_events(false);
     assert!(had_events);
+    // UpdateRequest now feeds the window's deferred-render gate: the render itself runs on the
+    // next turn. It must settle (no ping-pong) within a couple of turns.
+    for _ in 0..4 {
+        if el.queue().lock().unwrap().len() == 0 {
+            break;
+        }
+        el.process_events(false);
+    }
     assert_eq!(el.queue().lock().unwrap().len(), 0);
 }
 

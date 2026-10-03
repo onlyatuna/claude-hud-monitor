@@ -146,10 +146,60 @@ unsafe fn com_release(ptr: *mut c_void) {
 // DirectComposition Surface Implementation
 // -----------------------------------------------------------------------------
 
+/// Upper bound of a D3D11 texture dimension.
+const MAX_SWAP_CHAIN_DIM: u32 = 16384;
+
+/// Swap chain capacity for a visible extent `n`: 1.5x headroom rounded up to 64 px.
+/// Interactive resizing then stays inside the allocation (no `ResizeBuffers`); growth beyond it
+/// reallocates geometrically, so a long drag costs O(log) reallocations, not one per `WM_SIZE`.
+fn capacity_for(n: u32) -> u32 {
+    let padded = (n.saturating_mul(3) / 2).div_ceil(64) * 64;
+    padded.clamp(n.max(64), MAX_SWAP_CHAIN_DIM.max(n))
+}
+
+/// Counters for instrumentation and tests.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DCompStats {
+    /// `IDXGISwapChain::ResizeBuffers` calls (capacity growth/shrink only).
+    pub resize_buffers_count: u64,
+    /// Successful `Present1` calls.
+    pub present_count: u64,
+    /// Visible-size changes applied (clip update), whether or not buffers were reallocated.
+    pub visible_resize_count: u64,
+    /// `IDCompositionVisual::SetClip` calls.
+    pub clip_update_count: u64,
+    /// `IDCompositionDevice::Commit` calls.
+    pub commit_count: u64,
+}
+
+/// `IDCompositionVisual::SetClip(const D2D_RECT_F&)` (vtable slot 14; slot 13 is the
+/// `IDCompositionClip*` overload) with the rect `[0, w) x [0, h)`.
+unsafe fn set_clip_rect(clip_visual: *mut c_void, w: u32, h: u32) -> HRESULT {
+    #[repr(C)]
+    struct D2dRectF {
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+    }
+    type PfnSetClipRect =
+        unsafe extern "system" fn(this: *mut c_void, rect: *const D2dRectF) -> HRESULT;
+    let vtbl = *(clip_visual as *mut *mut usize);
+    let f: PfnSetClipRect = std::mem::transmute(*vtbl.add(14));
+    let rect = D2dRectF { left: 0.0, top: 0.0, right: w as f32, bottom: h as f32 };
+    f(clip_visual, &rect)
+}
+
+/// Visual tree: `Target -> ClipVisual (clip = visible rect) -> ContentVisual (swap chain)`.
+/// The swap chain has a fixed `allocated` size; only the clip follows the window (`visible`).
 pub struct DCompSurface {
     hwnd: HWND,
+    /// Visible (client) size: what the window shows and what `present` expects.
     width: u32,
     height: u32,
+    /// Allocated swap chain / staging DIB size (>= visible).
+    alloc_w: u32,
+    alloc_h: u32,
     d3d11_mod: HMODULE,
     dxgi_mod: HMODULE,
     dcomp_mod: HMODULE,
@@ -157,15 +207,19 @@ pub struct DCompSurface {
     d3d_context: *mut c_void,
     dcomp_device: *mut c_void,
     dcomp_target: *mut c_void,
+    dcomp_clip_visual: *mut c_void,
     dcomp_visual: *mut c_void,
     swap_chain: *mut c_void,
-    // Staging CPU GDI DIB for format blit
+    // Staging CPU GDI DIB for format blit (allocated size)
     staging_dc: HDC,
     staging_bitmap: HBITMAP,
     staging_old_bitmap: HGDIOBJ,
     staging_bits: *mut u8,
     staging_w: u32,
     staging_h: u32,
+    /// Back buffers were reallocated: the next present must cover the whole visible area.
+    force_full: bool,
+    stats: DCompStats,
 }
 
 unsafe impl Send for DCompSurface {}
@@ -252,9 +306,10 @@ impl DCompSurface {
             }
 
             // 5. Create SwapChain for DirectComposition
+            let (alloc_w, alloc_h) = (capacity_for(width), capacity_for(height));
             let desc = DXGI_SWAP_CHAIN_DESC1 {
-                Width: width,
-                Height: height,
+                Width: alloc_w,
+                Height: alloc_h,
                 Format: DXGI_FORMAT_B8G8R8A8_UNORM,
                 Stereo: 0,
                 SampleDesc_Count: 1,
@@ -335,7 +390,7 @@ impl DCompSurface {
                 return Err("CreateTargetForHwnd failed");
             }
 
-            // 8. Create Visual
+            // 8. Create clip visual (root) and content visual (swap chain).
             // CreateVisual is slot 7 on IDCompositionDevice
             type PfnCreateVisual = unsafe extern "system" fn(
                 this: *mut c_void,
@@ -343,9 +398,10 @@ impl DCompSurface {
             ) -> HRESULT;
             let create_visual_fn: PfnCreateVisual = std::mem::transmute(*dev_vtbl.add(7));
 
-            let mut dcomp_visual: *mut c_void = ptr::null_mut();
-            let hr = create_visual_fn(dcomp_device, &mut dcomp_visual);
-            if hr < 0 || dcomp_visual.is_null() {
+            let cleanup = |extras: &[*mut c_void]| {
+                for p in extras {
+                    com_release(*p);
+                }
                 com_release(dcomp_target);
                 com_release(dcomp_device);
                 com_release(swap_chain);
@@ -354,10 +410,22 @@ impl DCompSurface {
                 FreeLibrary(dcomp_mod);
                 FreeLibrary(dxgi_mod);
                 FreeLibrary(d3d11_mod);
+            };
+
+            let mut dcomp_visual: *mut c_void = ptr::null_mut();
+            let hr = create_visual_fn(dcomp_device, &mut dcomp_visual);
+            if hr < 0 || dcomp_visual.is_null() {
+                cleanup(&[]);
                 return Err("CreateVisual failed");
             }
+            let mut dcomp_clip_visual: *mut c_void = ptr::null_mut();
+            let hr = create_visual_fn(dcomp_device, &mut dcomp_clip_visual);
+            if hr < 0 || dcomp_clip_visual.is_null() {
+                cleanup(&[dcomp_visual]);
+                return Err("CreateVisual (clip) failed");
+            }
 
-            // 9. Bind visual content to swap chain: SetContent is slot 15 on IDCompositionVisual
+            // 9. Content visual shows the swap chain: SetContent is slot 15 on IDCompositionVisual
             let vis_vtbl = *(dcomp_visual as *mut *mut usize);
             type PfnSetContent = unsafe extern "system" fn(
                 this: *mut c_void,
@@ -366,16 +434,28 @@ impl DCompSurface {
             let set_content_fn: PfnSetContent = std::mem::transmute(*vis_vtbl.add(15));
             let hr = set_content_fn(dcomp_visual, swap_chain);
             if hr < 0 {
-                com_release(dcomp_visual);
-                com_release(dcomp_target);
-                com_release(dcomp_device);
-                com_release(swap_chain);
-                com_release(d3d_context);
-                com_release(d3d_device);
-                FreeLibrary(dcomp_mod);
-                FreeLibrary(dxgi_mod);
-                FreeLibrary(d3d11_mod);
+                cleanup(&[dcomp_clip_visual, dcomp_visual]);
                 return Err("SetContent failed on visual");
+            }
+
+            // Clip visual: AddVisual is slot 16, SetClip(const D2D_RECT_F&) is slot 14.
+            let clip_vtbl = *(dcomp_clip_visual as *mut *mut usize);
+            type PfnAddVisual = unsafe extern "system" fn(
+                this: *mut c_void,
+                visual: *mut c_void,
+                insert_above: i32,
+                reference: *mut c_void,
+            ) -> HRESULT;
+            let add_visual_fn: PfnAddVisual = std::mem::transmute(*clip_vtbl.add(16));
+            let hr = add_visual_fn(dcomp_clip_visual, dcomp_visual, 1, ptr::null_mut());
+            if hr < 0 {
+                cleanup(&[dcomp_clip_visual, dcomp_visual]);
+                return Err("AddVisual failed on clip visual");
+            }
+            let hr = set_clip_rect(dcomp_clip_visual, width, height);
+            if hr < 0 {
+                cleanup(&[dcomp_clip_visual, dcomp_visual]);
+                return Err("SetClip failed on clip visual");
             }
 
             // 10. Set root visual: SetRoot is slot 3 on IDCompositionTarget
@@ -385,17 +465,9 @@ impl DCompSurface {
                 visual: *mut c_void,
             ) -> HRESULT;
             let set_root_fn: PfnSetRoot = std::mem::transmute(*target_vtbl.add(3));
-            let hr = set_root_fn(dcomp_target, dcomp_visual);
+            let hr = set_root_fn(dcomp_target, dcomp_clip_visual);
             if hr < 0 {
-                com_release(dcomp_visual);
-                com_release(dcomp_target);
-                com_release(dcomp_device);
-                com_release(swap_chain);
-                com_release(d3d_context);
-                com_release(d3d_device);
-                FreeLibrary(dcomp_mod);
-                FreeLibrary(dxgi_mod);
-                FreeLibrary(d3d11_mod);
+                cleanup(&[dcomp_clip_visual, dcomp_visual]);
                 return Err("SetRoot failed on target");
             }
 
@@ -404,12 +476,12 @@ impl DCompSurface {
             let commit_fn: PfnCommit = std::mem::transmute(*dev_vtbl.add(3));
             let _ = commit_fn(dcomp_device);
 
-            // 12. Allocate staging GDI DIB for software pixel translation
+            // 12. Allocate staging GDI DIB (allocated size) for software pixel translation
             let staging_dc = CreateCompatibleDC(ptr::null_mut());
             let mut bmi: BITMAPINFO = std::mem::zeroed();
             bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = width.max(1) as i32;
-            bmi.bmiHeader.biHeight = -(height.max(1) as i32); // Top-down
+            bmi.bmiHeader.biWidth = alloc_w.max(1) as i32;
+            bmi.bmiHeader.biHeight = -(alloc_h.max(1) as i32); // Top-down
             bmi.bmiHeader.biPlanes = 1;
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB;
@@ -429,6 +501,8 @@ impl DCompSurface {
                 hwnd,
                 width,
                 height,
+                alloc_w,
+                alloc_h,
                 d3d11_mod,
                 dxgi_mod,
                 dcomp_mod,
@@ -436,19 +510,38 @@ impl DCompSurface {
                 d3d_context,
                 dcomp_device,
                 dcomp_target,
+                dcomp_clip_visual,
                 dcomp_visual,
                 swap_chain,
                 staging_dc,
                 staging_bitmap,
                 staging_old_bitmap,
                 staging_bits: staging_bits as *mut u8,
-                staging_w: width,
-                staging_h: height,
+                staging_w: alloc_w,
+                staging_h: alloc_h,
+                force_full: true,
+                stats: DCompStats::default(),
             })
         }
     }
 
-    /// Resize DirectComposition swap chain buffers.
+    /// Allocated swap chain size (>= visible size).
+    pub fn allocated_width(&self) -> u32 {
+        self.alloc_w
+    }
+
+    pub fn allocated_height(&self) -> u32 {
+        self.alloc_h
+    }
+
+    pub fn stats(&self) -> DCompStats {
+        self.stats
+    }
+
+    /// Changes the visible size. Inside the allocated capacity this only moves the clip:
+    /// no `ResizeBuffers`, no staging reallocation. Swap chain buffers are reallocated only
+    /// when the capacity is too small, or more than 2x too large (hysteresis: the new
+    /// capacity has 1.5x headroom, so shrink/grow do not alternate).
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), &'static str> {
         if width == 0 || height == 0 {
             return Err("Width and height must be greater than 0");
@@ -457,8 +550,43 @@ impl DCompSurface {
             return Ok(());
         }
 
+        let realloc = |alloc: u32, visible: u32| {
+            if visible > alloc || alloc > visible.saturating_mul(2) {
+                capacity_for(visible)
+            } else {
+                alloc
+            }
+        };
+        let new_alloc_w = realloc(self.alloc_w, width);
+        let new_alloc_h = realloc(self.alloc_h, height);
+        if new_alloc_w != self.alloc_w || new_alloc_h != self.alloc_h {
+            self.resize_buffers(new_alloc_w, new_alloc_h)?;
+        }
+
+        self.width = width;
+        self.height = height;
+        self.stats.visible_resize_count += 1;
+        // Content outside the previous visible area is stale: repaint all visible pixels.
+        self.force_full = true;
         unsafe {
-            // Resize swap chain buffers: ResizeBuffers is slot 13 on IDXGISwapChain
+            if set_clip_rect(self.dcomp_clip_visual, width, height) < 0 {
+                return Err("SetClip failed on clip visual");
+            }
+        }
+        self.stats.clip_update_count += 1;
+        crate::resize_trace::record(
+            crate::resize_trace::TraceKind::SurfaceResize,
+            self.hwnd as usize,
+            (0, 0),
+            (width, height),
+        );
+        Ok(())
+    }
+
+    /// Reallocates swap chain buffers and the staging DIB to `alloc_w x alloc_h`.
+    fn resize_buffers(&mut self, alloc_w: u32, alloc_h: u32) -> Result<(), &'static str> {
+        unsafe {
+            // ResizeBuffers is slot 13 on IDXGISwapChain
             let sc_vtbl = *(self.swap_chain as *mut *mut usize);
             type PfnResizeBuffers = unsafe extern "system" fn(
                 this: *mut c_void,
@@ -472,8 +600,8 @@ impl DCompSurface {
             let hr = resize_fn(
                 self.swap_chain,
                 2,
-                width,
-                height,
+                alloc_w,
+                alloc_h,
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE,
             );
@@ -484,6 +612,7 @@ impl DCompSurface {
                 }
                 return Err("ResizeBuffers failed on swap chain");
             }
+            self.stats.resize_buffers_count += 1;
 
             // Resize staging DIB
             SelectObject(self.staging_dc, self.staging_old_bitmap);
@@ -491,8 +620,8 @@ impl DCompSurface {
 
             let mut bmi: BITMAPINFO = std::mem::zeroed();
             bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = width.max(1) as i32;
-            bmi.bmiHeader.biHeight = -(height.max(1) as i32);
+            bmi.bmiHeader.biWidth = alloc_w.max(1) as i32;
+            bmi.bmiHeader.biHeight = -(alloc_h.max(1) as i32);
             bmi.bmiHeader.biPlanes = 1;
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB;
@@ -509,10 +638,12 @@ impl DCompSurface {
             self.staging_old_bitmap = SelectObject(self.staging_dc, new_bmp);
             self.staging_bitmap = new_bmp;
             self.staging_bits = bits as *mut u8;
-            self.staging_w = width;
-            self.staging_h = height;
-            self.width = width;
-            self.height = height;
+            self.staging_w = alloc_w;
+            self.staging_h = alloc_h;
+            self.alloc_w = alloc_w;
+            self.alloc_h = alloc_h;
+            // Fresh buffers + staging: the next present must repaint everything visible.
+            self.force_full = true;
         }
 
         Ok(())
@@ -532,6 +663,7 @@ impl DCompSurface {
         }
 
         let full_window_rect = Rect::new(0, 0, self.width as i32, self.height as i32);
+        let dirty = if self.force_full { full_window_rect } else { dirty };
         let clipped = full_window_rect.intersected(&dirty);
         if clipped.is_empty() {
             return Ok(());
@@ -539,17 +671,19 @@ impl DCompSurface {
 
         unsafe {
             // 1. Copy dirty rect pixels from Pixmap (RGBA) into staging DIB (BGRA)
-            let stride = (self.width * 4) as usize;
+            let src_stride = (self.width * 4) as usize;
+            let dst_stride = (self.staging_w * 4) as usize;
             let dirty_x = clipped.x as usize;
             let dirty_w = clipped.width as usize;
             let src_data = pixmap.data();
 
             for y in clipped.y..(clipped.y + clipped.height) {
                 let y = y as usize;
-                let row_offset = y * stride + dirty_x * 4;
+                let src_offset = y * src_stride + dirty_x * 4;
+                let dst_offset = y * dst_stride + dirty_x * 4;
                 let copy_bytes = dirty_w * 4;
-                let src_row = std::slice::from_raw_parts(src_data.as_ptr().add(row_offset), copy_bytes);
-                let dst_row = std::slice::from_raw_parts_mut(self.staging_bits.add(row_offset), copy_bytes);
+                let src_row = std::slice::from_raw_parts(src_data.as_ptr().add(src_offset), copy_bytes);
+                let dst_row = std::slice::from_raw_parts_mut(self.staging_bits.add(dst_offset), copy_bytes);
 
                 let (src_chunks, _) = src_row.as_chunks::<4>();
                 let (dst_chunks, _) = dst_row.as_chunks_mut::<4>();
@@ -656,8 +790,16 @@ impl DCompSurface {
             if hr < 0 {
                 return Err("IDXGISwapChain1::Present1 failed");
             }
+            self.force_full = false;
+            self.stats.present_count += 1;
+            crate::resize_trace::record(
+                crate::resize_trace::TraceKind::Present1,
+                self.hwnd as usize,
+                (0, 0),
+                (self.width, self.height),
+            );
 
-            // 7. Commit DirectComposition device
+            // 7. Commit DirectComposition device (also publishes any clip change)
             let dev_vtbl = *(self.dcomp_device as *mut *mut usize);
             type PfnCommit = unsafe extern "system" fn(this: *mut c_void) -> HRESULT;
             let commit_fn: PfnCommit = std::mem::transmute(*dev_vtbl.add(3));
@@ -665,6 +807,13 @@ impl DCompSurface {
             if hr_commit < 0 {
                 return Err("IDCompositionDevice::Commit failed");
             }
+            self.stats.commit_count += 1;
+            crate::resize_trace::record(
+                crate::resize_trace::TraceKind::DCompCommit,
+                self.hwnd as usize,
+                (0, 0),
+                (self.width, self.height),
+            );
         }
 
         Ok(())
@@ -707,6 +856,7 @@ impl Drop for DCompSurface {
                 DeleteObject(self.staging_bitmap);
                 DeleteDC(self.staging_dc);
             }
+            com_release(self.dcomp_clip_visual);
             com_release(self.dcomp_visual);
             com_release(self.dcomp_target);
             com_release(self.dcomp_device);

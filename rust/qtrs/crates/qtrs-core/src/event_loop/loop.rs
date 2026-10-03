@@ -1,5 +1,5 @@
 use crate::event::EventFilterChain;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
@@ -409,9 +409,84 @@ impl EventLoop {
     }
 }
 
+thread_local! {
+    /// True while this thread is inside the posted-event pump (normal or modal).
+    static POSTED_PUMP_ACTIVE: Cell<bool> = const { Cell::new(false) };
+    /// Set when a modal wake-up was ignored because a pump was already running, so the
+    /// outermost pump can re-arm the wake-up for events it left behind.
+    static MODAL_PUMP_SKIPPED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// RAII marker for "a posted-event pump is running on this thread".
+struct PostedPumpGuard {
+    was_active: bool,
+}
+
+impl PostedPumpGuard {
+    fn enter() -> Self {
+        Self {
+            was_active: POSTED_PUMP_ACTIVE.with(|f| f.replace(true)),
+        }
+    }
+}
+
+impl Drop for PostedPumpGuard {
+    fn drop(&mut self) {
+        POSTED_PUMP_ACTIVE.with(|f| f.set(self.was_active));
+    }
+}
+
+/// Normal event-loop pump. Nested event loops (`loop_level`) may still pump re-entrantly;
+/// only the modal wake-up path (`pump_posted_events_modal`) honours the guard.
 pub fn send_posted_events_for_queue(
     queue: &Arc<Mutex<EventQueue>>,
     loop_level: usize,
+) -> (usize, Option<i32>) {
+    let guard = PostedPumpGuard::enter();
+    let outermost = !guard.was_active;
+    let result = pump_posted_events(queue, loop_level, false);
+    drop(guard);
+
+    if outermost && MODAL_PUMP_SKIPPED.with(|f| f.replace(false)) {
+        // A modal wake-up message was consumed while we were dispatching; its events may
+        // still be queued with no wake-up in flight. Re-arm it.
+        let has_pending = !queue.lock().unwrap().events.is_empty();
+        if has_pending {
+            if let Some(handle) = get_thread_event_sender(ThreadId::current()) {
+                handle.wake_up();
+            }
+        }
+    }
+    result
+}
+
+/// Pumps the current thread's posted-event queue from a native modal loop
+/// (e.g. `WM_QTRS_WAKEUP` reaching `internal_wnd_proc` during a Win32 sizing loop).
+///
+/// Returns `None` if no event loop is registered for this thread, or if a pump is already
+/// running (reentrancy guard); otherwise the number of delivered events. Operates on the
+/// same queue as `EventLoop`, and keeps the `insertion_offset` turn boundary: events posted
+/// by callbacks during this pump wait for the next one. `DeferredDelete` events are always
+/// left queued, since a modal loop runs inside an arbitrary native callback stack.
+pub fn pump_posted_events_modal() -> Option<usize> {
+    if POSTED_PUMP_ACTIVE.with(|f| f.get()) {
+        MODAL_PUMP_SKIPPED.with(|f| f.set(true));
+        return None;
+    }
+    let handle = get_thread_event_sender(ThreadId::current())?;
+    let _guard = PostedPumpGuard::enter();
+    let (delivered, quit_code) = pump_posted_events(&handle.queue, usize::MAX, true);
+    if let Some(code) = quit_code {
+        handle.exit_requested.store(true, Ordering::SeqCst);
+        handle.return_code.store(code, Ordering::SeqCst);
+    }
+    Some(delivered)
+}
+
+fn pump_posted_events(
+    queue: &Arc<Mutex<EventQueue>>,
+    loop_level: usize,
+    modal: bool,
 ) -> (usize, Option<i32>) {
     let max_index = {
         let mut q = queue.lock().unwrap();
@@ -438,7 +513,7 @@ pub fn send_posted_events_for_queue(
                 loop_level: event_loop_level,
             } = q.events[0].event.kind
             {
-                if event_loop_level > 0 && loop_level > event_loop_level {
+                if modal || (event_loop_level > 0 && loop_level > event_loop_level) {
                     let deferred = q.events.remove(0);
                     q.events.push(deferred);
                     processed_count += 1;
@@ -1333,5 +1408,119 @@ mod tests {
         let el = EventLoop::new();
         let el_handle = el.handle();
         el_handle.wake_up();
+    }
+
+    fn meta_call<F: FnOnce() + Send + 'static>(f: F) -> Event {
+        Event::new(EventKind::MetaCall(Box::new(move |_| f())))
+    }
+
+    fn post_current(event: Event) {
+        assert!(post_event_to_thread(
+            ThreadId::current(),
+            ObjectId(900_001),
+            event
+        ));
+    }
+
+    #[test]
+    fn test_normal_pump_delivers_posted_events() {
+        let mut el = EventLoop::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        for name in ["a", "b"] {
+            let log = Arc::clone(&log);
+            post_current(meta_call(move || log.lock().unwrap().push(name)));
+        }
+        assert_eq!(el.send_posted_events(), 2);
+        assert_eq!(*log.lock().unwrap(), vec!["a", "b"]);
+        assert!(el.queue().lock().unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn test_modal_pump_keeps_turn_boundary() {
+        let el = EventLoop::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        {
+            let log_a = Arc::clone(&log);
+            let log_c = Arc::clone(&log);
+            post_current(meta_call(move || {
+                log_a.lock().unwrap().push("a");
+                post_current(meta_call(move || log_c.lock().unwrap().push("c")));
+            }));
+        }
+        {
+            let log_b = Arc::clone(&log);
+            post_current(meta_call(move || log_b.lock().unwrap().push("b")));
+        }
+
+        assert_eq!(pump_posted_events_modal(), Some(2));
+        assert_eq!(*log.lock().unwrap(), vec!["a", "b"]);
+        assert_eq!(
+            el.queue().lock().unwrap().events.len(),
+            1,
+            "C waits for next turn"
+        );
+
+        assert_eq!(pump_posted_events_modal(), Some(1));
+        assert_eq!(*log.lock().unwrap(), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn test_modal_pump_without_event_loop_is_noop() {
+        assert_eq!(pump_posted_events_modal(), None);
+    }
+
+    #[test]
+    fn test_modal_pump_is_blocked_inside_normal_pump() {
+        let mut el = EventLoop::new();
+        let nested = Arc::new(Mutex::new(None));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        {
+            let nested = Arc::clone(&nested);
+            let log = Arc::clone(&log);
+            post_current(meta_call(move || {
+                // Callback posts more work, wakes the loop, then a modal wake-up arrives.
+                let log_late = Arc::clone(&log);
+                post_current(meta_call(move || log_late.lock().unwrap().push("late")));
+                get_thread_event_sender(ThreadId::current())
+                    .unwrap()
+                    .wake_up();
+                *nested.lock().unwrap() = Some(pump_posted_events_modal());
+            }));
+        }
+
+        assert_eq!(el.send_posted_events(), 1);
+        assert_eq!(*nested.lock().unwrap(), Some(None), "no recursive pump");
+        assert!(log.lock().unwrap().is_empty(), "late event stays queued");
+        assert_eq!(el.queue().lock().unwrap().events.len(), 1);
+        assert!(!MODAL_PUMP_SKIPPED.with(|f| f.get()), "skip flag consumed");
+
+        // Guard released: the next modal pump works and drains the late event.
+        assert_eq!(pump_posted_events_modal(), Some(1));
+        assert_eq!(*log.lock().unwrap(), vec!["late"]);
+    }
+
+    #[test]
+    fn test_modal_pump_is_blocked_inside_modal_pump() {
+        let _el = EventLoop::new();
+        let nested = Arc::new(Mutex::new(None));
+        {
+            let nested = Arc::clone(&nested);
+            post_current(meta_call(move || {
+                *nested.lock().unwrap() = Some(pump_posted_events_modal());
+            }));
+        }
+        assert_eq!(pump_posted_events_modal(), Some(1));
+        assert_eq!(*nested.lock().unwrap(), Some(None));
+        assert!(!POSTED_PUMP_ACTIVE.with(|f| f.get()));
+    }
+
+    #[test]
+    fn test_modal_pump_runs_metacall_for_unregistered_receiver() {
+        let _el = EventLoop::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = Arc::clone(&ran);
+        post_current(meta_call(move || ran_clone.store(true, Ordering::SeqCst)));
+        assert_eq!(pump_posted_events_modal(), Some(1));
+        assert!(ran.load(Ordering::SeqCst));
     }
 }

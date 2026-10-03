@@ -24,10 +24,10 @@ use super::provider_card::ProviderCardWidget;
 use super::styles::{get_theme, Theme};
 use super::usage_table::UsageTable;
 use crate::config::{
-    Config, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH, DEFAULT_TABLE_HEIGHT,
-    DEFAULT_TABLE_WIDTH, DEFAULT_VERTICAL_HEIGHT, DEFAULT_VERTICAL_WIDTH, MIN_HORIZONTAL_HEIGHT,
-    MIN_HORIZONTAL_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH, MIN_VERTICAL_HEIGHT,
-    MIN_VERTICAL_WIDTH,
+    Config, ResizeDebouncer, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH,
+    DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH, DEFAULT_VERTICAL_HEIGHT, DEFAULT_VERTICAL_WIDTH,
+    MIN_HORIZONTAL_HEIGHT, MIN_HORIZONTAL_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH,
+    MIN_VERTICAL_HEIGHT, MIN_VERTICAL_WIDTH,
 };
 use crate::providers::base::UsageMetrics;
 use crate::providers::{AgyProvider, ClaudeProvider, CodexProvider, Provider};
@@ -70,6 +70,7 @@ pub struct HUDWindow {
     pub cards_container: WidgetRef,
     pub cards: HashMap<String, ProviderCardWidget>,
     pub table: UsageTable,
+    pub debouncer: Arc<ResizeDebouncer>,
 }
 
 impl HUDWindow {
@@ -137,6 +138,9 @@ impl HUDWindow {
         if ct {
             flags |= WindowFlags::CLICK_THROUGH;
         }
+
+        let debouncer = Arc::new(ResizeDebouncer::new(Arc::clone(&config)));
+        debouncer.set_restoring(true);
 
         let geom = Rect::new(init_x, init_y, init_w, init_h);
         let mut window = Window::new("Claude HUD Monitor", geom, flags)?;
@@ -288,19 +292,25 @@ impl HUDWindow {
             false
         });
         let cfg_resize = Arc::clone(&config);
+        let debouncer_resize = Arc::clone(&debouncer);
         window.set_resize_handler(move |size| {
-            let mut cfg = cfg_resize.lock();
-            if cfg.ui_mode == "table" {
-                cfg.table_width = size.width as u32;
-                cfg.table_height = size.height as u32;
-            } else if cfg.layout_mode == "horizontal" {
-                cfg.horizontal_width = size.width as u32;
-                cfg.horizontal_height = size.height as u32;
-            } else {
-                cfg.vertical_width = size.width as u32;
-                cfg.vertical_height = size.height as u32;
+            if debouncer_resize.is_restoring() {
+                return;
             }
-            crate::config::ConfigManager::save(&cfg);
+            {
+                let mut cfg = cfg_resize.lock();
+                if cfg.ui_mode == "table" {
+                    cfg.table_width = size.width as u32;
+                    cfg.table_height = size.height as u32;
+                } else if cfg.layout_mode == "horizontal" {
+                    cfg.horizontal_width = size.width as u32;
+                    cfg.horizontal_height = size.height as u32;
+                } else {
+                    cfg.vertical_width = size.width as u32;
+                    cfg.vertical_height = size.height as u32;
+                }
+            }
+            debouncer_resize.request_save();
         });
         // Initialize providers
         let providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::from([
@@ -345,7 +355,9 @@ impl HUDWindow {
             cards_container,
             cards,
             table,
+            debouncer: Arc::clone(&debouncer),
         };
+        debouncer.set_restoring(false);
 
         Ok(hud)
     }
@@ -390,27 +402,41 @@ impl HUDWindow {
 
     pub fn hide(&mut self) {
         self.is_visible = false;
+        self.debouncer.flush();
+        self.persist_geometry();
+        self.window.hide();
+        crate::memory::trim_memory();
+    }
+
+    #[allow(dead_code)]
+    pub fn close(&mut self) {
+        self.is_visible = false;
+        self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
         crate::memory::trim_memory();
     }
 
     pub fn persist_geometry(&self) {
-        let geom = self.window.geometry();
-        let mut cfg = self.config.lock();
-        cfg.window_x = Some(geom.x);
-        cfg.window_y = Some(geom.y);
-        if cfg.ui_mode == "table" {
-            cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
-            cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
-        } else if cfg.layout_mode == "horizontal" {
-            cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
-            cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
-        } else {
-            cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
-            cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
+        if self.debouncer.is_restoring() {
+            return;
         }
-        crate::config::ConfigManager::save(&cfg);
+        let geom = self.window.geometry();
+        // SAVE_LOCK -> Config lock; Config lock is released before the file write.
+        self.debouncer.update_and_save_now(|cfg| {
+            cfg.window_x = Some(geom.x);
+            cfg.window_y = Some(geom.y);
+            if cfg.ui_mode == "table" {
+                cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
+                cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+            } else if cfg.layout_mode == "horizontal" {
+                cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
+                cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
+            } else {
+                cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
+                cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
+            }
+        });
     }
 
     pub fn toggle_visibility(&mut self) {
@@ -448,8 +474,7 @@ impl HUDWindow {
             (cfg.ui_mode.clone(), cfg.layout_mode.clone())
         };
         let geom = self.window.geometry();
-        {
-            let mut cfg = self.config.lock();
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.window_x = Some(geom.x);
             cfg.window_y = Some(geom.y);
             if old_mode == "table" {
@@ -463,8 +488,7 @@ impl HUDWindow {
                 cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
             }
             cfg.ui_mode = mode.to_string();
-            crate::config::ConfigManager::save(&cfg);
-        }
+        });
 
         if mode == "cards" {
             let card_layout_mode = { self.config.lock().layout_mode.clone() };
@@ -558,8 +582,7 @@ impl HUDWindow {
             (cfg.ui_mode.clone(), cfg.layout_mode.clone())
         };
         let geom = self.window.geometry();
-        {
-            let mut cfg = self.config.lock();
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.window_x = Some(geom.x);
             cfg.window_y = Some(geom.y);
             if old_mode == "table" {
@@ -574,8 +597,7 @@ impl HUDWindow {
             }
             cfg.layout_mode = mode.to_string();
             cfg.ui_mode = "cards".to_string();
-            crate::config::ConfigManager::save(&cfg);
-        }
+        });
         Self::apply_cards_layout_inner(&self.cards_container, &self.cards, mode);
         self.apply_ui_mode_internal("cards");
     }
@@ -653,30 +675,24 @@ impl HUDWindow {
     }
     pub fn set_opacity(&mut self, opacity: f32) {
         let val = opacity.clamp(0.1, 1.0);
-        {
-            let mut cfg = self.config.lock();
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.opacity = val;
-            crate::config::ConfigManager::save(&cfg);
-        }
+        });
         self.window.set_opacity(val);
         self.window.render_and_present();
     }
 
     pub fn set_refresh_interval(&mut self, seconds: u64) {
-        {
-            let mut cfg = self.config.lock();
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.refresh_interval_sec = seconds;
-            crate::config::ConfigManager::save(&cfg);
-        }
+        });
         self.refresh_ctrl.lock().set_interval(seconds);
     }
 
     pub fn set_claude_profile(&mut self, profile_id: &str) {
-        {
-            let mut cfg = self.config.lock();
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.claude_profile = profile_id.to_string();
-            crate::config::ConfigManager::save(&cfg);
-        }
+        });
         self.trigger_refresh();
     }
 
@@ -707,5 +723,63 @@ impl HUDWindow {
         self.window.set_geometry(Rect::new(nx, ny, w, h));
         self.persist_geometry();
         self.window.render_and_present();
+    }
+}
+
+/// Drop guarantees flush and worker thread join during normal object destruction and clean shutdown.
+/// Note: Drop cannot run during abnormal termination (e.g. process::abort, SIGKILL, TerminateProcess,
+/// unhandled access violations, OS crash, or power loss).
+impl Drop for HUDWindow {
+    fn drop(&mut self) {
+        self.debouncer.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::refresh_controller::RefreshController;
+
+    #[test]
+    fn test_hud_window_init_does_not_trigger_save() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+
+        let hud = HUDWindow::new(Arc::clone(&cfg), refresh_ctrl).expect("HUDWindow::new failed");
+
+        // Debouncer was in restoring mode during HUDWindow::new
+        // It must have prevented any saves during init
+        assert_eq!(hud.debouncer.save_count(), 0);
+        assert!(!hud.debouncer.is_restoring());
+    }
+
+    #[test]
+    fn test_hud_window_close_flushes_pending_resize() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let mut hud =
+            HUDWindow::new(Arc::clone(&cfg), refresh_ctrl).expect("HUDWindow::new failed");
+
+        // Simulate resize request
+        hud.debouncer.request_save();
+        assert!(hud.debouncer.is_pending());
+
+        // Calling close should flush pending resize immediately
+        hud.close();
+        assert!(!hud.debouncer.is_pending());
+    }
+
+    #[test]
+    fn test_hud_window_drop_triggers_shutdown_and_worker_join() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let hud = HUDWindow::new(Arc::clone(&cfg), refresh_ctrl).expect("HUDWindow::new failed");
+        let debouncer = Arc::clone(&hud.debouncer);
+
+        assert!(!debouncer.is_worker_joined());
+
+        drop(hud);
+
+        assert!(debouncer.is_worker_joined());
     }
 }

@@ -26,6 +26,10 @@ pub trait SurfacePresenter: Send + Sync {
 
     /// Sets the presentation opacity (alpha multiplier in [0.0, 1.0]).
     fn set_opacity(&mut self, _opacity: f32) {}
+
+    /// Tells the presenter whether a native interactive sizing loop is in progress, so it may
+    /// trade memory for fewer reallocations. Default: ignored.
+    fn set_interactive_resize(&mut self, _active: bool) {}
 }
 
 #[cfg(windows)]
@@ -258,6 +262,15 @@ pub mod win32 {
     }
 
     impl Win32LayeredPresenter {
+        /// The underlying surface (counters, allocation sizes, policy switches).
+        pub fn surface(&self) -> &crate::surface::win32::Win32LayeredSurface {
+            &self.surface
+        }
+
+        pub fn surface_mut(&mut self) -> &mut crate::surface::win32::Win32LayeredSurface {
+            &mut self.surface
+        }
+
         pub fn new(
             hwnd: HWND,
             width: u32,
@@ -278,6 +291,10 @@ pub mod win32 {
             self.opacity = opacity;
         }
 
+        fn set_interactive_resize(&mut self, active: bool) {
+            self.surface.set_interactive_resize(active);
+        }
+
         fn present(&mut self, surface: &Pixmap, dirty: &Region) -> Result<(), &'static str> {
             let br = dirty.bounding_rect();
             self.surface.present_dirty_ref(surface, self.opacity, br)
@@ -290,6 +307,23 @@ pub mod win32 {
         Layered(Win32LayeredPresenter),
         Dc(Win32DcPresenter),
         DirectComposition(crate::surface::dcomp::DCompSurface),
+    }
+
+    impl WindowsPresenter {
+        /// The layered presenter, when this is one (instrumentation/tests).
+        pub fn as_layered(&self) -> Option<&Win32LayeredPresenter> {
+            match self {
+                Self::Layered(p) => Some(p),
+                _ => None,
+            }
+        }
+
+        pub fn as_layered_mut(&mut self) -> Option<&mut Win32LayeredPresenter> {
+            match self {
+                Self::Layered(p) => Some(p),
+                _ => None,
+            }
+        }
     }
 
     impl SurfacePresenter for WindowsPresenter {
@@ -306,6 +340,13 @@ pub mod win32 {
                 Self::Layered(p) => p.set_opacity(opacity),
                 Self::Dc(_) => {}
                 Self::DirectComposition(_) => {}
+            }
+        }
+
+        fn set_interactive_resize(&mut self, active: bool) {
+            match self {
+                Self::Layered(p) => p.set_interactive_resize(active),
+                Self::Dc(_) | Self::DirectComposition(_) => {}
             }
         }
 

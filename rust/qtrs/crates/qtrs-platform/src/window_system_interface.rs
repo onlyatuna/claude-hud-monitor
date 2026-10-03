@@ -110,6 +110,11 @@ pub enum WindowSystemEvent {
     Resize {
         size: Size,
     },
+    /// Native interactive sizing loop entered (Windows `WM_ENTERSIZEMOVE`). Platforms
+    /// without such a loop never emit this.
+    InteractiveResizeStart,
+    /// Native interactive sizing loop left (Windows `WM_EXITSIZEMOVE`).
+    InteractiveResizeEnd,
     GeometryChange {
         geometry: Rect,
     },

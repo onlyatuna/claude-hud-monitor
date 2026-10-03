@@ -534,48 +534,38 @@ impl HUDTrayIcon {
                 self.update_menu_state();
             }
             ACTION_APPEARANCE_AUTO => {
-                {
-                    let mut cfg = self.config.lock();
+                crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.appearance = "auto".to_string();
-                    crate::config::ConfigManager::save(&cfg);
-                }
+                });
                 hud.set_theme(true);
                 self.update_menu_state();
             }
             ACTION_APPEARANCE_LIGHT => {
-                {
-                    let mut cfg = self.config.lock();
+                crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.appearance = "light".to_string();
-                    crate::config::ConfigManager::save(&cfg);
-                }
+                });
                 hud.set_theme(false);
                 self.update_menu_state();
             }
             ACTION_APPEARANCE_DARK => {
-                {
-                    let mut cfg = self.config.lock();
+                crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.appearance = "dark".to_string();
-                    crate::config::ConfigManager::save(&cfg);
-                }
+                });
                 hud.set_theme(true);
                 self.update_menu_state();
             }
             ACTION_SCHEME_SCALE => {
-                {
-                    let mut cfg = self.config.lock();
+                crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.color_scheme = "scale".to_string();
-                    crate::config::ConfigManager::save(&cfg);
-                }
+                });
                 let dark = hud.is_dark;
                 hud.set_theme(dark);
                 self.update_menu_state();
             }
             ACTION_SCHEME_DUO => {
-                {
-                    let mut cfg = self.config.lock();
+                crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.color_scheme = "duo".to_string();
-                    crate::config::ConfigManager::save(&cfg);
-                }
+                });
                 let dark = hud.is_dark;
                 hud.set_theme(dark);
                 self.update_menu_state();
@@ -589,11 +579,9 @@ impl HUDTrayIcon {
                 self.update_menu_state();
             }
             ACTION_LOCK_DRAG => {
-                {
-                    let mut cfg = self.config.lock();
+                crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.locked = !cfg.locked;
-                    crate::config::ConfigManager::save(&cfg);
-                }
+                });
                 self.update_menu_state();
             }
             ACTION_OPACITY_100 => {

@@ -235,6 +235,45 @@ pub fn flush_window_system_events() -> bool {
 }
 
 thread_local! {
+    /// HWNDs currently inside the native sizing loop (`WM_ENTERSIZEMOVE`..`WM_EXITSIZEMOVE`).
+    static INTERACTIVE_RESIZE_HWNDS: std::cell::RefCell<std::collections::HashSet<isize>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Whether `hwnd` is inside the native interactive sizing loop (UI thread only).
+pub fn is_interactive_resize(hwnd: HWND) -> bool {
+    INTERACTIVE_RESIZE_HWNDS
+        .try_with(|s| s.borrow().contains(&(hwnd as isize)))
+        .unwrap_or(false)
+}
+
+fn set_interactive_resize_flag(hwnd: HWND, active: bool) {
+    let _ = INTERACTIVE_RESIZE_HWNDS.try_with(|s| {
+        let mut s = s.borrow_mut();
+        if active {
+            s.insert(hwnd as isize);
+        } else {
+            s.remove(&(hwnd as isize));
+        }
+    });
+}
+
+/// Mirrors the native sizing-loop state onto the surfaces before they are resized.
+fn sync_interactive_resize(
+    hwnd: HWND,
+    presenter: &mut Option<crate::presenter::WindowsPresenter>,
+    layered_surface: &mut Option<crate::surface::WindowsSurface>,
+) {
+    let active = is_interactive_resize(hwnd);
+    if let Some(p) = presenter {
+        p.set_interactive_resize(active);
+    }
+    if let Some(crate::surface::WindowsSurface::Layered(s)) = layered_surface {
+        s.set_interactive_resize(active);
+    }
+}
+
+thread_local! {
     static NESTED_EVENTS: std::cell::RefCell<Vec<(HWND, WindowSystemEvent)>> = const { std::cell::RefCell::new(Vec::new()) };
     static IS_DISPATCHING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -478,7 +517,27 @@ unsafe extern "system" fn native_window_proc(
             }
             0
         }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_ENTERSIZEMOVE => {
+            set_interactive_resize_flag(hwnd, true);
+            // Per-HWND: delivered to this window's own event handler.
+            dispatch_window_system_event(
+                Delivery::Default,
+                hwnd,
+                WindowSystemEvent::InteractiveResizeStart,
+            );
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
+        windows_sys::Win32::UI::WindowsAndMessaging::WM_EXITSIZEMOVE => {
+            set_interactive_resize_flag(hwnd, false);
+            dispatch_window_system_event(
+                Delivery::Default,
+                hwnd,
+                WindowSystemEvent::InteractiveResizeEnd,
+            );
+            DefWindowProcW(hwnd, msg, wparam, lparam)
+        }
         WM_DESTROY => {
+            set_interactive_resize_flag(hwnd, false);
             unregister_window_event_binding(hwnd);
             0
         }
@@ -489,6 +548,12 @@ unsafe extern "system" fn native_window_proc(
             let logical_size = crate::high_dpi::from_native_size(
                 qtrs_gui::geometry::primitives::Size::new(phys_w, phys_h),
                 dpr,
+            );
+            crate::resize_trace::record(
+                crate::resize_trace::TraceKind::WmSize,
+                hwnd as usize,
+                (logical_size.width as u32, logical_size.height as u32),
+                (phys_w as u32, phys_h as u32),
             );
             let mut r: RECT = unsafe { std::mem::zeroed() };
             let (x, y) = if unsafe { GetWindowRect(hwnd, &mut r) } != 0 {
@@ -1235,6 +1300,7 @@ impl NativeWindow {
                 && rect.width > 0
                 && rect.height > 0
             {
+                sync_interactive_resize(self.hwnd, &mut self.presenter, &mut self.layered_surface);
                 if let Some(surface) = &mut self.layered_surface {
                     if surface.resize(rect.width as u32, rect.height as u32).is_err() {
                         self.layered_surface = None;
@@ -1368,6 +1434,7 @@ impl NativeWindow {
         if self.layered_surface.is_none() {
             self.layered_surface = Some(crate::surface::WindowsSurface::create(self.hwnd, width, height)?);
         }
+        sync_interactive_resize(self.hwnd, &mut self.presenter, &mut self.layered_surface);
         let surface = self.layered_surface.as_mut().unwrap();
         if surface.width() != width || surface.height() != height {
             if let Err(e) = surface.resize(width, height) {
@@ -1376,6 +1443,15 @@ impl NativeWindow {
             }
         }
         Ok(self.layered_surface.as_mut().unwrap())
+    }
+
+    /// The current presenter, if one has been created (instrumentation/tests).
+    pub fn presenter(&self) -> Option<&crate::presenter::WindowsPresenter> {
+        self.presenter.as_ref()
+    }
+
+    pub fn presenter_mut(&mut self) -> Option<&mut crate::presenter::WindowsPresenter> {
+        self.presenter.as_mut()
     }
 
     pub fn get_or_create_presenter(
@@ -1402,6 +1478,7 @@ impl NativeWindow {
             };
             self.presenter = Some(p);
         }
+        sync_interactive_resize(self.hwnd, &mut self.presenter, &mut self.layered_surface);
         let p = self.presenter.as_mut().unwrap();
         if let Err(e) = p.resize(width, height) {
             self.presenter = None;

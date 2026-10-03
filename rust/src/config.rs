@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+use parking_lot::{Condvar, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -256,9 +260,47 @@ impl ConfigManager {
         Config::default()
     }
 
-    /// Save config atomically: write temp → rename.
+    /// Save a Config value atomically. Acquires SAVE_LOCK itself, so it MUST NOT be called
+    /// by a path that already holds SAVE_LOCK (use `save_unlocked` there).
+    #[allow(dead_code)]
     pub fn save(cfg: &Config) {
-        let path = Self::config_path();
+        let _save = SAVE_LOCK.lock();
+        Self::save_unlocked(cfg);
+    }
+
+    /// Serialize, write tmp, rename. Does NOT take SAVE_LOCK: the caller MUST already hold it.
+    pub(crate) fn save_unlocked(cfg: &Config) {
+        Self::save_internal(&Self::config_path(), cfg);
+    }
+
+    /// Mutate the shared Config and persist it immediately.
+    ///
+    /// Lock order: SAVE_LOCK -> Config lock. The Config lock is released (after cloning a
+    /// snapshot) before any serialization or file I/O; SAVE_LOCK alone spans the I/O.
+    pub fn update_and_save(config: &Mutex<Config>, mutate: impl FnOnce(&mut Config)) {
+        let _save = SAVE_LOCK.lock();
+        let snapshot = {
+            let mut cfg = config.lock();
+            mutate(&mut cfg);
+            cfg.clone()
+        };
+        Self::save_unlocked(&snapshot);
+    }
+
+    /// Test helper: serialized save to an explicit path (takes SAVE_LOCK).
+    #[cfg(test)]
+    pub(crate) fn save_to_path(path: &std::path::Path, cfg: &Config) {
+        let _save = SAVE_LOCK.lock();
+        Self::save_internal(path, cfg);
+    }
+
+    /// Test helper: unserialized save to an explicit path (caller holds SAVE_LOCK).
+    #[cfg(test)]
+    pub(crate) fn save_unlocked_to_path(path: &std::path::Path, cfg: &Config) {
+        Self::save_internal(path, cfg);
+    }
+
+    fn save_internal(path: &std::path::Path, cfg: &Config) {
         if let Some(dir) = path.parent() {
             if let Err(e) = fs::create_dir_all(dir) {
                 error!("[Config] Cannot create config dir: {e}");
@@ -272,13 +314,293 @@ impl ConfigManager {
                     error!("[Config] Write temp error: {e}");
                     return;
                 }
-                if let Err(e) = fs::rename(&tmp_path, &path) {
+                if let Err(e) = fs::rename(&tmp_path, path) {
                     error!("[Config] Rename error: {e}");
                     let _ = fs::remove_file(&tmp_path);
                 }
             }
             Err(e) => error!("[Config] Serialize error: {e}"),
         }
+    }
+}
+
+/// Process-wide serialization of config file writes (tmp write + rename).
+///
+/// Lock order, everywhere: SAVE_LOCK -> Config lock. The DebounceInner mutex is a leaf:
+/// it is only held briefly and never while waiting for SAVE_LOCK or the Config lock.
+/// The Config lock is never held across file I/O.
+static SAVE_LOCK: Mutex<()> = Mutex::new(());
+
+pub const RESIZE_DEBOUNCE_MS: u64 = 250;
+
+struct DebounceInner {
+    pending: bool,
+    deadline: Option<Instant>,
+    in_flight: bool,
+    stopped: bool,
+    has_worker: bool,
+    save_count: usize,
+}
+
+type DebounceState = (Mutex<DebounceInner>, Condvar);
+
+/// Snapshot the latest Config and persist it with `save_fn`.
+/// Lock order SAVE_LOCK -> Config; the Config lock is dropped before `save_fn` runs.
+fn perform_save(config: &Mutex<Config>, save_fn: &dyn Fn(&Config)) {
+    let _save = SAVE_LOCK.lock();
+    let snapshot = config.lock().clone();
+    save_fn(&snapshot);
+}
+
+/// Clears `in_flight` and wakes waiters when a worker save ends, including by panic.
+struct InFlightGuard<'a>(&'a DebounceState);
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        let (lock, condvar) = self.0;
+        let mut inner = lock.lock();
+        inner.in_flight = false;
+        inner.save_count += 1;
+        if std::thread::panicking() {
+            inner.has_worker = false;
+        }
+        condvar.notify_all();
+    }
+}
+
+/// Debounces resize-triggered config saves onto a single worker thread.
+///
+/// At most one debouncer-initiated save exists at any time, and only the worker (or the
+/// inline fallback when no worker thread exists) runs it. `flush()` drains by making the
+/// pending save due immediately and waiting until nothing is pending or in flight.
+pub struct ResizeDebouncer {
+    state: Arc<DebounceState>,
+    config: Arc<Mutex<Config>>,
+    debounce_duration: Duration,
+    restoring: Arc<AtomicBool>,
+    save_fn: Arc<dyn Fn(&Config) + Send + Sync + 'static>,
+    worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl ResizeDebouncer {
+    pub fn new(config: Arc<Mutex<Config>>) -> Self {
+        Self::with_save_fn(
+            config,
+            Duration::from_millis(RESIZE_DEBOUNCE_MS),
+            Arc::new(|cfg| {
+                ConfigManager::save_unlocked(cfg);
+            }),
+        )
+    }
+
+    /// `save_fn` is always invoked with SAVE_LOCK held and the Config lock released, so it
+    /// must not take SAVE_LOCK itself (use `ConfigManager::save_unlocked`).
+    pub fn with_save_fn(
+        config: Arc<Mutex<Config>>,
+        debounce_duration: Duration,
+        save_fn: Arc<dyn Fn(&Config) + Send + Sync + 'static>,
+    ) -> Self {
+        let state: Arc<DebounceState> = Arc::new((
+            Mutex::new(DebounceInner {
+                pending: false,
+                deadline: None,
+                in_flight: false,
+                stopped: false,
+                has_worker: false,
+                save_count: 0,
+            }),
+            Condvar::new(),
+        ));
+        let state_clone = Arc::clone(&state);
+        let config_clone = Arc::clone(&config);
+        let save_fn_clone = Arc::clone(&save_fn);
+
+        let worker = std::thread::Builder::new()
+            .name("resize-debouncer".to_string())
+            .spawn(move || {
+                let (lock, condvar) = &*state_clone;
+                let mut inner = lock.lock();
+                loop {
+                    if inner.stopped {
+                        return;
+                    }
+                    if !inner.pending {
+                        condvar.wait(&mut inner);
+                        continue;
+                    }
+                    if let Some(deadline) = inner.deadline {
+                        let now = Instant::now();
+                        if now < deadline {
+                            condvar.wait_for(&mut inner, deadline - now);
+                            continue;
+                        }
+                    }
+
+                    // Deadline reached: claim the save, then snapshot the *current* Config.
+                    inner.pending = false;
+                    inner.deadline = None;
+                    inner.in_flight = true;
+                    drop(inner);
+                    {
+                        let _flight = InFlightGuard(&state_clone);
+                        perform_save(&config_clone, &*save_fn_clone);
+                    }
+                    inner = lock.lock();
+                }
+            })
+            .ok();
+
+        state.0.lock().has_worker = worker.is_some();
+
+        Self {
+            state,
+            config,
+            debounce_duration,
+            restoring: Arc::new(AtomicBool::new(false)),
+            save_fn,
+            worker: Mutex::new(worker),
+        }
+    }
+
+    #[inline]
+    pub fn is_restoring(&self) -> bool {
+        self.restoring.load(Ordering::SeqCst)
+    }
+
+    #[inline]
+    pub fn set_restoring(&self, restoring: bool) {
+        self.restoring.store(restoring, Ordering::SeqCst);
+    }
+
+    /// Schedule a save `debounce_duration` from now, replacing any earlier deadline.
+    pub fn request_save(&self) {
+        if self.is_restoring() {
+            return;
+        }
+        let (lock, condvar) = &*self.state;
+        {
+            let mut inner = lock.lock();
+            if inner.stopped {
+                return;
+            }
+            inner.pending = true;
+            inner.deadline = Some(Instant::now() + self.debounce_duration);
+        }
+        condvar.notify_all();
+    }
+
+    /// Drain all debouncer persistence work.
+    ///
+    /// - pending, idle:       the save becomes due now; waits for the worker to run it.
+    /// - idle, in flight:     waits for the running save.
+    /// - pending, in flight:  waits for the running save, then the worker runs exactly one
+    ///   more save with the latest Config. No second concurrent save is ever started.
+    /// - idle, idle:          returns immediately.
+    ///
+    /// Must not be called while holding the Config lock or SAVE_LOCK.
+    pub fn flush(&self) {
+        let (lock, condvar) = &*self.state;
+        let mut inner = lock.lock();
+
+        if inner.pending && !inner.has_worker {
+            // No worker thread exists (spawn failed or it panicked): run inline.
+            inner.pending = false;
+            inner.deadline = None;
+            drop(inner);
+            perform_save(&self.config, &*self.save_fn);
+            lock.lock().save_count += 1;
+            return;
+        }
+
+        if inner.pending {
+            inner.deadline = Some(Instant::now());
+            condvar.notify_all();
+        }
+        while inner.has_worker && (inner.in_flight || (inner.pending && !inner.stopped)) {
+            condvar.wait(&mut inner);
+        }
+    }
+
+    /// Apply `mutate` to the shared Config and persist immediately, superseding any pending
+    /// debounced save. Lock order SAVE_LOCK -> Config; Config is released before I/O.
+    /// Any in-flight worker save finishes first because it holds SAVE_LOCK.
+    pub fn update_and_save_now(&self, mutate: impl FnOnce(&mut Config)) {
+        if self.is_restoring() {
+            return;
+        }
+        let _save = SAVE_LOCK.lock();
+        let (lock, condvar) = &*self.state;
+        {
+            let mut inner = lock.lock();
+            inner.pending = false;
+            inner.deadline = None;
+            inner.save_count += 1;
+            condvar.notify_all();
+        }
+        let snapshot = {
+            let mut cfg = self.config.lock();
+            mutate(&mut cfg);
+            cfg.clone()
+        };
+        (self.save_fn)(&snapshot);
+    }
+
+    /// Graceful shutdown: drain via `flush()`, stop the worker, join it.
+    /// On return no debouncer save is running and the worker thread has exited.
+    /// Idempotent. Must not be called while holding the Config lock or SAVE_LOCK.
+    pub fn shutdown(&self) {
+        self.flush();
+        {
+            let (lock, condvar) = &*self.state;
+            let mut inner = lock.lock();
+            inner.stopped = true;
+            condvar.notify_all();
+        }
+        if let Some(handle) = self.worker.lock().take() {
+            let _ = handle.join();
+        }
+        // A request_save() racing between flush() and `stopped` would leave a pending save
+        // with no worker; persist it here.
+        let leftover = {
+            let mut inner = self.state.0.lock();
+            std::mem::take(&mut inner.pending)
+        };
+        if leftover {
+            perform_save(&self.config, &*self.save_fn);
+            self.state.0.lock().save_count += 1;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_worker_joined(&self) -> bool {
+        self.worker.lock().is_none()
+    }
+
+    #[allow(dead_code)]
+    pub fn save_count(&self) -> usize {
+        let (lock, _) = &*self.state;
+        lock.lock().save_count
+    }
+
+    #[allow(dead_code)]
+    pub fn is_pending(&self) -> bool {
+        let (lock, _) = &*self.state;
+        lock.lock().pending
+    }
+
+    #[allow(dead_code)]
+    pub fn is_in_flight(&self) -> bool {
+        let (lock, _) = &*self.state;
+        lock.lock().in_flight
+    }
+}
+
+/// Drop runs `shutdown()` (drain + join) during normal object destruction only.
+/// It does not run on process::abort, SIGKILL, TerminateProcess, access violations,
+/// OS crash or power loss.
+impl Drop for ResizeDebouncer {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -410,5 +732,538 @@ mod tests {
         let json = r#"{"opacity": 0.5}"#;
         let deserialized: Config = serde_json::from_str(json).unwrap();
         assert_eq!(deserialized.claude_profile, "auto");
+    }
+
+    #[test]
+    fn test_resize_debounce_coalesces_multiple_events() {
+        let save_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&save_counter);
+
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let debouncer = ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(60),
+            Arc::new(move |_| {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+
+        // Multiple rapid resize events
+        for i in 0..5 {
+            cfg.lock().table_width = 500 + i * 10;
+            debouncer.request_save();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // Initially within debounce window, save_count is 0
+        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
+
+        // Wait past debounce duration (60ms)
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Exactly one save must have fired
+        assert_eq!(save_counter.load(Ordering::SeqCst), 1);
+        assert_eq!(debouncer.save_count(), 1);
+    }
+
+    #[test]
+    fn test_resize_debounce_resets_timer_on_continued_resizing() {
+        let save_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&save_counter);
+
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let debouncer = ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(120),
+            Arc::new(move |_| {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+
+        // Event A
+        cfg.lock().table_width = 510;
+        debouncer.request_save();
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
+
+        // Event B (resets 120ms deadline)
+        cfg.lock().table_width = 520;
+        debouncer.request_save();
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
+
+        // Event C (resets 120ms deadline)
+        cfg.lock().table_width = 530;
+        debouncer.request_save();
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
+
+        // Wait past remaining debounce (now > 120ms since event C)
+        std::thread::sleep(Duration::from_millis(150));
+
+        assert_eq!(save_counter.load(Ordering::SeqCst), 1);
+        assert_eq!(debouncer.save_count(), 1);
+    }
+
+    #[test]
+    fn test_resize_debounce_close_flushes_immediately() {
+        let save_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&save_counter);
+
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let debouncer = ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(300),
+            Arc::new(move |_| {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+
+        // Resize happens
+        cfg.lock().table_width = 550;
+        debouncer.request_save();
+
+        // Immediately before debounce fires:
+        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
+        assert!(debouncer.is_pending());
+
+        // Close/flush triggered
+        debouncer.flush();
+
+        // Saved immediately!
+        assert_eq!(save_counter.load(Ordering::SeqCst), 1);
+        assert!(!debouncer.is_pending());
+
+        // Wait past original 300ms debounce duration
+        std::thread::sleep(Duration::from_millis(350));
+
+        // Must NOT double save!
+        assert_eq!(save_counter.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_resize_debounce_restore_geometry_guard_prevents_spurious_save() {
+        let save_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter_clone = Arc::clone(&save_counter);
+
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let debouncer = ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(60),
+            Arc::new(move |_| {
+                counter_clone.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+
+        // Simulating restore geometry phase during startup
+        debouncer.set_restoring(true);
+        assert!(debouncer.is_restoring());
+
+        // During restore, resize callback occurs
+        cfg.lock().table_width = 580;
+        debouncer.request_save();
+        debouncer.flush();
+
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Guard must have prevented any save!
+        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
+        assert_eq!(debouncer.save_count(), 0);
+
+        // Restore completes
+        debouncer.set_restoring(false);
+
+        // Normal resize after restore
+        debouncer.request_save();
+        std::thread::sleep(Duration::from_millis(100));
+
+        assert_eq!(save_counter.load(Ordering::SeqCst), 1);
+        assert_eq!(debouncer.save_count(), 1);
+    }
+
+    #[test]
+    fn test_concurrent_save_serialization_no_corruption() {
+        let temp_dir = std::env::temp_dir().join(format!("claude_hud_test_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_path = temp_dir.join("test_concurrent_config.json");
+
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let path_clone = test_path.clone();
+            let handle = std::thread::spawn(move || {
+                for j in 0..15 {
+                    let mut cfg = Config::default();
+                    cfg.table_width = 500 + i * 20 + j;
+                    cfg.opacity = 0.5 + (j as f32 * 0.01);
+                    ConfigManager::save_to_path(&path_clone, &cfg);
+                }
+            });
+            handles.push(handle);
+        }
+
+        for h in handles {
+            h.join().expect("thread join failed");
+        }
+
+        // Must exist, be valid JSON, and parseable into Config
+        assert!(test_path.exists());
+        let text = fs::read_to_string(&test_path).expect("failed to read written config");
+        let parsed: Result<Config, _> = serde_json::from_str(&text);
+        assert!(parsed.is_ok(), "Written JSON was corrupted by race: {text}");
+
+        // Cleanup
+        let _ = fs::remove_file(&test_path);
+        let _ = fs::remove_file(test_path.with_extension("tmp"));
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_flush_waits_for_in_flight_save() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let save_started = Arc::new(AtomicBool::new(false));
+        let save_finished = Arc::new(AtomicBool::new(false));
+        let can_finish_save = Arc::new(AtomicBool::new(false));
+
+        let s_start = Arc::clone(&save_started);
+        let s_finish = Arc::clone(&save_finished);
+        let c_finish = Arc::clone(&can_finish_save);
+
+        let debouncer = Arc::new(ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(20),
+            Arc::new(move |_| {
+                s_start.store(true, Ordering::SeqCst);
+                // Simulate slow I/O by waiting until signaled
+                while !c_finish.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                s_finish.store(true, Ordering::SeqCst);
+            }),
+        ));
+
+        // Request save
+        debouncer.request_save();
+
+        // Wait until worker enters save_fn (in_flight is true)
+        while !save_started.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // Worker is now inside save_fn with in_flight = true
+        let debouncer_flush = Arc::clone(&debouncer);
+        let flush_returned = Arc::new(AtomicBool::new(false));
+        let f_ret = Arc::clone(&flush_returned);
+
+        let flush_handle = std::thread::spawn(move || {
+            debouncer_flush.flush();
+            f_ret.store(true, Ordering::SeqCst);
+        });
+
+        // Give flush thread time to enter wait
+        std::thread::sleep(Duration::from_millis(40));
+
+        // Because save is not allowed to finish yet, flush MUST still be waiting!
+        assert!(
+            !flush_returned.load(Ordering::SeqCst),
+            "flush returned before in-flight save finished!"
+        );
+        assert!(!save_finished.load(Ordering::SeqCst));
+
+        // Now allow save to finish
+        can_finish_save.store(true, Ordering::SeqCst);
+
+        flush_handle.join().expect("flush thread join failed");
+
+        // After flush returned, save MUST be finished!
+        assert!(flush_returned.load(Ordering::SeqCst));
+        assert!(save_finished.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_stale_snapshot_cannot_overwrite_newer_config() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("claude_hud_stale_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_path = temp_dir.join("test_stale_config.json");
+
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let path_clone = test_path.clone();
+
+        let debouncer = ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(40),
+            Arc::new(move |c| {
+                ConfigManager::save_unlocked_to_path(&path_clone, c);
+            }),
+        );
+
+        // Resize sets S1: table_width = 800
+        cfg.lock().table_width = 800;
+        debouncer.request_save();
+
+        // Concurrent immediate save of S2 (opacity 0.5, table_width 950).
+        std::thread::sleep(Duration::from_millis(10));
+        debouncer.update_and_save_now(|c| {
+            c.opacity = 0.5;
+            c.table_width = 950;
+        });
+        debouncer.flush();
+
+        let text = fs::read_to_string(&test_path).expect("failed to read config");
+        let on_disk: Config = serde_json::from_str(&text).expect("invalid json");
+        assert_eq!(on_disk.opacity, 0.5);
+        assert_eq!(on_disk.table_width, 950);
+
+        let _ = fs::remove_file(&test_path);
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_shutdown_joins_worker_and_completes_save() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let saved = Arc::new(AtomicBool::new(false));
+        let saved_clone = Arc::clone(&saved);
+
+        let debouncer = ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(500),
+            Arc::new(move |_| {
+                saved_clone.store(true, Ordering::SeqCst);
+            }),
+        );
+
+        debouncer.request_save();
+        assert!(debouncer.is_pending());
+
+        // Shutdown immediately
+        debouncer.shutdown();
+
+        // 1. Pending must be cleared
+        assert!(!debouncer.is_pending());
+        // 2. Pending save must have completed
+        assert!(saved.load(Ordering::SeqCst));
+        // 3. Worker thread must be joined
+        assert!(debouncer.is_worker_joined());
+    }
+
+    use std::sync::atomic::AtomicUsize;
+
+    /// Mock save target. The first call blocks until `release` is set; all calls record the
+    /// table_width they were given and how many saves overlapped.
+    struct Gate {
+        started: AtomicBool,
+        release: AtomicBool,
+        calls: AtomicUsize,
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+        widths: Mutex<Vec<u32>>,
+    }
+
+    impl Gate {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                started: AtomicBool::new(false),
+                release: AtomicBool::new(false),
+                calls: AtomicUsize::new(0),
+                active: AtomicUsize::new(0),
+                max_active: AtomicUsize::new(0),
+                widths: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn save_fn(self: &Arc<Self>) -> Arc<dyn Fn(&Config) + Send + Sync + 'static> {
+            let g = Arc::clone(self);
+            Arc::new(move |c: &Config| {
+                let n = g.calls.fetch_add(1, Ordering::SeqCst);
+                let a = g.active.fetch_add(1, Ordering::SeqCst) + 1;
+                g.max_active.fetch_max(a, Ordering::SeqCst);
+                g.widths.lock().push(c.table_width);
+                g.started.store(true, Ordering::SeqCst);
+                if n == 0 {
+                    while !g.release.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                g.active.fetch_sub(1, Ordering::SeqCst);
+            })
+        }
+
+        fn wait_started(&self) {
+            let start = Instant::now();
+            while !self.started.load(Ordering::SeqCst) {
+                assert!(
+                    start.elapsed() < Duration::from_secs(10),
+                    "save never started"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+    }
+
+    #[test]
+    fn test_config_lock_not_held_during_disk_io() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let gate = Gate::new();
+        let debouncer = ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(5),
+            gate.save_fn(),
+        );
+
+        debouncer.request_save();
+        gate.wait_started();
+        assert!(debouncer.is_in_flight());
+
+        // The save is blocked "in disk I/O"; the Config lock must be free.
+        let acquired = cfg.try_lock_for(Duration::from_secs(2)).is_some();
+        gate.release.store(true, Ordering::SeqCst);
+        debouncer.flush();
+        assert!(acquired, "Config lock was held across the save");
+    }
+
+    #[test]
+    fn test_immediate_save_during_in_flight_worker_save_does_not_deadlock() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let gate = Gate::new();
+        let debouncer = Arc::new(ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(5),
+            gate.save_fn(),
+        ));
+
+        debouncer.request_save();
+        gate.wait_started();
+
+        // Same shape as persist_geometry while the worker has in_flight == true.
+        let d = Arc::clone(&debouncer);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            d.update_and_save_now(|c| c.table_width = 777);
+            let _ = tx.send(());
+        });
+
+        let config_free = cfg.try_lock_for(Duration::from_secs(2)).is_some();
+        gate.release.store(true, Ordering::SeqCst);
+        let finished = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+        debouncer.flush();
+
+        assert!(config_free);
+        assert!(finished, "update_and_save_now deadlocked against worker");
+        assert_eq!(cfg.lock().table_width, 777);
+        assert_eq!(gate.widths.lock().last().copied(), Some(777));
+        assert_eq!(gate.max_active.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn test_flush_pending_and_in_flight_runs_one_save_at_a_time() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let gate = Gate::new();
+        let debouncer = Arc::new(ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(20),
+            gate.save_fn(),
+        ));
+
+        debouncer.request_save();
+        gate.wait_started();
+
+        // New resize arrives while the first save is in flight: pending && in_flight.
+        cfg.lock().table_width = 999;
+        debouncer.request_save();
+        assert!(debouncer.is_pending());
+        assert!(debouncer.is_in_flight());
+
+        let d = Arc::clone(&debouncer);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            d.flush();
+            let _ = tx.send(());
+        });
+        std::thread::sleep(Duration::from_millis(40));
+        let returned_early = rx.try_recv().is_ok();
+
+        gate.release.store(true, Ordering::SeqCst);
+        let finished = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+
+        assert!(!returned_early, "flush returned while a save was in flight");
+        assert!(finished);
+        assert_eq!(gate.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(gate.max_active.load(Ordering::SeqCst), 1);
+        assert_eq!(gate.widths.lock().last().copied(), Some(999));
+        assert!(!debouncer.is_pending());
+        assert!(!debouncer.is_in_flight());
+    }
+
+    #[test]
+    fn test_worker_and_immediate_save_race_leaves_latest_config() {
+        let temp_dir = std::env::temp_dir().join(format!("claude_hud_race_{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_dir);
+        let test_path = temp_dir.join("test_race_config.json");
+
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let path_clone = test_path.clone();
+        let debouncer = ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(1),
+            Arc::new(move |c| ConfigManager::save_unlocked_to_path(&path_clone, c)),
+        );
+
+        for i in 0..40u32 {
+            cfg.lock().table_width = 100 + i;
+            debouncer.request_save();
+            if i % 2 == 0 {
+                std::thread::yield_now();
+            }
+            let opacity = 0.2 + i as f32 * 0.01;
+            debouncer.update_and_save_now(|c| c.opacity = opacity);
+            debouncer.flush();
+
+            let text = fs::read_to_string(&test_path).expect("read config");
+            let on_disk: Config = serde_json::from_str(&text).expect("valid json");
+            assert_eq!(on_disk.table_width, 100 + i, "iteration {i}");
+            assert_eq!(on_disk.opacity, opacity, "iteration {i}");
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_save_lock_is_not_reentrant() {
+        let guard = SAVE_LOCK.lock();
+        assert!(SAVE_LOCK.try_lock().is_none());
+        drop(guard);
+    }
+
+    #[test]
+    fn test_shutdown_waits_for_in_flight_save_then_joins() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let gate = Gate::new();
+        let debouncer = Arc::new(ResizeDebouncer::with_save_fn(
+            Arc::clone(&cfg),
+            Duration::from_millis(5),
+            gate.save_fn(),
+        ));
+
+        debouncer.request_save();
+        gate.wait_started();
+
+        let d = Arc::clone(&debouncer);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            d.shutdown();
+            let _ = tx.send(());
+        });
+        std::thread::sleep(Duration::from_millis(30));
+        let returned_early = rx.try_recv().is_ok();
+        let joined_early = debouncer.is_worker_joined();
+
+        gate.release.store(true, Ordering::SeqCst);
+        let finished = rx.recv_timeout(Duration::from_secs(10)).is_ok();
+
+        assert!(!returned_early && !joined_early);
+        assert!(finished);
+        assert!(debouncer.is_worker_joined());
+        assert!(!debouncer.is_in_flight());
+        assert!(!debouncer.is_pending());
     }
 }

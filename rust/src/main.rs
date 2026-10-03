@@ -82,7 +82,7 @@ impl qtrs_core::event::NativeEventFilter for WakeFilter {
     }
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     logger::setup_logging();
     info!("=== Claude HUD Monitor (Rust Qt) starting ===");
 
@@ -110,7 +110,7 @@ fn main() {
         hud.update_clock();
         let _ = qtrs_core::application::CoreApplication::process_events(false);
         info!("=== Smoke-test passed successfully! ===");
-        return;
+        return std::process::ExitCode::SUCCESS;
     }
 
     if std::env::args().any(|a| a == "--snapshot") {
@@ -260,7 +260,7 @@ fn main() {
         info!("Saved context menu snapshot: {}", menu_path.display());
 
         info!("=== Snapshots generated successfully! ===");
-        return;
+        return std::process::ExitCode::SUCCESS;
     }
 
     // Single instance protection and IPC wake-up broadcast across all platforms
@@ -286,7 +286,7 @@ fn main() {
         }
         SingleInstanceResult::Secondary { command_sent } => {
             log::warn!("[SingleInstance] Another instance is already running (wake command sent: {command_sent}). Exiting.");
-            return;
+            return std::process::ExitCode::SUCCESS;
         }
     };
 
@@ -329,7 +329,7 @@ fn main() {
         Ok(h) => h,
         Err(e) => {
             log::error!("Failed to create HUD window: {}", e);
-            return;
+            return std::process::ExitCode::FAILURE;
         }
     };
     hud.show();
@@ -594,8 +594,14 @@ fn main() {
             *borrow = None;
         }
     });
+
+    // Explicitly drop HUD and Tray to ensure HUDWindow::drop, ResizeDebouncer::shutdown,
+    // and worker thread join complete cleanly via standard Rust destructor execution.
+    drop(tray);
+    drop(hud);
+
     info!("Claude HUD Monitor exited cleanly with code: {}", exit_code);
-    std::process::exit(exit_code);
+    std::process::ExitCode::from(exit_code as u8)
 }
 
 /// Windows-only: set AppUserModelID for proper taskbar grouping.

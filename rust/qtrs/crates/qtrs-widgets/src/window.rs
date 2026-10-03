@@ -12,6 +12,290 @@ type MousePressCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point
 type MouseMoveCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>;
 type ResizeCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Size)>>>>;
 
+/// Resize/render counters for one window (diagnostics and tests).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RenderStats {
+    /// Native `Resize` events that changed the window size (never coalesced).
+    pub resize_event_count: u64,
+    /// Deferred renders actually queued on the event loop.
+    pub deferred_render_schedule_count: u64,
+    /// `LayoutScheduler::activate_pending()` passes run by the deferred render phase.
+    pub layout_activation_count: u64,
+    /// Deferred render phases executed.
+    pub render_count: u64,
+    /// Deferred render phases that painted and presented a non-empty region.
+    pub present_count: u64,
+    /// Deferred renders skipped because a platform-window / backing-store / root borrow was held.
+    pub borrow_skipped_count: u64,
+    /// Next-turn retries queued after a borrow conflict.
+    pub borrow_retry_count: u64,
+    /// Synchronous renders performed while a native interactive sizing loop was active.
+    pub interactive_render_count: u64,
+}
+
+thread_local! {
+    static RENDER_STATES: std::cell::RefCell<std::collections::HashMap<ObjectId, std::rc::Rc<RenderState>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Per-window coalescing state for native-resize driven repaints.
+///
+/// `MetaCall` closures must be `Send`, so a queued render captures only the window's
+/// `ObjectId` and resolves this state through a thread-local registry when it runs.
+///
+/// State machine (all flags per window, single thread):
+///
+/// * IDLE: `dirty=false pending=false rendering=false`
+/// * REQUESTED: `dirty=true pending=true` (exactly one `MetaCall` queued)
+/// * RENDERING: `dirty=false pending=false rendering=true`; invalidations only set `dirty`
+/// * RENDER AGAIN: `dirty` set while rendering -> re-queued once after the phase
+/// * BORROW CONFLICT: `dirty=true pending=false`; one bounded next-turn retry is queued
+///   (`retry_used`). If the retry also conflicts the window is *parked* (`dirty` kept, nothing
+///   queued, no spin) and is re-armed by the next invalidation (`request_render`) or when a
+///   synchronous `Window::render_and_present` releases its borrows (`rearm_if_parked`).
+///
+/// `UpdateRequest` and native `Resize` both enter through `request_render`.
+struct RenderState {
+    window_id: ObjectId,
+    platform_window: std::rc::Weak<std::cell::RefCell<Box<dyn PlatformWindow>>>,
+    backing_store: std::rc::Weak<std::cell::RefCell<BackingStore>>,
+    geometry: std::rc::Rc<std::cell::Cell<Rect>>,
+    root: std::cell::RefCell<WidgetRef>,
+    dirty: std::cell::Cell<bool>,
+    render_pending: std::cell::Cell<bool>,
+    currently_rendering: std::cell::Cell<bool>,
+    /// Set only while `Window::set_geometry` is inside the native `set_geometry` call; it
+    /// renders synchronously itself, so native Resize must not queue another render.
+    within_set_geometry: std::cell::Cell<bool>,
+    /// Native interactive sizing loop is active (`InteractiveResizeStart`..`End`): native Resize
+    /// renders synchronously instead of deferring. Never read by event/callback semantics.
+    interactive_resize: std::cell::Cell<bool>,
+    /// A next-turn retry after a borrow conflict was already used for this request.
+    retry_used: std::cell::Cell<bool>,
+    stats: std::cell::Cell<RenderStats>,
+}
+
+/// Clears a flag on every exit path, including unwinding.
+struct FlagGuard<'a>(&'a std::cell::Cell<bool>);
+
+impl Drop for FlagGuard<'_> {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
+impl RenderState {
+    fn register(
+        window_id: ObjectId,
+        platform_window: std::rc::Weak<std::cell::RefCell<Box<dyn PlatformWindow>>>,
+        backing_store: std::rc::Weak<std::cell::RefCell<BackingStore>>,
+        geometry: std::rc::Rc<std::cell::Cell<Rect>>,
+        root: WidgetRef,
+    ) -> std::rc::Rc<Self> {
+        let state = std::rc::Rc::new(Self {
+            window_id,
+            platform_window,
+            backing_store,
+            geometry,
+            root: std::cell::RefCell::new(root),
+            dirty: std::cell::Cell::new(false),
+            render_pending: std::cell::Cell::new(false),
+            currently_rendering: std::cell::Cell::new(false),
+            interactive_resize: std::cell::Cell::new(false),
+            within_set_geometry: std::cell::Cell::new(false),
+            retry_used: std::cell::Cell::new(false),
+            stats: std::cell::Cell::new(RenderStats::default()),
+        });
+        RENDER_STATES.with(|m| m.borrow_mut().insert(window_id, std::rc::Rc::clone(&state)));
+        state
+    }
+
+    fn unregister(window_id: ObjectId) {
+        let _ = RENDER_STATES.try_with(|m| m.borrow_mut().remove(&window_id));
+    }
+
+    fn bump(&self, f: impl FnOnce(&mut RenderStats)) {
+        let mut s = self.stats.get();
+        f(&mut s);
+        self.stats.set(s);
+    }
+
+    /// Marks the window dirty and queues at most one deferred render.
+    fn request_render(&self) {
+        self.dirty.set(true);
+        self.retry_used.set(false);
+        if self.render_pending.get() || self.currently_rendering.get() {
+            // Pending: the queued render reads the latest geometry. Rendering: re-queued on completion.
+            return;
+        }
+        if !self.queue_render() {
+            // No event loop on this thread to defer to: render in place.
+            self.render_phase();
+        }
+    }
+
+    /// Posts the one deferred render. Events posted from inside a pump wait for the next pump
+    /// (`insertion_offset`), so this never re-dispatches within the current pump.
+    fn queue_render(&self) -> bool {
+        self.render_pending.set(true);
+        let id = self.window_id;
+        let queued = qtrs_core::event_loop::post_event_to_thread(
+            qtrs_core::object::ThreadId::current(),
+            ObjectId(0),
+            Event::new(EventKind::MetaCall(Box::new(move |_| run_deferred_render(id)))),
+        );
+        if queued {
+            self.bump(|s| s.deferred_render_schedule_count += 1);
+        } else {
+            self.render_pending.set(false);
+        }
+        queued
+    }
+
+    /// Re-queues a render left `dirty` by a borrow conflict that exhausted its retry.
+    fn rearm_if_parked(&self) {
+        if self.dirty.get() && !self.render_pending.get() && !self.currently_rendering.get() {
+            self.request_render();
+        }
+    }
+
+    /// True if a repaint is owed: the window flag, or any widget with a dirty rect.
+    fn has_pending_invalidation(&self) -> bool {
+        if self.dirty.get() {
+            return true;
+        }
+        match self.root.try_borrow() {
+            Ok(root) => tree_has_dirty(&root),
+            Err(_) => true,
+        }
+    }
+
+    /// A borrow was held elsewhere: keep `dirty`, queue at most one next-turn retry.
+    fn on_borrow_conflict(&self) {
+        self.bump(|s| s.borrow_skipped_count += 1);
+        if self.retry_used.get() || self.render_pending.get() {
+            return;
+        }
+        self.retry_used.set(true);
+        if self.queue_render() {
+            self.bump(|s| s.borrow_retry_count += 1);
+        }
+    }
+    /// Interactive-resize policy: render the latest geometry now, through the same guards
+    /// (`currently_rendering`, `dirty`, borrow-conflict retry). A `MetaCall` queued before the
+    /// loop started stays queued but finds `dirty == false` and does nothing, so there is never
+    /// a sync + deferred double render.
+    fn render_now(&self) {
+        self.dirty.set(true);
+        if self.currently_rendering.get() {
+            // Re-queued once by the running phase's tail.
+            return;
+        }
+        let before = self.stats.get().render_count;
+        self.render_phase();
+        if self.stats.get().render_count != before {
+            self.bump(|s| s.interactive_render_count += 1);
+        }
+    }
+
+    /// Leaves interactive mode; anything still owed (borrow conflict) is re-armed.
+    fn end_interactive_resize(&self) {
+        self.interactive_resize.set(false);
+        self.rearm_if_parked();
+    }
+
+
+    /// Layout activation + paint + present, using the latest geometry.
+    fn render_phase(&self) {
+        if self.currently_rendering.get() || !self.dirty.get() {
+            return;
+        }
+        let (Some(pw_rc), Some(bs_rc)) = (self.platform_window.upgrade(), self.backing_store.upgrade())
+        else {
+            return;
+        };
+        let Ok(mut pw) = pw_rc.try_borrow_mut() else {
+            self.on_borrow_conflict();
+            return;
+        };
+        let Ok(mut bs) = bs_rc.try_borrow_mut() else {
+            self.on_borrow_conflict();
+            return;
+        };
+        let Ok(root) = self.root.try_borrow().map(|r| r.clone()) else {
+            self.on_borrow_conflict();
+            return;
+        };
+
+        self.dirty.set(false);
+        self.retry_used.set(false);
+        {
+            self.currently_rendering.set(true);
+            let _guard = FlagGuard(&self.currently_rendering);
+            crate::layout_scheduler::LayoutScheduler::activate_pending();
+            let g = self.geometry.get();
+            let trace_hwnd = pw.native_handle() as usize;
+            let trace_dpr = platform().primary_screen().device_pixel_ratio();
+            let trace_phys = (
+                (g.width as f32 * trace_dpr).round() as u32,
+                (g.height as f32 * trace_dpr).round() as u32,
+            );
+            qtrs_platform::resize_trace::record(
+                qtrs_platform::resize_trace::TraceKind::RenderStart,
+                trace_hwnd,
+                (g.width as u32, g.height as u32),
+                trace_phys,
+            );
+            let presented = do_render_and_present(&mut **pw, &mut bs, &root, g);
+            qtrs_platform::resize_trace::record(
+                qtrs_platform::resize_trace::TraceKind::RenderEnd,
+                trace_hwnd,
+                (g.width as u32, g.height as u32),
+                trace_phys,
+            );
+            self.bump(|s| {
+                s.layout_activation_count += 1;
+                s.render_count += 1;
+                if presented {
+                    s.present_count += 1;
+                }
+            });
+        }
+        drop(bs);
+        drop(pw);
+
+        // An invalidation arrived while rendering (e.g. a nested native resize).
+        if self.dirty.get() && !self.render_pending.get() {
+            self.request_render();
+        }
+    }
+}
+
+fn tree_has_dirty(widget: &WidgetRef) -> bool {
+    let Ok(w) = widget.try_borrow() else {
+        return true;
+    };
+    if w.dirty_rect().is_some() {
+        return true;
+    }
+    let children = w.children();
+    drop(w);
+    children.iter().any(tree_has_dirty)
+}
+
+/// Body of the queued `MetaCall`; the window may be gone by now.
+fn run_deferred_render(window_id: ObjectId) {
+    let state = RENDER_STATES
+        .try_with(|m| m.borrow().get(&window_id).cloned())
+        .ok()
+        .flatten();
+    let Some(state) = state else {
+        return;
+    };
+    state.render_pending.set(false);
+    state.render_phase();
+}
+
 pub struct Window {
     object_data: ObjectData,
     platform_window: std::rc::Rc<std::cell::RefCell<Box<dyn PlatformWindow>>>,
@@ -22,6 +306,7 @@ pub struct Window {
     mouse_press_cb: MousePressCallback,
     mouse_move_cb: MouseMoveCallback,
     resize_cb: ResizeCallback,
+    render_state: std::rc::Rc<RenderState>,
 }
 
 impl Window {
@@ -60,6 +345,13 @@ impl Window {
         let pw_rc = std::rc::Rc::new(std::cell::RefCell::new(platform_win));
         let pw_clone = std::rc::Rc::clone(&pw_rc);
 
+        let render_state = RenderState::register(
+            window_id,
+            std::rc::Rc::downgrade(&pw_rc),
+            std::rc::Rc::downgrade(&bs_rc),
+            std::rc::Rc::clone(&geom_cell),
+            root_widget.clone(),
+        );
         let handler = WindowEventHandler {
             platform_window: pw_clone,
             backing_store: bs_clone,
@@ -70,6 +362,7 @@ impl Window {
             mouse_press_cb: press_cb_clone,
             mouse_move_cb: move_cb_clone,
             resize_cb: resize_cb_clone,
+            render: std::rc::Rc::clone(&render_state),
         };
         pw_rc.borrow_mut().set_event_handler(Box::new(handler));
 
@@ -83,6 +376,7 @@ impl Window {
             mouse_press_cb,
             mouse_move_cb,
             resize_cb,
+            render_state,
         };
         crate::application::Application::register_window(window_id);
         Ok(win)
@@ -111,6 +405,7 @@ impl Window {
         widget
             .borrow_mut()
             .set_geometry(Rect::new(0, 0, geom.width, geom.height));
+        *self.render_state.root.borrow_mut() = widget.clone();
         self.root_widget = widget;
     }
 
@@ -134,7 +429,11 @@ impl Window {
         } else {
             rect
         };
-        self.platform_window.borrow_mut().set_geometry(native_rect);
+        {
+            self.render_state.within_set_geometry.set(true);
+            let _guard = FlagGuard(&self.render_state.within_set_geometry);
+            self.platform_window.borrow_mut().set_geometry(native_rect);
+        }
 
         // 1. Root geometry updated
         self.root_widget
@@ -271,9 +570,13 @@ impl Window {
     pub fn render_and_present(&mut self) {
         let geom = self.geometry.get();
         let root = self.root_widget.clone();
-        let mut bs = self.backing_store.borrow_mut();
-        let mut pw = self.platform_window.borrow_mut();
-        do_render_and_present(&mut **pw, &mut bs, &root, geom);
+        {
+            let mut bs = self.backing_store.borrow_mut();
+            let mut pw = self.platform_window.borrow_mut();
+            do_render_and_present(&mut **pw, &mut bs, &root, geom);
+        }
+        // Borrows released: recover a deferred render parked by a borrow conflict.
+        self.render_state.rearm_if_parked();
     }
 
     pub fn present_custom<F: FnOnce(&mut Painter)>(&mut self, f: F) {
@@ -308,6 +611,22 @@ impl Window {
     pub fn save_png(&self, path: &std::path::Path) -> Result<(), &'static str> {
         self.backing_store.borrow().save_png(path).map_err(|_| "failed to save PNG")
     }
+
+    /// Snapshot of the resize/render counters (diagnostics and tests).
+    pub fn render_stats(&self) -> RenderStats {
+        self.render_state.stats.get()
+    }
+
+    /// True while a native interactive sizing loop is active.
+    pub fn is_interactive_resize(&self) -> bool {
+        self.render_state.interactive_resize.get()
+    }
+
+    /// True when no repaint is owed or queued (`dirty`, `render_pending`, `currently_rendering` all clear).
+    pub fn render_idle(&self) -> bool {
+        let s = &self.render_state;
+        !s.dirty.get() && !s.render_pending.get() && !s.currently_rendering.get()
+    }
 }
 
 impl Drop for Window {
@@ -317,6 +636,8 @@ impl Drop for Window {
             let hwnd = self.platform_window.borrow().native_handle() as windows_sys::Win32::Foundation::HWND;
             qtrs_platform::unregister_window_event_binding(hwnd);
         }
+        // Deferred renders already queued for this window become no-ops.
+        RenderState::unregister(self.object_data.id);
         crate::application::Application::unregister_window(self.object_data.id);
         // SAFETY: an unsafe registration caller must ensure no callbacks remain active at drop.
         unsafe { unregister_qobject(self.object_data.id) };
@@ -343,7 +664,11 @@ impl QObject for Window {
     fn event(&mut self, event: &mut Event) -> bool {
         match &event.kind {
             EventKind::UpdateRequest => {
-                self.render_and_present();
+                // Same gate as native Resize. Skip stale requests whose dirty state a
+                // synchronous render already consumed.
+                if self.render_state.has_pending_invalidation() {
+                    self.render_state.request_render();
+                }
                 true
             }
             EventKind::Resize { width, height, .. } => {
@@ -477,7 +802,7 @@ fn do_render_and_present(
     backing_store: &mut BackingStore,
     root_widget: &WidgetRef,
     geometry: Rect,
-) {
+) -> bool {
     let dpr = platform().primary_screen().device_pixel_ratio();
     let logical_size = Size::new(geometry.width, geometry.height);
 
@@ -493,7 +818,7 @@ fn do_render_and_present(
         .unwrap_or(root_geom)
         .intersected(&root_geom);
     if dirty.is_empty() {
-        return;
+        return false;
     }
 
     let phys_dirty = if dpr > 1.0 {
@@ -517,6 +842,7 @@ fn do_render_and_present(
 
     let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
     let _ = platform_window.present_region(backing_store, &dirty_region);
+    true
 }
 
 struct WindowEventHandler {
@@ -529,6 +855,7 @@ struct WindowEventHandler {
     mouse_press_cb: MousePressCallback,
     mouse_move_cb: MouseMoveCallback,
     resize_cb: ResizeCallback,
+    render: std::rc::Rc<RenderState>,
 }
 
 impl WindowSystemEventHandler for WindowEventHandler {
@@ -600,6 +927,12 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 });
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
+            WindowSystemEvent::InteractiveResizeStart => {
+                self.render.interactive_resize.set(true);
+            }
+            WindowSystemEvent::InteractiveResizeEnd => {
+                self.render.end_interactive_resize();
+            }
             WindowSystemEvent::GeometryChange { geometry } => {
                 let (old_pos, _) = {
                     let mut cur = self.geometry.get();
@@ -623,22 +956,23 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 }
             }
             WindowSystemEvent::Resize { size } => {
-                let (old_size, cur_geom) = {
+                let old_size = {
                     let mut cur = self.geometry.get();
                     let old_size = Size::new(cur.width, cur.height);
                     cur.width = size.width;
                     cur.height = size.height;
                     self.geometry.set(cur);
-                    (old_size, cur)
+                    old_size
                 };
 
                 let size_changed = old_size.width != size.width || old_size.height != size.height;
 
                 if size_changed {
+                    self.render.bump(|s| s.resize_event_count += 1);
                     // 1. Update root widget geometry (widget geometry = new size)
                     root.borrow_mut().set_geometry(Rect::new(0, 0, size.width, size.height));
 
-                    // 2. Dispatch Resize event to widgets and callback
+                    // 2. Dispatch Resize event to widgets and callback (never coalesced)
                     let mut ev = Event::new_spontaneous(EventKind::Resize {
                         width: size.width,
                         height: size.height,
@@ -651,15 +985,18 @@ impl WindowSystemEventHandler for WindowEventHandler {
                         cb(size);
                     }
 
-                    // 3. Layout Invalidation & Activation via LayoutScheduler
+                    // 3. Invalidate layout (deduplicated by LayoutScheduler); activation, paint
+                    //    and present happen once in the coalesced deferred render.
                     crate::layout_scheduler::LayoutScheduler::invalidate(&root);
-                    crate::layout_scheduler::LayoutScheduler::activate_pending();
 
-                    // 4. Paint and present: Lazy Backing Store Resize
-                    if let Ok(mut pw) = self.platform_window.try_borrow_mut() {
-                        if !pw.is_within_set_geometry() {
-                            let mut bs = self.backing_store.borrow_mut();
-                            do_render_and_present(&mut **pw, &mut bs, &root, cur_geom);
+                    // 4. Window::set_geometry renders synchronously itself (explicit flag,
+                    //    not RefCell borrow state).
+                    if !self.render.within_set_geometry.get() {
+                        if self.render.interactive_resize.get() {
+                            // Native sizing loop: layout activation + paint + present now.
+                            self.render.render_now();
+                        } else {
+                            self.render.request_render();
                         }
                     }
                 }
