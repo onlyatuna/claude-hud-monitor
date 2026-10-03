@@ -107,3 +107,16 @@ pub(crate) fn set_label_color(
         ));
     }
 }
+
+/// Whether the UI is dark for an `appearance` setting. `"auto"` follows the operating system's
+/// colour scheme (Python `_system_is_dark`); an unknown scheme counts as dark, as there.
+pub(crate) fn resolve_is_dark(appearance: &str) -> bool {
+    match appearance {
+        "light" => false,
+        "dark" => true,
+        _ => !matches!(
+            qtrs_platform::platform().theme().color_scheme(),
+            qtrs_platform::ColorScheme::Light
+        ),
+    }
+}

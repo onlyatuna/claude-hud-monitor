@@ -1,12 +1,16 @@
+use std::path::Path;
 use std::sync::Arc;
 
 /// Shared binary font data representation supporting zero-copy slicing and deduplication.
 ///
-/// Encapsulates binary font data behind an `Arc`, ensuring multiple `FontEngine`
-/// or `Font` instances share the exact same underlying byte buffer without duplication.
-#[derive(Debug, Clone)]
+/// The bytes live behind an `Arc`, so every `FontEngine`/`Font` sharing a file shares one buffer.
+/// The buffer is either heap memory ([`from_vec`](Self::from_vec)) or a read-only mapping of the
+/// font file ([`from_file`](Self::from_file)). A mapping is backed by the file itself: it is not
+/// charged to the process's commit, and only the pages actually read (a few glyph tables out of a
+/// 16 MB CJK collection) become resident. Qt maps system font files the same way.
+#[derive(Clone)]
 pub struct SharedFontData {
-    data: Arc<Vec<u8>>,
+    data: Arc<dyn AsRef<[u8]> + Send + Sync>,
 }
 
 impl SharedFontData {
@@ -22,28 +26,38 @@ impl SharedFontData {
         Self { data }
     }
 
+    /// Maps the font file at `path` read-only; reads it into memory if it cannot be mapped.
+    ///
+    /// As with any file mapping, the file must not be truncated or rewritten while the mapping
+    /// lives. Installed font files are not modified in place, and Windows refuses to delete or
+    /// overwrite a file that is mapped.
+    pub fn from_file(path: &Path) -> std::io::Result<Self> {
+        let file = std::fs::File::open(path)?;
+        if file.metadata()?.len() > 0 {
+            // SAFETY: the mapping is read-only and private; see the caveat above.
+            if let Ok(map) = unsafe { memmap2::Mmap::map(&file) } {
+                return Ok(Self { data: Arc::new(map) });
+            }
+        }
+        Ok(Self::from_vec(std::fs::read(path)?))
+    }
+
     /// Returns the underlying byte slice.
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
-        self.data.as_slice()
-    }
-
-    /// Returns the inner `Arc<Vec<u8>>` for backwards compatibility.
-    #[inline]
-    pub fn to_arc(&self) -> Arc<Vec<u8>> {
-        Arc::clone(&self.data)
+        (*self.data).as_ref()
     }
 
     /// Returns the number of bytes in the font data.
     #[inline]
     pub fn len(&self) -> usize {
-        self.data.len()
+        self.as_slice().len()
     }
 
     /// Returns `true` if the font data is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.as_slice().is_empty()
     }
 
     /// Returns the strong reference count of this shared font buffer.
@@ -55,7 +69,14 @@ impl SharedFontData {
     /// Checks if two `SharedFontData` share the exact same underlying memory buffer.
     #[inline]
     pub fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.data, &other.data)
+        std::ptr::eq(self.as_slice().as_ptr(), other.as_slice().as_ptr())
+            && self.len() == other.len()
+    }
+}
+
+impl std::fmt::Debug for SharedFontData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedFontData").field("len", &self.len()).finish()
     }
 }
 
@@ -64,20 +85,20 @@ impl std::ops::Deref for SharedFontData {
 
     #[inline]
     fn deref(&self) -> &Self::Target {
-        self.data.as_slice()
+        self.as_slice()
     }
 }
 
 impl AsRef<[u8]> for SharedFontData {
     #[inline]
     fn as_ref(&self) -> &[u8] {
-        self.data.as_slice()
+        self.as_slice()
     }
 }
 
 impl PartialEq for SharedFontData {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.data, &other.data) || *self.data == *other.data
+        self.ptr_eq(other) || self.as_slice() == other.as_slice()
     }
 }
 

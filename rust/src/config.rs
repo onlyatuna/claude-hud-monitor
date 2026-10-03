@@ -192,8 +192,28 @@ impl ConfigManager {
         }
     }
 
+    /// Path of the config file, resolved as the Python HUD's `get_config_path` does when packaged:
+    /// a writable `config.json` next to the executable (portable install) wins, otherwise the
+    /// per-user file in [`config_dir`](Self::config_dir). The two builds therefore share settings.
+    ///
+    /// Unit tests get a throw-away file: they switch layouts and save, and must not rewrite the
+    /// settings of the HUD installed on the machine.
     pub fn config_path() -> PathBuf {
-        Self::config_dir().join("config.json")
+        #[cfg(test)]
+        {
+            std::env::temp_dir().join("ClaudeHUDMonitor-tests").join("config.json")
+        }
+        #[cfg(not(test))]
+        {
+            Self::portable_config_path().unwrap_or_else(|| Self::config_dir().join("config.json"))
+        }
+    }
+
+    #[cfg(not(test))]
+    fn portable_config_path() -> Option<PathBuf> {
+        let portable = std::env::current_exe().ok()?.parent()?.join("config.json");
+        let writable = fs::metadata(&portable).ok().is_some_and(|m| !m.permissions().readonly());
+        writable.then_some(portable)
     }
 
     /// Sanitize and clamp configuration parameters to valid ranges.

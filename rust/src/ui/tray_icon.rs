@@ -247,7 +247,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     use qtrs_widgets::menu::Menu;
 
     let mut menu = Menu::new("");
-    menu.set_dark_mode(cfg.appearance != "light");
+    menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
 
     let add_item = |m: &mut Menu, id: u32, text: &str| {
         let act = Action::new_ref(text);
@@ -278,7 +278,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     let claude_sub = Menu::new_ref("✳️ Claude 帳號 (Claude Account)");
     {
         let mut cs = claude_sub.borrow_mut();
-        cs.set_dark_mode(cfg.appearance != "light");
+        cs.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
 
         let cur_profile = cfg.claude_profile.as_str();
         let is_auto = cur_profile.is_empty() || cur_profile.eq_ignore_ascii_case("auto");
@@ -313,7 +313,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     let style_sub = Menu::new_ref("🎭 介面風格 (UI Style)");
     {
         let mut s = style_sub.borrow_mut();
-        s.set_dark_mode(cfg.appearance != "light");
+        s.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
         add_check(
             &mut s,
             ACTION_MODE_CARDS,
@@ -334,7 +334,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
         let layout_sub = Menu::new_ref("📐 顯示佈局 (Layout)");
         {
             let mut l = layout_sub.borrow_mut();
-            l.set_dark_mode(cfg.appearance != "light");
+            l.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
             add_check(
                 &mut l,
                 ACTION_LAYOUT_HORIZONTAL,
@@ -356,7 +356,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
         let scheme_sub = Menu::new_ref("🎨 配色 (Colors)");
         {
             let mut sc = scheme_sub.borrow_mut();
-            sc.set_dark_mode(cfg.appearance != "light");
+            sc.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
             add_check(
                 &mut sc,
                 ACTION_SCHEME_SCALE,
@@ -376,7 +376,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     let app_sub = Menu::new_ref("🌓 外觀 (Appearance)");
     {
         let mut a = app_sub.borrow_mut();
-        a.set_dark_mode(cfg.appearance != "light");
+        a.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
         add_check(
             &mut a,
             ACTION_APPEARANCE_AUTO,
@@ -426,7 +426,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     let opacity_sub = Menu::new_ref("🌗 視窗透明度 (Opacity)");
     {
         let mut op = opacity_sub.borrow_mut();
-        op.set_dark_mode(cfg.appearance != "light");
+        op.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
         let current_op = cfg.opacity;
         for (id, pct, val) in [
             (ACTION_OPACITY_100, 100, 1.00),
@@ -446,7 +446,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     let interval_sub = Menu::new_ref("⏱️ 更新頻率 (Interval)");
     {
         let mut intv = interval_sub.borrow_mut();
-        intv.set_dark_mode(cfg.appearance != "light");
+        intv.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
         let cur_int = cfg.refresh_interval_sec;
         for (id, sec) in [
             (ACTION_INTERVAL_30, 30),
@@ -536,7 +536,7 @@ impl HUDTrayIcon {
                 crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.appearance = "auto".to_string();
                 });
-                hud.set_theme(true);
+                hud.set_theme(crate::ui::resolve_is_dark("auto"));
                 self.update_menu_state();
             }
             ACTION_APPEARANCE_LIGHT => {

@@ -506,6 +506,18 @@ fn main() -> std::process::ExitCode {
         );
     }
 
+    // Follow the operating system's light/dark setting while `appearance` is "auto".
+    // `WM_SETTINGCHANGE` refreshes the platform theme inside the window procedure, so the
+    // change is queued to the UI event loop instead of re-entering the HUD from there.
+    qtrs_platform::platform()
+        .theme()
+        .theme_changed()
+        .connect(move |_| {
+            run_on_main_thread(main_thread_id, |hud| {
+                hud.borrow_mut().follow_system_theme();
+            });
+        });
+
     // Connect worker thread results callback
     let refresh_ctrl_clone = Arc::clone(&refresh_ctrl);
     refresh_ctrl.lock().set_notify_callback(move || {
@@ -551,6 +563,8 @@ fn main() -> std::process::ExitCode {
                 for update in updates {
                     hud.borrow_mut().on_data_fetched(&update);
                 }
+                let busy = refresh_ctrl_poll.lock().is_busy();
+                hud.borrow_mut().set_busy(busy);
             }
         });
     });

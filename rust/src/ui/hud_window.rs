@@ -44,14 +44,17 @@ fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
 
 use crate::ui::set_label_color;
 
-/// Header status dot: `#10b981` normally, `#f59e0b` while a provider reports an error
-/// (Python `_on_busy_changed`).
-fn status_dot_color(any_error: bool) -> qtrs_gui::tiny_skia::Color {
-    if any_error {
-        qtrs_gui::tiny_skia::Color::from_rgba8(245, 158, 11, 255)
+/// Header status dot (Python `_on_busy_changed`): `#38bdf8` while fetching, `#f59e0b` while a
+/// provider reports an error, `#10b981` otherwise.
+fn status_dot_color(busy: bool, any_error: bool) -> qtrs_gui::tiny_skia::Color {
+    let (r, g, b) = if busy {
+        (56, 189, 248)
+    } else if any_error {
+        (245, 158, 11)
     } else {
-        qtrs_gui::tiny_skia::Color::from_rgba8(16, 185, 129, 255)
-    }
+        (16, 185, 129)
+    };
+    qtrs_gui::tiny_skia::Color::from_rgba8(r, g, b, 255)
 }
 
 pub struct HUDWindow {
@@ -63,6 +66,8 @@ pub struct HUDWindow {
     pub is_click_through: bool,
     pub is_dark: bool,
     pub theme: Theme,
+    /// A provider fetch is running (drives the status dot colour).
+    pub busy: bool,
 
     #[allow(dead_code)]
     pub status_dot: WidgetRef,
@@ -85,7 +90,7 @@ impl HUDWindow {
     ) -> Result<Self, &'static str> {
         let (init_x, init_y, init_w, init_h, opacity, aot, ct, ui_mode, dark) = {
             let cfg = config.lock();
-            let is_dark = cfg.appearance != "light";
+            let is_dark = crate::ui::resolve_is_dark(&cfg.appearance);
             let (w, h) = if cfg.ui_mode == "table" {
                 (
                     cfg.table_width.max(MIN_TABLE_WIDTH) as i32,
@@ -160,7 +165,7 @@ impl HUDWindow {
         // Header bar widgets
         let dot = Label::new("●");
         let status_dot = make_widget(dot);
-        set_label_color(&status_dot, status_dot_color(false));
+        set_label_color(&status_dot, status_dot_color(false, false));
 
         let mut title = Label::new("AI AGENT HUD (3-IN-1)");
         title.set_object_name("HeaderTitle");
@@ -361,6 +366,7 @@ impl HUDWindow {
             cards,
             table,
             debouncer: Arc::clone(&debouncer),
+            busy: false,
         };
         debouncer.set_restoring(false);
 
@@ -665,14 +671,41 @@ impl HUDWindow {
         // Python `_on_data_fetched`: the header time is the time of the last fetch, and the
         // status dot is amber while any provider reports an error, green otherwise.
         set_label_text(&self.time_label, Local::now().format("%H:%M:%S").to_string());
-        let any_error = self.cards.values().any(|card| card.current_metrics.error.is_some());
-        set_label_color(&self.status_dot, status_dot_color(any_error));
+        self.refresh_status_dot();
         self.cards_container.borrow().update_layout();
         self.window.render_and_present();
     }
 
-    pub fn update_clock(&mut self) {
+    /// Python `_on_system_appearance_changed`: under `appearance = "auto"` the UI follows the
+    /// operating system's colour scheme.
+    pub fn follow_system_theme(&mut self) {
+        let dark = {
+            let cfg = self.config.lock();
+            if cfg.appearance != "auto" {
+                return;
+            }
+            crate::ui::resolve_is_dark(&cfg.appearance)
+        };
+        if dark != self.is_dark {
+            self.set_theme(dark);
+        }
+    }
 
+    /// Python `_on_busy_changed`: the status dot is blue while providers are being fetched.
+    pub fn set_busy(&mut self, busy: bool) {
+        if busy != self.busy {
+            self.busy = busy;
+            self.refresh_status_dot();
+            self.window.render_and_present();
+        }
+    }
+
+    fn refresh_status_dot(&self) {
+        let any_error = self.cards.values().any(|card| card.current_metrics.error.is_some());
+        set_label_color(&self.status_dot, status_dot_color(self.busy, any_error));
+    }
+
+    pub fn update_clock(&mut self) {
         for card in self.cards.values_mut() {
             card.update_countdown();
         }

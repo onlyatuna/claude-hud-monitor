@@ -471,8 +471,7 @@ impl FontDatabase {
         if let Some(data) = self.file_cache.get(&canonical) {
             return Some(data.clone());
         }
-        if let Ok(bytes) = std::fs::read(&canonical) {
-            let shared = SharedFontData::from_vec(bytes);
+        if let Ok(shared) = SharedFontData::from_file(&canonical) {
             self.file_cache.insert(canonical, shared.clone());
             return Some(shared);
         }
@@ -588,11 +587,10 @@ impl FontDatabase {
                             return Some((shared.clone(), face));
                         }
                     }
-                    let read = crate::startup_trace::span(|| format!("fs::read {}", canonical.display()));
-                    if let Ok(bytes) = std::fs::read(&canonical) {
+                    let read = crate::startup_trace::span(|| format!("map {}", canonical.display()));
+                    if let Ok(shared) = SharedFontData::from_file(&canonical) {
                         drop(read);
-                        let _p = crate::startup_trace::span(|| format!("parse_face {} ({} KB)", canonical.display(), bytes.len() / 1024));
-                        let shared = SharedFontData::from_vec(bytes);
+                        let _p = crate::startup_trace::span(|| format!("parse_face {} ({} KB)", canonical.display(), shared.len() / 1024));
                         if let Ok(face) = parse_face(&shared, 0) {
                             self.file_cache.insert(canonical, shared.clone());
                             return Some((shared, face));
@@ -626,9 +624,8 @@ impl FontDatabase {
             return Some((shared.clone(), face));
         }
 
-        let _t = crate::startup_trace::span(|| format!("read+parse (family index) {}", canonical.display()));
-        let bytes = std::fs::read(&canonical).ok()?;
-        let shared = SharedFontData::from_vec(bytes);
+        let _t = crate::startup_trace::span(|| format!("map+parse (family index) {}", canonical.display()));
+        let shared = SharedFontData::from_file(&canonical).ok()?;
         let face = parse_face(&shared, face_index).ok()?;
         self.file_cache.insert(canonical, shared.clone());
         Some((shared, face))

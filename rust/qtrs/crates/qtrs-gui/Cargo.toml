@@ -11,6 +11,7 @@ ab_glyph_rasterizer = "0.1"
 rustybuzz = "0.20.1"
 unicode-segmentation = "1.12"
 serde = { version = "1.0", features = ["derive"], optional = true }
+memmap2 = "0.9.11"
 
 [features]
 default = ["serde"]
