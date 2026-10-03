@@ -275,7 +275,12 @@ unsafe extern "system" fn tray_window_proc(
                 WM_RBUTTONUP | WM_CONTEXTMENU => {
                     let mut pt = POINT { x: 0, y: 0 };
                     GetCursorPos(&mut pt);
-                    let pos = Point::new(pt.x, pt.y);
+                    let dpr = crate::integration::platform().primary_screen().device_pixel_ratio();
+                    let pos = if dpr > 1.0 {
+                        crate::high_dpi::from_native_point(Point::new(pt.x, pt.y), dpr)
+                    } else {
+                        Point::new(pt.x, pt.y)
+                    };
                     tray.on_context_menu_requested.emit(&pos);
                     tray.on_activated.emit(&TrayActivation::Context);
                     if tray.menu.is_some() {

@@ -429,23 +429,26 @@ impl Menu {
         let size = self.size_hint();
         let screen = platform().primary_screen();
         let s_geom = screen.available_geometry();
+        const DESKTOP_MARGIN: i32 = 8;
 
         let mut x = pos.x;
         let mut y = pos.y;
-        if x + size.width > s_geom.right() {
-            x = (s_geom.right() - size.width).max(s_geom.x);
+        if x + size.width > s_geom.right() - DESKTOP_MARGIN {
+            x = (s_geom.right() - size.width - DESKTOP_MARGIN).max(s_geom.x + DESKTOP_MARGIN);
         }
-        if y + size.height > s_geom.bottom() {
-            y = if pos.y - size.height >= s_geom.y {
-                (pos.y - size.height).min(s_geom.bottom() - size.height)
+        if y + size.height > s_geom.bottom() - DESKTOP_MARGIN {
+            y = if pos.y - size.height >= s_geom.y + DESKTOP_MARGIN {
+                (pos.y - size.height).min(s_geom.bottom() - size.height - DESKTOP_MARGIN)
             } else {
-                (s_geom.bottom() - size.height).max(s_geom.y)
+                (s_geom.bottom() - size.height - DESKTOP_MARGIN).max(s_geom.y + DESKTOP_MARGIN)
             };
         }
-        x = x.max(s_geom.x);
-        y = y.max(s_geom.y);
+        x = x.max(s_geom.x + DESKTOP_MARGIN);
+        y = y.max(s_geom.y + DESKTOP_MARGIN);
+
+        let root_origin = Point::new(x, y);
         let initial_rect = Rect::new(x, y, size.width, size.height);
-        self.popup_bounds = Some(Rect::new(0, 0, s_geom.width, s_geom.height));
+        self.popup_bounds = Some(s_geom.translated(-root_origin.x, -root_origin.y));
         self.popup_at(Point::new(0, 0), None);
 
         let mut window = match Window::new(
@@ -472,61 +475,43 @@ impl Menu {
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) != 0 {
-                let win_geom = window.physical_geometry();
-                let mouse_pt = Point::new(msg.pt.x, msg.pt.y);
                 let dpr = platform().primary_screen().device_pixel_ratio();
-                let local_x = if dpr > 1.0 {
-                    ((msg.pt.x - win_geom.x) as f32 / dpr).round() as i32
+                let mouse_pt = Point::new(msg.pt.x, msg.pt.y);
+                let mouse_screen = if dpr > 1.0 {
+                    qtrs_platform::high_dpi::from_native_point(mouse_pt, dpr)
                 } else {
-                    msg.pt.x - win_geom.x
+                    mouse_pt
                 };
-                let local_y = if dpr > 1.0 {
-                    ((msg.pt.y - win_geom.y) as f32 / dpr).round() as i32
-                } else {
-                    msg.pt.y - win_geom.y
-                };
-                let local_pt = Point::new(local_x, local_y);
+                let local_pt = Point::new(mouse_screen.x - root_origin.x, mouse_screen.y - root_origin.y);
                 match msg.message {
                     WM_SETCURSOR => {
-                        // Parity with Qt QWindowsWindow::applyCursor (qwindowswindow.cpp:3751):
-                        // Ensure arrow cursor is active during menu modal tracking
                         SetCursor(LoadCursorW(std::ptr::null_mut(), IDC_ARROW));
                     }
                     WM_RBUTTONUP => {
-                        // Parity with Qt QMenu::mouseReleaseEvent (qmenu.cpp:2962):
-                        // Swallow right-button release event so it never leaks back to the parent
-                        // window or triggers another context menu!
-                        if !win_geom.contains(mouse_pt) {
+                        if !self.covers(local_pt) {
                             break;
                         }
                     }
                     WM_MOUSEMOVE => {
-                        // Parity with Qt QMenu::mouseMoveEvent (qmenu.cpp:2935 & 3511):
-                        // Repaint whenever hover changes on the root menu or any open submenu!
                         let old_signature = self.hover_signature();
                         let outcome = self.handle_mouse_move(local_pt);
                         let new_signature = self.hover_signature();
 
                         if old_signature != new_signature {
                             let covered = self.covered_rect();
-                            let new_w = covered.width.max(size.width);
-                            let new_h = covered.height.max(size.height);
+                            let win_x = root_origin.x + covered.x;
+                            let win_y = root_origin.y + covered.y;
+                            let win_w = covered.width.max(size.width);
+                            let win_h = covered.height.max(size.height);
                             let current_log = window.geometry();
-                            if current_log.width != new_w || current_log.height != new_h {
-                                let target_x = if initial_rect.x + new_w > s_geom.right() {
-                                    (s_geom.right() - new_w).max(s_geom.x)
-                                } else {
-                                    initial_rect.x
-                                };
-                                let target_y = if initial_rect.y + new_h > s_geom.bottom() {
-                                    (s_geom.bottom() - new_h).max(s_geom.y)
-                                } else {
-                                    initial_rect.y
-                                };
-                                window.set_geometry(Rect::new(target_x, target_y, new_w, new_h));
+                            if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
+                                window.set_geometry(Rect::new(win_x, win_y, win_w, win_h));
                             }
                             window.present_custom(|painter| {
+                                painter.save();
+                                painter.translate(-covered.x as f32, -covered.y as f32);
                                 self.paint_event(painter);
+                                painter.restore();
                             });
                         }
 
@@ -536,8 +521,7 @@ impl Menu {
                         }
                     }
                     WM_LBUTTONDOWN | WM_RBUTTONDOWN => {
-                        if !win_geom.contains(mouse_pt) {
-                            // Clicked outside menu window
+                        if !self.covers(local_pt) {
                             break;
                         }
                         let outcome = self.handle_mouse_press(local_pt, 1);
@@ -545,28 +529,23 @@ impl Menu {
                             break;
                         }
                         let covered = self.covered_rect();
-                        let new_w = covered.width.max(size.width);
-                        let new_h = covered.height.max(size.height);
+                        let win_x = root_origin.x + covered.x;
+                        let win_y = root_origin.y + covered.y;
+                        let win_w = covered.width.max(size.width);
+                        let win_h = covered.height.max(size.height);
                         let current_log = window.geometry();
-                        if current_log.width != new_w || current_log.height != new_h {
-                            let target_x = if initial_rect.x + new_w > s_geom.right() {
-                                (s_geom.right() - new_w).max(s_geom.x)
-                            } else {
-                                initial_rect.x
-                            };
-                            let target_y = if initial_rect.y + new_h > s_geom.bottom() {
-                                (s_geom.bottom() - new_h).max(s_geom.y)
-                            } else {
-                                initial_rect.y
-                            };
-                            window.set_geometry(Rect::new(target_x, target_y, new_w, new_h));
+                        if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
+                            window.set_geometry(Rect::new(win_x, win_y, win_w, win_h));
                         }
                         window.present_custom(|painter| {
+                            painter.save();
+                            painter.translate(-covered.x as f32, -covered.y as f32);
                             self.paint_event(painter);
+                            painter.restore();
                         });
                     }
                     WM_LBUTTONUP => {
-                        if !win_geom.contains(mouse_pt) {
+                        if !self.covers(local_pt) {
                             break;
                         }
                         let outcome = self.handle_mouse_release(local_pt, 1);
@@ -577,8 +556,12 @@ impl Menu {
                             }
                             MenuOutcome::Closed => break,
                             _ => {
+                                let covered = self.covered_rect();
                                 window.present_custom(|painter| {
+                                    painter.save();
+                                    painter.translate(-covered.x as f32, -covered.y as f32);
                                     self.paint_event(painter);
+                                    painter.restore();
                                 });
                             }
                         }
@@ -588,27 +571,15 @@ impl Menu {
                             VK_ESCAPE => break,
                             VK_UP => {
                                 self.handle_key(keys::UP, 0);
-                                window.present_custom(|painter| {
-                                    self.paint_event(painter);
-                                });
                             }
                             VK_DOWN => {
                                 self.handle_key(keys::DOWN, 0);
-                                window.present_custom(|painter| {
-                                    self.paint_event(painter);
-                                });
                             }
                             VK_LEFT => {
                                 self.handle_key(keys::LEFT, 0);
-                                window.present_custom(|painter| {
-                                    self.paint_event(painter);
-                                });
                             }
                             VK_RIGHT => {
                                 self.handle_key(keys::RIGHT, 0);
-                                window.present_custom(|painter| {
-                                    self.paint_event(painter);
-                                });
                             }
                             VK_RETURN => {
                                 let outcome = self.handle_key(keys::RETURN, 0);
@@ -616,12 +587,24 @@ impl Menu {
                                     chosen = Some(act);
                                     break;
                                 }
-                                window.present_custom(|painter| {
-                                    self.paint_event(painter);
-                                });
                             }
                             _ => {}
                         }
+                        let covered = self.covered_rect();
+                        let win_x = root_origin.x + covered.x;
+                        let win_y = root_origin.y + covered.y;
+                        let win_w = covered.width.max(size.width);
+                        let win_h = covered.height.max(size.height);
+                        let current_log = window.geometry();
+                        if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
+                            window.set_geometry(Rect::new(win_x, win_y, win_w, win_h));
+                        }
+                        window.present_custom(|painter| {
+                            painter.save();
+                            painter.translate(-covered.x as f32, -covered.y as f32);
+                            self.paint_event(painter);
+                            painter.restore();
+                        });
                     }
                     WM_KILLFOCUS => {
                         // Window lost keyboard/window focus (Win+L, Alt+Tab, clicked outside)
@@ -841,7 +824,7 @@ impl Menu {
                 }
                 y = y.max(b.y);
             }
-            x = x.max(0);
+            sub.popup_bounds = local_bounds.map(|b| b.translated(-x, -y));
             sub.show_with_geometry(Rect::new(x, y, size.width, size.height));
             if select_first {
                 sub.select_first();
@@ -923,7 +906,7 @@ impl Menu {
     }
 
     /// Bounding rectangle of this menu and its open sub-menus, in menu coordinates.
-    pub(crate) fn covered_rect(&self) -> Rect {
+    pub fn covered_rect(&self) -> Rect {
         let g = self.base.geometry();
         let mut rect = Rect::new(0, 0, g.width, g.height);
         if let Some((_, submenu)) = &self.open_submenu {
