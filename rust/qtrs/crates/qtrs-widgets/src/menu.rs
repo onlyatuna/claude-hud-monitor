@@ -74,6 +74,9 @@ pub struct Menu {
     menu_action: ActionWeak,
     popup_bounds: Option<Rect>,
     last_triggered: Option<ActionRef>,
+    /// Previous pointer position over this menu, used to tell whether the pointer is heading
+    /// for the open submenu. Cleared when the pointer leaves or enters a submenu.
+    last_mouse_pos: Option<Point>,
     last_covered: std::cell::Cell<Rect>,
     font: Font,
 
@@ -116,6 +119,7 @@ impl Menu {
             menu_action: Weak::new(),
             popup_bounds: None,
             last_triggered: None,
+            last_mouse_pos: None,
             last_covered: std::cell::Cell::new(Rect::default()),
             font: Font::new("Segoe UI, Microsoft JhengHei, Segoe UI Emoji", 12.0),
 
@@ -1037,13 +1041,15 @@ impl Menu {
         MenuOutcome::Handled
     }
 
-    /// Returns true if `pos` (in this menu's coordinates) is in the transition corridor
-    /// between the active parent item and the open submenu.
+    /// True when the pointer moved from `from` to `pos` heading for the open submenu, i.e. `pos`
+    /// lies inside the wedge spanned by `from` and the submenu's near edge.
     ///
-    /// Mirrors Qt's `QMenuPrivate::sloppyState` (qmenu.cpp:3514), preventing premature
-    /// submenu closing or item hopping while the user moves the mouse diagonally towards
-    /// the submenu.
-    fn is_in_submenu_corridor(&self, pos: Point) -> bool {
+    /// Mirrors Qt's `QMenuSloppyState` (qmenu.cpp): the submenu is not abandoned while the
+    /// pointer crosses neighbouring items on its way to it. The decision depends on the direction
+    /// of travel, so moving straight along the parent menu, or away from the submenu, selects the
+    /// item under the pointer as usual (a plain bounding rectangle would swallow every row that
+    /// lies within the submenu's vertical extent).
+    fn is_moving_towards_submenu(&self, from: Point, pos: Point) -> bool {
         let Some((idx, submenu)) = &self.open_submenu else {
             return false;
         };
@@ -1056,31 +1062,28 @@ impl Menu {
         };
         let sg = sub.base.geometry();
 
-        // If submenu is on the right:
-        if sg.x >= item.right() - SUBMENU_OVERLAP - 4 {
-            let corridor_min_x = item.x + item.width / 4;
-            let corridor_max_x = sg.x + sg.width;
-            let corridor_min_y = item.y.min(sg.y) - 8;
-            let corridor_max_y = (item.y + item.height).max(sg.y + sg.height) + 8;
-            pos.x >= corridor_min_x
-                && pos.x <= corridor_max_x
-                && pos.y >= corridor_min_y
-                && pos.y <= corridor_max_y
+        // `side` is +1 when the submenu opens to the right, -1 when it opens to the left; all
+        // x distances below are measured towards the submenu.
+        let (side, edge_x) = if sg.x >= item.right() - SUBMENU_OVERLAP - 4 {
+            (1i64, sg.x)
         } else {
-            // Submenu is on the left:
-            let corridor_min_x = sg.x;
-            let corridor_max_x = item.right() - item.width / 4;
-            let corridor_min_y = item.y.min(sg.y) - 8;
-            let corridor_max_y = (item.y + item.height).max(sg.y + sg.height) + 8;
-            pos.x >= corridor_min_x
-                && pos.x <= corridor_max_x
-                && pos.y >= corridor_min_y
-                && pos.y <= corridor_max_y
+            (-1i64, sg.x + sg.width)
+        };
+        let to_edge = side * (edge_x - from.x) as i64;
+        let dx = side * (pos.x - from.x) as i64;
+        if to_edge <= 0 || dx <= 0 {
+            return false;
         }
+        let dy = (pos.y - from.y) as i64;
+        let top = (sg.y - from.y) as i64;
+        let bottom = (sg.y + sg.height - from.y) as i64;
+        // cross((to_edge, top), (dx, dy)) >= 0 && cross((dx, dy), (to_edge, bottom)) >= 0
+        to_edge * dy - top * dx >= 0 && dx * bottom - dy * to_edge >= 0
     }
 
     pub(crate) fn handle_mouse_move(&mut self, pos: Point) -> MenuOutcome {
         if let Some(outcome) = self.route_to_submenu(pos, |s, p| s.handle_mouse_move(p)) {
+            self.last_mouse_pos = None;
             return outcome;
         }
         // Parity with Qt QMenu::mouseMoveEvent (qmenu.cpp:3511):
@@ -1090,9 +1093,10 @@ impl Menu {
                 sub.set_active_index(None);
             }
         }
-        // If moving within the corridor between the active item and the open submenu,
-        // preserve the open submenu and don't switch items (mirrors Qt's sloppyState / submenu corridor).
-        if self.is_in_submenu_corridor(pos) {
+        // While the pointer travels diagonally towards the open submenu, keep the submenu and
+        // the active item (mirrors Qt's sloppyState). Any other move selects the item under it.
+        let from = self.last_mouse_pos.replace(pos);
+        if from.is_some_and(|from| self.is_moving_towards_submenu(from, pos)) {
             return MenuOutcome::Handled;
         }
         if let Some(idx) = self.index_at(pos) {
@@ -1153,6 +1157,7 @@ impl Menu {
     }
 
     pub(crate) fn handle_leave(&mut self) {
+        self.last_mouse_pos = None;
         if self.open_submenu.is_none() {
             self.set_active_index(None);
         }

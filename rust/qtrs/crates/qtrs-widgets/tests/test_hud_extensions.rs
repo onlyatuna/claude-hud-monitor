@@ -201,6 +201,91 @@ fn test_submenu_hover_and_signature_propagation() {
         "Hover signature must change when returning to parent menu"
     );
 }
+
+/// Root menu shaped like the HUD context menu around "Opacity": a submenu item taller than the
+/// plain items beneath it ("Interval", "Autostart"), which lie inside the submenu's vertical span.
+fn opacity_menu() -> (
+    qtrs_widgets::menu::Menu,
+    qtrs_widgets::action::ActionRef,
+    qtrs_widgets::action::ActionRef,
+) {
+    use qtrs_gui::geometry::primitives::Point;
+    use qtrs_widgets::action::Action;
+    use qtrs_widgets::menu::Menu;
+
+    let mut root = Menu::new("Root");
+    let opacity = root.add_menu("Opacity");
+    for pct in ["100%", "90%", "80%", "70%", "50%", "30%"] {
+        opacity.borrow_mut().add_action(Action::new_ref(pct));
+    }
+    let interval = Action::new_ref("Interval");
+    let autostart = Action::new_ref("Autostart");
+    root.add_action(interval.clone());
+    root.add_action(autostart.clone());
+    root.popup(Point::new(0, 0));
+    (root, interval, autostart)
+}
+
+fn active_text(menu: &qtrs_widgets::menu::Menu) -> Option<String> {
+    menu.active_action().map(|a| a.borrow().text().to_string())
+}
+
+#[test]
+fn test_hover_moving_straight_down_past_open_submenu_selects_rows_below() {
+    let (mut root, interval, autostart) = opacity_menu();
+    let opacity = root.actions()[0].clone();
+    let opacity_c = root.action_geometry(&opacity).unwrap().center();
+    root.handle_mouse_move_at(opacity_c);
+    assert!(root.open_submenu().is_some(), "hovering Opacity opens its submenu");
+
+    // Rows below "Opacity" are inside the submenu's vertical extent; the pointer is not heading
+    // for the submenu, so they must take the hover.
+    let interval_c = root.action_geometry(&interval).unwrap().center();
+    root.handle_mouse_move_at(qtrs_gui::geometry::primitives::Point::new(opacity_c.x, interval_c.y));
+    assert_eq!(active_text(&root).as_deref(), Some("Interval"));
+    assert!(root.open_submenu().is_none(), "moving to a plain item closes the submenu");
+
+    let autostart_c = root.action_geometry(&autostart).unwrap().center();
+    root.handle_mouse_move_at(qtrs_gui::geometry::primitives::Point::new(opacity_c.x, autostart_c.y));
+    assert_eq!(active_text(&root).as_deref(), Some("Autostart"));
+}
+
+#[test]
+fn test_hover_diagonal_towards_open_submenu_keeps_item_until_it_is_reached() {
+    use qtrs_gui::geometry::primitives::Point;
+    let (mut root, _interval, _autostart) = opacity_menu();
+    let opacity = root.actions()[0].clone();
+    let start = root.action_geometry(&opacity).unwrap().center();
+    root.handle_mouse_move_at(start);
+    let sub = root.open_submenu().expect("submenu open");
+    let sg = sub.borrow().geometry();
+    let last = sub.borrow().actions().last().cloned().unwrap();
+    let lg = sub.borrow().action_geometry(&last).unwrap();
+    let target = Point::new(sg.x + lg.center().x, sg.y + lg.center().y);
+
+    // Straight line from the item to the submenu's last row, crossing the rows below "Opacity".
+    let n = 24;
+    for step in 1..=n {
+        let p = Point::new(
+            start.x + (target.x - start.x) * step / n,
+            start.y + (target.y - start.y) * step / n,
+        );
+        root.handle_mouse_move_at(p);
+        if p.x < sg.x {
+            assert_eq!(
+                active_text(&root).as_deref(),
+                Some("Opacity"),
+                "diagonal travel at {p:?} must not hop to the rows it crosses"
+            );
+            assert!(root.open_submenu().is_some(), "submenu must stay open at {p:?}");
+        }
+    }
+    assert_eq!(
+        sub.borrow().active_action().map(|a| a.borrow().text().to_string()).as_deref(),
+        Some("30%"),
+        "pointer ends on the submenu's last row"
+    );
+}
 #[test]
 fn test_window_system_resize_event_and_backing_store_update() {
     use qtrs_core::event::{Event, EventKind};
