@@ -1,4 +1,9 @@
 use crate::resize_trace::{record as trace_record, TraceKind};
+
+#[inline]
+fn trace_record_at(kind: TraceKind, hwnd: usize, pos: (i32, i32), physical: (u32, u32)) {
+    crate::resize_trace::record_at(kind, hwnd, pos, (0, 0), physical);
+}
 use crate::surface::PlatformSurface;
 use qtrs_gui::geometry::Rect;
 use qtrs_gui::paint::Pixmap;
@@ -13,10 +18,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, SetWindowLongPtrW, UpdateLayeredWindow,
     UpdateLayeredWindowIndirect, GWL_EXSTYLE, ULW_ALPHA, UPDATELAYEREDWINDOWINFO, WS_EX_LAYERED,
 };
-
-/// Introduced in Windows 8: tells DWM/compositor to ignore `psize` and avoid window resizing
-/// during incremental dirty region updates.
-const ULW_EX_NORESIZE: u32 = 0x00000008;
 
 /// Largest capacity (in pixels) the interactive-resize headroom may allocate (128 MiB of BGRA).
 /// Beyond this the DIB is sized exactly instead.
@@ -96,6 +97,12 @@ pub struct LayeredStats {
     pub pixel_copy_ns: u64,
     /// Debug builds only: time in `UpdateLayeredWindowIndirect` (and its fallback).
     pub ulw_ns: u64,
+    /// Presents where the live `GetWindowRect` size differed from `psize` (the visible size the
+    /// content was rendered for), i.e. the HWND and the layered content disagreed.
+    pub ulw_size_mismatch_count: u64,
+    /// Presents where `UpdateLayeredWindowIndirect` itself changed the HWND rect (debug builds
+    /// only: needs a `GetWindowRect` after the call).
+    pub ulw_rect_changed_by_ulw_count: u64,
 }
 
 pub struct Win32LayeredSurface {
@@ -354,6 +361,7 @@ impl Win32LayeredSurface {
             resized = true;
         }
 
+        let dbg_force_full = self.force_full;
         let full_window_rect = Rect::new(0, 0, self.width as i32, self.height as i32);
         // After a (re)allocation or visible-size change the DIB's visible area is stale, so the
         // whole of it is repainted regardless of what the caller marked dirty.
@@ -381,6 +389,7 @@ impl Win32LayeredSurface {
             (clipped_dirty.width as u32, clipped_dirty.height as u32),
         );
         let t_copy = tick();
+        let dbg_copy = crate::resize_debug::start();
         unsafe {
             let src_data = pixmap.data();
             for y in clipped_dirty.y..(clipped_dirty.y + clipped_dirty.height) {
@@ -405,6 +414,7 @@ impl Win32LayeredSurface {
                 }
             }
         }
+        crate::resize_debug::end(crate::resize_debug::Phase::PixelCopy, dbg_copy);
         self.stats.pixel_copy_ns += ns_since(t_copy);
         self.stats.copied_pixels += (clipped_dirty.width as u64) * (clipped_dirty.height as u64);
         self.stats.last_copied_width = clipped_dirty.width as u32;
@@ -424,6 +434,20 @@ impl Win32LayeredSurface {
             GetWindowRect(self.hwnd, &mut win_rect);
             pt_dst.x = win_rect.left;
             pt_dst.y = win_rect.top;
+            trace_record_at(
+                TraceKind::WindowRectBeforeUlw,
+                hwnd_id,
+                (win_rect.left, win_rect.top),
+                (
+                    (win_rect.right - win_rect.left) as u32,
+                    (win_rect.bottom - win_rect.top) as u32,
+                ),
+            );
+            if (win_rect.right - win_rect.left) as u32 != self.width
+                || (win_rect.bottom - win_rect.top) as u32 != self.height
+            {
+                self.stats.ulw_size_mismatch_count += 1;
+            }
 
             // `psize` is the visible size; the (possibly larger) DIB is read from (0,0).
             let size = SIZE {
@@ -431,6 +455,12 @@ impl Win32LayeredSurface {
                 cy: self.height as i32,
             };
             let pt_src = POINT { x: 0, y: 0 };
+            trace_record_at(
+                TraceKind::UlwArgs,
+                hwnd_id,
+                (pt_dst.x, pt_dst.y),
+                (self.width, self.height),
+            );
 
             let mut dirty_win_rect = RECT {
                 left: clipped_dirty.x,
@@ -448,20 +478,24 @@ impl Win32LayeredSurface {
             info.pptSrc = &pt_src;
             info.crKey = 0;
             info.pblend = &blend;
-            let dw_flags = if resized {
-                ULW_ALPHA
-            } else {
-                ULW_ALPHA | ULW_EX_NORESIZE
-            };
+            // Plain `ULW_ALPHA`, as Qt's QWindowsBackingStore::flush does. `ULW_EX_NORESIZE` made the
+            // call fail (GetLastError 31) whenever `psize` was 1 px off the HWND (DPI rounding) and
+            // measured no faster (tools/second_layer_harness/ulw_cost.py).
+            let dw_flags = ULW_ALPHA;
             info.dwFlags = dw_flags;
             info.prcDirty = &mut dirty_win_rect;
 
             trace_record(TraceKind::UpdateLayeredWindowStart, hwnd_id, (0, 0), phys);
             let t_ulw = tick();
+            let dbg_t0 = std::time::Instant::now();
+            let mut dbg_indirect_err: Option<u32> = None;
+            let mut dbg_fallback_ok: Option<bool> = None;
             let res = UpdateLayeredWindowIndirect(self.hwnd, &info);
             let mut outcome = Ok(());
             if res == 0 {
                 let err = windows_sys::Win32::Foundation::GetLastError();
+                dbg_indirect_err = Some(err);
+                let dbg_fb = crate::resize_debug::start();
                 eprintln!("[Win32Surface] UpdateLayeredWindowIndirect failed (GetLastError = {}), falling back to UpdateLayeredWindow", err);
                 self.stats.ulw_fallback_count += 1;
                 let fallback_res = UpdateLayeredWindow(
@@ -475,6 +509,8 @@ impl Win32LayeredSurface {
                     &blend,
                     ULW_ALPHA,
                 );
+                crate::resize_debug::end(crate::resize_debug::Phase::UlwFallback, dbg_fb);
+                dbg_fallback_ok = Some(fallback_res != 0);
                 if fallback_res == 0 {
                     let err2 = windows_sys::Win32::Foundation::GetLastError();
                     eprintln!(
@@ -486,8 +522,47 @@ impl Win32LayeredSurface {
                     );
                 }
             }
+            if crate::resize_debug::enabled() {
+                let dbg_dur = dbg_t0.elapsed();
+                crate::resize_debug::end(crate::resize_debug::Phase::Ulw, Some(dbg_t0));
+                let mut after: RECT = std::mem::zeroed();
+                GetWindowRect(self.hwnd, &mut after);
+                crate::resize_debug::ulw(crate::resize_debug::UlwSample {
+                    hwnd_before: (win_rect.left, win_rect.top, win_rect.right, win_rect.bottom),
+                    hwnd_after: (after.left, after.top, after.right, after.bottom),
+                    pt_dst: (pt_dst.x, pt_dst.y),
+                    psize: (self.width, self.height),
+                    pixmap: (p_width, p_height),
+                    alloc: (self.alloc_width, self.alloc_height),
+                    dirty: (
+                        clipped_dirty.x,
+                        clipped_dirty.y,
+                        clipped_dirty.width,
+                        clipped_dirty.height,
+                    ),
+                    no_resize_flag: false,
+                    resized,
+                    force_full: dbg_force_full,
+                    indirect_error: dbg_indirect_err,
+                    fallback_ok: dbg_fallback_ok,
+                    duration: dbg_dur,
+                });
+            }
             self.stats.ulw_ns += ns_since(t_ulw);
             trace_record(TraceKind::UpdateLayeredWindowEnd, hwnd_id, (0, 0), phys);
+            crate::resize_trace::record_window_rect(TraceKind::WindowRectAfterUlw, hwnd_id);
+            #[cfg(debug_assertions)]
+            {
+                let mut after: RECT = std::mem::zeroed();
+                if GetWindowRect(self.hwnd, &mut after) != 0
+                    && (after.left != win_rect.left
+                        || after.top != win_rect.top
+                        || after.right != win_rect.right
+                        || after.bottom != win_rect.bottom)
+                {
+                    self.stats.ulw_rect_changed_by_ulw_count += 1;
+                }
+            }
             outcome?;
         }
 

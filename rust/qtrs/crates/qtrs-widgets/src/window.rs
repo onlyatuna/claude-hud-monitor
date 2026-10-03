@@ -131,6 +131,7 @@ impl RenderState {
 
     /// Marks the window dirty and queues at most one deferred render.
     fn request_render(&self) {
+        qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::RenderRequested);
         self.dirty.set(true);
         self.retry_used.set(false);
         if self.render_pending.get() || self.currently_rendering.get() {
@@ -147,6 +148,7 @@ impl RenderState {
     /// (`insertion_offset`), so this never re-dispatches within the current pump.
     fn queue_render(&self) -> bool {
         self.render_pending.set(true);
+        qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::RenderQueuedDeferred);
         let id = self.window_id;
         let queued = qtrs_core::event_loop::post_event_to_thread(
             qtrs_core::object::ThreadId::current(),
@@ -181,6 +183,8 @@ impl RenderState {
 
     /// A borrow was held elsewhere: keep `dirty`, queue at most one next-turn retry.
     fn on_borrow_conflict(&self) {
+        qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::SkipBorrowConflict);
+        qtrs_platform::resize_debug::note(|| "render skipped: borrow conflict".to_string());
         self.bump(|s| s.borrow_skipped_count += 1);
         if self.retry_used.get() || self.render_pending.get() {
             return;
@@ -195,6 +199,7 @@ impl RenderState {
     /// loop started stays queued but finds `dirty == false` and does nothing, so there is never
     /// a sync + deferred double render.
     fn render_now(&self) {
+        qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::RenderNow);
         self.dirty.set(true);
         if self.currently_rendering.get() {
             // Re-queued once by the running phase's tail.
@@ -216,7 +221,14 @@ impl RenderState {
 
     /// Layout activation + paint + present, using the latest geometry.
     fn render_phase(&self) {
-        if self.currently_rendering.get() || !self.dirty.get() {
+        if self.currently_rendering.get() {
+            qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::SkipReentrant);
+            qtrs_platform::resize_debug::note(|| "render_phase skipped: already rendering".to_string());
+            return;
+        }
+        if !self.dirty.get() {
+            qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::SkipNotDirty);
+            qtrs_platform::resize_debug::note(|| "render_phase skipped: not dirty".to_string());
             return;
         }
         let (Some(pw_rc), Some(bs_rc)) = (self.platform_window.upgrade(), self.backing_store.upgrade())
@@ -241,13 +253,26 @@ impl RenderState {
         {
             self.currently_rendering.set(true);
             let _guard = FlagGuard(&self.currently_rendering);
+            let dbg_lay = qtrs_platform::resize_debug::start();
             crate::layout_scheduler::LayoutScheduler::activate_pending();
+            qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::LayoutActivate, dbg_lay);
             let g = self.geometry.get();
             let trace_hwnd = pw.native_handle() as usize;
             let trace_dpr = platform().primary_screen().device_pixel_ratio();
             let trace_phys = (
                 (g.width as f32 * trace_dpr).round() as u32,
                 (g.height as f32 * trace_dpr).round() as u32,
+            );
+            qtrs_platform::resize_trace::record_at(
+                qtrs_platform::resize_trace::TraceKind::RequestedGeometry,
+                trace_hwnd,
+                (g.x, g.y),
+                (g.width as u32, g.height as u32),
+                trace_phys,
+            );
+            qtrs_platform::resize_trace::record_window_rect(
+                qtrs_platform::resize_trace::TraceKind::WindowRectBeforeRender,
+                trace_hwnd,
             );
             qtrs_platform::resize_trace::record(
                 qtrs_platform::resize_trace::TraceKind::RenderStart,
@@ -256,6 +281,7 @@ impl RenderState {
                 trace_phys,
             );
             let presented = do_render_and_present(&mut **pw, &mut bs, &root, g);
+            qtrs_platform::resize_debug::mark_rendered();
             qtrs_platform::resize_trace::record(
                 qtrs_platform::resize_trace::TraceKind::RenderEnd,
                 trace_hwnd,
@@ -320,14 +346,21 @@ pub struct Window {
 
 impl Window {
     pub fn new(title: &str, geometry: Rect, flags: WindowFlags) -> Result<Self, &'static str> {
-        let p = platform();
+        let _t = qtrs_gui::startup_trace::span(|| format!("Window::new({title:?})"));
+        let p = {
+            let _t = qtrs_gui::startup_trace::span(|| "platform() first use".into());
+            platform()
+        };
         let dpr = p.primary_screen().device_pixel_ratio();
         let native_rect = if dpr > 1.0 {
             qtrs_platform::high_dpi::to_native_rect(geometry, dpr)
         } else {
             geometry
         };
-        let platform_win = p.create_window(title, native_rect, flags)?;
+        let platform_win = {
+            let _t = qtrs_gui::startup_trace::span(|| "create_window (native)".into());
+            p.create_window(title, native_rect, flags)?
+        };
         let backing_store = BackingStore::new(Size::new(geometry.width, geometry.height), dpr)
             .ok_or("Failed to create top-level window offscreen BackingStore")?;
         let window_id = ObjectId::next();
@@ -487,7 +520,11 @@ impl Window {
     }
 
     pub fn show(&mut self) {
-        self.platform_window.borrow_mut().show();
+        let _t = qtrs_gui::startup_trace::span(|| "Window::show".into());
+        {
+            let _s = qtrs_gui::startup_trace::span(|| "platform_window.show() (ShowWindow + messages it dispatches)".into());
+            self.platform_window.borrow_mut().show();
+        }
         self.render_and_present();
     }
 
@@ -577,8 +614,16 @@ impl Window {
         *cb = Some(Box::new(handler));
     }
 
+    #[track_caller]
     pub fn render_and_present(&mut self) {
         let geom = self.geometry.get();
+        {
+            let c = std::panic::Location::caller();
+            qtrs_platform::resize_debug::note(|| format!(
+                "render_and_present() called from {}:{} with geometry {}x{}@({},{})",
+                c.file(), c.line(), geom.width, geom.height, geom.x, geom.y
+            ));
+        }
         let root = self.root_widget.clone();
         {
             let mut bs = self.backing_store.borrow_mut();
@@ -775,7 +820,17 @@ fn render_widget_recursive(widget_ref: &WidgetRef, painter: &mut Painter, dirty_
     painter.save();
     painter.translate(geom.x as f32, geom.y as f32);
 
+    let dbg_w = qtrs_platform::resize_debug::start();
     widget.paint_event(painter);
+    if let Some(t0) = dbg_w {
+        let us = t0.elapsed().as_micros();
+        if us >= 1500 {
+            qtrs_platform::resize_debug::note(|| format!(
+                "slow paint_event {:.1}ms: widget {:?} geom {}x{}@({},{})",
+                us as f64 / 1000.0, widget.object_name(), geom.width, geom.height, geom.x, geom.y
+            ));
+        }
+    }
 
     let children = widget.children();
     drop(widget);
@@ -823,21 +878,28 @@ fn do_render_and_present(
     root_widget: &WidgetRef,
     geometry: Rect,
 ) -> bool {
+    let _t = qtrs_gui::startup_trace::span_min(0.5, || "do_render_and_present".into());
     let dpr = platform().primary_screen().device_pixel_ratio();
     let logical_size = Size::new(geometry.width, geometry.height);
 
     // --- Lazy Backing Store Resize (Qt QWidgetRepaintManager::paintAndFlush parity) ---
     // If the backing store dimensions or DPR differ from the required top-level size,
     // reallocate lazily here, and mark the entire window dirty so the new buffer is fully painted.
-    if backing_store.resize(logical_size, dpr) {
+    let dbg_bs = qtrs_platform::resize_debug::start();
+    if backing_store.resize_to_native(logical_size, dpr, platform_window.native_size()) {
+        qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::BackingStoreResized);
         root_widget.borrow_mut().update();
     }
+    qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::BackingStoreResize, dbg_bs);
 
     let root_geom = Rect::new(0, 0, geometry.width, geometry.height);
+    let dbg_col = qtrs_platform::resize_debug::start();
     let dirty = collect_dirty_region(root_widget, Point::new(0, 0))
         .unwrap_or(root_geom)
         .intersected(&root_geom);
+    qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::CollectDirty, dbg_col);
     if dirty.is_empty() {
+        qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::NoDirtyRegion);
         return false;
     }
 
@@ -847,8 +909,12 @@ fn do_render_and_present(
         dirty
     };
 
+    let dbg_clr = qtrs_platform::resize_debug::start();
     backing_store.clear_rect(phys_dirty);
+    qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::Clear, dbg_clr);
 
+    let dbg_paint = qtrs_platform::resize_debug::start();
+    let _paint_span = qtrs_gui::startup_trace::span_min(0.5, || "paint (render_widget_recursive)".into());
     {
         let mut painter = Painter::begin(&mut **backing_store);
         painter.set_clip_rect(RectF::new(
@@ -859,8 +925,11 @@ fn do_render_and_present(
         ));
         render_widget_recursive(root_widget, &mut painter, dirty);
     }
+    qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::Paint, dbg_paint);
+    drop(_paint_span);
 
     let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
+    let _present_span = qtrs_gui::startup_trace::span_min(0.5, || "present_region".into());
     let _ = platform_window.present_region(backing_store, &dirty_region);
     true
 }
@@ -880,6 +949,10 @@ struct WindowEventHandler {
 
 impl WindowSystemEventHandler for WindowEventHandler {
     fn handle_window_event(&mut self, event: WindowSystemEvent) {
+        let _t = qtrs_gui::startup_trace::span_min(2.0, || {
+            let d = format!("{event:?}");
+            format!("handle_window_event {}", d.chars().take(60).collect::<String>())
+        });
         let root = self.root.clone();
         match event {
             WindowSystemEvent::MouseMove { pos, .. } => {
@@ -986,10 +1059,18 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 };
 
                 let size_changed = old_size.width != size.width || old_size.height != size.height;
+                qtrs_platform::resize_debug::note(|| format!(
+                    "Resize event {}x{} (logical) vs widget geometry {}x{}: {}; within_set_geometry={} interactive={}",
+                    size.width, size.height, old_size.width, old_size.height,
+                    if size_changed { "changed" } else { "UNCHANGED -> no layout, no render" },
+                    self.render.within_set_geometry.get(),
+                    self.render.interactive_resize.get(),
+                ));
 
                 if size_changed {
                     self.render.bump(|s| s.resize_event_count += 1);
                     // 1. Update root widget geometry (widget geometry = new size)
+                    let dbg_disp = qtrs_platform::resize_debug::start();
                     root.borrow_mut().set_geometry(Rect::new(0, 0, size.width, size.height));
 
                     // 2. Dispatch Resize event to widgets and callback (never coalesced)
@@ -1000,23 +1081,30 @@ impl WindowSystemEventHandler for WindowEventHandler {
                         old_height: old_size.height,
                     });
                     self.dispatcher.dispatch_event(&root, &mut ev);
+                    qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::ResizeDispatch, dbg_disp);
 
+                    let dbg_cb = qtrs_platform::resize_debug::start();
                     if let Some(cb) = self.resize_cb.borrow().as_ref() {
                         self.render.bump(|s| s.resize_callback_count += 1);
                         cb(size);
                     }
+                    qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::ResizeCallback, dbg_cb);
 
                     // 3. Invalidate layout (deduplicated by LayoutScheduler); activation, paint
                     //    and present happen once in the coalesced deferred render.
+                    let dbg_inv = qtrs_platform::resize_debug::start();
                     crate::layout_scheduler::LayoutScheduler::invalidate(&root);
+                    qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::LayoutInvalidate, dbg_inv);
 
                     // 4. Window::set_geometry renders synchronously itself (explicit flag,
                     //    not RefCell borrow state).
                     if !self.render.within_set_geometry.get() {
                         if self.render.interactive_resize.get() {
                             // Native sizing loop: layout activation + paint + present now.
+                            qtrs_platform::resize_debug::note(|| "-> render_now".to_string());
                             self.render.render_now();
                         } else {
+                            qtrs_platform::resize_debug::note(|| "-> request_render (deferred)".to_string());
                             self.render.request_render();
                         }
                     }

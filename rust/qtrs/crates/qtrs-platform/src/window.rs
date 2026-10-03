@@ -428,8 +428,19 @@ unsafe extern "system" fn native_window_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    let _t = qtrs_gui::startup_trace::span_min(3.0, || format!("wndproc msg=0x{msg:04X}"));
+    native_window_proc_inner(hwnd, msg, wparam, lparam)
+}
+
+unsafe fn native_window_proc_inner(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_NCCALCSIZE => {
+            crate::resize_debug::count(crate::resize_debug::Count::NcCalcSize);
             if wparam != 0 {
                 let ncp = &mut *(lparam as *mut NCCALCSIZE_PARAMS);
                 let client_rect = &mut ncp.rgrc[0];
@@ -518,6 +529,7 @@ unsafe extern "system" fn native_window_proc(
             0
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_ENTERSIZEMOVE => {
+            crate::resize_debug::enter_size_move();
             set_interactive_resize_flag(hwnd, true);
             // Per-HWND: delivered to this window's own event handler.
             dispatch_window_system_event(
@@ -534,6 +546,7 @@ unsafe extern "system" fn native_window_proc(
                 hwnd,
                 WindowSystemEvent::InteractiveResizeEnd,
             );
+            crate::resize_debug::exit_size_move();
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DESTROY => {
@@ -545,6 +558,7 @@ unsafe extern "system" fn native_window_proc(
             let dpr = get_window_dpr(hwnd);
             let phys_w = (lparam as usize & 0xffff) as i32;
             let phys_h = ((lparam as usize >> 16) & 0xffff) as i32;
+            crate::resize_debug::wm_size_begin(hwnd as isize, phys_w, phys_h);
             let logical_size = crate::high_dpi::from_native_size(
                 qtrs_gui::geometry::primitives::Size::new(phys_w, phys_h),
                 dpr,
@@ -566,14 +580,20 @@ unsafe extern "system" fn native_window_proc(
                 (0, 0)
             };
             let logical_rect = Rect::new(x, y, logical_size.width, logical_size.height);
+            crate::resize_debug::note(|| format!(
+                "WM_SIZE phys {}x{} dpr {} -> logical {}x{} (wparam={})",
+                phys_w, phys_h, dpr, logical_size.width, logical_size.height, wparam
+            ));
 
             // The single canonical resize delivery: WindowSystemEvent::Resize (geometry, widget
             // Resize, callback, layout, render). No second `EventKind::Resize` is posted to the
             // bound QObject; it used to re-run the callback and a synchronous render.
             handle_geometry_change(Delivery::Default, hwnd, logical_rect);
+            crate::resize_debug::wm_size_end(hwnd as isize);
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MOVE => {
+            crate::resize_debug::wm_move_begin(hwnd as isize);
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);
@@ -605,6 +625,7 @@ unsafe extern "system" fn native_window_proc(
                     }),
                 );
             }
+            crate::resize_debug::wm_move_end(hwnd as isize);
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_SHOWWINDOW => {
@@ -620,6 +641,7 @@ unsafe extern "system" fn native_window_proc(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_PAINT => {
+            crate::resize_debug::count(crate::resize_debug::Count::WmPaint);
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(receiver, Event::new_spontaneous(EventKind::Expose));
             }
@@ -1104,6 +1126,7 @@ pub struct NativeWindow {
     presenter: Option<crate::presenter::WindowsPresenter>,
     owner_thread: std::thread::ThreadId,
     state_flags: std::cell::Cell<PlatformWindowStateFlags>,
+    ime_enabled: std::cell::Cell<bool>,
 }
 
 #[cfg(windows)]
@@ -1168,6 +1191,8 @@ impl NativeWindow {
             return Err("CreateWindowExW failed");
         }
 
+        crate::ime::set_window_ime_enabled(hwnd, false);
+
         if flags.contains(WindowFlags::CUSTOM_FRAMELESS) && !flags.contains(WindowFlags::LAYERED) {
             unsafe {
                 let margins = MARGINS {
@@ -1213,6 +1238,7 @@ impl NativeWindow {
             presenter: None,
             owner_thread: std::thread::current().id(),
             state_flags: std::cell::Cell::new(PlatformWindowStateFlags::NONE),
+            ime_enabled: std::cell::Cell::new(false),
         })
     }
 
@@ -1590,6 +1616,7 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         let width = pixmap.physical_width();
         let height = pixmap.physical_height();
         let opacity = self.opacity;
+        let dbg_t = crate::resize_debug::start();
         let res = match self.get_or_create_presenter(width, height) {
             Ok(p) => {
                 p.set_opacity(opacity);
@@ -1599,13 +1626,17 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         };
 
         if res.is_err() {
+            crate::resize_debug::count(crate::resize_debug::Count::PresentError);
             self.presenter.take();
             let p = self.get_or_create_presenter(width, height)?;
             p.set_opacity(opacity);
             let full = qtrs_gui::geometry::Region::from_coords(0, 0, width as i32, height as i32);
-            return p.present(pixmap, &full);
+            let r = p.present(pixmap, &full);
+            crate::resize_debug::end(crate::resize_debug::Phase::Present, dbg_t);
+            return r;
         }
 
+        crate::resize_debug::end(crate::resize_debug::Phase::Present, dbg_t);
         Ok(())
     }
 
@@ -1639,11 +1670,27 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         self.hwnd as isize
     }
 
+    fn native_size(&self) -> Option<(u32, u32)> {
+        if self.hwnd.is_null() {
+            return None;
+        }
+        let mut r: RECT = unsafe { std::mem::zeroed() };
+        // Same rect `UpdateLayeredWindowIndirect` is given as `psize`.
+        if unsafe { GetWindowRect(self.hwnd, &mut r) } == 0 {
+            return None;
+        }
+        let (w, h) = (r.right - r.left, r.bottom - r.top);
+        (w > 0 && h > 0).then_some((w as u32, h as u32))
+    }
+
     fn set_backdrop(&mut self, backdrop: crate::backdrop::BackdropType, dark_mode: bool) -> bool {
         crate::backdrop::set_window_backdrop(self.hwnd, backdrop, dark_mode)
     }
 
     fn set_ime_focus(&mut self, pos: qtrs_gui::geometry::primitives::Point) {
+        if !self.ime_enabled.replace(true) {
+            crate::ime::set_window_ime_enabled(self.hwnd, true);
+        }
         let mut ime = crate::ime::Win32InputContext::new(self.hwnd);
         ime.set_micro_focus(pos);
     }

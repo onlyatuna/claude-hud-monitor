@@ -103,6 +103,24 @@ impl BackingStore {
         self.pixmap.resize_with_dpr(phys_w, phys_h, self.dpr)
     }
 
+    /// Like [`resize`](Self::resize), but sizes the buffer to the window's real native size when
+    /// the platform knows it.
+    ///
+    /// `round(logical * dpr)` can be 1 px off the native window at fractional scale factors; the
+    /// native size is used when it is within 2 px of that estimate (otherwise the estimate wins,
+    /// e.g. the window is mid-way through a move to another screen).
+    pub fn resize_to_native(&mut self, size: Size, dpr: f32, native: Option<(u32, u32)>) -> bool {
+        self.size = size;
+        self.dpr = if dpr <= 0.0 { 1.0 } else { dpr };
+        let est_w = ((size.width.max(1) as f32) * self.dpr).round() as u32;
+        let est_h = ((size.height.max(1) as f32) * self.dpr).round() as u32;
+        let (phys_w, phys_h) = match native {
+            Some((w, h)) if w.abs_diff(est_w) <= 2 && h.abs_diff(est_h) <= 2 => (w, h),
+            _ => (est_w, est_h),
+        };
+        self.pixmap.resize_with_dpr(phys_w, phys_h, self.dpr)
+    }
+
     /// Returns a reference to the underlying raster pixmap.
     #[inline]
     pub fn pixmap(&self) -> &Pixmap {
@@ -249,6 +267,20 @@ impl DerefMut for BackingStore {
 mod tests {
     use super::*;
     use crate::geometry::primitives::Rect;
+
+    #[test]
+    fn resize_to_native_keeps_the_window_pixel_size_at_fractional_dpr() {
+        // 125%: native 427 rows -> logical 342 -> round(342 * 1.25) = 428, 1 px too tall.
+        let mut bs = BackingStore::new(Size::new(100, 100), 1.25).unwrap();
+        assert!(bs.resize_to_native(Size::new(828, 342), 1.25, Some((1035, 427))));
+        assert_eq!(bs.native_size(), (1035, 427));
+        // Unknown native size: falls back to the estimate.
+        assert!(bs.resize_to_native(Size::new(828, 342), 1.25, None));
+        assert_eq!(bs.native_size(), (1035, 428));
+        // A native size far from the estimate (e.g. mid screen change) is ignored.
+        bs.resize_to_native(Size::new(828, 342), 1.25, Some((2000, 900)));
+        assert_eq!(bs.native_size(), (1035, 428));
+    }
 
     #[test]
     fn test_backing_store_creation_and_dpr() {

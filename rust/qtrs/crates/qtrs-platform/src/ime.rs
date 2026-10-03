@@ -16,6 +16,21 @@ pub struct Win32InputContext {
     candidate_pos: Point,
 }
 
+/// Associates (`true`) or dissociates (`false`) the window's default IME input context.
+///
+/// A window starts without an input context and gets it back when a text widget asks for an input
+/// method (`set_micro_focus`), as `QWindowsInputContext` does. The first activation of a window
+/// that still has its default context initializes the process' text services, which measured
+/// ~800 ms inside `DefWindowProc(WM_ACTIVATE)` on a machine with Chinese IMEs installed, even for a bare Win32 window.
+#[cfg(windows)]
+pub fn set_window_ime_enabled(hwnd: windows_sys::Win32::Foundation::HWND, enabled: bool) {
+    use windows_sys::Win32::UI::Input::Ime::{ImmAssociateContextEx, IACE_DEFAULT};
+    let _t = qtrs_gui::startup_trace::span(|| format!("ImmAssociateContextEx(enabled={enabled})"));
+    unsafe {
+        ImmAssociateContextEx(hwnd, std::ptr::null_mut(), if enabled { IACE_DEFAULT } else { 0 });
+    }
+}
+
 #[cfg(windows)]
 impl Win32InputContext {
     pub fn new(hwnd: windows_sys::Win32::Foundation::HWND) -> Self {

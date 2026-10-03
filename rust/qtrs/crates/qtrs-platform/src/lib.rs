@@ -24,6 +24,7 @@ pub mod platform_tray;
 pub mod platform_window;
 pub mod presenter;
 pub mod screen;
+pub mod resize_debug;
 pub mod resize_trace;
 pub mod surface;
 pub mod theme;

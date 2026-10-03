@@ -75,6 +75,14 @@ pub trait PlatformWindow: 'static {
     fn owner_thread(&self) -> std::thread::ThreadId {
         std::thread::current().id()
     }
+    /// The window's current size in native (physical) pixels, if the platform can report it.
+    ///
+    /// The paint surface is sized to this instead of `round(logical * dpr)`, so the content and the
+    /// native window always have the same pixel size (the logical round trip is off by 1 px at
+    /// fractional scale factors, e.g. 427 -> 342 -> 428 at 125%).
+    fn native_size(&self) -> Option<(u32, u32)> {
+        None
+    }
     fn is_within_set_geometry(&self) -> bool {
         self.state_flags().contains(crate::window::PlatformWindowStateFlags::WITHIN_SET_GEOMETRY)
     }
