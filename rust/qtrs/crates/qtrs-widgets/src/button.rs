@@ -506,11 +506,14 @@ impl Widget for Button {
     fn paint_event(&mut self, painter: &mut Painter) {
         let geom = self.base.geometry();
         let style = self.resolved_style();
-        let normal_bg = style.background_color.unwrap_or(self.normal_bg);
+        let bg = style.background_color.unwrap_or_else(|| match self.state {
+            ButtonState::Normal => self.normal_bg,
+            ButtonState::Hovered => self.hover_bg,
+            ButtonState::Pressed => self.press_bg,
+        });
         let text_color = style.color.unwrap_or(self.text_color);
         let border_color = style.border_color.unwrap_or(self.border_color);
         let border_radius = style.border_radius.unwrap_or(self.border_radius);
-
         self.style.draw_button(
             painter,
             &ButtonStyleOption {
@@ -524,9 +527,9 @@ impl Widget for Button {
                 focused: self.has_focus()
                     && style.background_color.is_none()
                     && style.border_color.is_none(),
-                normal_color: normal_bg,
-                hover_color: self.hover_bg,
-                pressed_color: self.press_bg,
+                normal_color: bg,
+                hover_color: bg,
+                pressed_color: bg,
                 text_color,
                 border_color,
                 border_radius,

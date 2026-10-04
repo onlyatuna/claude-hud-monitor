@@ -231,3 +231,46 @@ fn test_button_layout_toggle_btn_size_hint_matches_qt() {
     assert_eq!(hint.width, 28, "button width should match Qt (28 px)");
     assert_eq!(hint.height, 18, "button height should match Qt (18 px)");
 }
+
+#[test]
+fn test_button_hover_style_paints_stylesheet_hover_bg() {
+    use qtrs_core::event::{Event, EventKind};
+    use qtrs_core::object::qobject::QObject;
+    use qtrs_gui::paint::Painter;
+    use qtrs_gui::Pixmap;
+    use qtrs_widgets::{Button, Widget};
+
+    let qss = r#"
+    QPushButton#LayoutToggleBtn {
+        background-color: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #94a3b8;
+    }
+    QPushButton#LayoutToggleBtn:hover {
+        background-color: rgba(255, 255, 255, 0.12);
+        color: #38bdf8;
+        border-color: #38bdf8;
+    }
+    "#;
+    let mut btn = Button::new("⇄");
+    btn.set_object_name("LayoutToggleBtn");
+    btn.set_style_sheet(qss);
+    btn.set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 28, 18));
+
+    // Enter event triggers hover state
+    let mut enter_ev = Event::new_spontaneous(EventKind::Enter { x: 5, y: 5 });
+    btn.event(&mut enter_ev);
+    assert_eq!(btn.state(), qtrs_widgets::button::ButtonState::Hovered);
+
+    // Paint onto a transparent pixmap
+    let mut pixmap = Pixmap::new(28, 18).unwrap();
+    pixmap.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
+    let mut painter = Painter::begin(&mut pixmap);
+    btn.paint_event(&mut painter);
+
+    // Sample an interior pixel (e.g. at (2, 2))
+    // rgba(255, 255, 255, 0.12) -> alpha is ~31 (0.12 * 255 = 30.6)
+    // NOT the hardcoded hover_bg which has alpha 255 and color (225, 235, 245)!
+    let pixel = pixmap.pixel(2, 2).unwrap();
+    assert_eq!(pixel.alpha(), 31, "hover background alpha should match rgba(255, 255, 255, 0.12) ~ 31, was {}", pixel.alpha());
+}

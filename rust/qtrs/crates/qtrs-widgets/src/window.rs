@@ -961,9 +961,15 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 if let Some(cb) = self.mouse_move_cb.borrow().as_ref() {
                     cb(pos);
                 }
+                if self.render.has_pending_invalidation() {
+                    self.render.request_render();
+                }
             }
             WindowSystemEvent::MouseLeave => {
                 self.dispatcher.handle_mouse_leave();
+                if self.render.has_pending_invalidation() {
+                    self.render.request_render();
+                }
             }
             WindowSystemEvent::MousePress { pos, button, .. } => {
                 let btn = match button {

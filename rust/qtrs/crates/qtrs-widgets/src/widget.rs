@@ -639,6 +639,11 @@ impl Widget for EmptyWidget {
     fn set_layout(&mut self, mut layout: Box<dyn Layout>) {
         let g = self.base.geometry.get();
         layout.set_geometry(Rect::new(0, 0, g.width, g.height));
+        if let Some(win_id) = self.base.window_id.get() {
+            for w in layout.widgets() {
+                w.borrow().set_window_id(Some(win_id));
+            }
+        }
         *self.base.layout.get_mut() = Some(layout);
         self.update();
     }
