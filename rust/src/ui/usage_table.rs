@@ -206,28 +206,36 @@ impl Widget for UsageDial {
         let geo = self.base.geometry();
         let w = geo.width as f32;
         let h = geo.height as f32;
-        let side = (w.min(h) - 4.0).max(10.0);
-        let center = PointF::new(w / 2.0, h / 2.0);
+        let side = ((w.min(h) - 2.0) as f32).max(10.0);
+        let outer_x = (w - side) / 2.0;
+        let outer_y = (h - side) / 2.0;
+        let center = PointF::new(outer_x + side / 2.0, outer_y + side / 2.0);
         let ring_width = (side * 0.07).max(5.0);
 
         // 1. Outer ring (Weekly 7D)
-        let outer_rect = RectF::new(center.x - side / 2.0, center.y - side / 2.0, side, side);
+        let ring_inset = ring_width / 2.0 + 1.0;
+        let ring_rect = RectF::new(
+            outer_x + ring_inset,
+            outer_y + ring_inset,
+            side - ring_inset * 2.0,
+            side - ring_inset * 2.0,
+        );
         painter.set_brush(Brush::NoBrush);
         painter.set_pen(Pen::new(self.theme.track, ring_width));
-        painter.draw_ellipse(outer_rect);
+        painter.draw_ellipse(ring_rect);
 
         let (o_pct, o_mark, o_color) = self.outer;
         if let Some(pct) = o_pct {
             if !self.muted && pct > 0.0 {
                 painter.set_pen(Pen::new(o_color, ring_width));
-                painter.draw_arc(outer_rect, 90.0, Self::deg(pct));
+                painter.draw_arc(ring_rect, 90.0, Self::deg(pct));
 
                 // Hatching when outer pct > mark
                 if let Some(mark) = o_mark {
                     if pct > mark {
                         let mark_deg = Self::deg(mark);
                         let span = Self::deg(pct) - mark_deg;
-                        if let Some(arc_path) = create_donut_arc_path(outer_rect, ring_width, 90.0 + mark_deg, span) {
+                        if let Some(arc_path) = create_donut_arc_path(ring_rect, ring_width, 90.0 + mark_deg, span) {
                             painter.set_pen(None);
                             painter.set_brush(Brush::Hatched { color: self.theme.hatch });
                             painter.fill_path(&arc_path);
@@ -248,13 +256,13 @@ impl Widget for UsageDial {
 
         // 2. Inner pie (Session 5H)
         let gap = ring_width + side * 0.06;
-        let inner_side = (side - gap * 2.0).max(4.0);
         let inner_rect = RectF::new(
-            center.x - inner_side / 2.0,
-            center.y - inner_side / 2.0,
-            inner_side,
-            inner_side,
+            outer_x + gap,
+            outer_y + gap,
+            side - gap * 2.0,
+            side - gap * 2.0,
         );
+        let inner_side = side - gap * 2.0;
 
         painter.set_pen(None);
         painter.set_brush(Brush::Color(self.theme.disc));
@@ -913,6 +921,7 @@ impl ProviderColumn {
         let mut badge_lbl = Label::new(" ");
         badge_lbl.set_color(theme.text2);
         badge_lbl.set_font(Font::new("Segoe UI", 9.5).with_weight(FontWeight::Bold));
+        badge_lbl.set_alignment(qtrs_widgets::Alignment::Center);
         let badge = make_widget(badge_lbl);
         hv.add_widget(badge.clone());
         header.borrow_mut().set_layout(Box::new(hv));
@@ -1154,6 +1163,7 @@ impl UsageTable {
         let mut lv = BoxLayout::vertical();
         lv.set_margins(Margins::new(0, 0, 0, 0));
         lv.set_spacing(3);
+        lv.add_stretch(1);
 
         let (leg1_w, leg1_g, leg1_l) = make_glyph_row("pie", inner_c, "內圈 5 小時", &theme, 11.0, 10.0, false);
         glyphs.push(leg1_g);
@@ -1174,6 +1184,7 @@ impl UsageTable {
         glyphs.push(leg4_g);
         sub_labels.push(leg4_l);
         lv.add_widget(leg4_w);
+        lv.add_stretch(1);
 
         legend.borrow_mut().set_layout(Box::new(lv));
         grid.add_widget(legend, 5, 0);

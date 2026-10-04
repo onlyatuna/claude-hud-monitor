@@ -13,6 +13,8 @@ use parking_lot::Mutex;
 use qtrs_core::QObject;
 use qtrs_gui::geometry::primitives::{Margins, Rect, RectF};
 use qtrs_gui::paint::{Brush, Pen};
+use qtrs_gui::text::font::{Font, FontWeight};
+use qtrs_gui::tiny_skia::Color;
 use qtrs_platform::backdrop::BackdropType;
 use qtrs_platform::WindowFlags;
 use qtrs_widgets::{
@@ -209,7 +211,8 @@ impl HUDWindow {
         let theme = get_theme(dark);
 
         // Header bar widgets
-        let dot = Label::new("●");
+        let mut dot = Label::new("●");
+        dot.set_font(Font::new("Segoe UI", 11.0));
         let status_dot = make_widget(dot);
         set_label_color(&status_dot, status_dot_color(false, false));
 
@@ -219,6 +222,12 @@ impl HUDWindow {
             "AI AGENT HUD (3-IN-1)"
         });
         title.set_object_name("HeaderTitle");
+        if ui_mode == "table" {
+            let mut tf = Font::new("Segoe UI", 11.0);
+            tf.weight = FontWeight::Bold;
+            title.set_font(tf);
+            title.set_color(theme.text2);
+        }
         let title_label = make_widget(title);
 
         let ghost_label = make_widget(Label::new("👻"));
@@ -228,10 +237,14 @@ impl HUDWindow {
         btn.set_object_name("LayoutToggleBtn");
         let layout_toggle_btn = make_widget(btn);
         layout_toggle_btn.borrow().set_visible(ui_mode != "table");
+
         let mut time_lbl = Label::new("--:--:--");
         time_lbl.set_object_name("HeaderStatus");
+        if ui_mode == "table" {
+            time_lbl.set_font(Font::new("Segoe UI", 10.0));
+            time_lbl.set_color(theme.text2);
+        }
         let time_label = make_widget(time_lbl);
-
         // Header layout
         let mut header_layout = BoxLayout::horizontal();
         header_layout.set_spacing(6);
@@ -288,7 +301,7 @@ impl HUDWindow {
 
         // Root layout
         let mut root_layout = BoxLayout::vertical();
-        root_layout.set_margins(Margins::new(10, 8, 10, 8));
+        root_layout.set_margins(Margins::new(12, 8, 12, 10));
         root_layout.set_spacing(6);
         root_layout.add_widget(header_widget);
         root_layout.add_widget_with_stretch(stack.clone(), 1);
@@ -561,6 +574,16 @@ impl HUDWindow {
                 s.set_current_index(1);
             }
             set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
+            set_label_color(&self.title_label, self.theme.text2);
+            set_label_color(&self.time_label, self.theme.text2);
+            if let Some(lbl) = self.title_label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+                let mut tf = Font::new("Segoe UI", 11.0);
+                tf.weight = FontWeight::Bold;
+                lbl.set_font(tf);
+            }
+            if let Some(lbl) = self.time_label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+                lbl.set_font(Font::new("Segoe UI", 10.0));
+            }
             self.layout_toggle_btn.borrow().set_visible(false);
             self.window
                 .set_minimum_size(MIN_TABLE_WIDTH as i32, MIN_TABLE_HEIGHT as i32);
@@ -579,6 +602,16 @@ impl HUDWindow {
                 s.set_current_index(0);
             }
             set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
+            set_label_color(&self.title_label, Color::from_rgba8(148, 163, 184, 255));
+            set_label_color(&self.time_label, Color::from_rgba8(100, 116, 139, 255));
+            if let Some(lbl) = self.title_label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+                let mut tf = Font::new("Segoe UI", 10.5);
+                tf.weight = FontWeight::Bold;
+                lbl.set_font(tf);
+            }
+            if let Some(lbl) = self.time_label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+                lbl.set_font(Font::new("Consolas", 9.5));
+            }
             self.layout_toggle_btn.borrow().set_visible(true);
             let cfg = self.config.lock();
             if cfg.layout_mode == "horizontal" {
