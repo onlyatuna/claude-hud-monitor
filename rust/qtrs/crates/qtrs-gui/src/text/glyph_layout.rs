@@ -411,7 +411,14 @@ impl GlyphLayout {
                         x: current_x + (pos.x_offset as f32) * scale,
                         y: current_y + (pos.y_offset as f32) * scale,
                     });
-                    current_x += (pos.x_advance as f32) * scale;
+                    // Qt's `_hb_qt_font_get_glyph_h_advance`: delegates glyph advance back to
+                    // `fe->recalcAdvances`, which in `GDI_CLASSIC` mode returns the GDI grid-fitted
+                    // integer pixel advances. Fall back to HarfBuzz's unhinted design advances.
+                    let adv = engine
+                        .face
+                        .gdi_advance_width(info.glyph_id as u16, font.size, 1.0)
+                        .unwrap_or_else(|| (pos.x_advance as f32) * scale);
+                    current_x += adv;
                     current_y += (pos.y_advance as f32) * scale;
                     // `QTextEngine::shapeText`: spacing goes after the last glyph of every cluster.
                     if infos.get(i + 1).is_none_or(|next| next.cluster != info.cluster) {
@@ -438,7 +445,10 @@ impl GlyphLayout {
                     let adv_x = if ch.is_ascii_digit() && run.engine_index == 0 {
                         tnum_width.unwrap_or(metrics.advance_width)
                     } else {
-                        metrics.advance_width
+                        engine
+                            .face
+                            .gdi_advance_width(gid, font.size, 1.0)
+                            .unwrap_or(metrics.advance_width)
                     };
 
                     glyphs.push(PositionedGlyph {

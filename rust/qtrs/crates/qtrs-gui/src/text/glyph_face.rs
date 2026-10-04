@@ -65,6 +65,14 @@ pub trait GlyphFace: Send + Sync {
     fn vertical_metrics(&self, _px: f32) -> Option<(f32, f32)> {
         None
     }
+
+    /// When rendering in `GDI_CLASSIC` mode on Windows (scale == 1.0, size <= 16.0), queries
+    /// DirectWrite's `GetGdiCompatibleGlyphMetrics` to get the integer grid-fitted advance
+    /// width that matches Windows GDI (`fe->recalcAdvances` in Qt's `shapeTextWithHarfbuzzNG`).
+    /// Returns `None` when the backend has no GDI-compatible metrics (non-Windows or unhinted).
+    fn gdi_advance_width(&self, _glyph_id: u16, _size: f32, _scale: f32) -> Option<f32> {
+        None
+    }
 }
 
 /// Shared handle to a face (Qt's ref-counted `QFontEngine*`).

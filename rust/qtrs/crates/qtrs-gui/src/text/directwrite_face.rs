@@ -74,6 +74,7 @@ pub struct DirectWriteFace {
     // Field order matters: DirectWrite's font face reads `base`'s font bytes, so it is dropped first.
     face: IDWriteFontFace,
     base: OutlineFace,
+    upem: f32,
 }
 
 // SAFETY: `IDWriteFontFace` is free-threaded, and `OutlineFace` is plain immutable data.
@@ -111,7 +112,10 @@ impl DirectWriteFace {
                 .CreateFontFace(face_type, &[Some(file)], face_index, DWRITE_FONT_SIMULATIONS_NONE)
                 .map_err(|e| format!("CreateFontFace: {e}"))?
         };
-        Ok(Self { face, base })
+        let mut fm = DWRITE_FONT_METRICS::default();
+        unsafe { face.GetMetrics(&mut fm) };
+        let upem = fm.designUnitsPerEm as f32;
+        Ok(Self { face, base, upem })
     }
 
     /// Qt's `determineHinting` + `hintingPreferenceToRenderingMode` for default hinting, plus the
@@ -206,6 +210,34 @@ impl DirectWriteFace {
         };
         Some((metrics, texture))
     }
+
+    /// When rendering in `GDI_CLASSIC` mode (scale == 1.0, size <= 16.0), queries DirectWrite's
+    /// `GetGdiCompatibleGlyphMetrics(useGdiNatural = FALSE)` to get the integer grid-fitted
+    /// advance width that matches Windows GDI (`GetCharWidth32` / `GetTextExtentPoint32`).
+    pub fn gdi_advance_width(&self, glyph_id: u16, size: f32, scale: f32) -> Option<f32> {
+        let (mode, _) = Self::rendering_mode(size, scale);
+        if mode != DWRITE_RENDERING_MODE_GDI_CLASSIC {
+            return None;
+        }
+        let mut metric = DWRITE_GLYPH_METRICS::default();
+        let res = unsafe {
+            self.face.GetGdiCompatibleGlyphMetrics(
+                size,
+                1.0,
+                None,
+                false,
+                &glyph_id,
+                1,
+                &mut metric,
+                false,
+            )
+        };
+        if res.is_ok() && self.upem > 0.0 {
+            Some((metric.advanceWidth as f32 / self.upem) * size)
+        } else {
+            None
+        }
+    }
 }
 
 impl GlyphFace for DirectWriteFace {
@@ -251,5 +283,9 @@ impl GlyphFace for DirectWriteFace {
             return None;
         }
         self.rasterize_texture(glyph_id, size, scale)
+    }
+
+    fn gdi_advance_width(&self, glyph_id: u16, size: f32, scale: f32) -> Option<f32> {
+        self.gdi_advance_width(glyph_id, size, scale)
     }
 }

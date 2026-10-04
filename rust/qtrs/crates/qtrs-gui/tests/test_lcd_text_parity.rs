@@ -84,7 +84,7 @@ fn check(dir: &str, family: &str, text: &str, case: &str, bg: Color, fg: Color, 
 fn lcd_text_on_opaque_destination_matches_qt() {
     for (dir, family, text) in [
         ("lcd_segoe12", "Segoe UI", "Hag"),
-        ("lcd_jhenghei12", "Microsoft JhengHei UI", "Hag"),
+        ("lcd_jhenghei12", "Microsoft JhengHei UI", "Hag中"),
     ] {
         check(dir, family, text, "rgb32_opaque", BG(), FG(), LCD, 0.1, 2);
         check(dir, family, text, "argb_pre_opaque", BG(), FG(), LCD, 0.1, 2);
@@ -93,7 +93,7 @@ fn lcd_text_on_opaque_destination_matches_qt() {
 
 #[test]
 fn lcd_text_on_translucent_destination_is_grey_like_qt() {
-    for (dir, family, text) in [("lcd_segoe12", "Segoe UI", "Hag"), ("lcd_jhenghei12", "Microsoft JhengHei UI", "Hag")] {
+    for (dir, family, text) in [("lcd_segoe12", "Segoe UI", "Hag"), ("lcd_jhenghei12", "Microsoft JhengHei UI", "Hag中")] {
         check(dir, family, text, "argb_pre_clear", Color::TRANSPARENT, FG(), LCD, 0.3, 3);
         check(dir, family, text, "argb_pre_half", Color::from_rgba8(22, 25, 32, 128), FG(), LCD, 0.3, 3);
     }
