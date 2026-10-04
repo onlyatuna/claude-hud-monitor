@@ -315,25 +315,43 @@ impl<'a> Painter<'a> {
                     .fill_path(path, &paint, fill_rule, transform, mask_ref);
             }
             Brush::Hatched { color } => {
-                if let Some(mut pat) = Pixmap::new(8, 8) {
+                const TILE_SIZE: usize = 6;
+                if let Some(mut pat) = Pixmap::new(TILE_SIZE as u32, TILE_SIZE as u32) {
                     let pat_data = pat.data_mut();
                     let r = (color.red() * 255.0).round() as u8;
                     let g = (color.green() * 255.0).round() as u8;
                     let b = (color.blue() * 255.0).round() as u8;
-                    let a = (color.alpha() * 255.0).round() as u8;
-                    for y in 0..8 {
-                        let x = y;
-                        let idx = (y * 8 + x) * 4;
-                        pat_data[idx] = r;
-                        pat_data[idx + 1] = g;
-                        pat_data[idx + 2] = b;
-                        pat_data[idx + 3] = a;
+                    let base_a = color.alpha();
+                    let sqrt2 = std::f32::consts::SQRT_2;
+                    let half_w = 0.8_f32;
+                    let aa_edge = 0.5_f32;
+
+                    for y in 0..TILE_SIZE {
+                        for x in 0..TILE_SIZE {
+                            let s = (x + y) % TILE_SIZE;
+                            let min_dist = (s as f32).min((TILE_SIZE - s) as f32) / sqrt2;
+                            let cov = if min_dist <= half_w {
+                                1.0
+                            } else if min_dist < half_w + aa_edge {
+                                1.0 - (min_dist - half_w) / aa_edge
+                            } else {
+                                0.0
+                            };
+                            if cov > 0.0 {
+                                let a = (base_a * cov * 255.0).round() as u8;
+                                let idx = (y * TILE_SIZE + x) * 4;
+                                pat_data[idx] = r;
+                                pat_data[idx + 1] = g;
+                                pat_data[idx + 2] = b;
+                                pat_data[idx + 3] = a;
+                            }
+                        }
                     }
                     let paint = Paint {
                         shader: Pattern::new(
                             pat.as_tiny_skia().as_ref(),
                             SpreadMode::Repeat,
-                            FilterQuality::Nearest,
+                            FilterQuality::Bilinear,
                             opacity,
                             Transform::identity(),
                         ),
@@ -907,6 +925,75 @@ pub fn create_pie_path(rect: RectF, start_deg: f32, span_deg: f32) -> Option<Pat
     }
 
     // Close back to center
+    pb.close();
+    pb.finish()
+}
+pub fn create_donut_arc_path(
+    rect: RectF,
+    ring_width: f32,
+    start_deg: f32,
+    span_deg: f32,
+) -> Option<Path> {
+    if span_deg.abs() < 1e-4 || rect.width <= 0.0 || rect.height <= 0.0 {
+        return None;
+    }
+    let r_out_x = rect.width / 2.0;
+    let r_out_y = rect.height / 2.0;
+    let r_in_x = (r_out_x - ring_width).max(0.0);
+    let r_in_y = (r_out_y - ring_width).max(0.0);
+    let cx = rect.x + r_out_x;
+    let cy = rect.y + r_out_y;
+
+    let mut pb = PathBuilder::new();
+    let num_segments = (span_deg.abs() / 45.0).ceil().max(1.0) as usize;
+    let step_deg = span_deg / num_segments as f32;
+
+    // Outer arc forward
+    for i in 0..num_segments {
+        let a1_deg = start_deg + i as f32 * step_deg;
+        let a2_deg = a1_deg + step_deg;
+        let a1 = a1_deg.to_radians();
+        let a2 = a2_deg.to_radians();
+
+        let p1 = (cx + r_out_x * a1.cos(), cy - r_out_y * a1.sin());
+        let p2 = (cx + r_out_x * a2.cos(), cy - r_out_y * a2.sin());
+
+        let delta = (a2 - a1) / 2.0;
+        let k = (4.0 / 3.0) * (delta.sin() / (1.0 + delta.cos()));
+
+        let c1x = p1.0 - k * r_out_x * a1.sin();
+        let c1y = p1.1 - k * r_out_y * a1.cos();
+        let c2x = p2.0 + k * r_out_x * a2.sin();
+        let c2y = p2.1 + k * r_out_y * a2.cos();
+
+        if i == 0 {
+            pb.move_to(p1.0, p1.1);
+        }
+        pb.cubic_to(c1x, c1y, c2x, c2y, p2.0, p2.1);
+    }
+
+    // Inner arc backward
+    for i in (0..num_segments).rev() {
+        let a1_deg = start_deg + (i + 1) as f32 * step_deg;
+        let a2_deg = a1_deg - step_deg;
+        let a1 = a1_deg.to_radians();
+        let a2 = a2_deg.to_radians();
+
+        let p1 = (cx + r_in_x * a1.cos(), cy - r_in_y * a1.sin());
+        let p2 = (cx + r_in_x * a2.cos(), cy - r_in_y * a2.sin());
+
+        let delta = (a2 - a1) / 2.0;
+        let k = (4.0 / 3.0) * (delta.sin() / (1.0 + delta.cos()));
+
+        let c1x = p1.0 - k * r_in_x * a1.sin();
+        let c1y = p1.1 - k * r_in_y * a1.cos();
+        let c2x = p2.0 + k * r_in_x * a2.sin();
+        let c2y = p2.1 + k * r_in_y * a2.cos();
+
+        pb.line_to(p1.0, p1.1);
+        pb.cubic_to(c1x, c1y, c2x, c2y, p2.0, p2.1);
+    }
+
     pb.close();
     pb.finish()
 }

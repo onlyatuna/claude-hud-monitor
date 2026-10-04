@@ -7,6 +7,7 @@ use qtrs_gui::tiny_skia::Color;
 pub struct Theme {
     pub is_dark: bool,
     pub panel_bg: Color,
+    pub panel_bg_vibrant: Color,
     pub panel_border: Color,
     pub text: Color,
     pub text2: Color,
@@ -36,6 +37,7 @@ impl Theme {
         Self {
             is_dark: true,
             panel_bg: Color::from_rgba8(30, 30, 36, 240),
+            panel_bg_vibrant: Color::from_rgba8(34, 34, 40, 140),
             panel_border: Color::from_rgba8(255, 255, 255, 31),
             text: Color::from_rgba8(242, 242, 247, 255), // #f2f2f7
             text2: Color::from_rgba8(235, 235, 245, 158),
@@ -65,6 +67,7 @@ impl Theme {
         Self {
             is_dark: false,
             panel_bg: Color::from_rgba8(246, 244, 250, 240),
+            panel_bg_vibrant: Color::from_rgba8(246, 244, 250, 128),
             panel_border: Color::from_rgba8(255, 255, 255, 140),
             text: Color::from_rgba8(31, 31, 36, 255), // #1f1f24
             text2: Color::from_rgba8(40, 40, 50, 158),

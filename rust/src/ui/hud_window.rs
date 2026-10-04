@@ -61,10 +61,11 @@ fn status_dot_color(busy: bool, any_error: bool) -> qtrs_gui::tiny_skia::Color {
 /// the application style sheet's `QWidget#CentralWidget` rule, as in the Python HUD; the table
 /// mode (and a sheet without that rule) uses the theme.
 fn panel_look(cards_mode: bool, theme: &Theme) -> (qtrs_gui::tiny_skia::Color, qtrs_gui::tiny_skia::Color, f32) {
-    let themed = (theme.panel_bg, theme.panel_border, 10.0);
     if !cards_mode {
-        return themed;
+        // Table mode uses vibrant panel on top of Acrylic backdrop blur, matching Python (radius 12.0)
+        return (theme.panel_bg_vibrant, theme.panel_border, 12.0);
     }
+    let themed = (theme.panel_bg, theme.panel_border, 10.0);
     let Some(sheet) = qtrs_widgets::application::Application::style_sheet() else {
         return themed;
     };
@@ -226,7 +227,7 @@ impl HUDWindow {
         let mut btn = Button::new("⇄");
         btn.set_object_name("LayoutToggleBtn");
         let layout_toggle_btn = make_widget(btn);
-
+        layout_toggle_btn.borrow().set_visible(ui_mode != "table");
         let mut time_lbl = Label::new("--:--:--");
         time_lbl.set_object_name("HeaderStatus");
         let time_label = make_widget(time_lbl);
