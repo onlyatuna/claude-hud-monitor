@@ -636,6 +636,7 @@ pub struct GridLayout {
     items: Vec<GridItem>,
     row_stretches: Vec<u32>,
     col_stretches: Vec<u32>,
+    col_min_widths: Vec<i32>,
     dirty: bool,
 }
 
@@ -649,6 +650,7 @@ impl GridLayout {
             items: Vec::new(),
             row_stretches: Vec::new(),
             col_stretches: Vec::new(),
+            col_min_widths: Vec::new(),
             dirty: true,
         }
     }
@@ -688,6 +690,13 @@ impl GridLayout {
             self.col_stretches.resize(col + 1, 0);
         }
         self.col_stretches[col] = stretch;
+        self.update_layout();
+    }
+    pub fn set_column_minimum_width(&mut self, col: usize, min_w: i32) {
+        if col >= self.col_min_widths.len() {
+            self.col_min_widths.resize(col + 1, 0);
+        }
+        self.col_min_widths[col] = min_w;
         self.update_layout();
     }
 
@@ -852,6 +861,9 @@ impl Layout for GridLayout {
                     }
                 }
             }
+            let col_min = self.col_min_widths.get(c).copied().unwrap_or(0);
+            hint = hint.max(col_min);
+            min_sz = min_sz.max(col_min);
             let stretch = self.col_stretches.get(c).copied().unwrap_or(0);
             col_specs.push((hint, min_sz, max_sz, policy, stretch));
         }

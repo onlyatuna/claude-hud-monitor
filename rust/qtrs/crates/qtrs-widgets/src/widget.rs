@@ -579,11 +579,7 @@ impl Widget for EmptyWidget {
     }
 
     fn minimum_size(&self) -> Size {
-        if let Some(layout) = self.base.layout.borrow().as_ref() {
-            layout.size_hint()
-        } else {
-            Size::new(0, 0)
-        }
+        Size::new(0, 0)
     }
 
     fn maximum_size(&self) -> Size {

@@ -1223,6 +1223,7 @@ impl UsageTable {
                 grid.set_column_stretch(col, 1);
             }
         }
+        grid.set_column_minimum_width(0, 86);
         grid.set_row_stretch(5, 1);
 
         container.borrow_mut().set_layout(Box::new(grid));
@@ -1478,5 +1479,18 @@ mod tests {
             let col = table.columns.get(pid).unwrap();
             assert!(col.icon.borrow().as_any().downcast_ref::<ProviderIconWidget>().is_some());
         }
+    }
+    #[test]
+    fn test_inspect_table_geometries() {
+        let table = UsageTable::new(Theme::dark(), "scale");
+        let container = table.widget();
+        container.borrow_mut().set_geometry(Rect::new(12, 25, 426, 315));
+        container.borrow().update_layout();
+        let claude = table.columns.get("claude").unwrap();
+        assert_eq!(claude.header.borrow().geometry().x, 96);
+        let codex = table.columns.get("codex").unwrap();
+        assert_eq!(codex.header.borrow().geometry().x, 210);
+        let agy = table.columns.get("agy").unwrap();
+        assert_eq!(agy.header.borrow().geometry().x, 323);
     }
 }
