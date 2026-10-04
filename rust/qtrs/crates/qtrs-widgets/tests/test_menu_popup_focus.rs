@@ -160,3 +160,26 @@ fn test_submenu_flips_left_when_near_right_screen_edge() {
     let covered = menu.covered_rect();
     assert!(covered.x < 0, "Covered rect x must be negative to cover left submenu");
 }
+
+#[test]
+fn test_window_present_custom_at_updates_geometry_and_backing_store() {
+    use qtrs_widgets::window::Window;
+    use qtrs_platform::WindowFlags;
+    use qtrs_gui::geometry::primitives::Rect;
+    use qtrs_gui::paint::PaintDevice;
+    let mut win = Window::new(
+        "TestPopup",
+        Rect::new(100, 100, 200, 300),
+        WindowFlags::FRAMELESS | WindowFlags::TOOL | WindowFlags::LAYERED,
+    ).expect("Window created");
+
+    assert_eq!(win.geometry(), Rect::new(100, 100, 200, 300));
+
+    // Present custom at a new rect (simulating left-expanded submenu)
+    let new_rect = Rect::new(50, 100, 250, 300);
+    win.present_custom_at(new_rect, |_painter| {});
+
+    assert_eq!(win.geometry(), new_rect);
+    assert_eq!(win.backing_store().width(), 250.0);
+    assert_eq!(win.backing_store().height(), 300.0);
+}

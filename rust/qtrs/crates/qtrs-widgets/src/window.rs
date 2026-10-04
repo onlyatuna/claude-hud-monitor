@@ -662,6 +662,33 @@ impl Window {
         let _ = pw.present_region(&bs, &dirty_region);
     }
 
+    /// Atomic geometry update and presentation for layered windows (e.g. cascading popup menus).
+    /// Avoids SetWindowPos prior to painting, preventing visual jumping / tearing.
+    pub fn present_custom_at<F: FnOnce(&mut Painter)>(&mut self, rect: Rect, f: F) {
+        let dpr = platform().primary_screen().device_pixel_ratio();
+        self.geometry.set(rect);
+        {
+            let mut pw = self.platform_window.borrow_mut();
+            pw.set_target_pos(Some(Point::new(rect.x, rect.y)));
+        }
+        let mut bs = self.backing_store.borrow_mut();
+        bs.resize(Size::new(rect.width, rect.height), dpr);
+        bs.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
+        {
+            let mut painter = Painter::begin(&mut **bs);
+            f(&mut painter);
+        }
+        let mut pw = self.platform_window.borrow_mut();
+        let phys_dirty = Rect::new(
+            0,
+            0,
+            bs.physical_width() as i32,
+            bs.physical_height() as i32,
+        );
+        let dirty_region = qtrs_gui::geometry::Region::from_rect(phys_dirty);
+        let _ = pw.present_region(&bs, &dirty_region);
+    }
+
     pub fn backing_store(&self) -> std::cell::Ref<'_, BackingStore> {
         self.backing_store.borrow()
     }

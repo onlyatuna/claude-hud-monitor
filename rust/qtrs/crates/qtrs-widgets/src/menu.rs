@@ -588,8 +588,16 @@ impl Menu {
         }
 
         window.show();
-        window.present_custom(|painter| {
+        let covered = self.covered_rect();
+        let win_x = root_origin.x + covered.x;
+        let win_y = root_origin.y + covered.y;
+        let win_w = covered.width.max(size.width);
+        let win_h = covered.height.max(size.height);
+        window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
+            painter.save();
+            painter.translate(-covered.x as f32, -covered.y as f32);
             self.paint_event(painter);
+            painter.restore();
         });
 
         let mut chosen = None;
@@ -624,11 +632,7 @@ impl Menu {
                             let win_y = root_origin.y + covered.y;
                             let win_w = covered.width.max(size.width);
                             let win_h = covered.height.max(size.height);
-                            let current_log = window.geometry();
-                            if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
-                                window.set_geometry_silent(Rect::new(win_x, win_y, win_w, win_h));
-                            }
-                            window.present_custom(|painter| {
+                            window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
                                 painter.save();
                                 painter.translate(-covered.x as f32, -covered.y as f32);
                                 self.paint_event(painter);
@@ -654,11 +658,7 @@ impl Menu {
                         let win_y = root_origin.y + covered.y;
                         let win_w = covered.width.max(size.width);
                         let win_h = covered.height.max(size.height);
-                        let current_log = window.geometry();
-                        if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
-                            window.set_geometry_silent(Rect::new(win_x, win_y, win_w, win_h));
-                        }
-                        window.present_custom(|painter| {
+                        window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
                             painter.save();
                             painter.translate(-covered.x as f32, -covered.y as f32);
                             self.paint_event(painter);
@@ -678,7 +678,11 @@ impl Menu {
                             MenuOutcome::Closed => break,
                             _ => {
                                 let covered = self.covered_rect();
-                                window.present_custom(|painter| {
+                                let win_x = root_origin.x + covered.x;
+                                let win_y = root_origin.y + covered.y;
+                                let win_w = covered.width.max(size.width);
+                                let win_h = covered.height.max(size.height);
+                                window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
                                     painter.save();
                                     painter.translate(-covered.x as f32, -covered.y as f32);
                                     self.paint_event(painter);
@@ -716,11 +720,7 @@ impl Menu {
                         let win_y = root_origin.y + covered.y;
                         let win_w = covered.width.max(size.width);
                         let win_h = covered.height.max(size.height);
-                        let current_log = window.geometry();
-                        if current_log.x != win_x || current_log.y != win_y || current_log.width != win_w || current_log.height != win_h {
-                            window.set_geometry_silent(Rect::new(win_x, win_y, win_w, win_h));
-                        }
-                        window.present_custom(|painter| {
+                        window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
                             painter.save();
                             painter.translate(-covered.x as f32, -covered.y as f32);
                             self.paint_event(painter);

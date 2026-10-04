@@ -280,6 +280,10 @@ pub mod win32 {
             let surface = crate::surface::win32::Win32LayeredSurface::new(hwnd, width, height)?;
             Ok(Self { surface, opacity })
         }
+
+        pub fn set_target_pos(&mut self, pos: Option<windows_sys::Win32::Foundation::POINT>) {
+            self.surface.set_target_pos(pos);
+        }
     }
 
     impl SurfacePresenter for Win32LayeredPresenter {

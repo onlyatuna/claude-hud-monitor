@@ -124,6 +124,7 @@ pub struct Win32LayeredSurface {
     persistent_capacity: bool,
     /// The DIB holds stale/uninitialised pixels in the visible area; next present copies it all.
     force_full: bool,
+    target_pos: Option<POINT>,
     stats: LayeredStats,
 }
 
@@ -176,6 +177,7 @@ impl Win32LayeredSurface {
                 interactive: false,
                 persistent_capacity: true,
                 force_full: true,
+                target_pos: None,
                 stats: LayeredStats::default(),
             })
         }
@@ -203,6 +205,12 @@ impl Win32LayeredSurface {
     #[inline]
     pub fn allocated_height(&self) -> u32 {
         self.alloc_height
+    }
+
+    /// Destination position for next UpdateLayeredWindow (atomic move with present).
+    #[inline]
+    pub fn set_target_pos(&mut self, pos: Option<POINT>) {
+        self.target_pos = pos;
     }
 
     #[inline]
@@ -432,8 +440,12 @@ impl Win32LayeredSurface {
             let mut pt_dst = POINT { x: 0, y: 0 };
             let mut win_rect: RECT = std::mem::zeroed();
             GetWindowRect(self.hwnd, &mut win_rect);
-            pt_dst.x = win_rect.left;
-            pt_dst.y = win_rect.top;
+            if let Some(target) = self.target_pos.take() {
+                pt_dst = target;
+            } else {
+                pt_dst.x = win_rect.left;
+                pt_dst.y = win_rect.top;
+            }
             trace_record_at(
                 TraceKind::WindowRectBeforeUlw,
                 hwnd_id,

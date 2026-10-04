@@ -1135,6 +1135,7 @@ pub struct NativeWindow {
     owner_thread: std::thread::ThreadId,
     state_flags: std::cell::Cell<PlatformWindowStateFlags>,
     ime_enabled: std::cell::Cell<bool>,
+    target_pos: Option<qtrs_gui::geometry::Point>,
 }
 
 #[cfg(windows)]
@@ -1247,6 +1248,7 @@ impl NativeWindow {
             owner_thread: std::thread::current().id(),
             state_flags: std::cell::Cell::new(PlatformWindowStateFlags::NONE),
             ime_enabled: std::cell::Cell::new(false),
+            target_pos: None,
         })
     }
 
@@ -1573,6 +1575,9 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
     fn set_geometry(&mut self, rect: Rect) {
         self.set_geometry(rect);
     }
+    fn set_target_pos(&mut self, pos: Option<qtrs_gui::geometry::Point>) {
+        self.target_pos = pos;
+    }
 
     fn set_stays_on_top(&mut self, enabled: bool) {
         self.set_stays_on_top(enabled);
@@ -1624,10 +1629,24 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         let width = pixmap.physical_width();
         let height = pixmap.physical_height();
         let opacity = self.opacity;
+        let target_pos = self.target_pos.take();
+        let dpr = crate::platform().primary_screen().device_pixel_ratio();
+        let phys_target = target_pos.map(|p| {
+            if dpr > 1.0 {
+                crate::high_dpi::to_native_point(p, dpr)
+            } else {
+                p
+            }
+        });
         let dbg_t = crate::resize_debug::start();
         let res = match self.get_or_create_presenter(width, height) {
             Ok(p) => {
                 p.set_opacity(opacity);
+                if let crate::presenter::WindowsPresenter::Layered(lp) = p {
+                    if let Some(pos) = phys_target {
+                        lp.set_target_pos(Some(windows_sys::Win32::Foundation::POINT { x: pos.x, y: pos.y }));
+                    }
+                }
                 p.present(pixmap, dirty)
             }
             Err(e) => Err(e),
@@ -1638,11 +1657,31 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
             self.presenter.take();
             let p = self.get_or_create_presenter(width, height)?;
             p.set_opacity(opacity);
+            if let crate::presenter::WindowsPresenter::Layered(lp) = p {
+                if let Some(pos) = phys_target {
+                    lp.set_target_pos(Some(windows_sys::Win32::Foundation::POINT { x: pos.x, y: pos.y }));
+                }
+            }
             let full = qtrs_gui::geometry::Region::from_coords(0, 0, width as i32, height as i32);
             let r = p.present(pixmap, &full);
+            if r.is_ok() {
+                if let Some(pos) = target_pos {
+                    self.geometry.x = pos.x;
+                    self.geometry.y = pos.y;
+                }
+                self.geometry.width = width as i32;
+                self.geometry.height = height as i32;
+            }
             crate::resize_debug::end(crate::resize_debug::Phase::Present, dbg_t);
             return r;
         }
+
+        if let Some(pos) = target_pos {
+            self.geometry.x = pos.x;
+            self.geometry.y = pos.y;
+        }
+        self.geometry.width = width as i32;
+        self.geometry.height = height as i32;
 
         crate::resize_debug::end(crate::resize_debug::Phase::Present, dbg_t);
         Ok(())
