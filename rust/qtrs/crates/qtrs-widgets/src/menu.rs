@@ -32,6 +32,13 @@ const RIGHT_PADDING: i32 = 8;
 const MIN_WIDTH: i32 = 120;
 const SUBMENU_OVERLAP: i32 = 2;
 const ICON_SIZE: i32 = 16;
+/// Width and height of the check indicator box (`QWindows11Style::pixelMetric(PM_IndicatorWidth)`).
+/// A styled menu with checkable items reserves this plus [`CHECK_GAP`] before the text
+/// (`QStyleSheetStyle::sizeFromContents`, `CT_MenuItem`), and draws the text this far from the
+/// item's padding edge (`drawControl`, `CE_MenuItem`: `textRectOffset`).
+const CHECK_INDICATOR: i32 = 16;
+/// Extra width `QStyleSheetStyle` adds after the check indicator in `CT_MenuItem`.
+const CHECK_GAP: i32 = 4;
 
 /// Box model and palette of a style-sheet-driven menu (`QMenu`, `QMenu::item`,
 /// `QMenu::separator` rules). Without it a menu keeps its built-in look.
@@ -278,7 +285,7 @@ impl Menu {
     fn text_x(&self) -> f32 {
         match &self.style {
             Some(s) => {
-                (FRAME + s.item_padding[3] + if self.has_checkable() { 16 } else { 0 }) as f32
+                (FRAME + s.item_padding[3] + if self.has_checkable() { CHECK_INDICATOR } else { 0 }) as f32
             }
             None => CHECK_COLUMN as f32,
         }
@@ -294,7 +301,7 @@ impl Menu {
                 2 * FRAME
                     + s.item_padding[1]
                     + s.item_padding[3]
-                    + if self.has_checkable() { 20 } else { 0 }
+                    + if self.has_checkable() { CHECK_INDICATOR + CHECK_GAP } else { 0 }
                     + max_text
                     + shortcut_w
             }
@@ -1321,9 +1328,20 @@ impl Menu {
 
         if action.is_checkable() && action.is_checked() {
             if self.style.is_some() && !action.is_exclusive_in_group() {
+                // The glyph is centred in the indicator box at the item's left edge
+                // (`positionRect`: AlignLeft | AlignVCenter, padding origin). Qt draws the
+                // Fluent check-mark font glyph; this stroke imitates its shape and weight.
+                let u = CHECK_INDICATOR as f32 / 16.0;
+                let cx = FRAME as f32 + CHECK_INDICATOR as f32 / 2.0;
                 painter.set_pen(Pen::new(color, 1.6));
-                painter.draw_line(PointF::new(5.5, mid_y + 0.5), PointF::new(8.0, mid_y + 3.0));
-                painter.draw_line(PointF::new(8.0, mid_y + 3.0), PointF::new(12.5, mid_y - 3.0));
+                painter.draw_line(
+                    PointF::new(cx - 3.5 * u, mid_y + 0.5 * u),
+                    PointF::new(cx - 1.0 * u, mid_y + 3.0 * u),
+                );
+                painter.draw_line(
+                    PointF::new(cx - 1.0 * u, mid_y + 3.0 * u),
+                    PointF::new(cx + 3.5 * u, mid_y - 3.0 * u),
+                );
             } else {
                 let check_color = if active {
                     self.highlight_text_color
@@ -1394,10 +1412,28 @@ impl Menu {
         }
 
         if action.menu().is_some() {
-            let ax = (width - if self.style.is_some() { 17 } else { 14 }) as f32;
-            painter.set_pen(Pen::new(color, if self.style.is_some() { 1.3 } else { 1.5 }));
-            painter.draw_line(PointF::new(ax, mid_y - 4.0), PointF::new(ax + 4.0, mid_y));
-            painter.draw_line(PointF::new(ax + 4.0, mid_y), PointF::new(ax, mid_y + 4.0));
+            if self.style.is_some() {
+                // `QStyleSheetStyle` derives the arrow box from the row: a square of half the
+                // row height, centred `dim` px left of the item's right edge. Qt draws the
+                // Fluent chevron glyph in it; this stroke imitates its shape and weight.
+                let dim = (rect.height / 2) as f32;
+                let cx = (width - FRAME - 1) as f32 - dim;
+                let half = dim * 0.3;
+                painter.set_pen(Pen::new(color, 1.3));
+                painter.draw_line(
+                    PointF::new(cx - half / 2.0, mid_y - half),
+                    PointF::new(cx + half / 2.0, mid_y),
+                );
+                painter.draw_line(
+                    PointF::new(cx + half / 2.0, mid_y),
+                    PointF::new(cx - half / 2.0, mid_y + half),
+                );
+            } else {
+                let ax = (width - 14) as f32;
+                painter.set_pen(Pen::new(color, 1.5));
+                painter.draw_line(PointF::new(ax, mid_y - 4.0), PointF::new(ax + 4.0, mid_y));
+                painter.draw_line(PointF::new(ax + 4.0, mid_y), PointF::new(ax, mid_y + 4.0));
+            }
         }
     }
 }
