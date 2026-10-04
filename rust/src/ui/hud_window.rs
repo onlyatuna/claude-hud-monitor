@@ -195,7 +195,12 @@ impl HUDWindow {
         let geom = Rect::new(init_x, init_y, init_w, init_h);
         let mut window = Window::new("Claude HUD Monitor", geom, flags)?;
         window.set_opacity(opacity);
-        window.set_backdrop(BackdropType::Acrylic, dark);
+        let backdrop = if ui_mode == "table" {
+            BackdropType::Acrylic
+        } else {
+            BackdropType::None
+        };
+        window.set_backdrop(backdrop, dark);
         let sheet = crate::ui::styles::get_cards_stylesheet(dark);
         window.set_style_sheet(sheet);
         qtrs_widgets::application::Application::set_style_sheet(sheet);
@@ -220,7 +225,6 @@ impl HUDWindow {
 
         let mut btn = Button::new("⇄");
         btn.set_object_name("LayoutToggleBtn");
-        btn.set_font(qtrs_gui::text::font::Font::new("Segoe UI Symbol", 11.0));
         let layout_toggle_btn = make_widget(btn);
 
         let mut time_lbl = Label::new("--:--:--");
@@ -592,6 +596,12 @@ impl HUDWindow {
                 )
             }
         };
+        let backdrop = if mode == "table" {
+            BackdropType::Acrylic
+        } else {
+            BackdropType::None
+        };
+        self.window.set_backdrop(backdrop, self.is_dark);
 
         let cur_geom = self.window.geometry();
         let (nx, ny) = self.ensure_within_screen(cur_geom.x, cur_geom.y, w, h);
@@ -666,7 +676,13 @@ impl HUDWindow {
     pub fn set_theme(&mut self, dark: bool) {
         self.is_dark = dark;
         self.theme = get_theme(dark);
-        self.window.set_backdrop(BackdropType::Acrylic, dark);
+        let ui_mode = { self.config.lock().ui_mode.clone() };
+        let backdrop = if ui_mode == "table" {
+            BackdropType::Acrylic
+        } else {
+            BackdropType::None
+        };
+        self.window.set_backdrop(backdrop, dark);
         let sheet = crate::ui::styles::get_cards_stylesheet(dark);
         self.window.set_style_sheet(sheet);
         qtrs_widgets::application::Application::set_style_sheet(sheet);

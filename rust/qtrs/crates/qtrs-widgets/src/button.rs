@@ -143,6 +143,29 @@ impl Button {
         )
     }
 
+    /// The button's font with the stylesheet's size, family, weight and letter spacing applied.
+    fn styled_font(&self, style: &crate::style::stylesheet::ResolvedStyle) -> Font {
+        let mut font = self.font.clone();
+        if let Some(sz) = style.font_size {
+            font.size = sz.round();
+        }
+        if let Some(fam) = &style.font_family {
+            font.family = fam.clone();
+        }
+        if let Some(w) = style.font_weight {
+            font.weight = match w {
+                800..=900 => qtrs_gui::text::FontWeight::Black,
+                700..=799 => qtrs_gui::text::FontWeight::Bold,
+                600..=699 => qtrs_gui::text::FontWeight::SemiBold,
+                _ => qtrs_gui::text::FontWeight::Normal,
+            };
+        }
+        if let Some(spacing) = style.letter_spacing {
+            font.letter_spacing = spacing;
+        }
+        font
+    }
+
     pub fn action(&self) -> Option<ActionRef> {
         self.action.clone()
     }
@@ -242,31 +265,57 @@ impl Widget for Button {
     }
     fn size_hint(&self) -> Size {
         let style = self.resolved_style();
-        let metrics = FontMetrics::from_font(&self.font);
-        let contents = Size::new(
-            metrics.horizontal_advance(&self.text, &self.font).ceil() as i32,
-            metrics.height.ceil() as i32,
-        );
-        let style_metrics = self.style.metrics();
-        let styled = self.style.size_from_contents(
-            contents,
-            style_metrics.button_horizontal_padding,
-            style_metrics.button_vertical_padding,
-        );
-        let char_count = self.text.chars().count();
-        let (min_w, min_h) = if char_count <= 2 {
-            (20, 18)
-        } else if char_count <= 4 {
-            (40, 22)
-        } else {
-            (75, 26)
-        };
-        let base_w = styled.width.max(min_w);
-        let base_h = styled.height.max(min_h);
+        let font = self.styled_font(&style);
+        let metrics = FontMetrics::from_font(&font);
+        let text_w = metrics.horizontal_advance_exact(&self.text, &font).ceil() as i32;
+        let text_h = metrics.height.ceil() as i32;
 
-        let w = style.min_width.unwrap_or(base_w);
-        let h = style.max_height.or(style.min_height).unwrap_or(base_h);
-        Size::new(w, h)
+        let [pt, pr, pb, pl] = style.padding.unwrap_or([0.0; 4]);
+        let border = style.border_width.unwrap_or(0.0).max(0.0);
+        let pad_h = (pl + pr).round() as i32;
+        let pad_v = (pt + pb).round() as i32;
+        let border_h = (border * 2.0).round() as i32;
+        let border_v = (border * 2.0).round() as i32;
+
+        if style.padding.is_none() && style.border_width.is_none() && style.min_width.is_none() && style.max_height.is_none() {
+            let style_metrics = self.style.metrics();
+            let styled = self.style.size_from_contents(
+                Size::new(text_w, text_h),
+                style_metrics.button_horizontal_padding,
+                style_metrics.button_vertical_padding,
+            );
+            let char_count = self.text.chars().count();
+            let (min_w, min_h) = if char_count <= 2 {
+                (20, 18)
+            } else if char_count <= 4 {
+                (40, 22)
+            } else {
+                (75, 26)
+            };
+            let base_w = styled.width.max(min_w);
+            let base_h = styled.height.max(min_h);
+            Size::new(base_w, base_h)
+        } else {
+            // Qt's `QStyleSheetStyle::sizeFromContents(CT_PushButton)` + `rule.boxSize(sz)`:
+            // `min-width` applies to the content box, and padding + border are added around it.
+            let min_w = style.min_width.unwrap_or(0);
+            let content_w = text_w.max(min_w);
+            let mut w = content_w + pad_h + border_h;
+            if let Some(max_w) = style.max_width {
+                w = w.min(max_w);
+            }
+
+            let min_h = style.min_height.unwrap_or(0);
+            let content_h = text_h.max(min_h);
+            let mut h = content_h + pad_v + border_v;
+            if let Some(max_h) = style.max_height {
+                h = h.min(max_h);
+            }
+            if let Some(min_h) = style.min_height {
+                h = h.max(min_h);
+            }
+            Size::new(w, h)
+        }
     }
 
     fn minimum_size(&self) -> Size {
@@ -467,7 +516,7 @@ impl Widget for Button {
             &ButtonStyleOption {
                 rect: RectF::new(0.0, 0.0, geom.width as f32, geom.height as f32),
                 text: &self.text,
-                font: &self.font,
+                font: &self.styled_font(&style),
                 state: self.state,
                 enabled: self.base.is_enabled(),
                 // `QStyleSheetStyle` draws the box of a button the style sheet gives a background

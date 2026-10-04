@@ -51,6 +51,8 @@ pub fn set_window_backdrop(
                     &none_type as *const _ as *const _,
                     std::mem::size_of::<u32>() as u32,
                 );
+                // Clear Windows 10/11 SetWindowCompositionAttribute accent policy (ACCENT_DISABLED = 0)
+                let _ = set_win10_accent(hwnd, 0, 0, 0);
                 // Also disable blur behind if active
                 let bb = DWM_BLURBEHIND {
                     dwFlags: DWM_BB_ENABLE,
@@ -88,7 +90,7 @@ pub fn set_window_backdrop(
                 // Mirrors Python vibrancy.py: 100% compatible with WS_EX_LAYERED + UpdateLayeredWindow
                 // (DWMWA_SYSTEMBACKDROP_TYPE DWMSBT_TRANSIENTWINDOW breaks UpdateLayeredWindow with error 87)
                 let grad_color = if dark_mode { 0x99161a22 } else { 0x99f0f2f8 };
-                set_win10_acrylic(hwnd, grad_color)
+                set_win10_accent(hwnd, 4, 2, grad_color)
             }
             BackdropType::BlurBehind => {
                 let bb = DWM_BLURBEHIND {
@@ -104,7 +106,7 @@ pub fn set_window_backdrop(
 }
 
 #[cfg(windows)]
-fn set_win10_acrylic(hwnd: windows_sys::Win32::Foundation::HWND, gradient_color: u32) -> bool {
+fn set_win10_accent(hwnd: windows_sys::Win32::Foundation::HWND, state: u32, flags: u32, gradient_color: u32) -> bool {
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 
     #[repr(C)]
@@ -135,8 +137,8 @@ fn set_win10_acrylic(hwnd: windows_sys::Win32::Foundation::HWND, gradient_color:
         if let Some(set_wca) = fn_ptr {
             let set_wca: SetWindowCompositionAttributeFn = std::mem::transmute(set_wca);
             let mut policy = AccentPolicy {
-                accent_state: 4, // ACCENT_ENABLE_ACRYLICBLURBEHIND
-                accent_flags: 2, // Draw gradient color
+                accent_state: state,
+                accent_flags: flags,
                 gradient_color,
                 animation_id: 0,
             };

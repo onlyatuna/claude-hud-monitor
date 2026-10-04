@@ -204,3 +204,30 @@ fn test_stylesheet_style_pseudo_states_hover() {
         Some(Color::from_rgba8(255, 255, 255, 31))
     );
 }
+
+#[test]
+fn test_button_layout_toggle_btn_size_hint_matches_qt() {
+    use qtrs_core::object::qobject::QObject;
+    use qtrs_widgets::{Button, Widget};
+    let qss = r#"
+    QPushButton#LayoutToggleBtn {
+        background-color: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
+        color: #94a3b8;
+        font-size: 11px;
+        padding: 1px 4px;
+        min-width: 18px;
+        max-height: 18px;
+    }
+    "#;
+    let mut btn = Button::new("⇄");
+    btn.set_object_name("LayoutToggleBtn");
+    btn.set_style_sheet(qss);
+    let hint = btn.size_hint();
+    // In Qt: content width is max(advance(7), min_width(18)) = 18.
+    // Total width = 18 + padding (4+4) + border (1+1) = 28 px.
+    // Height = clamp(15 + padding 2 + border 2, max_height 18) = 18 px.
+    assert_eq!(hint.width, 28, "button width should match Qt (28 px)");
+    assert_eq!(hint.height, 18, "button height should match Qt (18 px)");
+}
