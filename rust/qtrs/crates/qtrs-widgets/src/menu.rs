@@ -32,13 +32,31 @@ const RIGHT_PADDING: i32 = 8;
 const MIN_WIDTH: i32 = 120;
 const SUBMENU_OVERLAP: i32 = 2;
 const ICON_SIZE: i32 = 16;
-/// Width and height of the check indicator box (`QWindows11Style::pixelMetric(PM_IndicatorWidth)`).
-/// A styled menu with checkable items reserves this plus [`CHECK_GAP`] before the text
-/// (`QStyleSheetStyle::sizeFromContents`, `CT_MenuItem`), and draws the text this far from the
-/// item's padding edge (`drawControl`, `CE_MenuItem`: `textRectOffset`).
-const CHECK_INDICATOR: i32 = 16;
 /// Extra width `QStyleSheetStyle` adds after the check indicator in `CT_MenuItem`.
 const CHECK_GAP: i32 = 4;
+
+fn native_style() -> qtrs_platform::NativeStyle {
+    qtrs_platform::platform().theme().native_style()
+}
+
+/// Width and height of the check indicator box: the base style's `PM_IndicatorWidth` /
+/// `PM_IndicatorHeight`. A styled menu with checkable items reserves this plus [`CHECK_GAP`]
+/// before the text (`QStyleSheetStyle::sizeFromContents`, `CT_MenuItem`), and draws the text this
+/// far from the item's padding edge (`drawControl`, `CE_MenuItem`: `textRectOffset`).
+///
+/// `windows11` 16 (`QWindows11Style::pixelMetric`), `Fusion` 14 (`QFusionStyle::pixelMetric`),
+/// `windowsvista` 13 (the theme's check box size at 96 dpi, queried from uxtheme by Qt),
+/// `macos` 18 + 1 (`CheckBoxWidth` + 1 in `qmacstyle_mac.mm`, the default control size).
+/// All but `macos` were confirmed against PySide6's menu widths.
+fn check_indicator() -> i32 {
+    use qtrs_platform::NativeStyle;
+    match native_style() {
+        NativeStyle::Windows11 => 16,
+        NativeStyle::WindowsVista => 13,
+        NativeStyle::Fusion => 14,
+        NativeStyle::Macintosh => 19,
+    }
+}
 
 /// Box model and palette of a style-sheet-driven menu (`QMenu`, `QMenu::item`,
 /// `QMenu::separator` rules). Without it a menu keeps its built-in look.
@@ -285,7 +303,7 @@ impl Menu {
     fn text_x(&self) -> f32 {
         match &self.style {
             Some(s) => {
-                (FRAME + s.item_padding[3] + if self.has_checkable() { CHECK_INDICATOR } else { 0 }) as f32
+                (FRAME + s.item_padding[3] + if self.has_checkable() { check_indicator() } else { 0 }) as f32
             }
             None => CHECK_COLUMN as f32,
         }
@@ -301,7 +319,7 @@ impl Menu {
                 2 * FRAME
                     + s.item_padding[1]
                     + s.item_padding[3]
-                    + if self.has_checkable() { CHECK_INDICATOR + CHECK_GAP } else { 0 }
+                    + if self.has_checkable() { check_indicator() + CHECK_GAP } else { 0 }
                     + max_text
                     + shortcut_w
             }
@@ -1329,11 +1347,18 @@ impl Menu {
         if action.is_checkable() && action.is_checked() {
             if self.style.is_some() && !action.is_exclusive_in_group() {
                 // `QStyleSheetStyle` draws the check through the base style's
-                // `PE_IndicatorMenuCheckMark`, which here is `QCommonStyle`'s: a box of
-                // `CHECK_INDICATOR` px at the item's left edge (`positionRect`: AlignLeft |
-                // AlignVCenter, padding origin), coloured like the item text.
-                let box_y = rect.y + (rect.height - CHECK_INDICATOR) / 2;
-                paint_common_check_mark(painter, Rect::new(FRAME, box_y, CHECK_INDICATOR, CHECK_INDICATOR), color);
+                // `PE_IndicatorMenuCheckMark`, in a box of `check_indicator()` px at the item's
+                // left edge (`positionRect`: AlignLeft | AlignVCenter, padding origin),
+                // coloured like the item text.
+                let size = check_indicator();
+                let box_y = rect.y + (rect.height - size) / 2;
+                let anti_aliased = native_style() == qtrs_platform::NativeStyle::Windows11;
+                paint_common_check_mark(
+                    painter,
+                    Rect::new(FRAME, box_y, size, size),
+                    color,
+                    anti_aliased,
+                );
             } else {
                 let check_color = if active {
                     self.highlight_text_color
@@ -1698,10 +1723,13 @@ impl Widget for Menu {
     }
 }
 
-/// `QCommonStyle::drawPrimitive(PE_IndicatorMenuCheckMark)`: a 7 px check built from 1 px wide,
-/// 2 px long vertical strokes (square caps, anti-aliased), centred in `rect` and shifted 1 px
-/// right.
-fn paint_common_check_mark(painter: &mut Painter, rect: Rect, color: Color) {
+/// The base style's `PE_IndicatorMenuCheckMark`: `QCommonStyle`'s 7 px check built from 1 px wide,
+/// 2 px long vertical strokes, centred in `rect` and shifted 1 px right. `QWindows11Style` leaves
+/// its painter anti-aliased (square caps, so each stroke is 3 rows tall and straddles two
+/// columns); `windowsvista` and `Fusion` draw it with plain pixels (column `x`, rows `y..=y+2`).
+/// `macos` instead draws a Core Text glyph (`kCTFontUIFontMenuItemMark`), which is not
+/// reproduced; this check stands in for it there.
+fn paint_common_check_mark(painter: &mut Painter, rect: Rect, color: Color, anti_aliased: bool) {
     let mark = rect.width.min(7);
     let pos_x = rect.x + (rect.width - mark) / 2 + 1;
     let pos_y = rect.y + (rect.height - mark) / 2;
@@ -1723,13 +1751,35 @@ fn paint_common_check_mark(painter: &mut Painter, rect: Rect, color: Color) {
         i += 1;
     }
 
-    painter.set_pen(Pen::new(color, 1.0).with_cap(qtrs_gui::tiny_skia::LineCap::Square));
-    for (x, y) in strokes {
-        painter.draw_line(
-            PointF::new(x as f32, y as f32),
-            PointF::new(x as f32, (y + 2) as f32),
-        );
+    if anti_aliased {
+        painter.set_pen(Pen::new(color, 1.0).with_cap(qtrs_gui::tiny_skia::LineCap::Square));
+        for (x, y) in strokes {
+            painter.draw_line(
+                PointF::new(x as f32, y as f32),
+                PointF::new(x as f32, (y + 2) as f32),
+            );
+        }
+    } else {
+        for (x, y) in strokes {
+            painter.fill_rect(RectF::new(x as f32, y as f32, 1.0, 3.0), color);
+        }
     }
+}
+
+/// `QMacStyle` `PE_IndicatorArrowRight`: a stroked chevron (round caps and joins, anti-aliased) of
+/// half-size `min(w, h) / 2`, the "down" chevron rotated by -90 degrees about the square's centre
+/// shifted by (1, 2) px (`qmacstyle_mac.mm`). Qt strokes it with the palette's text colour.
+fn paint_macos_arrow(painter: &mut Painter, rect: Rect, color: Color) {
+    let half = 0.5 * rect.width.min(rect.height) as f32;
+    let pen_width = (half / 3.0).max(1.25);
+    let cx = (rect.x + (rect.width - 1) / 2 + 1) as f32; // QRect::center().x() + 1
+    let cy = (rect.y + (rect.height - 1) / 2 + 2) as f32; // QRect::center().y() + 2
+    painter.set_pen(Pen::new(color, pen_width));
+    painter.draw_polyline(&[
+        PointF::new(cx - half / 2.0, cy + half),
+        PointF::new(cx + half / 2.0, cy),
+        PointF::new(cx - half / 2.0, cy - half),
+    ]);
 }
 
 
@@ -1738,7 +1788,8 @@ fn paint_common_check_mark(painter: &mut Painter, rect: Rect, color: Color) {
 /// row height, centred that far left of the item's right edge, and the base style draws the
 /// arrow, so the result differs by platform style:
 /// - `windows11`: the Fluent chevron glyph (`QWindows11Style`, `PE_IndicatorArrowRight`);
-/// - `windowsvista`, `macos`: `QCommonStyle`'s pixel triangle (macOS is assumed, not verified);
+/// - `windowsvista`: `QCommonStyle`'s pixel triangle;
+/// - `macos`: a stroked chevron (`QMacStyle`, from its source; not run on macOS);
 /// - `Fusion` (Linux, others): `qt_fusion_draw_arrow`'s anti-aliased triangle. Qt tints it with
 ///   the palette's `windowText` at alpha 160; without a palette the item colour stands in.
 fn paint_submenu_arrow(painter: &mut Painter, item: Rect, color: Color) {
@@ -1753,7 +1804,8 @@ fn paint_submenu_arrow(painter: &mut Painter, item: Rect, color: Color) {
 
     match qtrs_platform::platform().theme().native_style() {
         NativeStyle::Windows11 => paint_fluent_chevron(painter, square, color),
-        NativeStyle::WindowsVista | NativeStyle::Macintosh => paint_common_arrow(painter, square, color),
+        NativeStyle::WindowsVista => paint_common_arrow(painter, square, color),
+        NativeStyle::Macintosh => paint_macos_arrow(painter, square, color),
         NativeStyle::Fusion => paint_fusion_arrow(painter, square, color),
     }
 }
@@ -1850,11 +1902,7 @@ mod tests {
         let mut pixmap = canvas(24, 16);
         {
             let mut painter = Painter::begin(&mut pixmap);
-            paint_common_check_mark(
-                &mut painter,
-                Rect::new(FRAME, 0, CHECK_INDICATOR, CHECK_INDICATOR),
-                text(),
-            );
+            paint_common_check_mark(&mut painter, Rect::new(FRAME, 0, 16, 16), text(), true);
         }
         // With the box top at y = 0 the first stroke's cap lands on row 4 (QT_CHECK row 0).
         for (r, row) in QT_CHECK.iter().enumerate() {
@@ -1866,6 +1914,37 @@ mod tests {
                     c + 3,
                     r + 4
                 );
+            }
+        }
+    }
+
+    /// Plain-pixel check mark (`windowsvista`: indicator box 13 px at (1, 7); PySide6 6.11.2):
+    /// the 226-valued pixels per row, rows 11..=17.
+    const QT_PLAIN_CHECK: [(u32, &[u32]); 7] = [
+        (11, &[11]),
+        (12, &[10, 11]),
+        (13, &[5, 9, 10, 11]),
+        (14, &[5, 6, 8, 9, 10]),
+        (15, &[5, 6, 7, 8, 9]),
+        (16, &[6, 7, 8]),
+        (17, &[7]),
+    ];
+
+    #[test]
+    fn plain_check_mark_matches_qt_windowsvista() {
+        let mut pixmap = canvas(24, 24);
+        {
+            let mut painter = Painter::begin(&mut pixmap);
+            paint_common_check_mark(&mut painter, Rect::new(FRAME, 7, 13, 13), text(), false);
+        }
+        for y in 10..19u32 {
+            let ink: &[u32] = QT_PLAIN_CHECK
+                .iter()
+                .find(|(row, _)| *row == y)
+                .map_or(&[], |(_, xs)| xs);
+            for x in 2..16u32 {
+                let expected = if ink.contains(&x) { 226 } else { 22 };
+                assert_eq!(red(&pixmap, x, y), expected, "pixel ({x}, {y})");
             }
         }
     }

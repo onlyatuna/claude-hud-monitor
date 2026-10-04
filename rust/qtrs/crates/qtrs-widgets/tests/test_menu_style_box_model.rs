@@ -71,7 +71,15 @@ fn check_column_widens_the_menu_only_when_an_item_is_checkable() {
         m.add_action(a);
     })
     .size_hint();
-    assert_eq!(checkable.width - plain.width, 20);
+    // The base style's check indicator plus 4 px, measured with PySide6 6.11.2 per style.
+    use qtrs_platform::NativeStyle;
+    let expected = match qtrs_platform::platform().theme().native_style() {
+        NativeStyle::Windows11 => 20,
+        NativeStyle::WindowsVista => 17,
+        NativeStyle::Fusion => 18,
+        NativeStyle::Macintosh => 23,
+    };
+    assert_eq!(checkable.width - plain.width, expected);
 }
 
 #[test]
