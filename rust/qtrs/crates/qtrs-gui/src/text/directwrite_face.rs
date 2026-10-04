@@ -8,11 +8,15 @@
 //! * the rendering mode Qt derives from its default hinting preference (`determineHinting` /
 //!   `hintingPreferenceToRenderingMode`): `NATURAL` up to 16 px, `NATURAL_SYMMETRIC` above, with
 //!   grid fit default and ClearType antialiasing;
-//! * the ClearType 3x1 texture is reduced to one alpha value per pixel by averaging the sub-pixels.
+//! * the ClearType 3x1 texture is kept as three coverages per pixel for LCD text
+//!   (`alphaRGBMapForGlyph`, [`GlyphFace::rasterize_lcd_scaled`]) and reduced with `qGray` for
+//!   grey-scale text (`alphaMapForGlyph`); a BGR panel swaps red and blue first;
 //!
 //! Checked against Qt (PySide6) glyph by glyph at 125%, 150% and 200% scaling and 12-24 px
 //! (`tools/second_layer_harness/qt_glyph_compare.py`): identical placement and bitmap size, mean
-//! coverage difference about 0.5/255, at most 4.
+//! coverage difference about 0.5/255, at most 4. The blended LCD pixels at 100% are pixel-exact
+//! for Latin text (`tests/test_lcd_text_parity.rs`); the glyph 中 at 12 px and 100% still differs
+//! from Qt (cause not investigated; Qt draws 100% with its GDI engine, not DirectWrite).
 //!
 //! The font stays plain bytes in our memory (`SharedFontData`, handed to DirectWrite through an
 //! in-memory font file loader); character mapping and advances come from [`OutlineFace`], which
@@ -33,6 +37,9 @@ struct Factory {
     base: IDWriteFactory,
     factory2: IDWriteFactory2,
     loader: IDWriteInMemoryFontFileLoader,
+    /// The panel's sub-pixels run blue-green-red (`m_pixelGeometry` of Qt's DirectWrite engine,
+    /// from `CreateRenderingParams`).
+    bgr: bool,
 }
 
 // SAFETY: the shared DirectWrite factory and the objects created from it are free-threaded.
@@ -46,10 +53,14 @@ static FACTORY: LazyLock<Option<Factory>> = LazyLock::new(|| unsafe {
     factory5.RegisterFontFileLoader(&loader_base).ok()?;
     let base: IDWriteFactory = factory5.cast().ok()?;
     let factory2: IDWriteFactory2 = factory5.cast().ok()?;
+    let bgr = base
+        .CreateRenderingParams()
+        .is_ok_and(|params| params.GetPixelGeometry() == DWRITE_PIXEL_GEOMETRY_BGR);
     Some(Factory {
         base,
         factory2,
         loader,
+        bgr,
     })
 });
 
@@ -120,8 +131,10 @@ impl DirectWriteFace {
         }
     }
 
-    /// Qt's `imageForGlyph` + `alphaMapForGlyph`. `None` when DirectWrite fails for this glyph.
-    fn rasterize_directwrite(&self, glyph_id: u16, size: f32, scale: f32) -> Option<(GlyphMetrics, Vec<u8>)> {
+    /// Qt's `imageForGlyph`: the ClearType 3x1 texture, three coverages (red, green, blue sub-pixel,
+    /// swapped for a BGR panel as in `renderGlyphRun`) per pixel. `None` when DirectWrite fails for
+    /// this glyph.
+    fn rasterize_texture(&self, glyph_id: u16, size: f32, scale: f32) -> Option<(GlyphMetrics, Vec<u8>)> {
         let factory = FACTORY.as_ref()?;
         let advance = self.base.metrics_indexed(glyph_id, size * scale);
         let blank = GlyphMetrics {
@@ -177,13 +190,11 @@ impl DirectWriteFace {
         let mut texture = vec![0u8; width * height * 3];
         unsafe { analysis.CreateAlphaTexture(DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, &mut texture) }.ok()?;
 
-        // Qt's destination-with-alpha branch of `renderGlyphRun`: the three ClearType sub-pixel
-        // coverages are averaged (rounded) into one alpha value. (Measured against Qt output this
-        // matches to within 3/255; `qGray` weights, as used for opaque destinations, do not.)
-        let bitmap = texture
-            .chunks_exact(3)
-            .map(|p| ((p[0] as u32 + p[1] as u32 + p[2] as u32 + 1) / 3) as u8)
-            .collect();
+        if factory.bgr {
+            for px in texture.chunks_exact_mut(3) {
+                px.swap(0, 2);
+            }
+        }
         // Texture bounds are relative to the glyph origin on the baseline, rows growing downwards;
         // `ymin` is the bitmap's bottom edge above the baseline.
         let metrics = GlyphMetrics {
@@ -193,7 +204,7 @@ impl DirectWriteFace {
             height,
             ..blank
         };
-        Some((metrics, bitmap))
+        Some((metrics, texture))
     }
 }
 
@@ -217,11 +228,28 @@ impl GlyphFace for DirectWriteFace {
         self.rasterize_scaled(glyph_id, px, 1.0)
     }
 
+    /// Qt's `alphaMapForGlyph`: the texture reduced with `qGray`.
     fn rasterize_scaled(&self, glyph_id: u16, size: f32, scale: f32) -> (GlyphMetrics, Vec<u8>) {
         if size <= 0.0 || scale <= 0.0 {
             return (GlyphMetrics::default(), Vec::new());
         }
-        self.rasterize_directwrite(glyph_id, size, scale)
-            .unwrap_or_else(|| self.base.rasterize_indexed(glyph_id, size * scale))
+        match self.rasterize_texture(glyph_id, size, scale) {
+            Some((metrics, texture)) => {
+                let grey = texture
+                    .chunks_exact(3)
+                    .map(|p| ((p[0] as u32 * 11 + p[1] as u32 * 16 + p[2] as u32 * 5) / 32) as u8)
+                    .collect();
+                (metrics, grey)
+            }
+            None => self.base.rasterize_indexed(glyph_id, size * scale),
+        }
+    }
+
+    /// Qt's `alphaRGBMapForGlyph`: the texture itself.
+    fn rasterize_lcd_scaled(&self, glyph_id: u16, size: f32, scale: f32) -> Option<(GlyphMetrics, Vec<u8>)> {
+        if size <= 0.0 || scale <= 0.0 {
+            return None;
+        }
+        self.rasterize_texture(glyph_id, size, scale)
     }
 }

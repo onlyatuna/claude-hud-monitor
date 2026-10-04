@@ -13,7 +13,10 @@ use crate::paint::pixmap::Pixmap;
 use crate::text::document::TextDocument;
 use crate::text::font::Font;
 use crate::text::font_database::resolve_font_engines_for_text_global;
+use crate::paint::text_blend::{blend_grey, blend_lcd};
 use crate::text::glyph_layout::GlyphLayout;
+use crate::text::smoothing::{gamma_lut, text_smoothing, TextSmoothing, TrcLut};
+use std::sync::Arc;
 use tiny_skia::{
     Color, FilterQuality, LineCap, LineJoin, Mask, Paint, Path, PathBuilder, Pattern, Shader,
     SpreadMode, Stroke, Transform,
@@ -122,6 +125,9 @@ pub struct Painter<'a> {
     saved_states: Vec<PainterState>,
     cached_mask: Option<Mask>,
     cached_clip_rect: Option<tiny_skia::Rect>,
+    /// Gamma table of LCD (ClearType) text; `None` draws grey-scale text. Fixed when painting
+    /// starts, like `QRasterPaintEngine::begin` fixes the glyph cache format.
+    lcd_lut: Option<Arc<TrcLut>>,
 }
 impl<'a> Painter<'a> {
     // Begins painting on the specified `PaintDevice`, configuring initial DPR transform.
@@ -132,13 +138,20 @@ impl<'a> Painter<'a> {
         if dpr != 1.0 {
             state.transform = tiny_skia::Transform::from_scale(dpr, dpr);
         }
+        let smoothing = text_smoothing();
         Self {
             device,
             state,
             saved_states: Vec::new(),
             cached_mask: None,
             cached_clip_rect: None,
+            lcd_lut: smoothing.cleartype.then(|| gamma_lut(smoothing.gamma)),
         }
+    }
+
+    /// Overrides the text smoothing taken from the platform when painting started.
+    pub fn set_text_smoothing(&mut self, smoothing: TextSmoothing) {
+        self.lcd_lut = smoothing.cleartype.then(|| gamma_lut(smoothing.gamma));
     }
 
     // Returns a reference to the active state.
@@ -637,6 +650,8 @@ impl<'a> Painter<'a> {
         let target_g = (text_color.green() * 255.0).round() as u32;
         let target_b = (text_color.blue() * 255.0).round() as u32;
 
+        let target = [target_r, target_g, target_b];
+        let lcd_lut = self.lcd_lut.clone();
         let dpr = self.device.device_pixel_ratio();
         let transform = self.state.transform;
         let mut pixmap = self.device.as_pixmap_mut();
@@ -726,7 +741,15 @@ impl<'a> Painter<'a> {
                 continue;
             }
 
-            let (metrics, bitmap) = engine.rasterize_glyph(glyph.glyph_id, font.size, dpr);
+            // Qt draws LCD masks when ClearType is on and the face has them
+            // (`QRasterPaintEngine::drawCachedGlyphs`, `alphaRGBMapForGlyph`).
+            let lcd_glyph = lcd_lut
+                .as_ref()
+                .and_then(|_| engine.rasterize_lcd_glyph(glyph.glyph_id, font.size, dpr));
+            let (metrics, bitmap) = match &lcd_glyph {
+                Some((metrics, bitmap)) => (*metrics, bitmap.clone()),
+                None => engine.rasterize_glyph(glyph.glyph_id, font.size, dpr),
+            };
             if metrics.width == 0 || metrics.height == 0 {
                 continue;
             }
@@ -771,30 +794,21 @@ impl<'a> Painter<'a> {
                         }
                     }
 
-                    let glyph_alpha = bitmap[gy * metrics.width + gx];
-                    if glyph_alpha == 0 {
-                        continue;
-                    }
-
-                    let a_factor = (glyph_alpha as f32 / 255.0) * base_alpha;
                     let dst_idx = ((dst_y as usize) * (pw as usize) + (dst_x as usize)) * 4;
-
-                    let cur_r = pix_data[dst_idx] as u32;
-                    let cur_g = pix_data[dst_idx + 1] as u32;
-                    let cur_b = pix_data[dst_idx + 2] as u32;
-                    let cur_a = pix_data[dst_idx + 3] as u32;
-
-                    let src_a = (a_factor * 255.0).round() as u32;
-                    let inv_a = 255 - src_a;
-
-                    let src_pr = (target_r * src_a) / 255;
-                    let src_pg = (target_g * src_a) / 255;
-                    let src_pb = (target_b * src_a) / 255;
-
-                    pix_data[dst_idx] = ((src_pr + (cur_r * inv_a) / 255).min(255)) as u8;
-                    pix_data[dst_idx + 1] = ((src_pg + (cur_g * inv_a) / 255).min(255)) as u8;
-                    pix_data[dst_idx + 2] = ((src_pb + (cur_b * inv_a) / 255).min(255)) as u8;
-                    pix_data[dst_idx + 3] = ((src_a + (cur_a * inv_a) / 255).min(255)) as u8;
+                    let px = &mut pix_data[dst_idx..dst_idx + 4];
+                    match (&lcd_glyph, &lcd_lut) {
+                        (Some(_), Some(lut)) => {
+                            let i = (gy * metrics.width + gx) * 3;
+                            let cov = [bitmap[i], bitmap[i + 1], bitmap[i + 2]];
+                            blend_lcd(px, cov, base_alpha, target, lut);
+                        }
+                        _ => {
+                            let glyph_alpha = bitmap[gy * metrics.width + gx];
+                            if glyph_alpha != 0 {
+                                blend_grey(px, glyph_alpha, base_alpha, target);
+                            }
+                        }
+                    }
                 }
             }
         }

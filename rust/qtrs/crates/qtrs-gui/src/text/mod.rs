@@ -20,6 +20,7 @@ mod markup;
 pub mod outline_face;
 pub mod position;
 pub mod qcssparser;
+pub mod smoothing;
 
 pub use block::*;
 pub use block_data::*;

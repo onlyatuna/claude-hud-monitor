@@ -42,6 +42,18 @@ pub trait GlyphFace: Send + Sync {
         self.rasterize_indexed(glyph_id, size * scale)
     }
 
+    /// Sub-pixel (LCD) coverage of the glyph, as [`rasterize_scaled`](Self::rasterize_scaled)
+    /// places it: three bytes (red, green, blue sub-pixel) per pixel, top row first. `None` when
+    /// the backend only has grey-scale coverage (Qt's `alphaRGBMapForGlyph` fallback).
+    fn rasterize_lcd_scaled(
+        &self,
+        _glyph_id: u16,
+        _size: f32,
+        _scale: f32,
+    ) -> Option<(GlyphMetrics, Vec<u8>)> {
+        None
+    }
+
     /// Metrics of the glyph for `ch` at `px`.
     fn metrics(&self, ch: char, px: f32) -> GlyphMetrics {
         self.metrics_indexed(self.glyph_index(ch), px)

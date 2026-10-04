@@ -21,6 +21,9 @@ pub struct PositionedGlyph {
 /// (`rustybuzz`). Mirrors Qt's `QFontEngine`.
 type ColorGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32), Option<(GlyphMetrics, Arc<tiny_skia::Pixmap>)>>>>;
 type MonoGlyphCache = Arc<std::sync::Mutex<std::collections::HashMap<(u16, u32, u32), (GlyphMetrics, Arc<[u8]>)>>>;
+type LcdGlyphCache = Arc<
+    std::sync::Mutex<std::collections::HashMap<(u16, u32, u32), Option<(GlyphMetrics, Arc<[u8]>)>>>,
+>;
 /// Upper bound on cached glyph bitmaps per engine (a CJK font could otherwise grow without limit).
 const MONO_GLYPH_CACHE_LIMIT: usize = 4096;
 
@@ -36,6 +39,8 @@ pub struct FontEngine {
     color_cache: ColorGlyphCache,
     /// Cached monochrome glyph bitmaps: (glyph_id, px_size bits) -> (Metrics, coverage bitmap)
     mono_cache: MonoGlyphCache,
+    /// Cached LCD glyph bitmaps, three coverages per pixel; `None` when the face has none.
+    lcd_cache: LcdGlyphCache,
 }
 
 impl FontEngine {
@@ -47,6 +52,7 @@ impl FontEngine {
             face_index: 0,
             color_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mono_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            lcd_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -123,6 +129,33 @@ impl FontEngine {
             guard.insert(key, (metrics, bitmap.clone()));
         }
         (metrics, bitmap)
+    }
+
+    /// Like [`rasterize_glyph`](Self::rasterize_glyph) with three sub-pixel coverages per pixel,
+    /// or `None` when the face cannot produce them.
+    pub fn rasterize_lcd_glyph(
+        &self,
+        glyph_id: u16,
+        size: f32,
+        scale: f32,
+    ) -> Option<(GlyphMetrics, Arc<[u8]>)> {
+        let key = (glyph_id, size.to_bits(), scale.to_bits());
+        if let Ok(guard) = self.lcd_cache.lock() {
+            if let Some(entry) = guard.get(&key) {
+                return entry.clone();
+            }
+        }
+        let rendered = self
+            .face
+            .rasterize_lcd_scaled(glyph_id, size, scale)
+            .map(|(metrics, bitmap)| (metrics, Arc::<[u8]>::from(bitmap)));
+        if let Ok(mut guard) = self.lcd_cache.lock() {
+            if guard.len() >= MONO_GLYPH_CACHE_LIMIT {
+                guard.clear();
+            }
+            guard.insert(key, rendered.clone());
+        }
+        rendered
     }
 }
 

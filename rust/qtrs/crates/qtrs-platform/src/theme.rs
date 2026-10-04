@@ -46,6 +46,11 @@ pub trait PlatformTheme: Send + Sync {
     fn menu_font_family(&self) -> Option<String> {
         None
     }
+    /// How the system smooths text, which decides whether Qt draws glyphs as LCD (ClearType)
+    /// masks. Grey-scale (`TextSmoothing::OFF`) where Qt has no sub-pixel path.
+    fn text_smoothing(&self) -> qtrs_gui::text::smoothing::TextSmoothing {
+        qtrs_gui::text::smoothing::TextSmoothing::OFF
+    }
 }
 
 #[cfg(windows)]
@@ -63,10 +68,14 @@ pub mod win32_theme {
     impl Default for Win32Theme {
         fn default() -> Self {
             let initial = Self::query_color_scheme();
-            Self {
+            let theme = Self {
                 cached_scheme: AtomicU8::new(initial as u8),
                 theme_changed_signal: Signal::new(),
-            }
+            };
+            // Qt reads the font smoothing state once, when the first painter starts
+            // (`QRasterPaintEngine::clearTypeFontsEnabled`, a function-local static).
+            qtrs_gui::text::smoothing::set_text_smoothing(theme.text_smoothing());
+            theme
         }
     }
 
@@ -197,6 +206,39 @@ pub mod win32_theme {
                 let len = face.iter().position(|&c| c == 0).unwrap_or(face.len());
                 let name = String::from_utf16_lossy(&face[..len]);
                 (!name.is_empty()).then_some(name)
+            }
+        }
+
+        /// `SPI_GETFONTSMOOTHINGTYPE` is ClearType (`winClearTypeFontsEnabled`) and the
+        /// gamma is `SPI_GETFONTSMOOTHINGCONTRAST / 1000`, 1.4 when out of 1..=5
+        /// (`QWindowsFontDatabase::fontSmoothingGamma`).
+        fn text_smoothing(&self) -> qtrs_gui::text::smoothing::TextSmoothing {
+            use windows_sys::Win32::UI::WindowsAndMessaging::SystemParametersInfoW;
+            const SPI_GETFONTSMOOTHINGTYPE: u32 = 0x200A;
+            const SPI_GETFONTSMOOTHINGCONTRAST: u32 = 0x200C;
+            const FE_FONTSMOOTHINGCLEARTYPE: u32 = 0x0002;
+            let mut kind: u32 = 0;
+            let mut contrast: u32 = 0;
+            // SAFETY: both queries write one `UINT` through the pointer.
+            let (kind_ok, contrast_ok) = unsafe {
+                (
+                    SystemParametersInfoW(SPI_GETFONTSMOOTHINGTYPE, 0, &mut kind as *mut _ as *mut _, 0),
+                    SystemParametersInfoW(
+                        SPI_GETFONTSMOOTHINGCONTRAST,
+                        0,
+                        &mut contrast as *mut _ as *mut _,
+                        0,
+                    ),
+                )
+            };
+            // `QWindowsFontDatabase::fontSmoothingGamma` starts from 1 when the query fails.
+            let mut gamma = if contrast_ok != 0 { contrast as f32 / 1000.0 } else { 1.0 };
+            if !(1.0..=5.0).contains(&gamma) {
+                gamma = 1.4;
+            }
+            qtrs_gui::text::smoothing::TextSmoothing {
+                cleartype: kind_ok != 0 && kind == FE_FONTSMOOTHINGCLEARTYPE,
+                gamma,
             }
         }
 
