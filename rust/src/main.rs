@@ -372,15 +372,17 @@ fn main() -> std::process::ExitCode {
         .downcast_mut::<qtrs_widgets::button::Button>()
     {
         btn.clicked.connect(move |()| {
-            MAIN_HUD.with(|h_cell| {
-                if let Some(hud) = h_cell.borrow().as_ref() {
-                    hud.borrow_mut().toggle_cards_layout();
-                }
-            });
-            MAIN_TRAY.with(|t_cell| {
-                if let Some(tray) = t_cell.borrow().as_ref() {
-                    tray.borrow_mut().update_menu_state();
-                }
+            qtrs_widgets::command::WidgetCommandQueue::post_task(move || {
+                MAIN_HUD.with(|h_cell| {
+                    if let Some(hud) = h_cell.borrow().as_ref() {
+                        hud.borrow_mut().toggle_cards_layout();
+                    }
+                });
+                MAIN_TRAY.with(|t_cell| {
+                    if let Some(tray) = t_cell.borrow().as_ref() {
+                        tray.borrow_mut().update_menu_state();
+                    }
+                });
             });
         });
     }

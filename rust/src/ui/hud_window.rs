@@ -560,7 +560,7 @@ impl HUDWindow {
                 s.set_current_index(1);
             }
             set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
-            self.layout_toggle_btn.borrow_mut().set_visible(false);
+            self.layout_toggle_btn.borrow().set_visible(false);
             self.window
                 .set_minimum_size(MIN_TABLE_WIDTH as i32, MIN_TABLE_HEIGHT as i32);
             let cfg = self.config.lock();
@@ -578,7 +578,7 @@ impl HUDWindow {
                 s.set_current_index(0);
             }
             set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
-            self.layout_toggle_btn.borrow_mut().set_visible(true);
+            self.layout_toggle_btn.borrow().set_visible(true);
             let cfg = self.config.lock();
             if cfg.layout_mode == "horizontal" {
                 self.window
