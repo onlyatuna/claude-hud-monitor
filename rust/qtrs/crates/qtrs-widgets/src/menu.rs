@@ -1328,20 +1328,12 @@ impl Menu {
 
         if action.is_checkable() && action.is_checked() {
             if self.style.is_some() && !action.is_exclusive_in_group() {
-                // The glyph is centred in the indicator box at the item's left edge
-                // (`positionRect`: AlignLeft | AlignVCenter, padding origin). Qt draws the
-                // Fluent check-mark font glyph; this stroke imitates its shape and weight.
-                let u = CHECK_INDICATOR as f32 / 16.0;
-                let cx = FRAME as f32 + CHECK_INDICATOR as f32 / 2.0;
-                painter.set_pen(Pen::new(color, 1.6));
-                painter.draw_line(
-                    PointF::new(cx - 3.5 * u, mid_y + 0.5 * u),
-                    PointF::new(cx - 1.0 * u, mid_y + 3.0 * u),
-                );
-                painter.draw_line(
-                    PointF::new(cx - 1.0 * u, mid_y + 3.0 * u),
-                    PointF::new(cx + 3.5 * u, mid_y - 3.0 * u),
-                );
+                // `QStyleSheetStyle` draws the check through the base style's
+                // `PE_IndicatorMenuCheckMark`, which here is `QCommonStyle`'s: a box of
+                // `CHECK_INDICATOR` px at the item's left edge (`positionRect`: AlignLeft |
+                // AlignVCenter, padding origin), coloured like the item text.
+                let box_y = rect.y + (rect.height - CHECK_INDICATOR) / 2;
+                paint_common_check_mark(painter, Rect::new(FRAME, box_y, CHECK_INDICATOR, CHECK_INDICATOR), color);
             } else {
                 let check_color = if active {
                     self.highlight_text_color
@@ -1717,5 +1709,86 @@ impl Widget for Menu {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+
+/// `QCommonStyle::drawPrimitive(PE_IndicatorMenuCheckMark)`: a 7 px check built from 1 px wide,
+/// 2 px long vertical strokes (square caps, anti-aliased), centred in `rect` and shifted 1 px
+/// right.
+fn paint_common_check_mark(painter: &mut Painter, rect: Rect, color: Color) {
+    let mark = rect.width.min(7);
+    let pos_x = rect.x + (rect.width - mark) / 2 + 1;
+    let pos_y = rect.y + (rect.height - mark) / 2;
+
+    let mut strokes = Vec::with_capacity(mark as usize);
+    let (mut x, mut y) = (pos_x, 3 + pos_y);
+    let mut i = 0;
+    while i < mark / 2 {
+        strokes.push((x, y));
+        x += 1;
+        y += 1;
+        i += 1;
+    }
+    y -= 2;
+    while i < mark {
+        strokes.push((x, y));
+        x += 1;
+        y -= 1;
+        i += 1;
+    }
+
+    painter.set_pen(Pen::new(color, 1.0).with_cap(qtrs_gui::tiny_skia::LineCap::Square));
+    for (x, y) in strokes {
+        painter.draw_line(
+            PointF::new(x as f32, y as f32),
+            PointF::new(x as f32, (y + 2) as f32),
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qtrs_gui::paint::pixmap::Pixmap;
+
+    /// Red channel of Qt's own check mark (PySide6 6.11.2, Python HUD cards sheet: text
+    /// `#e2e8f0` over `#161920`), rows y = 4..=11 and columns x = 3..=15 of a 16 px indicator box
+    /// whose top-left is (1, 0).
+    const QT_RED: [[u8; 13]; 8] = [
+        [22, 22, 22, 22, 22, 22, 22, 22, 73, 73, 22, 22, 22],
+        [22, 22, 22, 22, 22, 22, 22, 73, 150, 124, 22, 22, 22],
+        [22, 22, 73, 73, 22, 22, 73, 150, 175, 124, 22, 22, 22],
+        [22, 22, 124, 149, 73, 73, 150, 175, 149, 73, 22, 22, 22],
+        [22, 22, 124, 175, 149, 150, 175, 149, 73, 22, 22, 22, 22],
+        [22, 22, 73, 150, 175, 175, 149, 73, 22, 22, 22, 22, 22],
+        [22, 22, 22, 73, 150, 149, 73, 22, 22, 22, 22, 22, 22],
+        [22, 22, 22, 22, 73, 73, 22, 22, 22, 22, 22, 22, 22],
+    ];
+
+    #[test]
+    fn check_mark_matches_qt_pixels() {
+        let mut pixmap = Pixmap::new(24, 16).unwrap();
+        pixmap.fill(Color::from_rgba8(22, 25, 32, 255));
+        {
+            let mut painter = Painter::begin(&mut pixmap);
+            paint_common_check_mark(
+                &mut painter,
+                Rect::new(FRAME, 0, CHECK_INDICATOR, CHECK_INDICATOR),
+                Color::from_rgba8(226, 232, 240, 255),
+            );
+        }
+        // With the box top at y = 0 the first stroke's cap lands on row 4 (QT_RED row 0).
+        for (r, row) in QT_RED.iter().enumerate() {
+            for (c, &expected) in row.iter().enumerate() {
+                let p = pixmap.pixel((c + 3) as u32, (r + 4) as u32).unwrap();
+                let got = p.red() as i32;
+                assert!(
+                    (got - expected as i32).abs() <= 2,
+                    "pixel ({}, {}): {got} vs Qt {expected}",
+                    c + 3,
+                    r + 4
+                );
+            }
+        }
     }
 }
