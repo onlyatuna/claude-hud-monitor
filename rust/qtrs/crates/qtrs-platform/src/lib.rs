@@ -97,7 +97,7 @@ pub use screen::{
 
 #[cfg(windows)]
 pub use theme::Win32Theme;
-pub use theme::{CocoaTheme, ColorScheme, GenericTheme, PlatformTheme, UnixTheme};
+pub use theme::{CocoaTheme, ColorScheme, GenericTheme, NativeStyle, PlatformTheme, UnixTheme};
 #[cfg(windows)]
 pub use tray::Win32TrayIcon;
 pub use tray::{

@@ -1405,21 +1405,7 @@ impl Menu {
 
         if action.menu().is_some() {
             if self.style.is_some() {
-                // `QStyleSheetStyle` derives the arrow box from the row: a square of half the
-                // row height, centred `dim` px left of the item's right edge. Qt draws the
-                // Fluent chevron glyph in it; this stroke imitates its shape and weight.
-                let dim = (rect.height / 2) as f32;
-                let cx = (width - FRAME - 1) as f32 - dim;
-                let half = dim * 0.3;
-                painter.set_pen(Pen::new(color, 1.3));
-                painter.draw_line(
-                    PointF::new(cx - half / 2.0, mid_y - half),
-                    PointF::new(cx + half / 2.0, mid_y),
-                );
-                painter.draw_line(
-                    PointF::new(cx + half / 2.0, mid_y),
-                    PointF::new(cx - half / 2.0, mid_y + half),
-                );
+                paint_submenu_arrow(painter, rect, color);
             } else {
                 let ax = (width - 14) as f32;
                 painter.set_pen(Pen::new(color, 1.5));
@@ -1746,15 +1732,109 @@ fn paint_common_check_mark(painter: &mut Painter, rect: Rect, color: Color) {
     }
 }
 
+
+/// Submenu arrow of a style-sheet-driven menu item, as `QStyleSheetStyle` draws it
+/// (`CE_MenuItem`): without a `::right-arrow` rule it hands the base style a square of half the
+/// row height, centred that far left of the item's right edge, and the base style draws the
+/// arrow, so the result differs by platform style:
+/// - `windows11`: the Fluent chevron glyph (`QWindows11Style`, `PE_IndicatorArrowRight`);
+/// - `windowsvista`, `macos`: `QCommonStyle`'s pixel triangle (macOS is assumed, not verified);
+/// - `Fusion` (Linux, others): `qt_fusion_draw_arrow`'s anti-aliased triangle. Qt tints it with
+///   the palette's `windowText` at alpha 160; without a palette the item colour stands in.
+fn paint_submenu_arrow(painter: &mut Painter, item: Rect, color: Color) {
+    use qtrs_platform::NativeStyle;
+
+    let dim = item.height / 2;
+    let right = item.x + item.width - 1; // QRect::right()
+    let center_y = item.y + (item.height - 1) / 2; // QRect::center().y()
+    // QRect::moveCenter on a dim x dim rect.
+    let (left, top) = (right - dim - (dim - 1) / 2, center_y - (dim - 1) / 2);
+    let square = Rect::new(left, top, dim, dim);
+
+    match qtrs_platform::platform().theme().native_style() {
+        NativeStyle::Windows11 => paint_fluent_chevron(painter, square, color),
+        NativeStyle::WindowsVista | NativeStyle::Macintosh => paint_common_arrow(painter, square, color),
+        NativeStyle::Fusion => paint_fusion_arrow(painter, square, color),
+    }
+}
+
+/// `QWindows11Style`: the `ChevronRightMed` glyph of the icon font, centred in `rect`.
+fn paint_fluent_chevron(painter: &mut Painter, rect: Rect, color: Color) {
+    const CHEVRON_RIGHT_MED: &str = "\u{E974}";
+    // `assetFont` is a `QFont(QStringList)` with no size, so it takes the application font's
+    // 9 pt = 12 px (measured: the glyph is 8 px tall, 5 px wide).
+    let font = Font::new("Segoe Fluent Icons, Segoe MDL2 Assets", 12.0);
+    let metrics = FontMetrics::from_font(&font);
+    let advance = metrics.horizontal_advance_exact(CHEVRON_RIGHT_MED, &font);
+    // Qt's DirectWrite engine has no sub-pixel positioning, so the origin is whole pixels.
+    let x = (rect.x as f32 + (rect.width as f32 - advance) / 2.0).round();
+    let y = (rect.y as f32 + (rect.height as f32 - metrics.height) / 2.0 + metrics.ascent).round();
+    painter.draw_text_colored(PointF::new(x, y), CHEVRON_RIGHT_MED, &font, color);
+}
+
+/// `QCommonStyle::drawPrimitive(PE_IndicatorArrowRight)`: an un-anti-aliased triangle of
+/// `size - 3` by `(size - 3) / 2` px, centred in the square.
+fn paint_common_arrow(painter: &mut Painter, rect: Rect, color: Color) {
+    let size = rect.width.min(rect.height);
+    let long = size - 3;
+    let (width, height) = (long / 2, long); // transposed for a right arrow
+    let (ox, oy) = (rect.x + (size - width) / 2, rect.y + (size - height) / 2);
+    let half = (height / 2).max(1);
+    for y in 0..=height {
+        let reach = (width * (half - (y - half).abs()) + half / 2) / half;
+        painter.fill_rect(
+            RectF::new(ox as f32, (oy + y) as f32, (reach + 1) as f32, 1.0),
+            color,
+        );
+    }
+}
+
+/// `qt_fusion_draw_arrow`: an anti-aliased triangle 4 x 8 px (for a 13 px square).
+fn paint_fusion_arrow(painter: &mut Painter, rect: Rect, color: Color) {
+    use qtrs_gui::tiny_skia::PathBuilder;
+    const ARROW_WIDTH: i32 = 14; // dpiScaled(14) at 96 dpi
+    const ARROW_HEIGHT: i32 = 8;
+    let size = ARROW_HEIGHT.min(ARROW_WIDTH).min(rect.width.min(rect.height));
+    let (w, h) = ((ARROW_HEIGHT * size / ARROW_WIDTH) as f32, size as f32); // transposed
+    let x = rect.x as f32 + (rect.width as f32 - w) / 2.0;
+    let y = rect.y as f32 + (rect.height as f32 - h) / 2.0;
+    let mut pb = PathBuilder::new();
+    pb.move_to(x, y);
+    pb.line_to(x, y + h);
+    pb.line_to(x + w, y + h / 2.0);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        let mut tint = color;
+        tint.set_alpha(160.0 / 255.0);
+        painter.set_brush(Brush::Color(tint));
+        painter.set_pen(None);
+        painter.fill_path(&path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use qtrs_gui::paint::pixmap::Pixmap;
 
+    fn text() -> Color {
+        Color::from_rgba8(226, 232, 240, 255)
+    }
+
+    fn canvas(w: u32, h: u32) -> Pixmap {
+        let mut pixmap = Pixmap::new(w, h).unwrap();
+        pixmap.fill(Color::from_rgba8(22, 25, 32, 255));
+        pixmap
+    }
+
+    fn red(pixmap: &Pixmap, x: u32, y: u32) -> i32 {
+        pixmap.pixel(x, y).unwrap().red() as i32
+    }
+
     /// Red channel of Qt's own check mark (PySide6 6.11.2, Python HUD cards sheet: text
     /// `#e2e8f0` over `#161920`), rows y = 4..=11 and columns x = 3..=15 of a 16 px indicator box
     /// whose top-left is (1, 0).
-    const QT_RED: [[u8; 13]; 8] = [
+    const QT_CHECK: [[u8; 13]; 8] = [
         [22, 22, 22, 22, 22, 22, 22, 22, 73, 73, 22, 22, 22],
         [22, 22, 22, 22, 22, 22, 22, 73, 150, 124, 22, 22, 22],
         [22, 22, 73, 73, 22, 22, 73, 150, 175, 124, 22, 22, 22],
@@ -1767,26 +1847,83 @@ mod tests {
 
     #[test]
     fn check_mark_matches_qt_pixels() {
-        let mut pixmap = Pixmap::new(24, 16).unwrap();
-        pixmap.fill(Color::from_rgba8(22, 25, 32, 255));
+        let mut pixmap = canvas(24, 16);
         {
             let mut painter = Painter::begin(&mut pixmap);
             paint_common_check_mark(
                 &mut painter,
                 Rect::new(FRAME, 0, CHECK_INDICATOR, CHECK_INDICATOR),
-                Color::from_rgba8(226, 232, 240, 255),
+                text(),
             );
         }
-        // With the box top at y = 0 the first stroke's cap lands on row 4 (QT_RED row 0).
-        for (r, row) in QT_RED.iter().enumerate() {
+        // With the box top at y = 0 the first stroke's cap lands on row 4 (QT_CHECK row 0).
+        for (r, row) in QT_CHECK.iter().enumerate() {
             for (c, &expected) in row.iter().enumerate() {
-                let p = pixmap.pixel((c + 3) as u32, (r + 4) as u32).unwrap();
-                let got = p.red() as i32;
+                let got = red(&pixmap, (c + 3) as u32, (r + 4) as u32);
                 assert!(
                     (got - expected as i32).abs() <= 2,
                     "pixel ({}, {}): {got} vs Qt {expected}",
                     c + 3,
                     r + 4
+                );
+            }
+        }
+    }
+
+    /// `windowsvista` (QCommonStyle) submenu arrow in a 13 px square whose top-left is (8, 7):
+    /// per row, how many 226-valued pixels start at x = 12 (PySide6 6.11.2, rows 8..=18).
+    const QT_COMMON_ARROW_WIDTHS: [u32; 11] = [1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1];
+
+    #[test]
+    fn common_arrow_matches_qt_windowsvista() {
+        let mut pixmap = canvas(32, 24);
+        {
+            let mut painter = Painter::begin(&mut pixmap);
+            paint_common_arrow(&mut painter, Rect::new(8, 7, 13, 13), text());
+        }
+        for (i, &width) in QT_COMMON_ARROW_WIDTHS.iter().enumerate() {
+            let y = 8 + i as u32;
+            for x in 8..24u32 {
+                let expect_ink = x >= 12 && x < 12 + width;
+                let got = red(&pixmap, x, y);
+                assert_eq!(got == 226, expect_ink, "row {y} x {x}: red {got}");
+                if !expect_ink {
+                    assert_eq!(got, 22, "row {y} x {x} must stay background");
+                }
+            }
+        }
+    }
+
+    /// Fusion submenu arrow (`qt_fusion_draw_arrow`) for the same square, red channel over the
+    /// background, rows y = 9..=17, columns x = 12..=16 (PySide6 6.11.2, `Fusion`). tiny-skia's
+    /// anti-aliasing covers diagonal edge pixels up to 17/255 more than Qt's scanline rasterizer.
+    const QT_FUSION_ARROW: [[u8; 5]; 9] = [
+        [38, 22, 22, 22, 22],
+        [86, 86, 22, 22, 22],
+        [86, 150, 86, 22, 22],
+        [86, 150, 150, 86, 22],
+        [86, 150, 150, 150, 55],
+        [86, 150, 150, 86, 22],
+        [86, 150, 86, 22, 22],
+        [86, 86, 22, 22, 22],
+        [38, 22, 22, 22, 22],
+    ];
+
+    #[test]
+    fn fusion_arrow_matches_qt_fusion() {
+        let mut pixmap = canvas(32, 24);
+        {
+            let mut painter = Painter::begin(&mut pixmap);
+            paint_fusion_arrow(&mut painter, Rect::new(8, 7, 13, 13), text());
+        }
+        for (r, row) in QT_FUSION_ARROW.iter().enumerate() {
+            for (c, &expected) in row.iter().enumerate() {
+                let got = red(&pixmap, 12 + c as u32, 9 + r as u32);
+                assert!(
+                    (got - expected as i32).abs() <= 18,
+                    "pixel ({}, {}): {got} vs Qt {expected}",
+                    12 + c,
+                    9 + r
                 );
             }
         }

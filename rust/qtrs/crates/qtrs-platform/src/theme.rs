@@ -19,7 +19,25 @@ impl From<u8> for ColorScheme {
     }
 }
 
+/// The widget style Qt would pick on this platform. Style-sheet-driven widgets still draw
+/// some parts (menu arrows, check marks) through it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeStyle {
+    /// `windows11` (Windows 11): Fluent icon font glyphs.
+    Windows11,
+    /// `windowsvista` (earlier Windows).
+    WindowsVista,
+    /// `macos`.
+    Macintosh,
+    /// `Fusion`, the style on Linux and elsewhere.
+    Fusion,
+}
+
 pub trait PlatformTheme: Send + Sync {
+    /// Which style Qt would use on this platform.
+    fn native_style(&self) -> NativeStyle {
+        NativeStyle::Fusion
+    }
     fn color_scheme(&self) -> ColorScheme;
     fn theme_changed(&self) -> &Signal<ColorScheme>;
     fn refresh(&self);
@@ -53,6 +71,47 @@ pub mod win32_theme {
     }
 
     impl Win32Theme {
+        /// Windows build number (`CurrentBuildNumber`).
+        fn build_number() -> Option<u32> {
+            use windows_sys::Win32::System::Registry::{HKEY_LOCAL_MACHINE, REG_SZ};
+            let subkey: Vec<u16> = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            let value_name: Vec<u16> = "CurrentBuildNumber"
+                .encode_utf16()
+                .chain(std::iter::once(0))
+                .collect();
+            // SAFETY: plain registry reads into stack buffers whose size is passed along.
+            unsafe {
+                let mut hkey: HKEY = std::ptr::null_mut();
+                if RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != 0 {
+                    return None;
+                }
+                let mut val_type: u32 = 0;
+                let mut buf = [0u16; 16];
+                let mut size = std::mem::size_of_val(&buf) as u32;
+                let status = RegQueryValueExW(
+                    hkey,
+                    value_name.as_ptr(),
+                    std::ptr::null_mut(),
+                    &mut val_type,
+                    buf.as_mut_ptr() as *mut u8,
+                    &mut size,
+                );
+                RegCloseKey(hkey);
+                if status != 0 || val_type != REG_SZ {
+                    return None;
+                }
+                let len = (size as usize / 2).min(buf.len());
+                String::from_utf16_lossy(&buf[..len])
+                    .trim_end_matches('\0')
+                    .trim()
+                    .parse()
+                    .ok()
+            }
+        }
+
         pub fn new() -> Self {
             Self::default()
         }
@@ -103,6 +162,18 @@ pub mod win32_theme {
     }
 
     impl PlatformTheme for Win32Theme {
+        /// Qt picks `windows11` from build 22000 on and `windowsvista` before
+        /// (`QWindowsIntegration`), whose menus draw differently.
+        fn native_style(&self) -> NativeStyle {
+            static STYLE: std::sync::LazyLock<NativeStyle> = std::sync::LazyLock::new(|| {
+                match Win32Theme::build_number() {
+                    Some(build) if build >= 22000 => NativeStyle::Windows11,
+                    _ => NativeStyle::WindowsVista,
+                }
+            });
+            *STYLE
+        }
+
         fn color_scheme(&self) -> ColorScheme {
             ColorScheme::from(self.cached_scheme.load(Ordering::Acquire))
         }
@@ -237,6 +308,10 @@ pub mod cocoa_theme {
     }
 
     impl PlatformTheme for CocoaTheme {
+        fn native_style(&self) -> NativeStyle {
+            NativeStyle::Macintosh
+        }
+
         fn color_scheme(&self) -> ColorScheme {
             ColorScheme::from(self.cached_scheme.load(Ordering::Acquire))
         }
