@@ -204,7 +204,14 @@ impl HUDWindow {
             BackdropType::None
         };
         window.set_backdrop(backdrop, dark);
-        let sheet = crate::ui::styles::get_cards_stylesheet(dark);
+        // Table mode installs the HUD sheet, which names no `font-family`; cards mode
+        // installs the cards sheet, which does. Installing the cards sheet for both would
+        // force Segoe UI onto the table's labels and shift every advance width.
+        let sheet = if ui_mode == "table" {
+            crate::ui::styles::get_hud_stylesheet(dark)
+        } else {
+            crate::ui::styles::get_cards_stylesheet(dark)
+        };
         window.set_style_sheet(sheet);
         qtrs_widgets::application::Application::set_style_sheet(sheet);
 
@@ -717,7 +724,11 @@ impl HUDWindow {
             BackdropType::None
         };
         self.window.set_backdrop(backdrop, dark);
-        let sheet = crate::ui::styles::get_cards_stylesheet(dark);
+        let sheet = if ui_mode == "table" {
+            crate::ui::styles::get_hud_stylesheet(dark)
+        } else {
+            crate::ui::styles::get_cards_stylesheet(dark)
+        };
         self.window.set_style_sheet(sheet);
         qtrs_widgets::application::Application::set_style_sheet(sheet);
 

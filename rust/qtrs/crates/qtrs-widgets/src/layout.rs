@@ -431,16 +431,18 @@ impl Layout for BoxLayout {
 
         let mut total_w = 0;
         let mut total_h = 0;
-        let mut visible_count = 0;
+        // `QLayout::sizeHint` counts spacing only *between* items, so a trailing stretch
+        // (added by `addStretch()` to push the rest left) contributes neither width nor spacing.
+        let mut sized_count = 0;
 
         for item in &self.items {
             if !item.widget.borrow().is_visible() {
                 continue;
             }
-            visible_count += 1;
             if item.stretch > 0 {
                 continue;
             }
+            sized_count += 1;
             let hint = item.widget.borrow().size_hint();
             match self.direction {
                 Direction::TopToBottom => {
@@ -454,7 +456,7 @@ impl Layout for BoxLayout {
             }
         }
 
-        let total_spacing = (visible_count - 1).max(0) * self.spacing;
+        let total_spacing = (sized_count - 1).max(0) * self.spacing;
         match self.direction {
             Direction::TopToBottom => total_h += total_spacing,
             Direction::LeftToRight => total_w += total_spacing,
@@ -637,6 +639,7 @@ pub struct GridLayout {
     row_stretches: Vec<u32>,
     col_stretches: Vec<u32>,
     col_min_widths: Vec<i32>,
+    row_min_heights: Vec<i32>,
     dirty: bool,
 }
 
@@ -651,6 +654,7 @@ impl GridLayout {
             row_stretches: Vec::new(),
             col_stretches: Vec::new(),
             col_min_widths: Vec::new(),
+            row_min_heights: Vec::new(),
             dirty: true,
         }
     }
@@ -692,11 +696,25 @@ impl GridLayout {
         self.col_stretches[col] = stretch;
         self.update_layout();
     }
+
+    /// `QGridLayout::setColumnMinimumWidth` equivalent: the column is laid out at least this
+    /// wide even when no item in it asks for it.
     pub fn set_column_minimum_width(&mut self, col: usize, min_w: i32) {
         if col >= self.col_min_widths.len() {
             self.col_min_widths.resize(col + 1, 0);
         }
         self.col_min_widths[col] = min_w;
+        self.update_layout();
+    }
+
+    /// `QGridLayout::setRowMinimumHeight` equivalent: the row is laid out at least this tall
+    /// even when no item in it asks for it.
+
+    pub fn set_row_minimum_height(&mut self, row: usize, min_h: i32) {
+        if row >= self.row_min_heights.len() {
+            self.row_min_heights.resize(row + 1, 0);
+        }
+        self.row_min_heights[row] = min_h;
         self.update_layout();
     }
 
@@ -887,6 +905,9 @@ impl Layout for GridLayout {
                     }
                 }
             }
+            let row_min = self.row_min_heights.get(r).copied().unwrap_or(0);
+            hint = hint.max(row_min);
+            min_sz = min_sz.max(row_min);
             let stretch = self.row_stretches.get(r).copied().unwrap_or(0);
             row_specs.push((hint, min_sz, max_sz, policy, stretch));
         }

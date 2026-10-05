@@ -24,15 +24,26 @@ pub struct Label {
     alignment: Alignment,
 }
 
+
+
+
+/// `QApplication`'s default font family on Windows (`Microsoft JhengHei UI`).
+///
+/// A `QLabel` whose style sheet does not set `font-family` keeps this family, so it is the
+/// face every HUD label renders with unless a rule names one explicitly.
+pub const APP_DEFAULT_FAMILY: &str = "Microsoft JhengHei UI";
+
+/// Family the `QWidget`-scoped style-sheet rule resolves to: the first installed family in the
+/// `'Segoe UI', 'SF Pro Display', 'Microsoft JhengHei', sans-serif` stack.
+pub const SHEET_FAMILY: &str = "Segoe UI";
+
 impl Label {
     pub fn new(text: impl Into<String>) -> Self {
         let text_str = text.into();
-        let family = if text_str.chars().any(|c| (c as u32) >= 0x2E80) {
-            "Microsoft JhengHei"
-        } else {
-            "Segoe UI"
-        };
-        let font = Font::new(family, 13.0);
+        // `QLabel` uses the `QApplication` default font unless a style-sheet rule names a
+        // family. That default is Microsoft JhengHei UI on Windows, and the table style sheet
+        // sets no `font-family`, so both its ASCII and CJK labels render with it.
+        let font = Font::new(APP_DEFAULT_FAMILY, 13.0);
         let base = WidgetBase::new();
         let metrics = FontMetrics::from_font(&font);
         let text_w = metrics.horizontal_advance(&text_str, &font).ceil() as i32 + 10;
@@ -54,9 +65,6 @@ impl Label {
 
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
-        if self.text.chars().any(|c| (c as u32) >= 0x2E80) && self.font.family == "Segoe UI" {
-            self.font.family = "Microsoft JhengHei".to_string();
-        }
         self.request_layout();
         self.update();
     }

@@ -151,10 +151,9 @@ impl Widget for UsageDial {
         qtrs_gui::geometry::primitives::Size::new(84, 84)
     }
     fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
-        qtrs_gui::geometry::primitives::Size::new(84, 84)
-    }
-    fn size_policy(&self) -> qtrs_widgets::QSizePolicy {
-        self.base.size_policy()
+        // `UsageDial` is a plain `QWidget` with no size constraint, so the grid row stretches
+        // it to fill; a hard minimum here would cap the dial at a fixed square.
+        qtrs_gui::geometry::primitives::Size::new(0, 0)
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -819,6 +818,20 @@ impl Widget for SeparatorWidget {
     }
 }
 
+/// Resize a label's font while keeping the family `Label::new` resolved for its text.
+///
+/// The Python table sets only `font-size` / `font-weight` in its style sheet, so `QLabel`
+/// keeps the application font's family; passing `Font::new("Segoe UI", ..)` outright would
+/// pick the wrong face for CJK text and change every advance width.
+fn with_label_size(label: &mut Label, size: f32, bold: bool) {
+    let mut f = label.font().clone();
+    f.size = size;
+    if bold {
+        f.weight = FontWeight::Bold;
+    }
+    label.set_font(f);
+}
+
 fn make_glyph_row(
     kind: &str,
     color: Color,
@@ -838,11 +851,7 @@ fn make_glyph_row(
 
     let mut lbl = Label::new(text);
     lbl.set_color(if bold { theme.text } else { theme.text2 });
-    let mut f = Font::new("Segoe UI", font_size);
-    if bold {
-        f.weight = FontWeight::Bold;
-    }
-    lbl.set_font(f);
+    with_label_size(&mut lbl, font_size, bold);
     let lbl_ref = make_widget(lbl);
     h.add_widget(lbl_ref.clone());
     h.add_stretch(1);
@@ -859,7 +868,7 @@ fn make_sub_label(text: &str, theme: &Theme) -> (WidgetRef, WidgetRef) {
 
     let mut lbl = Label::new(text);
     lbl.set_color(theme.text2);
-    lbl.set_font(Font::new("Segoe UI", 12.0));
+    with_label_size(&mut lbl, 12.0, false);
     let lbl_ref = make_widget(lbl);
     h.add_widget(lbl_ref.clone());
     h.add_stretch(1);
@@ -909,7 +918,7 @@ impl ProviderColumn {
         };
         let mut name_lbl = Label::new(display_name);
         name_lbl.set_color(theme.text);
-        name_lbl.set_font(Font::new("Segoe UI", 14.0).with_weight(FontWeight::Bold));
+        with_label_size(&mut name_lbl, 14.0, true);
         let name = make_widget(name_lbl);
         top.add_widget(name.clone());
         top.add_stretch(1);
@@ -920,7 +929,8 @@ impl ProviderColumn {
 
         let mut badge_lbl = Label::new(" ");
         badge_lbl.set_color(theme.text2);
-        badge_lbl.set_font(Font::new("Segoe UI", 9.5).with_weight(FontWeight::Bold));
+        // `QCss` turns `font-size: 9.5px` into `setPixelSize(10)`: half and above round up.
+        with_label_size(&mut badge_lbl, 10.0, true);
         badge_lbl.set_alignment(qtrs_widgets::Alignment::Center);
         let badge = make_widget(badge_lbl);
         hv.add_widget(badge.clone());
@@ -928,11 +938,9 @@ impl ProviderColumn {
 
         let make_cell_label = |txt: &str, sz: f32, bold: bool| {
             let mut l = Label::new(txt);
-            let mut f = Font::new("Segoe UI", sz).with_tabular_numbers(true);
-            if bold {
-                f.weight = FontWeight::Bold;
-            }
-            l.set_font(f);
+            with_label_size(&mut l, sz, bold);
+            // Countdowns must not shift horizontally as digits change.
+            l.set_font(l.font().clone().with_tabular_numbers(true));
             l.set_alignment(qtrs_widgets::Alignment::Center);
             make_widget(l)
         };
@@ -1223,10 +1231,14 @@ impl UsageTable {
                 grid.set_column_stretch(col, 1);
             }
         }
-        grid.set_column_minimum_width(0, 86);
+
+        grid.set_row_minimum_height(2, 18);
         grid.set_row_stretch(5, 1);
 
         container.borrow_mut().set_layout(Box::new(grid));
+        container.borrow_mut().set_style_sheet(crate::ui::styles::get_table_stylesheet(
+            theme.is_dark,
+        ));
 
         Self {
             container,
@@ -1251,6 +1263,9 @@ impl UsageTable {
         for col in self.columns.values_mut() {
             col.set_theme(theme.clone(), scheme);
         }
+        self.container
+            .borrow_mut()
+            .set_style_sheet(crate::ui::styles::get_table_stylesheet(theme.is_dark));
 
         if let Some(s) = self.sep1.borrow_mut().as_any_mut().downcast_mut::<SeparatorWidget>() {
             s.set_color(theme.separator);
@@ -1480,17 +1495,60 @@ mod tests {
             assert!(col.icon.borrow().as_any().downcast_ref::<ProviderIconWidget>().is_some());
         }
     }
+
+    /// Grid geometry must match the PySide6 `QGridLayout` for a 450x350 table-mode window.
+    ///
+    /// Reference measured with PySide6 6.11.2 and `QT_QPA_PLATFORM=windows` on the real
+    /// `HUDWindow` (the offscreen platform has no font database and reports fabricated
+    /// metrics): column x/width `68 | 78/109 | 197/110 | 317/109`, row y/height
+    /// `31 | 1 | 18 | 18 | 18 | 134 | 1 | 19 | 18 | 18`.
     #[test]
-    fn test_inspect_table_geometries() {
+    fn test_grid_matches_qt_geometry() {
         let table = UsageTable::new(Theme::dark(), "scale");
         let container = table.widget();
-        container.borrow_mut().set_geometry(Rect::new(12, 25, 426, 315));
+        container
+            .borrow_mut()
+            .set_geometry(Rect::new(12, 28, 426, 312));
         container.borrow().update_layout();
+
+        // Column 0 is the legend gutter: its width is the widest legend row's size hint,
+        // 11px glyph + 5px spacing + 52px "內圈 5 小時" advance, with no trailing stretch spacing.
         let claude = table.columns.get("claude").unwrap();
-        assert_eq!(claude.header.borrow().geometry().x, 96);
         let codex = table.columns.get("codex").unwrap();
-        assert_eq!(codex.header.borrow().geometry().x, 210);
         let agy = table.columns.get("agy").unwrap();
-        assert_eq!(agy.header.borrow().geometry().x, 323);
+        assert_eq!(claude.header.borrow().geometry().x, 78);
+        assert_eq!(codex.header.borrow().geometry().x, 198);
+        assert_eq!(agy.header.borrow().geometry().x, 317);
+        assert_eq!(claude.header.borrow().geometry().width, 110);
+
+        // Row heights come from QFontMetrics, so the stretched dial row absorbs the slack.
+        assert_eq!(claude.header.borrow().geometry().height, 31);
+        assert_eq!(claude.dial.borrow().geometry().y, 106);
+        assert_eq!(claude.dial.borrow().geometry().height, 134);
+    }
+
+    /// Every HUD label renders in the `QApplication` default family, as the Python table's
+    /// style sheet sets no `font-family`. Picking Segoe UI for ASCII text shifts the layout:
+    /// its 14px line box is 19px tall against JhengHei UI's 18px.
+    #[test]
+    fn test_labels_use_the_app_default_family() {
+        let col = ProviderColumn::new("claude", Theme::dark(), "scale");
+        let reset = col.m1_reset.borrow();
+        let label = reset.as_any().downcast_ref::<Label>().unwrap();
+        assert_eq!(label.font().family, qtrs_widgets::APP_DEFAULT_FAMILY);
+        // `QLabel#Cell { font-size: 14px; padding: 0px 2px; }` -> an 18px line box.
+        assert_eq!(reset.size_hint().height, 18);
+    }
+
+    /// A trailing `addStretch()` is a zero-width spacer that takes no spacing either:
+    /// `QLayout::sizeHint` sums the non-stretch items and their intervening spacing only.
+    #[test]
+    fn test_trailing_stretch_adds_no_spacing() {
+        let theme = Theme::dark();
+        let (row, glyph, label) =
+            make_glyph_row("pie", theme.neutral, "內圈 5 小時", &theme, 11.0, 10.0, false);
+        let mut expected = glyph.borrow().size_hint().width + label.borrow().size_hint().width;
+        expected += 5; // one spacing, between the two widgets
+        assert_eq!(row.borrow().size_hint().width, expected);
     }
 }
