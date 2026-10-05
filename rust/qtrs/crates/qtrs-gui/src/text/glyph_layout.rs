@@ -1,5 +1,6 @@
 use crate::text::font::{Font, SharedFontData};
-use crate::text::glyph_face::{GlyphMetrics, SharedGlyphFace};
+use crate::text::glyph_face::{GlyphFace, GlyphMetrics, SharedGlyphFace};
+use rustybuzz::ttf_parser::kern as ttf_kern;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -184,6 +185,120 @@ pub struct GlyphLayout {
     pub width: f32,
 }
 
+/// `hb_font_t::x_mult` of the font Qt hands HarfBuzz (`hb_font_set_scale(QFixed::fromReal(ppem))`):
+/// the 16.16 factor taking font units to 26.6 pixels.
+fn hb_font_multiplier(size: f32, units_per_em: i32) -> i64 {
+    if units_per_em <= 0 {
+        return 0;
+    }
+    let scale = (f64::from(size) * 64.0) as i64;
+    (scale << 16) / i64::from(units_per_em)
+}
+
+/// `hb_font_t::em_mult`: font units to 26.6 pixels, rounded half up, as HarfBuzz scales what it
+/// adds to the font engine's advance.
+fn hb_scale_font_units(units: i64, mult: i64) -> i64 {
+    (units * mult + 32768) >> 16
+}
+
+/// The plain horizontal subtables of the font's `kern` table when HarfBuzz applies them itself:
+/// no `kerx`, and no GPOS `kern` feature (`apply_kern` in HarfBuzz's shape plan). `None` when the
+/// font kerns through GPOS, or its `kern` table needs state machines or cross-stream kerning, which
+/// stay with rustybuzz.
+fn legacy_kern_table<'a>(face: &'a rustybuzz::Face<'a>) -> Option<Vec<ttf_kern::Subtable<'a>>> {
+    let tables = face.tables();
+    if tables.kerx.is_some() {
+        return None;
+    }
+    let kern_tag = rustybuzz::ttf_parser::Tag::from_bytes(b"kern");
+    if tables.gpos.is_some_and(|gpos| gpos.features.into_iter().any(|feature| feature.tag == kern_tag)) {
+        return None;
+    }
+    let mut subtables = Vec::new();
+    for subtable in tables.kern.as_ref()?.subtables {
+        if subtable.variable || !subtable.horizontal {
+            continue;
+        }
+        if subtable.has_cross_stream || subtable.has_state_machine {
+            return None;
+        }
+        subtables.push(subtable);
+    }
+    (!subtables.is_empty()).then_some(subtables)
+}
+
+/// Advance and x offset of every shaped glyph in 26.6 pixels, as `QTextEngine::shapeTextWithHarfbuzzNG`
+/// hands them on: the font engine's advance (`_hb_qt_font_get_glyph_h_advance`) plus what HarfBuzz
+/// adds to it, scaled to `size * 64` per unit. A `kern` table is applied the way `hb_kern_machine_t`
+/// does: the pair's kern is scaled first and only then split over both glyphs, the second one also
+/// moving by its half. A font engine without subpixel positions (Qt's GDI engine) gets every
+/// advance and offset rounded to whole pixels. `None` when the engine has no layout advance.
+fn qt_glyph_metrics(
+    face: &rustybuzz::Face,
+    engine: &dyn GlyphFace,
+    infos: &[rustybuzz::GlyphInfo],
+    positions: &[rustybuzz::GlyphPosition],
+    size: f32,
+    direct_write: bool,
+    legacy_kern: Option<&Vec<ttf_kern::Subtable>>,
+) -> Option<Vec<(i64, i64)>> {
+    let mult = hb_font_multiplier(size, face.units_per_em());
+    let mut metrics = Vec::with_capacity(infos.len());
+    for (info, pos) in infos.iter().zip(positions) {
+        let glyph = rustybuzz::ttf_parser::GlyphId(info.glyph_id as u16);
+        let engine_advance = engine.layout_advance_width(glyph.0, size, direct_write)?;
+        let design = i64::from(face.glyph_hor_advance(glyph).unwrap_or(0));
+        // HarfBuzz zeroes the advance of marks after the font callback; keep that zero.
+        let advance = if pos.x_advance == 0 {
+            0
+        } else {
+            (f64::from(engine_advance) * 64.0).round() as i64
+                + hb_scale_font_units(i64::from(pos.x_advance) - design, mult)
+        };
+        metrics.push((advance, hb_scale_font_units(i64::from(pos.x_offset), mult)));
+    }
+    if let Some(subtables) = legacy_kern {
+        let is_mark = |info: &rustybuzz::GlyphInfo| {
+            face.tables().gdef.is_some_and(|gdef| {
+                gdef.glyph_class(rustybuzz::ttf_parser::GlyphId(info.glyph_id as u16))
+                    == Some(rustybuzz::ttf_parser::gdef::GlyphClass::Mark)
+            })
+        };
+        for subtable in subtables {
+            let mut i = 0;
+            while i < infos.len() {
+                // `IGNORE_MARKS` skipping iterator: the next glyph that is not a mark.
+                let Some(j) = (i + 1..infos.len()).find(|&j| !is_mark(&infos[j])) else {
+                    break;
+                };
+                let raw = subtable
+                    .glyphs_kerning(
+                        rustybuzz::ttf_parser::GlyphId(infos[i].glyph_id as u16),
+                        rustybuzz::ttf_parser::GlyphId(infos[j].glyph_id as u16),
+                    )
+                    .map_or(0, i64::from);
+                if raw != 0 {
+                    let kern = hb_scale_font_units(raw, mult);
+                    let first = kern >> 1;
+                    let second = kern - first;
+                    metrics[i].0 += first;
+                    metrics[j].0 += second;
+                    metrics[j].1 += second;
+                }
+                i = j;
+            }
+        }
+    }
+    if !direct_write {
+        // `g.advances[i].round()` and `g.offsets[i].x.round()` for engines without subpixel positions.
+        for (advance, x_offset) in &mut metrics {
+            *advance = (*advance + 32) & -64;
+            *x_offset = (*x_offset + 32) & -64;
+        }
+    }
+    Some(metrics)
+}
+
 impl GlyphLayout {
     /// Creates an empty layout.
     pub fn empty() -> Self {
@@ -355,12 +470,17 @@ impl GlyphLayout {
             return Self::empty();
         }
 
-        // Pre-parse rustybuzz faces once per engine (zero-copy table header parsing).
+        // Pre-parse rustybuzz faces once per engine (zero-copy table header parsing). Qt sets the
+        // HarfBuzz font's ppem to the whole pixel size (`hb_font_set_ppem(int(ppem))`), which selects
+        // the GPOS device-table adjustments.
+        let ppem = font.size as u16;
         let rb_faces: Vec<Option<rustybuzz::Face>> = engines
             .iter()
             .map(|e| {
                 e.raw_data.as_ref().and_then(|data| {
-                    rustybuzz::Face::from_slice(data.as_slice(), e.face_index)
+                    let mut face = rustybuzz::Face::from_slice(data.as_slice(), e.face_index)?;
+                    face.set_pixels_per_em(Some((ppem, ppem)));
+                    Some(face)
                 })
             })
             .collect();
@@ -369,6 +489,7 @@ impl GlyphLayout {
         let mut glyphs = Vec::with_capacity(text.len());
         let mut current_x = 0.0;
         let mut current_y = 0.0;
+        let direct_write = crate::text::font_database::uses_directwrite_engine();
 
         for run in runs {
             let engine = &engines[run.engine_index];
@@ -385,7 +506,10 @@ impl GlyphLayout {
                         features.push(f);
                     }
                 }
-                if let Ok(f) = rustybuzz::Feature::from_str("kern") {
+                // HarfBuzz applies a `kern` table itself when the font has no GPOS kerning; the pairs
+                // are then applied below, scaled as HarfBuzz scales them (see `legacy_kern_table`).
+                let legacy_kern = legacy_kern_table(rb_face);
+                if let Ok(f) = rustybuzz::Feature::from_str(if legacy_kern.is_some() { "kern=0" } else { "kern" }) {
                     features.push(f);
                 }
                 // Qt passes `letterSpacing != 0` to disable ligatures (`shapeTextWithHarfbuzzNG`).
@@ -404,20 +528,29 @@ impl GlyphLayout {
                 let infos = glyph_buffer.glyph_infos();
                 let positions = glyph_buffer.glyph_positions();
 
+                let engine_metrics = qt_glyph_metrics(
+                    rb_face,
+                    &*engine.face,
+                    infos,
+                    positions,
+                    font.size,
+                    direct_write,
+                    legacy_kern.as_ref(),
+                );
+
                 for (i, (info, pos)) in infos.iter().zip(positions.iter()).enumerate() {
+                    // `engine_metrics` is Qt's own advance and x offset in 26.6 pixels; without a
+                    // font engine advance HarfBuzz's design values stand.
+                    let (adv, x_offset) = match &engine_metrics {
+                        Some(m) => (m[i].0 as f32 / 64.0, m[i].1 as f32 / 64.0),
+                        None => ((pos.x_advance as f32) * scale, (pos.x_offset as f32) * scale),
+                    };
                     glyphs.push(PositionedGlyph {
                         glyph_id: info.glyph_id as u16,
                         font_index: run.engine_index as u8,
-                        x: current_x + (pos.x_offset as f32) * scale,
+                        x: current_x + x_offset,
                         y: current_y + (pos.y_offset as f32) * scale,
                     });
-                    // Qt's `_hb_qt_font_get_glyph_h_advance`: delegates glyph advance back to
-                    // `fe->recalcAdvances`, which in `GDI_CLASSIC` mode returns the GDI grid-fitted
-                    // integer pixel advances. Fall back to HarfBuzz's unhinted design advances.
-                    let adv = engine
-                        .face
-                        .gdi_advance_width(info.glyph_id as u16, font.size, 1.0)
-                        .unwrap_or_else(|| (pos.x_advance as f32) * scale);
                     current_x += adv;
                     current_y += (pos.y_advance as f32) * scale;
                     // `QTextEngine::shapeText`: spacing goes after the last glyph of every cluster.
@@ -447,7 +580,7 @@ impl GlyphLayout {
                     } else {
                         engine
                             .face
-                            .gdi_advance_width(gid, font.size, 1.0)
+                            .layout_advance_width(gid, font.size, direct_write)
                             .unwrap_or(metrics.advance_width)
                     };
 

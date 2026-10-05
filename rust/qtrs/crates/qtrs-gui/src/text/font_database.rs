@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::text::font::{Font, FontStyle, SharedFontData};
@@ -113,6 +113,31 @@ static FONT_GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Current font-set generation; changes whenever a search path or an in-memory font is added.
 pub fn font_generation() -> u64 {
     FONT_GENERATION.load(Ordering::Relaxed)
+}
+
+/// `QGuiApplication::devicePixelRatio()` as bits of an `f32`; the highest ratio of any screen.
+static APPLICATION_DPR_BITS: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
+
+/// The ratio Qt's Windows font database consults (`qApp->devicePixelRatio()`).
+pub fn application_device_pixel_ratio() -> f32 {
+    f32::from_bits(APPLICATION_DPR_BITS.load(Ordering::Relaxed))
+}
+
+/// Records the application's device pixel ratio (the highest of all screens, as
+/// `QGuiApplication::devicePixelRatio()` reports it). Widths measured under the previous value are
+/// dropped.
+pub fn set_application_device_pixel_ratio(dpr: f32) {
+    if APPLICATION_DPR_BITS.swap(dpr.to_bits(), Ordering::Relaxed) != dpr.to_bits() {
+        FONT_GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+/// Whether Qt lays text out with its DirectWrite font engine rather than its GDI one
+/// (`useDirectWrite` in `qwindowsfontdatabase.cpp`, for the default hinting preference):
+/// any application device pixel ratio other than 1 (`qFuzzyCompare`).
+pub fn uses_directwrite_engine() -> bool {
+    let dpr = f64::from(application_device_pixel_ratio());
+    (dpr - 1.0).abs() * 1_000_000_000_000.0 > dpr.min(1.0).abs()
 }
 
 /// Process-wide font database shared by the painter and font-selection widgets.

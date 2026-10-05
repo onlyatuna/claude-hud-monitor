@@ -44,6 +44,15 @@ impl Application {
     pub fn new(args: Vec<String>) -> Self {
         let gui_app = GuiApplication::new(args);
 
+        // `QGuiApplication::devicePixelRatio()`: the highest ratio of any screen. Qt's Windows font
+        // database picks its font engine, and with it the advances text is laid out with, from it.
+        let dpr = qtrs_platform::platform()
+            .screens()
+            .iter()
+            .map(|screen| screen.device_pixel_ratio())
+            .fold(1.0, f32::max);
+        qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
+
         Self {
             gui_app,
             focus_changed: Signal::new(),

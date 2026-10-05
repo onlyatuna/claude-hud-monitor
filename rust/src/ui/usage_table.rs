@@ -1554,8 +1554,8 @@ mod tests {
 
     /// Header row: the icon sits 5px from the origin and the name 5px after it, so the pair
     /// ends flush with the 109px column (18px icon + 5px spacing + 86px "Claude Code").
-    /// The advance being exactly 86 is the part that was wrong before: `gdi_advance_width`
-    /// returned a fractional pixel, so `sizeHint().ceil()` added one.
+    /// Qt's `sizeHint` is 86 whichever way the string is laid out (85.765625 px at 125%, a whole
+    /// 86 at 100%), because the width is rounded up.
     #[test]
     fn test_header_row_advances_match_qt() {
         let col = ProviderColumn::new("claude", Theme::dark(), "scale");

@@ -211,36 +211,32 @@ impl DirectWriteFace {
         Some((metrics, texture))
     }
 
-    /// When rendering in `GDI_CLASSIC` mode (scale == 1.0, size <= 16.0), queries DirectWrite's
-    /// `GetGdiCompatibleGlyphMetrics(useGdiNatural = FALSE)` to get the integer grid-fitted
-    /// advance width that matches Windows GDI (`GetCharWidth32` / `GetTextExtentPoint32`).
-    pub fn gdi_advance_width(&self, glyph_id: u16, size: f32, scale: f32) -> Option<f32> {
-        let (mode, _) = Self::rendering_mode(size, scale);
-        if mode != DWRITE_RENDERING_MODE_GDI_CLASSIC {
+    /// The advance Qt's Windows font engines give a glyph when laying text out
+    /// (`QFontEngine::recalcAdvances`, called back from HarfBuzz for every glyph).
+    ///
+    /// * `direct_write == false`: Qt's GDI engine (`QWindowsFontEngine::recalcAdvances`), whose
+    ///   advances are whole pixels (`GetCharWidthI`). `GetGdiCompatibleGlyphMetrics` reports that
+    ///   grid-fitted advance, in font units.
+    /// * `direct_write == true`: Qt's DirectWrite engine. Default hinting resolves to vertical or no
+    ///   hinting there (`determineHinting`), so `recalcAdvances` takes `GetDesignGlyphMetrics` and
+    ///   converts with `DESIGN_TO_LOGICAL`: `QFixed::fromReal(design / unitsPerEm * pixelSize)`, a
+    ///   26.6 value truncated toward zero. The device pixel ratio does not enter, so 125%, 150% and
+    ///   200% share these advances.
+    pub fn layout_advance_width(&self, glyph_id: u16, size: f32, direct_write: bool) -> Option<f32> {
+        if self.upem <= 0.0 {
             return None;
         }
         let mut metric = DWRITE_GLYPH_METRICS::default();
-        let res = unsafe {
-            self.face.GetGdiCompatibleGlyphMetrics(
-                size,
-                1.0,
-                None,
-                false,
-                &glyph_id,
-                1,
-                &mut metric,
-                false,
-            )
-        };
-        // `advanceWidth` comes back in font units. GDI then rounds the scaled advance to a
-        // whole pixel (`GetCharWidth32` is an integer), so snap to the grid the same way:
-        // leaving the fraction in place made `sizeHint().ceil()` report a pixel too wide for
-        // every string whose scaled advance was not exact.
-        if res.is_ok() && self.upem > 0.0 {
-            Some(((metric.advanceWidth as f32 * size / self.upem) + 0.5).floor())
-        } else {
-            None
+        if direct_write {
+            unsafe { self.face.GetDesignGlyphMetrics(&glyph_id, 1, &mut metric, false) }.ok()?;
+            let pixels = f64::from(metric.advanceWidth) / f64::from(self.upem) * f64::from(size);
+            return Some(((pixels * 64.0).trunc() / 64.0) as f32);
         }
+        unsafe {
+            self.face.GetGdiCompatibleGlyphMetrics(size, 1.0, None, false, &glyph_id, 1, &mut metric, false)
+        }
+        .ok()?;
+        Some(((metric.advanceWidth as f32 * size / self.upem) + 0.5).floor())
     }
 }
 
@@ -289,7 +285,7 @@ impl GlyphFace for DirectWriteFace {
         self.rasterize_texture(glyph_id, size, scale)
     }
 
-    fn gdi_advance_width(&self, glyph_id: u16, size: f32, scale: f32) -> Option<f32> {
-        self.gdi_advance_width(glyph_id, size, scale)
+    fn layout_advance_width(&self, glyph_id: u16, size: f32, direct_write: bool) -> Option<f32> {
+        self.layout_advance_width(glyph_id, size, direct_write)
     }
 }

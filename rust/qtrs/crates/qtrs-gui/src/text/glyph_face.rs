@@ -66,11 +66,11 @@ pub trait GlyphFace: Send + Sync {
         None
     }
 
-    /// When rendering in `GDI_CLASSIC` mode on Windows (scale == 1.0, size <= 16.0), queries
-    /// DirectWrite's `GetGdiCompatibleGlyphMetrics` to get the integer grid-fitted advance
-    /// width that matches Windows GDI (`fe->recalcAdvances` in Qt's `shapeTextWithHarfbuzzNG`).
-    /// Returns `None` when the backend has no GDI-compatible metrics (non-Windows or unhinted).
-    fn gdi_advance_width(&self, _glyph_id: u16, _size: f32, _scale: f32) -> Option<f32> {
+    /// The advance Qt's Windows font engine gives a glyph in layout (see
+    /// `DirectWriteFace::layout_advance_width`); `direct_write` is
+    /// [`uses_directwrite_engine`](crate::text::font_database::uses_directwrite_engine).
+    /// `None` when the backend has no such metrics: the caller then keeps HarfBuzz's own advance.
+    fn layout_advance_width(&self, _glyph_id: u16, _size: f32, _direct_write: bool) -> Option<f32> {
         None
     }
 }
