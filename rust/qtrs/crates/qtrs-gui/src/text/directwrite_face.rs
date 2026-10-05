@@ -232,8 +232,12 @@ impl DirectWriteFace {
                 false,
             )
         };
+        // `advanceWidth` comes back in font units. GDI then rounds the scaled advance to a
+        // whole pixel (`GetCharWidth32` is an integer), so snap to the grid the same way:
+        // leaving the fraction in place made `sizeHint().ceil()` report a pixel too wide for
+        // every string whose scaled advance was not exact.
         if res.is_ok() && self.upem > 0.0 {
-            Some((metric.advanceWidth as f32 / self.upem) * size)
+            Some(((metric.advanceWidth as f32 * size / self.upem) + 0.5).floor())
         } else {
             None
         }

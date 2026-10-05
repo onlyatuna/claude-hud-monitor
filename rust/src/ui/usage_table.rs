@@ -1551,4 +1551,21 @@ mod tests {
         expected += 5; // one spacing, between the two widgets
         assert_eq!(row.borrow().size_hint().width, expected);
     }
+
+    /// Header row: the icon sits 5px from the origin and the name 5px after it, so the pair
+    /// ends flush with the 109px column (18px icon + 5px spacing + 86px "Claude Code").
+    /// The advance being exactly 86 is the part that was wrong before: `gdi_advance_width`
+    /// returned a fractional pixel, so `sizeHint().ceil()` added one.
+    #[test]
+    fn test_header_row_advances_match_qt() {
+        let col = ProviderColumn::new("claude", Theme::dark(), "scale");
+        assert_eq!(col.name.borrow().size_hint().width, 86);
+        col.header
+            .borrow_mut()
+            .set_geometry(Rect::new(0, 0, 109, 31));
+        col.header.borrow().update_layout();
+        let icon = col.icon.borrow().geometry();
+        let name = col.name.borrow().geometry();
+        assert_eq!((icon.x, name.x), (5, 28));
+    }
 }
