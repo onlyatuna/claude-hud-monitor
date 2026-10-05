@@ -1,4 +1,8 @@
-use crate::size_policy::Policy;
+use crate::layout_engine::{
+    distribute_multi_box, find_size, init_empty_multi_box, item_expanding, item_is_empty,
+    item_maximum_size, item_minimum_size, item_set_geometry, item_size_hint, q_geom_calc,
+    q_max_exp_calc, setup_spacings, LayoutStruct, LAYOUT_SIZE_MAX,
+};
 use crate::widget::{Widget, WidgetRef};
 use qtrs_gui::geometry::primitives::{Margins, Rect, Size};
 
@@ -11,6 +15,8 @@ pub enum Direction {
 pub struct LayoutItem {
     pub widget: WidgetRef,
     pub stretch: u32,
+    /// A `QSpacerItem`: it has no content of its own, so it takes no spacing.
+    pub spacer: bool,
 }
 
 pub trait Layout: 'static {
@@ -48,6 +54,13 @@ pub trait Layout: 'static {
 
     fn size_hint(&self) -> Size;
 
+    /// The smallest size the layout can be squeezed to (`QLayout::minimumSize`).
+    fn minimum_size(&self) -> Size;
+
+    /// The directions the layout wants to grow in, as (horizontal, vertical)
+    /// (`QLayout::expandingDirections`).
+    fn expanding_directions(&self) -> (bool, bool);
+
     /// Marks this layout as dirty/invalid, requiring recalculation on next activation.
     fn invalidate(&mut self);
 
@@ -64,255 +77,6 @@ pub trait Layout: 'static {
         self.invalidate();
         self.activate();
     }
-}
-
-/// Distributes 1D space among items based on hints, min/max constraints, policies, and stretch.
-pub fn distribute_1d_space(
-    items: &[(i32, i32, i32, Policy, u32)], // (hint, min, max, policy, stretch)
-    available_span: i32,
-) -> Vec<i32> {
-    let count = items.len();
-    if count == 0 {
-        return Vec::new();
-    }
-
-    let explicit_stretch_sum: u32 = items.iter().map(|it| it.4).sum();
-
-    if explicit_stretch_sum > 0 {
-        let mut sizes = vec![0i32; count];
-        let mut non_stretch_sum = 0i32;
-
-        for (i, &(hint, min_sz, max_sz, policy, stretch)) in items.iter().enumerate() {
-            if stretch == 0 {
-                let base = match policy {
-                    Policy::Ignored => min_sz,
-                    Policy::Fixed => hint,
-                    Policy::Minimum | Policy::MinimumExpanding => hint.max(min_sz),
-                    Policy::Maximum => hint.min(max_sz),
-                    Policy::Preferred | Policy::Expanding => hint,
-                };
-                let s = base.clamp(min_sz, max_sz);
-                sizes[i] = s;
-                non_stretch_sum += s;
-            }
-        }
-
-        let stretch_space = (available_span - non_stretch_sum).max(0);
-
-        // `qGeomCalc`: an item whose proportional share is below its minimum is pinned at the
-        // minimum, and the space left is divided again among the remaining stretch items.
-        let mut pinned = vec![false; count];
-        loop {
-            let pinned_min: i32 = items
-                .iter()
-                .enumerate()
-                .filter(|(i, it)| it.4 > 0 && pinned[*i])
-                .map(|(_, it)| it.1.min(it.2))
-                .sum();
-            let live_stretch: u32 = items
-                .iter()
-                .enumerate()
-                .filter(|(i, it)| it.4 > 0 && !pinned[*i])
-                .map(|(_, it)| it.4)
-                .sum();
-            if live_stretch == 0 {
-                break;
-            }
-            let free = (stretch_space - pinned_min).max(0);
-            let mut changed = false;
-            for (i, &(_, min_sz, _, _, stretch)) in items.iter().enumerate() {
-                if stretch > 0 && !pinned[i] {
-                    let share = ((free as i64 * stretch as i64) / live_stretch as i64) as i32;
-                    if share < min_sz {
-                        pinned[i] = true;
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-
-        let pinned_min: i32 = items
-            .iter()
-            .enumerate()
-            .filter(|(i, it)| it.4 > 0 && pinned[*i])
-            .map(|(_, it)| it.1.min(it.2))
-            .sum();
-        let live_stretch: u32 = items
-            .iter()
-            .enumerate()
-            .filter(|(i, it)| it.4 > 0 && !pinned[*i])
-            .map(|(_, it)| it.4)
-            .sum();
-        let free = (stretch_space - pinned_min).max(0);
-
-        let mut allocated_stretch = 0i32;
-        for (i, &(_, min_sz, max_sz, _, stretch)) in items.iter().enumerate() {
-            if stretch > 0 {
-                let s = if pinned[i] {
-                    min_sz
-                } else {
-                    ((free as i64 * stretch as i64) / live_stretch as i64) as i32
-                };
-                let clamped = s.clamp(min_sz, max_sz);
-                sizes[i] = clamped;
-                allocated_stretch += clamped;
-            }
-        }
-
-        let mut rem_slack = stretch_space - allocated_stretch;
-        if rem_slack > 0 {
-            for (i, &(_, _, max_sz, _, stretch)) in items.iter().enumerate() {
-                if stretch > 0 && !pinned[i] && sizes[i] < max_sz && rem_slack > 0 {
-                    sizes[i] += 1;
-                    rem_slack -= 1;
-                }
-            }
-        }
-
-        return sizes;
-    }
-
-    // 1. Initial base size calculation
-    let mut sizes: Vec<i32> = items
-        .iter()
-        .map(|&(hint, min_sz, max_sz, policy, _)| {
-            let base = match policy {
-                Policy::Ignored => min_sz,
-                Policy::Fixed => hint,
-                Policy::Minimum | Policy::MinimumExpanding => hint.max(min_sz),
-                Policy::Maximum => hint.min(max_sz),
-                Policy::Preferred | Policy::Expanding => hint,
-            };
-            base.clamp(min_sz, max_sz)
-        })
-        .collect();
-
-    let current_sum: i32 = sizes.iter().sum();
-    let mut slack = available_span - current_sum;
-
-    // 2. Expand if slack > 0
-    if slack > 0 {
-        for _ in 0..10 {
-            if slack <= 0 {
-                break;
-            }
-
-            let mut eligible: Vec<usize> = Vec::new();
-            let mut total_stretch: u32 = 0;
-
-            for (i, &(_, _, max_sz, policy, stretch)) in items.iter().enumerate() {
-                if sizes[i] < max_sz && (policy.can_grow() || stretch > 0) {
-                    eligible.push(i);
-                    let effective_stretch = if stretch > 0 {
-                        stretch
-                    } else if policy.is_expanding() {
-                        1
-                    } else {
-                        0
-                    };
-                    total_stretch += effective_stretch;
-                }
-            }
-
-            if eligible.is_empty() {
-                break;
-            }
-
-            let remaining_slack = slack;
-            let mut allocated_this_round = 0;
-
-            for &i in &eligible {
-                let (_, _, max_sz, _, stretch) = items[i];
-                let effective_stretch = if stretch > 0 {
-                    stretch
-                } else if items[i].3.is_expanding() {
-                    1
-                } else {
-                    0
-                };
-
-                let share = if total_stretch > 0 {
-                    if effective_stretch > 0 {
-                        ((remaining_slack as i64 * effective_stretch as i64) / total_stretch as i64)
-                            as i32
-                    } else {
-                        0
-                    }
-                } else {
-                    remaining_slack / eligible.len() as i32
-                };
-
-                let add = share
-                    .min(max_sz - sizes[i])
-                    .min(slack - allocated_this_round);
-                if add > 0 {
-                    sizes[i] += add;
-                    allocated_this_round += add;
-                }
-            }
-
-            slack -= allocated_this_round;
-            if allocated_this_round == 0 {
-                // Integer division remainder fallback: 1px allocation to first eligible
-                for &i in &eligible {
-                    let (_, _, max_sz, _, _) = items[i];
-                    if sizes[i] < max_sz && slack > 0 {
-                        sizes[i] += 1;
-                        slack -= 1;
-                    }
-                }
-                break;
-            }
-        }
-    } else if slack < 0 {
-        // 3. Shrink if slack < 0
-        let mut deficit = -slack;
-        for _ in 0..10 {
-            if deficit <= 0 {
-                break;
-            }
-
-            let eligible: Vec<usize> = items
-                .iter()
-                .enumerate()
-                .filter_map(|(i, &(_, min_sz, _, policy, _))| {
-                    if sizes[i] > min_sz && policy.can_shrink() {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if eligible.is_empty() {
-                break;
-            }
-
-            let per_item = (deficit / eligible.len() as i32).max(1);
-            let mut reduced_this_round = 0;
-
-            for &i in &eligible {
-                let (_, min_sz, _, _, _) = items[i];
-                let can_reduce = (sizes[i] - min_sz)
-                    .min(deficit - reduced_this_round)
-                    .min(per_item);
-                if can_reduce > 0 {
-                    sizes[i] -= can_reduce;
-                    reduced_this_round += can_reduce;
-                }
-            }
-
-            deficit -= reduced_this_round;
-            if reduced_this_round == 0 {
-                break;
-            }
-        }
-    }
-
-    sizes
 }
 
 /// Linear box layout arranging items horizontally or vertically (`QBoxLayout`).
@@ -360,7 +124,7 @@ impl BoxLayout {
 
     pub fn insert_widget(&mut self, index: usize, widget: WidgetRef, stretch: u32) {
         let clamped = index.min(self.items.len());
-        self.items.insert(clamped, LayoutItem { widget, stretch });
+        self.items.insert(clamped, LayoutItem { widget, stretch, spacer: false });
         self.update_layout();
     }
 
@@ -395,7 +159,25 @@ impl Layout for BoxLayout {
     }
 
     fn add_widget_with_stretch(&mut self, widget: WidgetRef, stretch: u32) {
-        self.items.push(LayoutItem { widget, stretch });
+        self.items.push(LayoutItem { widget, stretch, spacer: false });
+        self.update_layout();
+    }
+
+    /// `QBoxLayout::addStretch`: an empty, expanding spacer that takes no spacing.
+    fn add_stretch(&mut self, stretch: u32) {
+        let widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
+        widget.set_size_policy(crate::size_policy::QSizePolicy::new(
+            crate::size_policy::Policy::Expanding,
+            crate::size_policy::Policy::Expanding,
+        ));
+        let spacer = std::rc::Rc::new(std::cell::RefCell::new(
+            Box::new(widget) as Box<dyn crate::widget::Widget>,
+        ));
+        self.items.push(LayoutItem {
+            widget: spacer,
+            stretch: stretch.max(1),
+            spacer: true,
+        });
         self.update_layout();
     }
 
@@ -422,50 +204,15 @@ impl Layout for BoxLayout {
     }
 
     fn size_hint(&self) -> Size {
-        if self.items.is_empty() {
-            return Size::new(
-                self.margins.left + self.margins.right,
-                self.margins.top + self.margins.bottom,
-            );
-        }
+        self.setup_geom().hint
+    }
 
-        let mut total_w = 0;
-        let mut total_h = 0;
-        // `QLayout::sizeHint` counts spacing only *between* items, so a trailing stretch
-        // (added by `addStretch()` to push the rest left) contributes neither width nor spacing.
-        let mut sized_count = 0;
+    fn minimum_size(&self) -> Size {
+        self.setup_geom().min
+    }
 
-        for item in &self.items {
-            if !item.widget.borrow().is_visible() {
-                continue;
-            }
-            if item.stretch > 0 {
-                continue;
-            }
-            sized_count += 1;
-            let hint = item.widget.borrow().size_hint();
-            match self.direction {
-                Direction::TopToBottom => {
-                    total_w = total_w.max(hint.width);
-                    total_h += hint.height;
-                }
-                Direction::LeftToRight => {
-                    total_w += hint.width;
-                    total_h = total_h.max(hint.height);
-                }
-            }
-        }
-
-        let total_spacing = (sized_count - 1).max(0) * self.spacing;
-        match self.direction {
-            Direction::TopToBottom => total_h += total_spacing,
-            Direction::LeftToRight => total_w += total_spacing,
-        }
-
-        Size::new(
-            total_w + self.margins.left + self.margins.right,
-            total_h + self.margins.top + self.margins.bottom,
-        )
+    fn expanding_directions(&self) -> (bool, bool) {
+        self.setup_geom().expanding
     }
 
     fn invalidate(&mut self) {
@@ -476,6 +223,7 @@ impl Layout for BoxLayout {
         self.dirty
     }
 
+    /// `QBoxLayout::setGeometry`.
     fn activate(&mut self) {
         if !self.dirty {
             return;
@@ -486,136 +234,137 @@ impl Layout for BoxLayout {
             return;
         }
 
-        // Filter visible items and ensure hidden items are given zero geometry
-        let visible_items: Vec<(usize, &LayoutItem)> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, it)| {
-                let vis = it.widget.borrow().is_visible();
-                if !vis {
-                    it.widget.borrow().set_geometry(Rect::new(0, 0, 0, 0));
-                }
-                vis
-            })
-            .collect();
+        let horz = self.direction == Direction::LeftToRight;
+        let mut chain = self.setup_geom().chain;
+        let s = Rect::new(
+            self.geometry.x + self.margins.left,
+            self.geometry.y + self.margins.top,
+            self.geometry.width - self.margins.left - self.margins.right,
+            self.geometry.height - self.margins.top - self.margins.bottom,
+        );
+        let (pos, space) = if horz { (s.x, s.width) } else { (s.y, s.height) };
+        let n = chain.len();
+        q_geom_calc(&mut chain, 0, n, pos, space, -1);
 
-        if visible_items.is_empty() {
-            return;
+        for (item, data) in self.items.iter().zip(&chain) {
+            let rect = if horz {
+                Rect::new(data.pos, s.y, data.size, s.height)
+            } else {
+                Rect::new(s.x, data.pos, s.width, data.size)
+            };
+            let old_size = {
+                let w = item.widget.borrow();
+                let g = w.geometry();
+                Size::new(g.width, g.height)
+            };
+            if item.spacer {
+                // A `QSpacerItem` just remembers its rectangle.
+                item.widget.borrow().set_geometry(rect);
+            } else {
+                item_set_geometry(&**item.widget.borrow(), rect);
+            }
+            let new_size = Size::new(rect.width, rect.height);
+            if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
+                if old_size != new_size || child_layout.is_dirty() {
+                    crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
+                }
+            }
+        }
+    }
+}
+
+/// What `QBoxLayoutPrivate::setupGeom` computes.
+struct BoxGeom {
+    chain: Vec<LayoutStruct>,
+    min: Size,
+    hint: Size,
+    expanding: (bool, bool),
+}
+
+impl BoxLayout {
+    /// `QBoxLayoutPrivate::setupGeom`: the chain handed to `qGeomCalc` and the layout's sizes.
+    fn setup_geom(&self) -> BoxGeom {
+        let horz = self.direction == Direction::LeftToRight;
+        // Along the layout the maximum sizes add up; across it they are folded by `qMaxExpCalc`.
+        let mut max_main: i64 = 0;
+        let mut max_cross: i32 = LAYOUT_SIZE_MAX;
+        let (mut min_main, mut hint_main) = (0i32, 0i32);
+        let (mut min_cross, mut hint_cross) = (0i32, 0i32);
+        let (mut main_exp, mut cross_exp) = (false, false);
+
+        let mut chain = vec![LayoutStruct::default(); self.items.len()];
+        let mut previous_non_empty: Option<usize> = None;
+
+        for (i, item) in self.items.iter().enumerate() {
+            // Everything below is (main axis, cross axis).
+            let (max, min, hint, exp, empty, is_widget, policy_stretch) = if item.spacer {
+                // `QSpacerItem(0, 0, Expanding, Minimum)`, transposed for a vertical layout.
+                ((LAYOUT_SIZE_MAX, LAYOUT_SIZE_MAX), (0, 0), (0, 0), (true, false), true, false, 0)
+            } else {
+                let w = item.widget.borrow();
+                let policy = w.size_policy();
+                let swap = |s: Size| if horz { (s.width, s.height) } else { (s.height, s.width) };
+                let exp = item_expanding(&**w);
+                (
+                    swap(item_maximum_size(&**w)),
+                    swap(item_minimum_size(&**w)),
+                    swap(item_size_hint(&**w)),
+                    if horz { exp } else { (exp.1, exp.0) },
+                    item_is_empty(&**w),
+                    true,
+                    (if horz { policy.horizontal_stretch } else { policy.vertical_stretch }) as i32,
+                )
+            };
+
+            let mut spacing = 0;
+            if !empty {
+                spacing = if previous_non_empty.is_some() { self.spacing } else { 0 };
+                if let Some(previous) = previous_non_empty {
+                    chain[previous].spacing = spacing;
+                }
+                previous_non_empty = Some(i);
+            }
+
+            let expand = exp.0 || item.stretch > 0;
+            main_exp = main_exp || expand;
+            max_main += (spacing + max.0) as i64;
+            min_main += spacing + min.0;
+            hint_main += spacing + hint.0;
+            if !(empty && is_widget) {
+                // hidden widgets are ignored
+                let mut dummy = true;
+                q_max_exp_calc(&mut max_cross, &mut cross_exp, &mut dummy, max.1, exp.1, empty);
+            }
+            min_cross = min_cross.max(min.1);
+            hint_cross = hint_cross.max(hint.1);
+
+            chain[i].size_hint = hint.0;
+            chain[i].maximum_size = max.0;
+            chain[i].minimum_size = min.0;
+            chain[i].expansive = expand;
+            chain[i].stretch = if item.stretch > 0 { item.stretch as i32 } else { policy_stretch };
+            chain[i].empty = empty;
+            chain[i].spacing = 0; // may be set non-zero by a later non-empty item
         }
 
-        let avail_x = self.geometry.x + self.margins.left;
-        let avail_y = self.geometry.y + self.margins.top;
-        let avail_w = (self.geometry.width - self.margins.left - self.margins.right).max(0);
-        let avail_h = (self.geometry.height - self.margins.top - self.margins.bottom).max(0);
-
-        let count = visible_items.len();
-        let total_spacing = ((count - 1) as i32).max(0) * self.spacing;
-
-        match self.direction {
-            Direction::TopToBottom => {
-                let net_height = (avail_h - total_spacing).max(0);
-                let item_specs: Vec<(i32, i32, i32, Policy, u32)> = visible_items
-                    .iter()
-                    .map(|(_, it)| {
-                        let w = it.widget.borrow();
-                        let hint = w.size_hint().height;
-                        let min_sz = w.minimum_size().height;
-                        let max_sz = w.maximum_size().height;
-                        let policy = w.size_policy().vertical;
-                        let stretch = it.stretch.max(w.size_policy().vertical_stretch);
-                        (hint, min_sz, max_sz, policy, stretch)
-                    })
-                    .collect();
-
-                let heights = distribute_1d_space(&item_specs, net_height);
-
-                let mut cur_y = avail_y;
-                for (v_idx, (_, item)) in visible_items.iter().enumerate() {
-                    let item_h = heights[v_idx];
-                    let w = item.widget.borrow();
-                    let cross_policy = w.size_policy().horizontal;
-                    let cross_hint = w.size_hint().width;
-                    let cross_min = w.minimum_size().width;
-                    let cross_max = w.maximum_size().width;
-                    drop(w);
-
-                    let item_w = if cross_policy == Policy::Fixed {
-                        cross_hint.clamp(cross_min, cross_max)
-                    } else {
-                        avail_w.clamp(cross_min, cross_max)
-                    };
-
-                    let item_rect = Rect::new(avail_x, cur_y, item_w, item_h);
-                    let old_size = {
-                        let w = item.widget.borrow();
-                        let g = w.geometry();
-                        Size::new(g.width, g.height)
-                    };
-                    item.widget.borrow().set_geometry(item_rect);
-                    let new_size = Size::new(item_w, item_h);
-                    if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
-                        if old_size != new_size || child_layout.is_dirty() {
-                            crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
-                        }
-                    }
-                    cur_y += item_h + self.spacing;
-                }
-            }
-            Direction::LeftToRight => {
-                let net_width = (avail_w - total_spacing).max(0);
-                let item_specs: Vec<(i32, i32, i32, Policy, u32)> = visible_items
-                    .iter()
-                    .map(|(_, it)| {
-                        let w = it.widget.borrow();
-                        let hint = w.size_hint().width;
-                        let min_sz = w.minimum_size().width;
-                        let max_sz = w.maximum_size().width;
-                        let policy = w.size_policy().horizontal;
-                        let stretch = it.stretch.max(w.size_policy().horizontal_stretch);
-                        (hint, min_sz, max_sz, policy, stretch)
-                    })
-                    .collect();
-
-                let widths = distribute_1d_space(&item_specs, net_width);
-
-                let mut cur_x = avail_x;
-                for (v_idx, (_, item)) in visible_items.iter().enumerate() {
-                    let item_w = widths[v_idx];
-                    let w = item.widget.borrow();
-                    let cross_policy = w.size_policy().vertical;
-                    let cross_hint = w.size_hint().height;
-                    let cross_min = w.minimum_size().height;
-                    let cross_max = w.maximum_size().height;
-                    drop(w);
-
-                    let item_h = if cross_policy == Policy::Fixed {
-                        cross_hint.clamp(cross_min, cross_max)
-                    } else {
-                        avail_h.clamp(cross_min, cross_max)
-                    };
-                    let offset_y = if item_h < avail_h {
-                        (avail_h - item_h) / 2
-                    } else {
-                        0
-                    };
-
-                    let item_rect = Rect::new(cur_x, avail_y + offset_y, item_w, item_h);
-                    let old_size = {
-                        let w = item.widget.borrow();
-                        let g = w.geometry();
-                        Size::new(g.width, g.height)
-                    };
-                    item.widget.borrow().set_geometry(item_rect);
-                    let new_size = Size::new(item_w, item_h);
-                    if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
-                        if old_size != new_size || child_layout.is_dirty() {
-                            crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
-                        }
-                    }
-                    cur_x += item_w + self.spacing;
-                }
-            }
+        let extra = Size::new(self.margins.left + self.margins.right, self.margins.top + self.margins.bottom);
+        let (min_w, min_h) = if horz { (min_main, min_cross) } else { (min_cross, min_main) };
+        let (hint_w, hint_h) = if horz { (hint_main, hint_cross) } else { (hint_cross, hint_main) };
+        let (max_w, max_h) = if horz {
+            (max_main, max_cross as i64)
+        } else {
+            (max_cross as i64, max_main)
+        };
+        // `maxSize = QSize(maxw, maxh).expandedTo(minSize)`; `sizeHint` is bounded by both.
+        let bounded = |hint: i32, min: i32, max: i64| hint.max(min).min(max.max(min as i64).min(i32::MAX as i64) as i32);
+        BoxGeom {
+            chain,
+            min: Size::new(min_w + extra.width, min_h + extra.height),
+            hint: Size::new(
+                bounded(hint_w, min_w, max_w) + extra.width,
+                bounded(hint_h, min_h, max_h) + extra.height,
+            ),
+            expanding: if horz { (main_exp, cross_exp) } else { (cross_exp, main_exp) },
         }
     }
 }
@@ -728,10 +477,13 @@ impl GridLayout {
         self.update_layout();
     }
 
+    /// `QGridLayoutPrivate::expand`: rows and columns grow with the items and with any stretch
+    /// or minimum size set for them.
     pub fn row_count(&self) -> usize {
         self.items
             .iter()
             .map(|it| it.row + it.row_span)
+            .chain([self.row_stretches.len(), self.row_min_heights.len()])
             .max()
             .unwrap_or(0)
     }
@@ -740,6 +492,7 @@ impl GridLayout {
         self.items
             .iter()
             .map(|it| it.column + it.col_span)
+            .chain([self.col_stretches.len(), self.col_min_widths.len()])
             .max()
             .unwrap_or(0)
     }
@@ -796,38 +549,26 @@ impl Layout for GridLayout {
     }
 
     fn size_hint(&self) -> Size {
-        let rows = self.row_count();
-        let cols = self.column_count();
-        if rows == 0 || cols == 0 {
-            return Size::new(
-                self.margins.left + self.margins.right,
-                self.margins.top + self.margins.bottom,
-            );
-        }
+        let (rows, cols) = self.setup_layout_data();
+        let size = find_size(&rows, &cols, |d| d.size_hint);
+        Size::new(
+            size.width + self.margins.left + self.margins.right,
+            size.height + self.margins.top + self.margins.bottom,
+        )
+    }
 
-        let mut col_widths = vec![0i32; cols];
-        let mut row_heights = vec![0i32; rows];
+    fn minimum_size(&self) -> Size {
+        let (rows, cols) = self.setup_layout_data();
+        let size = find_size(&rows, &cols, |d| d.minimum_size);
+        Size::new(
+            size.width + self.margins.left + self.margins.right,
+            size.height + self.margins.top + self.margins.bottom,
+        )
+    }
 
-        for item in &self.items {
-            let hint = item.widget.borrow().size_hint();
-            if item.col_span == 1 {
-                col_widths[item.column] = col_widths[item.column].max(hint.width);
-            }
-            if item.row_span == 1 {
-                row_heights[item.row] = row_heights[item.row].max(hint.height);
-            }
-        }
-
-        let total_w: i32 = col_widths.iter().sum::<i32>()
-            + ((cols - 1) as i32).max(0) * self.h_spacing
-            + self.margins.left
-            + self.margins.right;
-        let total_h: i32 = row_heights.iter().sum::<i32>()
-            + ((rows - 1) as i32).max(0) * self.v_spacing
-            + self.margins.top
-            + self.margins.bottom;
-
-        Size::new(total_w, total_h)
+    fn expanding_directions(&self) -> (bool, bool) {
+        let (rows, cols) = self.setup_layout_data();
+        (cols.iter().any(|c| c.expansive), rows.iter().any(|r| r.expansive))
     }
 
     fn invalidate(&mut self) {
@@ -838,116 +579,39 @@ impl Layout for GridLayout {
         self.dirty
     }
 
+    /// `QGridLayoutPrivate::distribute`.
     fn activate(&mut self) {
         if !self.dirty {
             return;
         }
         self.dirty = false;
 
-        let rows = self.row_count();
-        let cols = self.column_count();
-        if rows == 0 || cols == 0 {
+        let (mut rows, mut cols) = self.setup_layout_data();
+        let (rr, cc) = (rows.len(), cols.len());
+        if rr == 0 || cc == 0 {
             return;
         }
 
-        let avail_x = self.geometry.x + self.margins.left;
-        let avail_y = self.geometry.y + self.margins.top;
-        let avail_w = (self.geometry.width - self.margins.left - self.margins.right).max(0);
-        let avail_h = (self.geometry.height - self.margins.top - self.margins.bottom).max(0);
+        let x = self.geometry.x + self.margins.left;
+        let y = self.geometry.y + self.margins.top;
+        let width = self.geometry.width - self.margins.left - self.margins.right;
+        let height = self.geometry.height - self.margins.top - self.margins.bottom;
+        q_geom_calc(&mut cols, 0, cc, x, width, -1);
+        q_geom_calc(&mut rows, 0, rr, y, height, -1);
 
-        let total_h_spacing = ((cols - 1) as i32).max(0) * self.h_spacing;
-        let total_v_spacing = ((rows - 1) as i32).max(0) * self.v_spacing;
-
-        let net_w = (avail_w - total_h_spacing).max(0);
-        let net_h = (avail_h - total_v_spacing).max(0);
-
-        // Gather col specs
-        let mut col_specs = Vec::with_capacity(cols);
-        for c in 0..cols {
-            let mut hint = 0;
-            let mut min_sz = 0;
-            let mut max_sz = 16777215;
-            let mut policy = Policy::Preferred;
-            for item in &self.items {
-                if item.column == c && item.col_span == 1 {
-                    let w = item.widget.borrow();
-                    hint = hint.max(w.size_hint().width);
-                    min_sz = min_sz.max(w.minimum_size().width);
-                    max_sz = max_sz.min(w.maximum_size().width);
-                    if w.size_policy().horizontal.is_expanding() {
-                        policy = Policy::Expanding;
-                    }
-                }
-            }
-            let col_min = self.col_min_widths.get(c).copied().unwrap_or(0);
-            hint = hint.max(col_min);
-            min_sz = min_sz.max(col_min);
-            let stretch = self.col_stretches.get(c).copied().unwrap_or(0);
-            col_specs.push((hint, min_sz, max_sz, policy, stretch));
-        }
-        let col_widths = distribute_1d_space(&col_specs, net_w);
-
-        // Gather row specs
-        let mut row_specs = Vec::with_capacity(rows);
-        for r in 0..rows {
-            let mut hint = 0;
-            let mut min_sz = 0;
-            let mut max_sz = 16777215;
-            let mut policy = Policy::Preferred;
-            for item in &self.items {
-                if item.row == r && item.row_span == 1 {
-                    let w = item.widget.borrow();
-                    hint = hint.max(w.size_hint().height);
-                    min_sz = min_sz.max(w.minimum_size().height);
-                    max_sz = max_sz.min(w.maximum_size().height);
-                    if w.size_policy().vertical.is_expanding() {
-                        policy = Policy::Expanding;
-                    }
-                }
-            }
-            let row_min = self.row_min_heights.get(r).copied().unwrap_or(0);
-            hint = hint.max(row_min);
-            min_sz = min_sz.max(row_min);
-            let stretch = self.row_stretches.get(r).copied().unwrap_or(0);
-            row_specs.push((hint, min_sz, max_sz, policy, stretch));
-        }
-        let row_heights = distribute_1d_space(&row_specs, net_h);
-
-        // Compute row Y offsets and col X offsets
-        let mut col_x = Vec::with_capacity(cols);
-        let mut cur_x = avail_x;
-        for &w in &col_widths {
-            col_x.push(cur_x);
-            cur_x += w + self.h_spacing;
-        }
-
-        let mut row_y = Vec::with_capacity(rows);
-        let mut cur_y = avail_y;
-        for &h in &row_heights {
-            row_y.push(cur_y);
-            cur_y += h + self.v_spacing;
-        }
-
-        // Position items
         for item in &self.items {
-            let x = col_x[item.column];
-            let y = row_y[item.row];
+            let (r2, c2) = (item.row + item.row_span - 1, item.column + item.col_span - 1);
+            let left = cols[item.column].pos;
+            let top = rows[item.row].pos;
+            let w = cols[c2].pos + cols[c2].size - left;
+            let h = rows[r2].pos + rows[r2].size - top;
 
-            let w: i32 = col_widths[item.column..(item.column + item.col_span).min(cols)]
-                .iter()
-                .sum::<i32>()
-                + ((item.col_span - 1) as i32).max(0) * self.h_spacing;
-
-            let h: i32 = row_heights[item.row..(item.row + item.row_span).min(rows)]
-                .iter()
-                .sum::<i32>()
-                + ((item.row_span - 1) as i32).max(0) * self.v_spacing;
             let old_size = {
-                let w = item.widget.borrow();
-                let g = w.geometry();
+                let widget = item.widget.borrow();
+                let g = widget.geometry();
                 Size::new(g.width, g.height)
             };
-            item.widget.borrow().set_geometry(Rect::new(x, y, w, h));
+            item_set_geometry(&**item.widget.borrow(), Rect::new(left, top, w, h));
             let new_size = Size::new(w, h);
             if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
                 if old_size != new_size || child_layout.is_dirty() {
@@ -955,5 +619,125 @@ impl Layout for GridLayout {
                 }
             }
         }
+    }
+}
+
+impl GridLayout {
+    /// `QGridLayoutPrivate::setupLayoutData`: the row and column chains of the current items.
+    fn setup_layout_data(&self) -> (Vec<LayoutStruct>, Vec<LayoutStruct>) {
+        let rr = self.row_count();
+        let cc = self.column_count();
+        let stretch_of = |v: &[u32], i: usize| v.get(i).copied().unwrap_or(0) as i32;
+        let min_of = |v: &[i32], i: usize| v.get(i).copied().unwrap_or(0);
+
+        let mut rows = vec![LayoutStruct::default(); rr];
+        let mut cols = vec![LayoutStruct::default(); cc];
+        for (i, row) in rows.iter_mut().enumerate() {
+            let (stretch, min) = (stretch_of(&self.row_stretches, i), min_of(&self.row_min_heights, i));
+            row.init(stretch, min);
+            row.maximum_size = if stretch != 0 { LAYOUT_SIZE_MAX } else { min };
+        }
+        for (i, col) in cols.iter_mut().enumerate() {
+            let (stretch, min) = (stretch_of(&self.col_stretches, i), min_of(&self.col_min_widths, i));
+            col.init(stretch, min);
+            col.maximum_size = if stretch != 0 { LAYOUT_SIZE_MAX } else { min };
+        }
+
+        struct Boxed {
+            min: Size,
+            hint: Size,
+            max: Size,
+            expanding: (bool, bool),
+            empty: bool,
+            h_stretch: i32,
+            v_stretch: i32,
+        }
+        let boxes: Vec<Boxed> = self
+            .items
+            .iter()
+            .map(|item| {
+                let w = item.widget.borrow();
+                let policy = w.size_policy();
+                Boxed {
+                    min: item_minimum_size(&**w),
+                    hint: item_size_hint(&**w),
+                    max: item_maximum_size(&**w),
+                    expanding: item_expanding(&**w),
+                    empty: item_is_empty(&**w),
+                    h_stretch: policy.horizontal_stretch as i32,
+                    v_stretch: policy.vertical_stretch as i32,
+                }
+            })
+            .collect();
+
+        // Which item covers which cell, to find the neighbours the spacing goes between.
+        let mut grid: Vec<Option<usize>> = vec![None; rr * cc];
+        let mut has_multi = false;
+        for (i, item) in self.items.iter().enumerate() {
+            let b = &boxes[i];
+            let (to_row, to_col) = (item.row + item.row_span - 1, item.column + item.col_span - 1);
+
+            if item.row == to_row {
+                if !b.empty {
+                    let data = &mut rows[item.row];
+                    if stretch_of(&self.row_stretches, item.row) == 0 {
+                        data.stretch = data.stretch.max(b.v_stretch);
+                    }
+                    data.size_hint = data.size_hint.max(b.hint.height);
+                    data.minimum_size = data.minimum_size.max(b.min.height);
+                    q_max_exp_calc(&mut data.maximum_size, &mut data.expansive, &mut data.empty, b.max.height, b.expanding.1, b.empty);
+                }
+            } else {
+                init_empty_multi_box(&mut rows, item.row, to_row);
+                has_multi = true;
+            }
+
+            if item.column == to_col {
+                if !b.empty {
+                    let data = &mut cols[item.column];
+                    if stretch_of(&self.col_stretches, item.column) == 0 {
+                        data.stretch = data.stretch.max(b.h_stretch);
+                    }
+                    data.size_hint = data.size_hint.max(b.hint.width);
+                    data.minimum_size = data.minimum_size.max(b.min.width);
+                    q_max_exp_calc(&mut data.maximum_size, &mut data.expansive, &mut data.empty, b.max.width, b.expanding.0, b.empty);
+                }
+            } else {
+                init_empty_multi_box(&mut cols, item.column, to_col);
+                has_multi = true;
+            }
+
+            for r in item.row..=to_row {
+                for c in item.column..=to_col {
+                    grid[r * cc + c] = Some(i);
+                }
+            }
+        }
+
+        let empty_of = |i: usize| boxes[i].empty;
+        setup_spacings(&mut cols, &grid, cc, self.h_spacing, true, &empty_of);
+        setup_spacings(&mut rows, &grid, cc, self.v_spacing, false, &empty_of);
+
+        // Multi-cell items go in after the single-cell ones for a better distribution.
+        if has_multi {
+            for (i, item) in self.items.iter().enumerate() {
+                let b = &boxes[i];
+                let (to_row, to_col) = (item.row + item.row_span - 1, item.column + item.col_span - 1);
+                if item.row != to_row {
+                    distribute_multi_box(&mut rows, item.row, to_row, b.min.height, b.hint.height, &self.row_stretches, b.v_stretch);
+                }
+                if item.column != to_col {
+                    distribute_multi_box(&mut cols, item.column, to_col, b.min.width, b.hint.width, &self.col_stretches, b.h_stretch);
+                }
+            }
+        }
+
+        for row in &mut rows {
+            row.expansive = row.expansive || row.stretch > 0;
+        }
+        for col in &mut cols {
+            col.expansive = col.expansive || col.stretch > 0;
+        }
+        (rows, cols)
     }
 }

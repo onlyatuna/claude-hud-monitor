@@ -135,6 +135,23 @@ impl Layout for StackedLayout {
         }
     }
 
+    fn minimum_size(&self) -> Size {
+        let page = self
+            .current_widget()
+            .map(|curr| crate::layout_engine::smart_min_size(&**curr.borrow()))
+            .unwrap_or_else(|| Size::new(0, 0));
+        Size::new(
+            page.width + self.margins.left + self.margins.right,
+            page.height + self.margins.top + self.margins.bottom,
+        )
+    }
+
+    fn expanding_directions(&self) -> (bool, bool) {
+        self.current_widget()
+            .map(|curr| crate::layout_engine::item_expanding(&**curr.borrow()))
+            .unwrap_or((false, false))
+    }
+
     fn invalidate(&mut self) {
         self.dirty = true;
     }
@@ -291,6 +308,10 @@ impl Widget for StackedWidget {
 
     fn size_hint(&self) -> Size {
         self.layout.borrow().size_hint()
+    }
+
+    fn minimum_size_hint(&self) -> Size {
+        self.layout.borrow().minimum_size()
     }
     fn size_policy(&self) -> crate::size_policy::QSizePolicy {
         self.base.size_policy()

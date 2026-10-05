@@ -793,6 +793,7 @@ impl QObject for Window {
                 let cur_geom = self.geometry.get();
                 let size = Size::new(cur_geom.width, cur_geom.height);
                 self.backing_store.borrow_mut().resize(size, new_dpr);
+                crate::widget::adopt_tree(&self.root_widget);
                 propagate_dpi_change_recursive(&self.root_widget, old_dpr, new_dpr);
 
                 // Invalidate and re-layout root widget tree
@@ -861,6 +862,7 @@ fn render_widget_recursive(widget_ref: &WidgetRef, painter: &mut Painter, dirty_
 
     let children = widget.children();
     drop(widget);
+    crate::widget::adopt_children(widget_ref, &children);
 
     for child in children {
         render_widget_recursive(&child, painter, child_dirty);
@@ -906,6 +908,9 @@ fn do_render_and_present(
     geometry: Rect,
 ) -> bool {
     let _t = qtrs_gui::startup_trace::span_min(0.5, || "do_render_and_present".into());
+    // Qt delivers the LayoutRequest events that text and size-hint changes post before the paint.
+    crate::command::WidgetCommandQueue::flush_layouts();
+    crate::widget::adopt_tree(root_widget);
     let dpr = platform().primary_screen().device_pixel_ratio();
     let logical_size = Size::new(geometry.width, geometry.height);
 

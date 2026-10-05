@@ -476,12 +476,7 @@ impl Frame {
             sub_control: None,
             attributes: &[],
         };
-        let sheet = self.base.style_sheet.borrow();
-        crate::style::stylesheet::QStyleSheetStyle::resolve_cascaded(
-            sheet.as_ref(),
-            crate::application::Application::style_sheet().as_deref(),
-            &ctx,
-        )
+        self.base.resolve_style(&ctx)
     }
 }
 
@@ -716,6 +711,10 @@ impl Widget for Frame {
 
     fn set_style_sheet(&self, qss: &str) {
         self.base.set_style_sheet(qss);
+    }
+
+    fn style_sheet(&self) -> Option<crate::style::stylesheet::QStyleSheetStyle> {
+        self.base.style_sheet.borrow().clone()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

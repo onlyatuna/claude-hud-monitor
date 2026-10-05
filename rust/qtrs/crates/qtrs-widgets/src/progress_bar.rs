@@ -353,12 +353,7 @@ impl ProgressBar {
             sub_control: None,
             attributes: &[],
         };
-        let sheet = self.base.style_sheet.borrow();
-        crate::style::stylesheet::QStyleSheetStyle::resolve_cascaded(
-            sheet.as_ref(),
-            crate::application::Application::style_sheet().as_deref(),
-            &ctx,
-        )
+        self.base.resolve_style(&ctx)
     }
 
     pub fn resolved_chunk_style(&self) -> crate::style::stylesheet::ResolvedStyle {
@@ -369,12 +364,7 @@ impl ProgressBar {
             sub_control: Some("chunk"),
             attributes: &[],
         };
-        let sheet = self.base.style_sheet.borrow();
-        crate::style::stylesheet::QStyleSheetStyle::resolve_cascaded(
-            sheet.as_ref(),
-            crate::application::Application::style_sheet().as_deref(),
-            &ctx,
-        )
+        self.base.resolve_style(&ctx)
     }
 }
 

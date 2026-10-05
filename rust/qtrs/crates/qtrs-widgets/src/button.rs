@@ -135,12 +135,7 @@ impl Button {
             sub_control: None,
             attributes: &[],
         };
-        let sheet_borrow = self.base.style_sheet.borrow();
-        crate::style::stylesheet::QStyleSheetStyle::resolve_cascaded(
-            sheet_borrow.as_ref(),
-            crate::application::Application::style_sheet().as_deref(),
-            &ctx,
-        )
+        self.base.resolve_style(&ctx)
     }
 
     /// The button's font with the stylesheet's size, family, weight and letter spacing applied.
@@ -543,6 +538,10 @@ impl Widget for Button {
 
     fn set_style_sheet(&self, qss: &str) {
         self.base.set_style_sheet(qss);
+    }
+
+    fn style_sheet(&self) -> Option<crate::style::stylesheet::QStyleSheetStyle> {
+        self.base.style_sheet.borrow().clone()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

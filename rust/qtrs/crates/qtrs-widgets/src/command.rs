@@ -56,6 +56,52 @@ impl WidgetCommandQueue {
         Self::post(WidgetCommand::Task(Box::new(task)));
     }
 
+    /// Runs the queued layout requests and leaves every other command queued.
+    ///
+    /// Qt delivers the posted `LayoutRequest` events a text or size-hint change produced before
+    /// the next paint; this is that step, for code that is about to paint. Unlike
+    /// [`flush`](Self::flush) it never runs tasks or deletions, which may need the caller's
+    /// borrows released first.
+    pub fn flush_layouts() {
+        let commands = COMMAND_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+        if commands.is_empty() {
+            return;
+        }
+
+        let mut layout_targets: Vec<WidgetRef> = Vec::new();
+        let mut seen_layout_ids = HashSet::new();
+        let mut kept = Vec::new();
+        for cmd in commands {
+            match cmd {
+                WidgetCommand::RequestLayout(weak) => {
+                    if let Some(target) = weak.upgrade() {
+                        let Ok(widget) = target.try_borrow() else {
+                            kept.push(WidgetCommand::RequestLayout(weak));
+                            continue;
+                        };
+                        let id = widget.id();
+                        drop(widget);
+                        if seen_layout_ids.insert(id) {
+                            layout_targets.push(target);
+                        }
+                    }
+                }
+                other => kept.push(other),
+            }
+        }
+        // Commands queued while the layouts ran go after the ones that were kept.
+        COMMAND_QUEUE.with(|q| {
+            let mut queue = q.borrow_mut();
+            kept.append(&mut queue);
+            *queue = kept;
+        });
+
+        for target in layout_targets {
+            crate::layout_scheduler::LayoutScheduler::invalidate(&target);
+        }
+        crate::layout_scheduler::LayoutScheduler::activate_pending();
+    }
+
     /// Safely requests deferred deletion of a `WidgetRef`.
     ///
     /// If the widget's `RefCell` is currently borrowed (e.g. inside its own event callback),

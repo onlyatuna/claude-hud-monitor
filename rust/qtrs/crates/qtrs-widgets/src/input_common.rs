@@ -114,6 +114,10 @@ macro_rules! leaf_widget_common {
             self.base.set_style_sheet(qss);
         }
 
+        fn style_sheet(&self) -> Option<crate::style::stylesheet::QStyleSheetStyle> {
+            self.base.style_sheet.borrow().clone()
+        }
+
         fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
             self
         }

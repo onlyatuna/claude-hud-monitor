@@ -101,28 +101,36 @@ impl Label {
         self.update();
     }
     /// Left, right, top and bottom space `QLabel` keeps around its text under a style sheet:
-    /// border plus padding, and, once the label has a box, the advance of `'x'` as indent
-    /// (`QLabelPrivate::sizeForWidth`; measured against PySide6: a 9px Consolas badge with
-    /// `padding: 1px 4px; border: 1px` is the text plus 15 px wide, 4 px taller than the font).
-    /// A label without padding or border has none of it.
-    fn box_insets(
+    /// the border plus the padding of each edge (`QStyleSheetStyle::subElementRect`).
+    fn box_insets(style: &crate::style::stylesheet::ResolvedStyle) -> (f32, f32, f32, f32) {
+        let border = style.border_width.unwrap_or(0.0).max(0.0);
+        let [pt, pr, pb, pl] = style.padding.unwrap_or([0.0; 4]);
+        (border + pl, border + pr, border + pt, border + pb)
+    }
+
+    /// `QLabel`'s text indent: the advance of `'x'`, which `QLabelPrivate::sizeForWidth` adds to
+    /// the width of a left- or right-aligned label that has a frame (`frameWidth() != 0`, which a
+    /// style sheet makes the widest edge of border plus padding). A centred label has none, and
+    /// neither has a label without a box. (Measured against PySide6: `padding-left: 5px` adds
+    /// 5 + 6 to a left-aligned 12px label and 5 to a centred one; `padding: 0px 2px` adds 4 to
+    /// the centred table cells.) `QLabelPrivate::documentRect` insets the text by half of it on
+    /// the aligned side.
+    fn indent(
         style: &crate::style::stylesheet::ResolvedStyle,
         metrics: &FontMetrics,
         font: &qtrs_gui::text::Font,
-    ) -> (f32, f32, f32, f32) {
-        let border = style.border_width.unwrap_or(0.0).max(0.0);
-        let [pt, pr, pb, pl] = style.padding.unwrap_or([0.0; 4]);
-        if border == 0.0 && pt + pr + pb + pl == 0.0 {
-            return (0.0, 0.0, 0.0, 0.0);
+        alignment: Alignment,
+    ) -> f32 {
+        if alignment == Alignment::Center {
+            return 0.0;
         }
-        let indent = metrics.horizontal_advance_exact("x", font).round();
-        let left_indent = (indent / 2.0).floor();
-        (
-            border + pl + left_indent,
-            border + pr + (indent - left_indent),
-            border + pt,
-            border + pb,
-        )
+        let border = style.border_width.unwrap_or(0.0).max(0.0);
+        let padding = style.padding.unwrap_or([0.0; 4]);
+        let frame = padding.iter().map(|p| border + p).fold(0.0, f32::max);
+        if frame <= 0.0 {
+            return 0.0;
+        }
+        metrics.horizontal_advance_exact("x", font).round()
     }
 
     /// The label's font with the stylesheet's size, family, weight and letter spacing applied.
@@ -162,12 +170,7 @@ impl Label {
             sub_control: None,
             attributes: &attrs,
         };
-        let sheet = self.base.style_sheet.borrow();
-        crate::style::stylesheet::QStyleSheetStyle::resolve_cascaded(
-            sheet.as_ref(),
-            crate::application::Application::style_sheet().as_deref(),
-            &ctx,
-        )
+        self.base.resolve_style(&ctx)
     }
 }
 
@@ -210,10 +213,11 @@ impl Widget for Label {
         let style = self.resolved_style();
         let font = self.styled_font(&style);
         let metrics = FontMetrics::from_font(&font);
-        let (box_l, box_r, box_t, box_b) = Self::box_insets(&style, &metrics, &font);
+        let (box_l, box_r, box_t, box_b) = Self::box_insets(&style);
+        let indent = Self::indent(&style, &metrics, &font, self.alignment);
         let text_w = metrics.horizontal_advance_exact(&self.text, &font).ceil() as i32
-            + (box_l + box_r).round() as i32;
-        let text_h = metrics.height.ceil() as i32 + (box_t + box_b).round() as i32;
+            + (box_l + box_r + indent).round() as i32;
+        let text_h = FontMetrics::layout_height(&font).ceil() as i32 + (box_t + box_b).round() as i32;
         let w = style.min_width.unwrap_or(text_w);
         let h = style.max_height.or(style.min_height).unwrap_or(text_h);
         Size::new(w, h)
@@ -224,6 +228,11 @@ impl Widget for Label {
         let w = style.min_width.unwrap_or(0);
         let h = style.min_height.unwrap_or(0);
         Size::new(w, h)
+    }
+
+    /// `QLabel::minimumSizeHint` of a label that does not wrap: the text's own size.
+    fn minimum_size_hint(&self) -> Size {
+        self.size_hint()
     }
 
     fn maximum_size(&self) -> Size {
@@ -349,7 +358,13 @@ impl Widget for Label {
         let text_color = style.color.unwrap_or(self.color);
         painter.set_pen(Pen::new(text_color, 1.0));
 
-        let (box_l, box_r, box_t, box_b) = Self::box_insets(&style, &metrics, &font);
+        let (mut box_l, mut box_r, box_t, box_b) = Self::box_insets(&style);
+        let half_indent = (Self::indent(&style, &metrics, &font, self.alignment) / 2.0).floor();
+        match self.alignment {
+            Alignment::Left => box_l += half_indent,
+            Alignment::Right => box_r += half_indent,
+            Alignment::Center => {}
+        }
         let content_w = (geom.width as f32 - box_l - box_r).max(0.0);
         let content_h = (geom.height as f32 - box_t - box_b).max(0.0);
         let x_for = |text_w: f32| match self.alignment {
@@ -382,6 +397,14 @@ impl Widget for Label {
 
     fn set_style_sheet(&self, qss: &str) {
         self.base.set_style_sheet(qss);
+    }
+
+    fn style_sheet(&self) -> Option<crate::style::stylesheet::QStyleSheetStyle> {
+        self.base.style_sheet.borrow().clone()
+    }
+
+    fn set_property(&self, name: &str, value: &str) {
+        self.base.set_property(name, value);
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

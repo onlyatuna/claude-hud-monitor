@@ -14,6 +14,37 @@ use std::rc::{Rc, Weak};
 pub type WidgetRef = Rc<RefCell<Box<dyn Widget>>>;
 pub type WidgetWeak = Weak<RefCell<Box<dyn Widget>>>;
 
+/// Points each of `children` at `parent`, so ancestor-dependent lookups (the style sheet
+/// cascade) can walk upwards.
+///
+/// A widget cannot name its own `Rc`, and `add_child` / `Layout::add_widget` only receive the
+/// child, so the link is made by whoever holds the owner's `WidgetRef`: layout activation
+/// (`adopt_tree`) and painting.
+pub fn adopt_children(parent: &WidgetRef, children: &[WidgetRef]) {
+    for child in children {
+        let Ok(c) = child.try_borrow() else { continue };
+        let linked = c
+            .parent_widget()
+            .and_then(|w| w.upgrade())
+            .is_some_and(|owner| Rc::ptr_eq(&owner, parent));
+        if !linked {
+            c.set_parent_widget(Some(Rc::downgrade(parent)));
+        }
+    }
+}
+
+/// `adopt_children` for every widget below `root`.
+pub fn adopt_tree(root: &WidgetRef) {
+    let children = match root.try_borrow() {
+        Ok(w) => w.children(),
+        Err(_) => return,
+    };
+    adopt_children(root, &children);
+    for child in &children {
+        adopt_tree(child);
+    }
+}
+
 pub trait Widget: QObject + 'static {
     fn id(&self) -> ObjectId;
 
@@ -172,7 +203,8 @@ pub trait Widget: QObject + 'static {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 
     fn set_style_sheet(&self, _qss: &str) {}
-    fn style_sheet(&self) -> Option<&QStyleSheetStyle> {
+    /// This widget's own style sheet (not its ancestors').
+    fn style_sheet(&self) -> Option<QStyleSheetStyle> {
         None
     }
 
@@ -349,6 +381,37 @@ impl WidgetBase {
         } else {
             None
         }
+    }
+
+    /// Resolves this widget's style the way `QStyleSheetStyle` does: the application sheet,
+    /// then the sheets of its ancestors from the outermost inwards, then its own sheet.
+    ///
+    /// An ancestor that is mutably borrowed (it is the widget currently being driven) ends the
+    /// walk; painting and layout of children happen after the parent's borrow is released.
+    pub fn resolve_style(
+        &self,
+        ctx: &crate::style::stylesheet::WidgetStyleContext,
+    ) -> crate::style::stylesheet::ResolvedStyle {
+        let mut ancestors: Vec<QStyleSheetStyle> = Vec::new();
+        let mut next = self.parent.borrow().clone();
+        while let Some(weak) = next {
+            let Some(rc) = weak.upgrade() else { break };
+            let Ok(widget) = rc.try_borrow() else { break };
+            if let Some(sheet) = widget.style_sheet() {
+                ancestors.push(sheet);
+            }
+            next = widget.parent_widget();
+        }
+
+        let app = crate::application::Application::style_sheet();
+        let own = self.style_sheet.borrow();
+        let sheets: Vec<&QStyleSheetStyle> = app
+            .as_deref()
+            .into_iter()
+            .chain(ancestors.iter().rev())
+            .chain(own.as_ref())
+            .collect();
+        QStyleSheetStyle::resolve_chain(&sheets, ctx)
     }
 
     pub fn set_property(&self, name: &str, value: &str) {
@@ -582,6 +645,15 @@ impl Widget for EmptyWidget {
         Size::new(0, 0)
     }
 
+    /// `QWidget::minimumSizeHint` of a widget with a layout: the layout's minimum size.
+    fn minimum_size_hint(&self) -> Size {
+        if let Some(layout) = self.base.layout.borrow().as_ref() {
+            layout.minimum_size()
+        } else {
+            Size::new(0, 0)
+        }
+    }
+
     fn maximum_size(&self) -> Size {
         Size::new(16777215, 16777215)
     }
@@ -712,6 +784,14 @@ impl Widget for EmptyWidget {
 
     fn set_size_policy(&self, policy: QSizePolicy) {
         self.base.size_policy.set(policy);
+    }
+
+    fn set_style_sheet(&self, qss: &str) {
+        self.base.set_style_sheet(qss);
+    }
+
+    fn style_sheet(&self) -> Option<QStyleSheetStyle> {
+        self.base.style_sheet.borrow().clone()
     }
 
     fn paint_event(&mut self, painter: &mut Painter) {

@@ -61,6 +61,7 @@ impl LayoutScheduler {
 
             for (_id, weak) in items {
                 if let Some(widget_ref) = weak.upgrade() {
+                    crate::widget::adopt_tree(&widget_ref);
                     let Ok(widget) = widget_ref.try_borrow() else {
                         // Already borrowed on the current stack; its layout pass is already active.
                         continue;

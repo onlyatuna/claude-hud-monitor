@@ -32,62 +32,6 @@ pub struct ResolvedStyle {
     pub text_align: Option<String>,
 }
 
-impl ResolvedStyle {
-    /// Merges another resolved style on top of this one (higher priority overrides lower).
-    pub fn merge_with(&mut self, other: &ResolvedStyle) {
-        if other.background_color.is_some() {
-            self.background_color = other.background_color;
-        }
-        if other.color.is_some() {
-            self.color = other.color;
-        }
-        if other.border_color.is_some() {
-            self.border_color = other.border_color;
-        }
-        if other.border_width.is_some() {
-            self.border_width = other.border_width;
-        }
-        if other.border_style.is_some() {
-            self.border_style = other.border_style.clone();
-        }
-        if other.border_radius.is_some() {
-            self.border_radius = other.border_radius;
-        }
-        if other.min_height.is_some() {
-            self.min_height = other.min_height;
-        }
-        if other.max_height.is_some() {
-            self.max_height = other.max_height;
-        }
-        if other.min_width.is_some() {
-            self.min_width = other.min_width;
-        }
-        if other.max_width.is_some() {
-            self.max_width = other.max_width;
-        }
-        if other.font_size.is_some() {
-            self.font_size = other.font_size;
-        }
-        if other.font_weight.is_some() {
-            self.font_weight = other.font_weight;
-        }
-        if other.font_family.is_some() {
-            self.font_family = other.font_family.clone();
-        }
-        if other.letter_spacing.is_some() {
-            self.letter_spacing = other.letter_spacing;
-        }
-        if other.padding.is_some() {
-            self.padding = other.padding;
-        }
-        if other.margin.is_some() {
-            self.margin = other.margin;
-        }
-        if other.text_align.is_some() {
-            self.text_align = other.text_align.clone();
-        }
-    }
-}
 
 /// Context information for querying matching stylesheet rules.
 #[derive(Debug, Clone, Default)]
@@ -124,52 +68,51 @@ impl QStyleSheetStyle {
 
     /// Resolves matching styles for a widget context.
     pub fn resolve(&self, ctx: &WidgetStyleContext) -> ResolvedStyle {
-        let mut matched_decls: Vec<(u32, &QCssDeclaration)> = Vec::new();
+        Self::resolve_chain(&[self], ctx)
+    }
 
-        for rule in &self.sheet.rules {
-            let mut best_score = None;
-            for selector in &rule.selectors {
-                if selector_matches(selector, ctx) {
-                    let score = selector.specificity();
-                    best_score = Some(best_score.map_or(score, |s: u32| s.max(score)));
-                }
-            }
-            if let Some(score) = best_score {
-                for decl in &rule.declarations {
-                    matched_decls.push((score, decl));
+    /// Resolves a widget through every style sheet that applies to it, lowest precedence first.
+    ///
+    /// As in `QStyleSheetStyle::styleRules`, a matching rule is weighted by the depth of the
+    /// sheet it came from, then by its selector's specificity, then by its position: the
+    /// application sheet, then each ancestor from the outermost inwards, then the widget's own
+    /// sheet. Declarations are applied in that order, so a later sheet overrides an earlier one
+    /// whatever the selector specificity, and `padding-left` composes with a `padding` set by
+    /// another sheet.
+    pub fn resolve_chain(sheets: &[&QStyleSheetStyle], ctx: &WidgetStyleContext) -> ResolvedStyle {
+        let mut matched: Vec<(usize, u32, &QCssDeclaration)> = Vec::new();
+        for (depth, sheet) in sheets.iter().enumerate() {
+            for rule in &sheet.sheet.rules {
+                let best = rule
+                    .selectors
+                    .iter()
+                    .filter(|selector| selector_matches(selector, ctx))
+                    .map(|selector| selector.specificity())
+                    .max();
+                if let Some(score) = best {
+                    matched.extend(rule.declarations.iter().map(|decl| (depth, score, decl)));
                 }
             }
         }
 
-        // Sort by specificity score (lowest to highest, so higher specificity overwrites)
-        matched_decls.sort_by_key(|&(score, _)| score);
+        // Stable: equal weights keep rule order, so the later rule wins.
+        matched.sort_by_key(|&(depth, score, _)| (depth, score));
 
         let mut resolved = ResolvedStyle::default();
-        for (_, decl) in matched_decls {
+        for (_, _, decl) in matched {
             apply_declaration(&mut resolved, decl);
         }
-
         resolved
     }
 
-    /// Cascades a local stylesheet with a fallback (parent/window/application stylesheet).
+    /// Cascades a local stylesheet with a fallback (the application stylesheet).
     pub fn resolve_cascaded(
         local: Option<&QStyleSheetStyle>,
         fallback: Option<&QStyleSheetStyle>,
         ctx: &WidgetStyleContext,
     ) -> ResolvedStyle {
-        let mut base = if let Some(fb) = fallback {
-            fb.resolve(ctx)
-        } else {
-            ResolvedStyle::default()
-        };
-
-        if let Some(loc) = local {
-            let local_style = loc.resolve(ctx);
-            base.merge_with(&local_style);
-        }
-
-        base
+        let sheets: Vec<&QStyleSheetStyle> = fallback.into_iter().chain(local).collect();
+        Self::resolve_chain(&sheets, ctx)
     }
 }
 
@@ -330,6 +273,21 @@ fn apply_declaration(style: &mut ResolvedStyle, decl: &QCssDeclaration) {
         QCssProperty::Padding => {
             if let QCssValue::Edges(e) = decl.value {
                 style.padding = Some(e);
+            }
+        }
+        QCssProperty::PaddingTop
+        | QCssProperty::PaddingRight
+        | QCssProperty::PaddingBottom
+        | QCssProperty::PaddingLeft => {
+            if let QCssValue::Length(v) = decl.value {
+                // [top, right, bottom, left]
+                let side = match decl.property {
+                    QCssProperty::PaddingTop => 0,
+                    QCssProperty::PaddingRight => 1,
+                    QCssProperty::PaddingBottom => 2,
+                    _ => 3,
+                };
+                style.padding.get_or_insert([0.0; 4])[side] = v;
             }
         }
         QCssProperty::Margin => {

@@ -104,7 +104,10 @@ fn test_reentrant_layout_request_during_callback() {
 
     // Initially layout positions them
     parent.borrow().update_layout();
-    assert_eq!(btn1.borrow().geometry().y, 0);
+    // Two buttons that cannot grow vertically in a 200px tall `QVBoxLayout`: `qGeomCalc` splits
+    // the spare 133px into three equal gaps (above, between and below), so the first sits at 44.
+    let first_y = btn1.borrow().geometry().y;
+    assert_eq!(first_y, 44);
 
     TEST2_SIBLING.with(|s| *s.borrow_mut() = Some(btn2.clone()));
     TEST2_PARENT.with(|p| *p.borrow_mut() = Some(parent.clone()));
@@ -138,14 +141,14 @@ fn test_reentrant_layout_request_during_callback() {
     let mut dispatcher = EventTreeDispatcher::new();
     let mut press_ev = Event::new_spontaneous(EventKind::MouseButtonPress {
         x: 10,
-        y: 10,
+        y: first_y + 10,
         button: 1,
     });
     dispatcher.dispatch_event(&parent, &mut press_ev);
 
     let mut release_ev = Event::new_spontaneous(EventKind::MouseButtonRelease {
         x: 10,
-        y: 10,
+        y: first_y + 10,
         button: 1,
     });
     // This MUST NOT panic with BorrowMutError
