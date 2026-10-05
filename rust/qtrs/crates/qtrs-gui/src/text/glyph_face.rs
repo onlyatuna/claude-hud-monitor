@@ -66,6 +66,19 @@ pub trait GlyphFace: Send + Sync {
         None
     }
 
+    /// Unrounded cap height in pixels at `px` per em (the OS/2 `sCapHeight` Qt's Windows engines
+    /// report as `QFontEngine::capHeight`), or `None` when the face has none.
+    fn cap_height(&self, _px: f32) -> Option<f32> {
+        None
+    }
+
+    /// The unhinted outline of the glyph at `px` per em, in pixels with the origin on the baseline
+    /// and y growing downwards (what `QFontEngine::addGlyphsToPath` adds to a `QPainterPath`), or
+    /// `None` when the backend cannot produce outlines.
+    fn glyph_outline(&self, _glyph_id: u16, _px: f32) -> Option<tiny_skia::Path> {
+        None
+    }
+
     /// The advance Qt's Windows font engine gives a glyph in layout (see
     /// `DirectWriteFace::layout_advance_width`); `direct_write` is
     /// [`uses_directwrite_engine`](crate::text::font_database::uses_directwrite_engine).

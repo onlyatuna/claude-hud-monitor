@@ -315,43 +315,37 @@ impl<'a> Painter<'a> {
                     .fill_path(path, &paint, fill_rule, transform, mask_ref);
             }
             Brush::Hatched { color } => {
-                const TILE_SIZE: usize = 6;
-                if let Some(mut pat) = Pixmap::new(TILE_SIZE as u32, TILE_SIZE as u32) {
-                    let pat_data = pat.data_mut();
-                    let r = (color.red() * 255.0).round() as u8;
-                    let g = (color.green() * 255.0).round() as u8;
-                    let b = (color.blue() * 255.0).round() as u8;
-                    let base_a = color.alpha();
-                    let sqrt2 = std::f32::consts::SQRT_2;
-                    let half_w = 0.8_f32;
-                    let aa_edge = 0.5_f32;
-
-                    for y in 0..TILE_SIZE {
-                        for x in 0..TILE_SIZE {
-                            let s = (x + y) % TILE_SIZE;
-                            let min_dist = (s as f32).min((TILE_SIZE - s) as f32) / sqrt2;
-                            let cov = if min_dist <= half_w {
-                                1.0
-                            } else if min_dist < half_w + aa_edge {
-                                1.0 - (min_dist - half_w) / aa_edge
-                            } else {
-                                0.0
-                            };
-                            if cov > 0.0 {
-                                let a = (base_a * cov * 255.0).round() as u8;
-                                let idx = (y * TILE_SIZE + x) * 4;
-                                pat_data[idx] = r;
-                                pat_data[idx + 1] = g;
-                                pat_data[idx + 2] = b;
-                                pat_data[idx + 3] = a;
-                            }
+                // Python `_hatch_brush`: a 6x6 tile with three antialiased 1.6px diagonals, which
+                // make one continuous stripe once tiled. Qt samples such a texture with the
+                // nearest pixel unless `SmoothPixmapTransform` is set (the dial sets only
+                // `Antialiasing`), including when the paint transform scales it.
+                const TILE_SIZE: u32 = 6;
+                if let Some(mut tile) = tiny_skia::Pixmap::new(TILE_SIZE, TILE_SIZE) {
+                    let mut ink = Paint::default();
+                    ink.set_color(*color);
+                    ink.anti_alias = true;
+                    let stroke = tiny_skia::Stroke {
+                        width: 1.6,
+                        line_cap: LineCap::Square,
+                        ..Default::default()
+                    };
+                    for ((x1, y1), (x2, y2)) in [
+                        ((-1.0, 7.0), (7.0, -1.0)),
+                        ((-1.0, 1.0), (1.0, -1.0)),
+                        ((5.0, 7.0), (7.0, 5.0)),
+                    ] {
+                        let mut line = tiny_skia::PathBuilder::new();
+                        line.move_to(x1, y1);
+                        line.line_to(x2, y2);
+                        if let Some(line) = line.finish() {
+                            tile.stroke_path(&line, &ink, &stroke, Transform::identity(), None);
                         }
                     }
                     let paint = Paint {
                         shader: Pattern::new(
-                            pat.as_tiny_skia().as_ref(),
+                            tile.as_ref(),
                             SpreadMode::Repeat,
-                            FilterQuality::Bilinear,
+                            FilterQuality::Nearest,
                             opacity,
                             Transform::identity(),
                         ),
@@ -830,6 +824,36 @@ impl<'a> Painter<'a> {
                 }
             }
         }
+    }
+
+    /// The outline of `text` with its baseline origin at `pos` (`QPainterPath::addText`): the
+    /// unhinted glyph outlines at the positions the text layout gives them, ready for
+    /// [`fill_path`](Self::fill_path) and [`stroke_path`](Self::stroke_path). `None` when the text
+    /// has no outlines (empty, or a backend that cannot produce them).
+    pub fn text_path(pos: PointF, text: &str, font: &Font) -> Option<Path> {
+        if text.is_empty() {
+            return None;
+        }
+        let engines = resolve_font_engines_for_text_global(font, text);
+        if engines.is_empty() {
+            return None;
+        }
+        let layout = GlyphLayout::shape_with_engines(text, font, &engines);
+        let mut builder = tiny_skia::PathBuilder::new();
+        for glyph in layout.glyphs {
+            let engine = engines.get(glyph.font_index as usize).unwrap_or(&engines[0]);
+            let Some(outline) = engine.face.glyph_outline(glyph.glyph_id, font.size) else {
+                continue;
+            };
+            let placed = outline.transform(tiny_skia::Transform::from_translate(
+                pos.x + glyph.x,
+                pos.y + glyph.y,
+            ));
+            if let Some(placed) = placed {
+                builder.push_path(&placed);
+            }
+        }
+        builder.finish()
     }
     /// Draws text with a specific color.
     pub fn draw_text_colored(&mut self, pos: PointF, text: &str, font: &Font, color: Color) {

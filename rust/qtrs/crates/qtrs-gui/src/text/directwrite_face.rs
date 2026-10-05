@@ -250,6 +250,14 @@ impl GlyphFace for DirectWriteFace {
         Some(self.base.line_metrics(px, true))
     }
 
+    fn cap_height(&self, px: f32) -> Option<f32> {
+        self.base.cap_height(px)
+    }
+
+    fn glyph_outline(&self, glyph_id: u16, px: f32) -> Option<tiny_skia::Path> {
+        self.base.glyph_outline(glyph_id, px)
+    }
+
     /// Outline metrics (advance widths are unhinted, as in Qt's natural layout). The placement of
     /// the DirectWrite bitmap itself is returned by the rasterize methods.
     fn metrics_indexed(&self, glyph_id: u16, px: f32) -> GlyphMetrics {

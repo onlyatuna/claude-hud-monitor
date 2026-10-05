@@ -169,6 +169,18 @@ pub fn primary_face_vertical_metrics(font: &Font) -> Option<(f32, f32)> {
     })
 }
 
+/// Cap height in pixels of the face `font` resolves to (see [`GlyphFace::cap_height`]).
+///
+/// [`GlyphFace::cap_height`]: crate::text::glyph_face::GlyphFace::cap_height
+pub fn primary_face_cap_height(font: &Font) -> Option<f32> {
+    with_global_font_database(|db| {
+        db.load_font_styled(&font.family, FaceStyle::of(font)).and_then(|face| {
+            face.cap_height(font.size)
+                .or_else(|| Some(face.metrics('H', font.size).height as f32))
+        })
+    })
+}
+
 /// Like [`resolve_font_engines_global`], but loads the fallback fonts only when `text` needs them.
 ///
 /// Parsing a CJK/emoji fallback can cost hundreds of ms (and hundreds of MB) with an eager backend,

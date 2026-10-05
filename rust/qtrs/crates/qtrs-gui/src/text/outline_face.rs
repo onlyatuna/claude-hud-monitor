@@ -122,6 +122,22 @@ impl GlyphFace for OutlineFace {
         Some(self.line_metrics(px, false))
     }
 
+    fn cap_height(&self, px: f32) -> Option<f32> {
+        let cap = self.face.tables().os2?.capital_height().filter(|c| *c > 0)?;
+        Some(cap as f32 * px / self.units_per_em)
+    }
+
+    fn glyph_outline(&self, glyph_id: u16, px: f32) -> Option<tiny_skia::Path> {
+        let mut sink = crate::text::color_glyph::SkiaPathBuilder {
+            builder: tiny_skia::PathBuilder::new(),
+        };
+        self.face.outline_glyph(GlyphId(glyph_id), &mut sink)?;
+        let scale = px / self.units_per_em;
+        sink.builder
+            .finish()?
+            .transform(tiny_skia::Transform::from_row(scale, 0.0, 0.0, -scale, 0.0, 0.0))
+    }
+
     fn metrics_indexed(&self, glyph_id: u16, px: f32) -> GlyphMetrics {
         self.layout(glyph_id, px).metrics
     }

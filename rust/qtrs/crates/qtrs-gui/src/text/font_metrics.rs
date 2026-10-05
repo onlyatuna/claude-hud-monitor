@@ -89,6 +89,33 @@ impl FontMetrics {
         Self::new(ascent, descent, line_gap, avg_width)
     }
 
+    /// `QFontMetricsF::capHeight`: the face's OS/2 cap height as Qt's Windows engines report it,
+    /// truncated to 26.6 fixed point (`DESIGN_TO_LOGICAL` / `QFixed` division). `None` when the
+    /// font cannot be resolved.
+    pub fn cap_height(font: &Font) -> Option<f32> {
+        if font.font_data.is_some() || font.size <= 0.0 {
+            return None;
+        }
+        let cap = crate::text::font_database::primary_face_cap_height(font)?;
+        Some((cap * 64.0).floor() / 64.0)
+    }
+
+    /// Height of one line of text as Qt's text layout measures it (`QFontMetrics::boundingRect`,
+    /// hence `QLabel::sizeHint`), before the final `ceil`.
+    ///
+    /// `QFontMetrics::height` rounds the engine's ascent and descent separately; the layout adds
+    /// them first. Qt's GDI engine reports whole pixels (the two agree); its DirectWrite engine
+    /// reports `DESIGN_TO_LOGICAL` values truncated to 26.6, so Microsoft JhengHei UI at 15px is
+    /// 15.234375 + 3.8125 = 19.046875, a 20px line against `height()`'s 19.
+    pub fn layout_height(font: &Font) -> f32 {
+        match Self::face_line_metrics(font) {
+            Some((ascent, descent)) if crate::text::font_database::uses_directwrite_engine() => {
+                ((ascent * 64.0).floor() + (descent * 64.0).floor()) / 64.0
+            }
+            _ => Self::from_font(font).height,
+        }
+    }
+
     /// Ascent and descent of the face `font` resolves to, from the font database.
     fn face_line_metrics(font: &Font) -> Option<(f32, f32)> {
         if font.font_data.is_some() || font.size <= 0.0 {
