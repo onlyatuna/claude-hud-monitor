@@ -13,8 +13,6 @@ use parking_lot::Mutex;
 use qtrs_core::QObject;
 use qtrs_gui::geometry::primitives::{Margins, Rect, RectF};
 use qtrs_gui::paint::{Brush, Pen};
-use qtrs_gui::text::font::{Font, FontWeight};
-use qtrs_gui::tiny_skia::Color;
 use qtrs_platform::backdrop::BackdropType;
 use qtrs_platform::WindowFlags;
 use qtrs_widgets::{
@@ -44,8 +42,6 @@ fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
     }
 }
 
-use crate::ui::set_label_color;
-
 /// Header status dot (Python `_on_busy_changed`): `#38bdf8` while fetching, `#f59e0b` while a
 /// provider reports an error, `#10b981` otherwise.
 fn status_dot_color(busy: bool, any_error: bool) -> qtrs_gui::tiny_skia::Color {
@@ -57,6 +53,33 @@ fn status_dot_color(busy: bool, any_error: bool) -> qtrs_gui::tiny_skia::Color {
         (16, 185, 129)
     };
     qtrs_gui::tiny_skia::Color::from_rgba8(r, g, b, 255)
+}
+
+/// The window style sheet of a UI mode (Python `_apply_theme`). Table mode's sheet names no
+/// `font-family`; cards mode's does. Installing the cards sheet for both would force Segoe UI
+/// onto the table's labels and shift every advance width.
+fn style_sheet_for(ui_mode: &str, dark: bool) -> &'static str {
+    if ui_mode == "table" {
+        crate::ui::styles::get_hud_stylesheet(dark)
+    } else {
+        crate::ui::styles::get_cards_stylesheet(dark)
+    }
+}
+
+/// Python `status_dot.setStyleSheet(f"color: {color}; font-size: 11px;")`.
+fn set_status_dot_color(dot: &WidgetRef, color: qtrs_gui::tiny_skia::Color) {
+    let c = color.to_color_u8();
+    let mut dot = dot.borrow_mut();
+    if let Some(lbl) = dot.as_any_mut().downcast_mut::<Label>() {
+        lbl.set_color(color);
+    }
+    dot.set_style_sheet(&format!(
+        "color: rgba({}, {}, {}, {}); font-size: 11px;",
+        c.red(),
+        c.green(),
+        c.blue(),
+        c.alpha()
+    ));
 }
 
 /// Background, border colour and corner radius of the window panel. In cards mode they come from
@@ -204,24 +227,15 @@ impl HUDWindow {
             BackdropType::None
         };
         window.set_backdrop(backdrop, dark);
-        // Table mode installs the HUD sheet, which names no `font-family`; cards mode
-        // installs the cards sheet, which does. Installing the cards sheet for both would
-        // force Segoe UI onto the table's labels and shift every advance width.
-        let sheet = if ui_mode == "table" {
-            crate::ui::styles::get_hud_stylesheet(dark)
-        } else {
-            crate::ui::styles::get_cards_stylesheet(dark)
-        };
+        let sheet = style_sheet_for(&ui_mode, dark);
         window.set_style_sheet(sheet);
         qtrs_widgets::application::Application::set_style_sheet(sheet);
 
         let theme = get_theme(dark);
 
         // Header bar widgets
-        let mut dot = Label::new("●");
-        dot.set_font(Font::new("Segoe UI", 11.0));
-        let status_dot = make_widget(dot);
-        set_label_color(&status_dot, status_dot_color(false, false));
+        let status_dot = make_widget(Label::new("●"));
+        set_status_dot_color(&status_dot, status_dot_color(false, false));
 
         let mut title = Label::new(if ui_mode == "table" {
             "AI AGENT HUD (TABLE)"
@@ -229,12 +243,6 @@ impl HUDWindow {
             "AI AGENT HUD (3-IN-1)"
         });
         title.set_object_name("HeaderTitle");
-        if ui_mode == "table" {
-            let mut tf = Font::new("Segoe UI", 11.0);
-            tf.weight = FontWeight::Bold;
-            title.set_font(tf);
-            title.set_color(theme.text2);
-        }
         let title_label = make_widget(title);
 
         let ghost_label = make_widget(Label::new("👻"));
@@ -247,10 +255,6 @@ impl HUDWindow {
 
         let mut time_lbl = Label::new("--:--:--");
         time_lbl.set_object_name("HeaderStatus");
-        if ui_mode == "table" {
-            time_lbl.set_font(Font::new("Segoe UI", 10.0));
-            time_lbl.set_color(theme.text2);
-        }
         let time_label = make_widget(time_lbl);
         // Header layout
         let mut header_layout = BoxLayout::horizontal();
@@ -571,6 +575,8 @@ impl HUDWindow {
     }
 
     fn apply_ui_mode_internal(&mut self, mode: &str) {
+        // Python `_apply_theme`: the mode picks which style sheet the labels cascade from.
+        qtrs_widgets::application::Application::set_style_sheet(style_sheet_for(mode, self.is_dark));
         let (w, h) = if mode == "table" {
             if let Some(s) = self
                 .stack
@@ -581,16 +587,6 @@ impl HUDWindow {
                 s.set_current_index(1);
             }
             set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
-            set_label_color(&self.title_label, self.theme.text2);
-            set_label_color(&self.time_label, self.theme.text2);
-            if let Some(lbl) = self.title_label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
-                let mut tf = Font::new("Segoe UI", 11.0);
-                tf.weight = FontWeight::Bold;
-                lbl.set_font(tf);
-            }
-            if let Some(lbl) = self.time_label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
-                lbl.set_font(Font::new("Segoe UI", 10.0));
-            }
             self.layout_toggle_btn.borrow().set_visible(false);
             self.window
                 .set_minimum_size(MIN_TABLE_WIDTH as i32, MIN_TABLE_HEIGHT as i32);
@@ -609,16 +605,6 @@ impl HUDWindow {
                 s.set_current_index(0);
             }
             set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
-            set_label_color(&self.title_label, Color::from_rgba8(148, 163, 184, 255));
-            set_label_color(&self.time_label, Color::from_rgba8(100, 116, 139, 255));
-            if let Some(lbl) = self.title_label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
-                let mut tf = Font::new("Segoe UI", 10.5);
-                tf.weight = FontWeight::Bold;
-                lbl.set_font(tf);
-            }
-            if let Some(lbl) = self.time_label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
-                lbl.set_font(Font::new("Consolas", 9.5));
-            }
             self.layout_toggle_btn.borrow().set_visible(true);
             let cfg = self.config.lock();
             if cfg.layout_mode == "horizontal" {
@@ -724,16 +710,9 @@ impl HUDWindow {
             BackdropType::None
         };
         self.window.set_backdrop(backdrop, dark);
-        let sheet = if ui_mode == "table" {
-            crate::ui::styles::get_hud_stylesheet(dark)
-        } else {
-            crate::ui::styles::get_cards_stylesheet(dark)
-        };
+        let sheet = style_sheet_for(&ui_mode, dark);
         self.window.set_style_sheet(sheet);
         qtrs_widgets::application::Application::set_style_sheet(sheet);
-
-        set_label_color(&self.title_label, self.theme.text);
-        set_label_color(&self.time_label, self.theme.text2);
 
         for card in self.cards.values_mut() {
             card.set_appearance(dark);
@@ -785,7 +764,7 @@ impl HUDWindow {
 
     fn refresh_status_dot(&self) {
         let any_error = self.cards.values().any(|card| card.current_metrics.error.is_some());
-        set_label_color(&self.status_dot, status_dot_color(self.busy, any_error));
+        set_status_dot_color(&self.status_dot, status_dot_color(self.busy, any_error));
     }
 
     pub fn update_clock(&mut self) {

@@ -327,62 +327,50 @@ pub fn get_cards_stylesheet(dark: bool) -> &'static str {
     }
 }
 
-/// Style sheet for the table-mode HUD window (the Python `get_hud_stylesheet` + table rules).
-///
-/// Unlike [`get_cards_stylesheet`] it names no `font-family`, so every `QLabel` keeps the
-/// `QApplication` default face (Microsoft JhengHei UI) exactly as the Python HUD does.
-pub fn get_hud_stylesheet(dark: bool) -> &'static str {
-    if dark {
-        r#"
-        QWidget#CentralWidget {
-            background-color: rgba(22, 22, 26, 0.94);
-            border: 1px solid rgba(255, 255, 255, 0.14);
-            border-radius: 9px;
-        }
-
-        QLabel#HeaderTitle {
-            font-size: 10.5px;
-            font-weight: 800;
-            letter-spacing: 1.0px;
-            color: #94a3b8;
-        }
-
-        QLabel#HeaderStatus {
-            font-size: 9.5px;
-            color: #64748b;
-            font-family: 'Consolas', monospace;
-        }
-        "#
-    } else {
-        r#"
-        QWidget#CentralWidget {
-            background-color: rgba(248, 250, 252, 0.94);
-            border: 1px solid rgba(15, 23, 42, 0.18);
-            border-radius: 9px;
-        }
-
-        QLabel#HeaderTitle {
-            font-size: 10.5px;
-            font-weight: 800;
-            letter-spacing: 1.0px;
-            color: #475569;
-        }
-
-        QLabel#HeaderStatus {
-            font-size: 9.5px;
-            color: #64748b;
-            font-family: 'Consolas', monospace;
-        }
-        "#
-    }
+/// The string-valued entries of the Python `THEMES` dict that its sheets interpolate.
+struct SheetTheme {
+    panel_solid: &'static str,
+    panel_border: &'static str,
+    radius: u32,
+    text: &'static str,
+    text2: &'static str,
+    text3: &'static str,
+    separator: &'static str,
+    menu_bg: &'static str,
+    menu_hover: &'static str,
 }
 
-/// Style sheet of `UsageTable` itself. Ported verbatim from the Python `get_table_stylesheet`;
-/// it sets sizes and weights only, never a family, which is what keeps the table's labels on
-/// the application default face.
-pub fn get_table_stylesheet(dark: bool) -> &'static str {
-    static DARK: LazyLock<String> = LazyLock::new(|| table_sheet(true));
-    static LIGHT: LazyLock<String> = LazyLock::new(|| table_sheet(false));
+const DARK_SHEET_THEME: SheetTheme = SheetTheme {
+    panel_solid: "rgba(30, 30, 36, 0.94)",
+    panel_border: "rgba(255, 255, 255, 0.12)",
+    radius: 12,
+    text: "#f2f2f7",
+    text2: "rgba(235, 235, 245, 0.62)",
+    text3: "rgba(235, 235, 245, 0.32)",
+    separator: "rgba(255, 255, 255, 0.12)",
+    menu_bg: "rgba(40, 40, 46, 0.97)",
+    menu_hover: "rgba(255, 255, 255, 0.10)",
+};
+
+const LIGHT_SHEET_THEME: SheetTheme = SheetTheme {
+    panel_solid: "rgba(246, 244, 250, 0.94)",
+    panel_border: "rgba(255, 255, 255, 0.55)",
+    radius: 12,
+    text: "#1f1f24",
+    text2: "rgba(40, 40, 50, 0.62)",
+    text3: "rgba(40, 40, 50, 0.34)",
+    separator: "rgba(40, 40, 50, 0.14)",
+    menu_bg: "rgba(250, 250, 252, 0.97)",
+    menu_hover: "rgba(0, 0, 0, 0.07)",
+};
+
+/// Style sheet of the table-mode HUD window: Python `get_hud_stylesheet(theme, vibrant=False)`.
+///
+/// It names no `font-family`, so every `QLabel` keeps the `QApplication` default face
+/// (Microsoft JhengHei UI), exactly as the Python HUD does.
+pub fn get_hud_stylesheet(dark: bool) -> &'static str {
+    static DARK: LazyLock<String> = LazyLock::new(|| hud_sheet(&DARK_SHEET_THEME));
+    static LIGHT: LazyLock<String> = LazyLock::new(|| hud_sheet(&LIGHT_SHEET_THEME));
     if dark {
         &DARK
     } else {
@@ -390,23 +378,73 @@ pub fn get_table_stylesheet(dark: bool) -> &'static str {
     }
 }
 
-fn table_sheet(dark: bool) -> String {
-    let (text, text2, text3, separator) = if dark {
-        ("#e2e8f0", "#94a3b8", "#64748b", "rgba(148, 163, 184, 0.20)")
-    } else {
-        ("#172033", "#475569", "#64748b", "rgba(15, 23, 42, 0.12)")
-    };
+fn hud_sheet(t: &SheetTheme) -> String {
+    let SheetTheme { panel_solid, panel_border, radius, text, text2, text3, separator, menu_bg, menu_hover } = t;
     format!(
         r#"
-        QLabel {{ color: {text}; }}
-        QLabel#SectionTitle {{ font-size: 13px; font-weight: 600; }}
-        QLabel#RowLabel {{ color: {text2}; font-size: 12px; padding-left: 18px; }}
-        QLabel#Legend {{ color: {text2}; font-size: 10px; }}
-        QLabel#Cell {{ font-size: 14px; padding: 0px 2px; }}
-        QLabel#Pill {{ font-size: 15px; font-weight: 600; padding: 0px 2px; }}
-        QLabel#HeaderName {{ font-size: 14px; font-weight: 600; }}
-        QLabel#HeaderBadge {{ color: {text3}; font-size: 9.5px; font-weight: 600; letter-spacing: 0.6px; }}
-        QFrame#Separator {{ background-color: {separator}; border: none; min-height: 1px; max-height: 1px; }}
-        "#
+    QWidget#CentralWidget {{
+        background-color: {panel_solid};
+        border: 1px solid {panel_border};
+        border-radius: {radius}px;
+    }}
+    QLabel {{ color: {text}; }}
+    QLabel#HeaderTitle {{ font-size: 11px; font-weight: 700; color: {text2}; }}
+    QLabel#HeaderStatus {{ font-size: 10px; color: {text2}; }}
+    QPushButton#LayoutToggleBtn {{
+        background-color: transparent;
+        border: 1px solid {separator};
+        border-radius: 4px;
+        color: {text2};
+        font-size: 11px;
+        padding: 1px 4px;
+        min-width: 18px;
+        max-height: 18px;
+    }}
+    QPushButton#LayoutToggleBtn:hover {{
+        background-color: {menu_hover};
+        color: {text};
+    }}
+    QMenu {{
+        background-color: {menu_bg};
+        border: 1px solid {separator};
+        border-radius: 8px;
+        padding: 5px 0px;
+    }}
+    QMenu::item {{ color: {text}; padding: 5px 26px 5px 22px; font-size: 12px; }}
+    QMenu::item:selected {{ background-color: {menu_hover}; }}
+    QMenu::item:disabled {{ color: {text3}; }}
+    QMenu::separator {{ height: 1px; background-color: {separator}; margin: 5px 10px; }}
+    "#
+    )
+}
+
+/// Style sheet of `UsageTable` itself: Python `get_table_stylesheet(theme)`. It sets sizes and
+/// weights only, never a family, which is what keeps the table's labels on the application
+/// default face.
+pub fn get_table_stylesheet(dark: bool) -> &'static str {
+    static DARK: LazyLock<String> = LazyLock::new(|| table_sheet(&DARK_SHEET_THEME));
+    static LIGHT: LazyLock<String> = LazyLock::new(|| table_sheet(&LIGHT_SHEET_THEME));
+    if dark {
+        &DARK
+    } else {
+        &LIGHT
+    }
+}
+
+fn table_sheet(t: &SheetTheme) -> String {
+    let SheetTheme { text, text2, text3, separator, .. } = t;
+    format!(
+        r#"
+    QLabel {{ color: {text}; }}
+    QLabel#SectionTitle {{ font-size: 13px; font-weight: 600; }}
+    QLabel#RowLabel {{ color: {text2}; font-size: 12px; padding-left: 18px; }}
+    QLabel#Legend {{ color: {text2}; font-size: 10px; }}
+    QLabel#Cell {{ font-size: 14px; padding: 0px 2px; }}
+    QLabel#Pill {{ font-size: 15px; font-weight: 600; padding: 0px 2px; }}
+    QLabel#HeaderName {{ font-size: 14px; font-weight: 600; }}
+    QLabel#HeaderBadge {{ color: {text3}; font-size: 9.5px; font-weight: 600; letter-spacing: 0.6px; }}
+    QFrame#Separator {{ background-color: {separator}; border: none; min-height: 1px; max-height: 1px; }}
+    QLabel[state="muted"] {{ color: {text3}; }}
+    "#
     )
 }

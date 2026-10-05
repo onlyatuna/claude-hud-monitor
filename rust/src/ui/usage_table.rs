@@ -16,6 +16,7 @@ use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Margins, PointF, Rect, RectF};
 use qtrs_gui::paint::brush::Brush;
 use qtrs_gui::paint::painter::{create_donut_arc_path, create_pie_path, Painter, Pen};
+use qtrs_gui::paint::pixmap::Pixmap;
 use qtrs_gui::text::font::{Font, FontWeight};
 use qtrs_gui::text::font_metrics::FontMetrics;
 use qtrs_gui::tiny_skia::{Color, LineCap, LineJoin, PathBuilder};
@@ -123,7 +124,13 @@ impl UsageDial {
             center.y - r_to * angle_rad.sin(),
         );
 
-        painter.set_pen(Pen::new(color, 1.6).with_dash_pattern(vec![1.6, 1.4]));
+        // `QPen(color, 1.6, CustomDashLine)` with `setDashPattern([1.6, 1.4])`: Qt measures the
+        // pattern in pen widths and its pen defaults to square caps.
+        painter.set_pen(
+            Pen::new(color, 1.6)
+                .with_cap(LineCap::Square)
+                .with_dash_pattern(vec![1.6 * 1.6, 1.4 * 1.6]),
+        );
         painter.draw_line(p1, p2);
     }
 }
@@ -226,7 +233,7 @@ impl Widget for UsageDial {
         let (o_pct, o_mark, o_color) = self.outer;
         if let Some(pct) = o_pct {
             if !self.muted && pct > 0.0 {
-                painter.set_pen(Pen::new(o_color, ring_width));
+                painter.set_pen(Pen::new(o_color, ring_width).with_cap(LineCap::Butt));
                 painter.draw_arc(ring_rect, 90.0, Self::deg(pct));
 
                 // Hatching when outer pct > mark
@@ -302,78 +309,76 @@ impl Widget for UsageDial {
             self.muted,
         );
 
-        // 3. Center percentage text
+        // 3. Centre text with a halo so it reads over the pie and the background alike. Python
+        //    builds it as a `QPainterPath` (unhinted outlines at the layout's glyph positions),
+        //    strokes the path with the halo and fills it with the text colour.
+        let app_font = |px: i32| {
+            Font::new(qtrs_widgets::APP_DEFAULT_FAMILY, px as f32).with_weight(FontWeight::Bold)
+        };
         let has_pct = self.inner_text.ends_with('%');
-        let num = self.inner_text.trim_end_matches('%').trim();
-        let num_size = ((inner_side * if has_pct { 0.30 } else { 0.22 }) as f32).max(8.0);
-        let suf_size = ((num_size * 0.5) as f32).max(6.0);
-        let num_font = Font::new("Segoe UI", num_size)
-            .with_weight(FontWeight::Bold)
-            .with_tabular_numbers(true);
-        let suf_font = Font::new("Segoe UI", suf_size).with_weight(FontWeight::Bold);
+        let num = self.inner_text.replace('%', "");
+        let num = num.trim();
+        let num_px = ((inner_side * if has_pct { 0.30 } else { 0.22 }) as i32).max(8);
+        let suf_px = (((num_px as f32) * 0.5) as i32).max(6);
+        let num_font = app_font(num_px);
+        let suf_font = app_font(suf_px);
 
         let num_metrics = FontMetrics::from_font(&num_font);
-        let suf_metrics = FontMetrics::from_font(&suf_font);
-
-        let num_w = num_metrics.horizontal_advance(num, &num_font);
+        let num_w = num_metrics.horizontal_advance_exact(num, &num_font);
         let suf_w = if has_pct {
-            suf_metrics.horizontal_advance("%", &suf_font) + 1.0
+            FontMetrics::from_font(&suf_font).horizontal_advance_exact("%", &suf_font) + 1.0
         } else {
             0.0
         };
-        let total_w = num_w + suf_w;
-        let x = center.x - total_w / 2.0;
+        let x = center.x - (num_w + suf_w) / 2.0;
         let cy = center.y - if !self.caption.is_empty() { inner_side * 0.05 } else { 0.0 };
-        let base_y = cy + num_metrics.ascent / 2.0;
+        let cap_height = FontMetrics::cap_height(&num_font).unwrap_or(num_metrics.ascent * 0.7);
+        let base_y = cy + cap_height / 2.0;
 
-        let text_color = if self.muted {
-            self.theme.text3
-        } else {
-            self.theme.text
-        };
-
-        // Draw halo for legibility over pie and dark background alike
-        if !self.muted {
-            painter.set_pen(Pen::new(self.theme.halo, 1.0));
-            let halo_offsets = [
-                (-1.5, 0.0), (1.5, 0.0), (0.0, -1.5), (0.0, 1.5),
-                (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0),
-            ];
-            for (dx, dy) in halo_offsets {
-                painter.draw_text(PointF::new(x + dx, base_y + dy), num, &num_font);
-                if has_pct {
-                    painter.draw_text(PointF::new(x + num_w + 1.0 + dx, base_y + dy), "%", &suf_font);
-                }
+        let mut builder = PathBuilder::new();
+        if let Some(p) = Painter::text_path(PointF::new(x, base_y), num, &num_font) {
+            builder.push_path(&p);
+        }
+        if has_pct {
+            if let Some(p) = Painter::text_path(PointF::new(x + num_w + 1.0, base_y), "%", &suf_font) {
+                builder.push_path(&p);
             }
         }
-
-        painter.set_pen(Pen::new(text_color, 1.0));
-        painter.draw_text(PointF::new(x, base_y), num, &num_font);
-        if has_pct {
-            painter.draw_text(PointF::new(x + num_w + 1.0, base_y), "%", &suf_font);
+        if let Some(path) = builder.finish() {
+            if !self.muted {
+                painter.set_brush(Brush::NoBrush);
+                painter.set_pen(
+                    Pen::new(self.theme.halo, 3.0)
+                        .with_cap(LineCap::Round)
+                        .with_join(LineJoin::Round),
+                );
+                painter.stroke_path(&path);
+            }
+            painter.set_pen(None);
+            painter.set_brush(Brush::Color(if self.muted {
+                // Python fills with `QColor(theme["text3"])`, and `text3` is a CSS `rgba(...)`
+                // string, which QColor does not parse: the muted label is opaque black.
+                Color::BLACK
+            } else {
+                self.theme.text
+            }));
+            painter.fill_path(&path);
         }
 
         // 4. Caption if provider window differs (e.g. "30D", "5H")
         if !self.caption.is_empty() {
-            let cap_size = ((inner_side * 0.13) as f32).max(9.0);
-            let cap_font = Font::new("Segoe UI", cap_size).with_weight(FontWeight::Bold);
-            let cap_metrics = FontMetrics::from_font(&cap_font);
-            let cap_w = cap_metrics.horizontal_advance(&self.caption, &cap_font);
-            let cap_x = center.x - cap_w / 2.0;
-            let cap_y = center.y + inner_side * 0.32 + cap_metrics.ascent / 2.0;
-
-            if !self.muted {
-                painter.set_pen(Pen::new(self.theme.halo, 1.0));
-                let halo_offsets = [
-                    (-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0),
-                ];
-                for (dx, dy) in halo_offsets {
-                    painter.draw_text(PointF::new(cap_x + dx, cap_y + dy), &self.caption, &cap_font);
-                }
+            let cap_px = ((inner_side * 0.13) as i32).max(9);
+            let cap_font = app_font(cap_px);
+            let cap_w = FontMetrics::from_font(&cap_font).horizontal_advance_exact(&self.caption, &cap_font);
+            let origin = PointF::new(center.x - cap_w / 2.0, center.y + inner_side * 0.32);
+            if let Some(path) = Painter::text_path(origin, &self.caption, &cap_font) {
+                painter.set_brush(Brush::NoBrush);
+                painter.set_pen(Pen::new(self.theme.halo, 2.5));
+                painter.stroke_path(&path);
+                painter.set_pen(None);
+                painter.set_brush(Brush::Color(self.theme.text));
+                painter.fill_path(&path);
             }
-
-            painter.set_pen(Pen::new(self.theme.text, 1.0));
-            painter.draw_text(PointF::new(cap_x, cap_y), &self.caption, &cap_font);
         }
     }
 
@@ -412,6 +417,63 @@ impl ProviderIconWidget {
         self.color = color;
         self.update();
     }
+    /// The line glyph in a `size` x `size` logical box (Python `provider_icon`).
+    fn draw_glyph(&self, painter: &mut Painter) {
+        let s = self.size;
+        let c = s / 2.0;
+        let pen = Pen::new(self.color, 1.5)
+            .with_cap(LineCap::Round)
+            .with_join(LineJoin::Round);
+        painter.set_pen(pen);
+        painter.set_brush(Brush::NoBrush);
+
+        match self.provider_id.as_str() {
+            "claude" => {
+                // Radiating burst matching Python provider_icon
+                for i in 0..8 {
+                    let a = (i as f32 * 45.0 + 22.5).to_radians();
+                    let r1 = s * 0.14;
+                    let r2 = s * if i % 2 == 0 { 0.36 } else { 0.44 };
+                    let p1 = PointF::new(c + r1 * a.cos(), c + r1 * a.sin());
+                    let p2 = PointF::new(c + r2 * a.cos(), c + r2 * a.sin());
+                    painter.draw_line(p1, p2);
+                }
+            }
+            "codex" => {
+                // Terminal prompt matching Python provider_icon
+                let rect = RectF::new(s * 0.1, s * 0.18, s * 0.8, s * 0.64);
+                let r = s * 0.14;
+                painter.draw_rounded_rect(rect, r, r);
+                // Prompt >
+                let p1 = PointF::new(s * 0.28, s * 0.38);
+                let p2 = PointF::new(s * 0.42, s * 0.50);
+                let p3 = PointF::new(s * 0.28, s * 0.62);
+                painter.draw_line(p1, p2);
+                painter.draw_line(p2, p3);
+                // Underscore _
+                let u1 = PointF::new(s * 0.50, s * 0.64);
+                let u2 = PointF::new(s * 0.70, s * 0.64);
+                painter.draw_line(u1, u2);
+            }
+            _ => {
+                // agy: Arch lifting off matching Python provider_icon
+                let mut pb = PathBuilder::new();
+                pb.move_to(s * 0.14, s * 0.86);
+                pb.cubic_to(
+                    s * 0.28, s * 0.10,
+                    s * 0.72, s * 0.10,
+                    s * 0.86, s * 0.86,
+                );
+                if let Some(path) = pb.finish() {
+                    painter.stroke_path(&path);
+                }
+                let c1 = PointF::new(s * 0.34, s * 0.62);
+                let c2 = PointF::new(s * 0.66, s * 0.62);
+                painter.draw_line(c1, c2);
+            }
+        }
+    }
+
 }
 
 impl QObject for ProviderIconWidget {
@@ -489,59 +551,19 @@ impl Widget for ProviderIconWidget {
     fn remove_child(&mut self, _child_id: ObjectId) {}
 
     fn paint_event(&mut self, painter: &mut Painter) {
+        // Python `provider_icon` draws into a `QPixmap(size * 2)` with a device pixel ratio of 2
+        // and `QLabel` paints that pixmap at its logical size, so the glyph is rasterised at 2x
+        // and then scaled to the screen's pixel ratio.
         let s = self.size;
-        let c = s / 2.0;
-        let pen = Pen::new(self.color, 1.5)
-            .with_cap(LineCap::Round)
-            .with_join(LineJoin::Round);
-        painter.set_pen(pen);
-        painter.set_brush(Brush::NoBrush);
-
-        match self.provider_id.as_str() {
-            "claude" => {
-                // Radiating burst matching Python provider_icon
-                for i in 0..8 {
-                    let a = (i as f32 * 45.0 + 22.5).to_radians();
-                    let r1 = s * 0.14;
-                    let r2 = s * if i % 2 == 0 { 0.36 } else { 0.44 };
-                    let p1 = PointF::new(c + r1 * a.cos(), c + r1 * a.sin());
-                    let p2 = PointF::new(c + r2 * a.cos(), c + r2 * a.sin());
-                    painter.draw_line(p1, p2);
-                }
-            }
-            "codex" => {
-                // Terminal prompt matching Python provider_icon
-                let rect = RectF::new(s * 0.1, s * 0.18, s * 0.8, s * 0.64);
-                let r = s * 0.14;
-                painter.draw_rounded_rect(rect, r, r);
-                // Prompt >
-                let p1 = PointF::new(s * 0.28, s * 0.38);
-                let p2 = PointF::new(s * 0.42, s * 0.50);
-                let p3 = PointF::new(s * 0.28, s * 0.62);
-                painter.draw_line(p1, p2);
-                painter.draw_line(p2, p3);
-                // Underscore _
-                let u1 = PointF::new(s * 0.50, s * 0.64);
-                let u2 = PointF::new(s * 0.70, s * 0.64);
-                painter.draw_line(u1, u2);
-            }
-            _ => {
-                // agy: Arch lifting off matching Python provider_icon
-                let mut pb = PathBuilder::new();
-                pb.move_to(s * 0.14, s * 0.86);
-                pb.cubic_to(
-                    s * 0.28, s * 0.10,
-                    s * 0.72, s * 0.10,
-                    s * 0.86, s * 0.86,
-                );
-                if let Some(path) = pb.finish() {
-                    painter.stroke_path(&path);
-                }
-                let c1 = PointF::new(s * 0.34, s * 0.62);
-                let c2 = PointF::new(s * 0.66, s * 0.62);
-                painter.draw_line(c1, c2);
-            }
+        let px = (s * 2.0) as u32;
+        let Some(mut pixmap) = Pixmap::with_dpr(px, px, 2.0) else {
+            return;
+        };
+        {
+            let mut inner = Painter::begin(&mut pixmap);
+            self.draw_glyph(&mut inner);
         }
+        painter.draw_pixmap(RectF::new(0.0, 0.0, s, s), &pixmap, None);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -818,28 +840,14 @@ impl Widget for SeparatorWidget {
     }
 }
 
-/// Resize a label's font while keeping the family `Label::new` resolved for its text.
-///
-/// The Python table sets only `font-size` / `font-weight` in its style sheet, so `QLabel`
-/// keeps the application font's family; passing `Font::new("Segoe UI", ..)` outright would
-/// pick the wrong face for CJK text and change every advance width.
-fn with_label_size(label: &mut Label, size: f32, bold: bool) {
-    let mut f = label.font().clone();
-    f.size = size;
-    if bold {
-        f.weight = FontWeight::Bold;
-    }
-    label.set_font(f);
-}
-
+/// Python `_glyph_row`: a legend glyph and its `QLabel` (styled through `obj`) in a 5px row.
 fn make_glyph_row(
     kind: &str,
     color: Color,
     text: &str,
     theme: &Theme,
     size: f32,
-    font_size: f32,
-    bold: bool,
+    obj: &str,
 ) -> (WidgetRef, WidgetRef, WidgetRef) {
     let row = make_widget(EmptyWidget::new());
     let mut h = BoxLayout::horizontal();
@@ -850,8 +858,7 @@ fn make_glyph_row(
     h.add_widget(glyph.clone());
 
     let mut lbl = Label::new(text);
-    lbl.set_color(if bold { theme.text } else { theme.text2 });
-    with_label_size(&mut lbl, font_size, bold);
+    lbl.set_object_name(obj);
     let lbl_ref = make_widget(lbl);
     h.add_widget(lbl_ref.clone());
     h.add_stretch(1);
@@ -860,21 +867,24 @@ fn make_glyph_row(
     (row, glyph, lbl_ref)
 }
 
-fn make_sub_label(text: &str, theme: &Theme) -> (WidgetRef, WidgetRef) {
-    let row = make_widget(EmptyWidget::new());
-    let mut h = BoxLayout::horizontal();
-    h.set_margins(Margins::new(18, 0, 0, 0)); // 18px indent matching Python padding-left: 18px
-    h.set_spacing(0);
-
+/// Python `sub_label`: a `QLabel#RowLabel`, whose `padding-left: 18px` comes from the sheet.
+fn make_sub_label(text: &str) -> WidgetRef {
     let mut lbl = Label::new(text);
-    lbl.set_color(theme.text2);
-    with_label_size(&mut lbl, 12.0, false);
-    let lbl_ref = make_widget(lbl);
-    h.add_widget(lbl_ref.clone());
-    h.add_stretch(1);
+    lbl.set_object_name("RowLabel");
+    make_widget(lbl)
+}
 
-    row.borrow_mut().set_layout(Box::new(h));
-    (row, lbl_ref)
+/// Python `_set_state`: the `state` property that `QLabel[state="muted"]` selects on.
+fn set_state(w: &WidgetRef, state: &str) {
+    w.borrow().set_property("state", state);
+}
+
+/// Python `_cell`: a centred `QLabel` styled through its object name.
+fn make_cell_label(text: &str, obj: &str) -> WidgetRef {
+    let mut l = Label::new(text);
+    l.set_object_name(obj);
+    l.set_alignment(qtrs_widgets::Alignment::Center);
+    make_widget(l)
 }
 
 #[allow(dead_code)]
@@ -917,8 +927,7 @@ impl ProviderColumn {
             _ => provider_id,
         };
         let mut name_lbl = Label::new(display_name);
-        name_lbl.set_color(theme.text);
-        with_label_size(&mut name_lbl, 14.0, true);
+        name_lbl.set_object_name("HeaderName");
         let name = make_widget(name_lbl);
         top.add_widget(name.clone());
         top.add_stretch(1);
@@ -927,30 +936,25 @@ impl ProviderColumn {
         top_widget.borrow_mut().set_layout(Box::new(top));
         hv.add_widget(top_widget);
 
-        let mut badge_lbl = Label::new(" ");
-        badge_lbl.set_color(theme.text2);
-        // `QCss` turns `font-size: 9.5px` into `setPixelSize(10)`: half and above round up.
-        with_label_size(&mut badge_lbl, 10.0, true);
-        badge_lbl.set_alignment(qtrs_widgets::Alignment::Center);
-        let badge = make_widget(badge_lbl);
+        let badge = make_cell_label(" ", "HeaderBadge");
         hv.add_widget(badge.clone());
         header.borrow_mut().set_layout(Box::new(hv));
 
-        let make_cell_label = |txt: &str, sz: f32, bold: bool| {
-            let mut l = Label::new(txt);
-            with_label_size(&mut l, sz, bold);
-            // Countdowns must not shift horizontally as digits change.
-            l.set_font(l.font().clone().with_tabular_numbers(true));
-            l.set_alignment(qtrs_widgets::Alignment::Center);
-            make_widget(l)
+        let make_value_cell = |txt: &str, obj: &str| {
+            let cell = make_cell_label(txt, obj);
+            if let Some(l) = cell.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+                // Countdowns must not shift horizontally as digits change.
+                l.set_font(l.font().clone().with_tabular_numbers(true));
+            }
+            cell
         };
 
-        let m1_reset = make_cell_label("--:--", 14.0, false);
-        let m1_countdown = make_cell_label("--:--", 14.0, false);
+        let m1_reset = make_value_cell("--:--", "Cell");
+        let m1_countdown = make_value_cell("--:--", "Cell");
         let dial = make_widget(UsageDial::new(theme.clone()));
-        let m2_val = make_cell_label("--", 15.0, true);
-        let m2_reset = make_cell_label("--:--", 14.0, false);
-        let m2_countdown = make_cell_label("--:--:--", 14.0, false);
+        let m2_val = make_value_cell("--", "Pill");
+        let m2_reset = make_value_cell("--:--", "Cell");
+        let m2_countdown = make_value_cell("--:--:--", "Cell");
 
         Self {
             provider_id: provider_id.to_string(),
@@ -979,7 +983,6 @@ impl ProviderColumn {
         if let Some(ic) = self.icon.borrow_mut().as_any_mut().downcast_mut::<ProviderIconWidget>() {
             ic.set_color(theme.text);
         }
-        set_label_color(&self.name, theme.text);
         if let Some(d) = self
             .dial
             .borrow_mut()
@@ -996,12 +999,24 @@ impl ProviderColumn {
         self.current_metrics = data.clone();
         let is_offline = data.error.is_some() && !data.stale;
 
+        // Python `_set_state`: offline columns dim their value cells and name.
+        let state = if is_offline { "muted" } else { "" };
+        for w in [
+            &self.m1_reset,
+            &self.m1_countdown,
+            &self.m2_val,
+            &self.m2_reset,
+            &self.m2_countdown,
+            &self.name,
+        ] {
+            set_state(w, state);
+        }
+
         if is_offline {
             if let Some(ic) = self.icon.borrow_mut().as_any_mut().downcast_mut::<ProviderIconWidget>() {
                 ic.set_color(self.theme.text3);
             }
             set_label_text(&self.badge, "OFFLINE");
-            set_label_color(&self.badge, self.theme.scale_red);
             if let Some(d) = self
                 .dial
                 .borrow_mut()
@@ -1017,6 +1032,8 @@ impl ProviderColumn {
                 );
             }
             set_label_text(&self.m2_val, "--");
+            // Python `self.m2_val.setStyleSheet("")`: back to the sheet's colour.
+            self.m2_val.borrow().set_style_sheet("");
             set_label_text(&self.m1_reset, "--:--");
             set_label_text(&self.m1_countdown, "--:--");
             set_label_text(&self.m2_reset, "--:--");
@@ -1038,11 +1055,6 @@ impl ProviderColumn {
             " "
         };
         set_label_text(&self.badge, badge_text);
-        if data.stale {
-            set_label_color(&self.badge, self.theme.scale_yellow);
-        } else {
-            set_label_color(&self.badge, self.theme.text2);
-        }
 
         self.update_countdown();
     }
@@ -1116,8 +1128,6 @@ pub struct UsageTable {
     pub sep1: WidgetRef,
     pub sep2: WidgetRef,
     pub glyphs: Vec<WidgetRef>,
-    pub sub_labels: Vec<WidgetRef>,
-    pub title_labels: Vec<WidgetRef>,
 }
 
 impl UsageTable {
@@ -1143,28 +1153,19 @@ impl UsageTable {
         };
 
         let mut glyphs = Vec::new();
-        let mut sub_labels = Vec::new();
-        let mut title_labels = Vec::new();
 
         // Row 1: Separator under header spanning all 4 columns
         let sep1 = make_widget(SeparatorWidget::new(theme.separator));
         grid.add_widget_with_span(sep1.clone(), 1, 0, 1, 4);
 
         // Row 2: Section title "5 小時" with 13px pie glyph
-        let (row2_w, row2_g, row2_l) = make_glyph_row("pie", inner_c, "5 小時", &theme, 13.0, 13.0, true);
+        let (row2_w, row2_g, _) = make_glyph_row("pie", inner_c, "5 小時", &theme, 13.0, "SectionTitle");
         glyphs.push(row2_g);
-        title_labels.push(row2_l);
         grid.add_widget(row2_w, 2, 0);
 
-        // Row 3: "重設" with 18px indent
-        let (r1_w, r1_l) = make_sub_label("重設", &theme);
-        sub_labels.push(r1_l);
-        grid.add_widget(r1_w, 3, 0);
-
-        // Row 4: "剩餘" with 18px indent
-        let (l1_w, l1_l) = make_sub_label("剩餘", &theme);
-        sub_labels.push(l1_l);
-        grid.add_widget(l1_w, 4, 0);
+        // Rows 3, 4: "重設" / "剩餘" (`QLabel#RowLabel`, padding-left: 18px)
+        grid.add_widget(make_sub_label("重設"), 3, 0);
+        grid.add_widget(make_sub_label("剩餘"), 4, 0);
 
         // Row 5: Legend (left)
         let legend = make_widget(EmptyWidget::new());
@@ -1173,25 +1174,16 @@ impl UsageTable {
         lv.set_spacing(3);
         lv.add_stretch(1);
 
-        let (leg1_w, leg1_g, leg1_l) = make_glyph_row("pie", inner_c, "內圈 5 小時", &theme, 11.0, 10.0, false);
-        glyphs.push(leg1_g);
-        sub_labels.push(leg1_l);
-        lv.add_widget(leg1_w);
-
-        let (leg2_w, leg2_g, leg2_l) = make_glyph_row("ring", outer_c, "外環 1 週", &theme, 11.0, 10.0, false);
-        glyphs.push(leg2_g);
-        sub_labels.push(leg2_l);
-        lv.add_widget(leg2_w);
-
-        let (leg3_w, leg3_g, leg3_l) = make_glyph_row("tick", theme.text, "平均進度", &theme, 11.0, 10.0, false);
-        glyphs.push(leg3_g);
-        sub_labels.push(leg3_l);
-        lv.add_widget(leg3_w);
-
-        let (leg4_w, leg4_g, leg4_l) = make_glyph_row("hatch", hatch_c, "超出平均", &theme, 11.0, 10.0, false);
-        glyphs.push(leg4_g);
-        sub_labels.push(leg4_l);
-        lv.add_widget(leg4_w);
+        for (kind, color, text) in [
+            ("pie", inner_c, "內圈 5 小時"),
+            ("ring", outer_c, "外環 1 週"),
+            ("tick", theme.text, "平均進度"),
+            ("hatch", hatch_c, "超出平均"),
+        ] {
+            let (row_w, row_g, _) = make_glyph_row(kind, color, text, &theme, 11.0, "Legend");
+            glyphs.push(row_g);
+            lv.add_widget(row_w);
+        }
         lv.add_stretch(1);
 
         legend.borrow_mut().set_layout(Box::new(lv));
@@ -1202,20 +1194,13 @@ impl UsageTable {
         grid.add_widget_with_span(sep2.clone(), 6, 0, 1, 4);
 
         // Row 7: Section title "1 週" with 13px ring glyph
-        let (row7_w, row7_g, row7_l) = make_glyph_row("ring", outer_c, "1 週", &theme, 13.0, 13.0, true);
+        let (row7_w, row7_g, _) = make_glyph_row("ring", outer_c, "1 週", &theme, 13.0, "SectionTitle");
         glyphs.push(row7_g);
-        title_labels.push(row7_l);
         grid.add_widget(row7_w, 7, 0);
 
-        // Row 8: "重設" with 18px indent
-        let (r2_w, r2_l) = make_sub_label("重設", &theme);
-        sub_labels.push(r2_l);
-        grid.add_widget(r2_w, 8, 0);
-
-        // Row 9: "剩餘" with 18px indent
-        let (l2_w, l2_l) = make_sub_label("剩餘", &theme);
-        sub_labels.push(l2_l);
-        grid.add_widget(l2_w, 9, 0);
+        // Rows 8, 9: "重設" / "剩餘"
+        grid.add_widget(make_sub_label("重設"), 8, 0);
+        grid.add_widget(make_sub_label("剩餘"), 9, 0);
 
         // Populate provider columns
         for (col_idx, pid) in PROVIDER_ORDER.iter().enumerate() {
@@ -1239,6 +1224,7 @@ impl UsageTable {
         container.borrow_mut().set_style_sheet(crate::ui::styles::get_table_stylesheet(
             theme.is_dark,
         ));
+        qtrs_widgets::widget::adopt_tree(&container);
 
         Self {
             container,
@@ -1248,8 +1234,6 @@ impl UsageTable {
             sep1,
             sep2,
             glyphs,
-            sub_labels,
-            title_labels,
         }
     }
 
@@ -1288,12 +1272,6 @@ impl UsageTable {
             }
         }
 
-        for lbl in &self.sub_labels {
-            set_label_color(lbl, theme.text2);
-        }
-        for lbl in &self.title_labels {
-            set_label_color(lbl, theme.text);
-        }
     }
 
     pub fn update_metrics(&mut self, data: &UsageMetrics) {
@@ -1496,6 +1474,14 @@ mod tests {
         }
     }
 
+    /// A table built under the application style sheet the table-mode HUD installs. Labels take
+    /// their sizes from it and from the table's own sheet, so a sheet another test left in the
+    /// process-wide slot would change every measurement.
+    fn table_mode_table() -> UsageTable {
+        qtrs_widgets::application::Application::set_style_sheet(crate::ui::styles::get_hud_stylesheet(true));
+        UsageTable::new(Theme::dark(), "scale")
+    }
+
     /// Grid geometry must match the PySide6 `QGridLayout` for a 450x350 table-mode window.
     ///
     /// Reference measured with PySide6 6.11.2 and `QT_QPA_PLATFORM=windows` on the real
@@ -1504,7 +1490,7 @@ mod tests {
     /// `31 | 1 | 18 | 18 | 18 | 134 | 1 | 19 | 18 | 18`.
     #[test]
     fn test_grid_matches_qt_geometry() {
-        let table = UsageTable::new(Theme::dark(), "scale");
+        let table = table_mode_table();
         let container = table.widget();
         container
             .borrow_mut()
@@ -1516,10 +1502,13 @@ mod tests {
         let claude = table.columns.get("claude").unwrap();
         let codex = table.columns.get("codex").unwrap();
         let agy = table.columns.get("agy").unwrap();
-        assert_eq!(claude.header.borrow().geometry().x, 78);
-        assert_eq!(codex.header.borrow().geometry().x, 198);
-        assert_eq!(agy.header.borrow().geometry().x, 317);
-        assert_eq!(claude.header.borrow().geometry().width, 110);
+        let geometry = |col: &ProviderColumn| {
+            let g = col.header.borrow().geometry();
+            (g.x, g.width)
+        };
+        assert_eq!(geometry(claude), (78, 109));
+        assert_eq!(geometry(codex), (197, 110));
+        assert_eq!(geometry(agy), (317, 109));
 
         // Row heights come from QFontMetrics, so the stretched dial row absorbs the slack.
         assert_eq!(claude.header.borrow().geometry().height, 31);
@@ -1532,7 +1521,8 @@ mod tests {
     /// its 14px line box is 19px tall against JhengHei UI's 18px.
     #[test]
     fn test_labels_use_the_app_default_family() {
-        let col = ProviderColumn::new("claude", Theme::dark(), "scale");
+        let table = table_mode_table();
+        let col = table.columns.get("claude").unwrap();
         let reset = col.m1_reset.borrow();
         let label = reset.as_any().downcast_ref::<Label>().unwrap();
         assert_eq!(label.font().family, qtrs_widgets::APP_DEFAULT_FAMILY);
@@ -1546,26 +1536,76 @@ mod tests {
     fn test_trailing_stretch_adds_no_spacing() {
         let theme = Theme::dark();
         let (row, glyph, label) =
-            make_glyph_row("pie", theme.neutral, "內圈 5 小時", &theme, 11.0, 10.0, false);
+            make_glyph_row("pie", theme.neutral, "內圈 5 小時", &theme, 11.0, "Legend");
         let mut expected = glyph.borrow().size_hint().width + label.borrow().size_hint().width;
         expected += 5; // one spacing, between the two widgets
         assert_eq!(row.borrow().size_hint().width, expected);
     }
 
-    /// Header row: the icon sits 5px from the origin and the name 5px after it, so the pair
-    /// ends flush with the 109px column (18px icon + 5px spacing + 86px "Claude Code").
+    /// Header row: the icon and the name are packed with `addStretch()` spacers on both sides,
+    /// which take no spacing, so the 5px spacing falls between the icon and the name only
+    /// (18px icon + 5px + 86px "Claude Code" is the 109px hint) and the spare pixel of a 110px
+    /// column goes to the left spacer. Measured with PySide6 6.11.2: icon x 1, name x 24, width 86.
     /// Qt's `sizeHint` is 86 whichever way the string is laid out (85.765625 px at 125%, a whole
     /// 86 at 100%), because the width is rounded up.
     #[test]
     fn test_header_row_advances_match_qt() {
-        let col = ProviderColumn::new("claude", Theme::dark(), "scale");
+        let table = table_mode_table();
+        let col = table.columns.get("claude").unwrap();
         assert_eq!(col.name.borrow().size_hint().width, 86);
         col.header
             .borrow_mut()
-            .set_geometry(Rect::new(0, 0, 109, 31));
+            .set_geometry(Rect::new(0, 0, 110, 31));
         col.header.borrow().update_layout();
         let icon = col.icon.borrow().geometry();
         let name = col.name.borrow().geometry();
-        assert_eq!((icon.x, name.x), (5, 28));
+        assert_eq!((icon.x, name.x, name.width), (1, 24, 86));
+    }
+
+    /// Restores the application device pixel ratio the other tests run under.
+    struct DevicePixelRatioGuard;
+
+    impl Drop for DevicePixelRatioGuard {
+        fn drop(&mut self) {
+            qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.0);
+        }
+    }
+
+    /// Each column is at least as wide as its widest cell, so a long weekly pill widens its
+    /// column at the expense of the others, as in `QGridLayout`: the columns take their minimum
+    /// sizes when the equal stretch shares fall below them.
+    ///
+    /// Reference measured with PySide6 6.11.2 at a device pixel ratio of 1.25 (DirectWrite
+    /// advances) with the same cell texts in a 426x312 table: header x/width
+    /// `77/109 | 196/121 | 327/99`, pill size hints `71x20 | 121x20 | 89x20`.
+    #[test]
+    fn test_columns_follow_widest_cell_hint() {
+        let _guard = DevicePixelRatioGuard;
+        qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
+        let table = table_mode_table();
+        let cells = [("claude", "95 %  ▲1"), ("codex", "-- · SECONDARY"), ("agy", "100 %  ▲24")];
+        for (pid, pill) in cells {
+            let c = table.columns.get(pid).unwrap();
+            set_label_text(&c.m2_val, pill);
+            set_label_text(&c.m2_reset, "週二 02:59");
+        }
+        let container = table.widget();
+        container.borrow_mut().set_geometry(Rect::new(0, 0, 426, 312));
+        qtrs_widgets::LayoutScheduler::invalidate(&container);
+        qtrs_widgets::LayoutScheduler::activate_pending();
+
+        let measured = cells.map(|(pid, _)| {
+            let c = table.columns.get(pid).unwrap();
+            let header = c.header.borrow().geometry();
+            (header.x, header.width, c.m2_val.borrow().size_hint())
+        });
+        assert_eq!(
+            measured.map(|(x, w, _)| (x, w)),
+            [(77, 109), (196, 121), (327, 99)]
+        );
+        assert_eq!(
+            measured.map(|(_, _, hint)| (hint.width, hint.height)),
+            [(71, 20), (121, 20), (89, 20)]
+        );
     }
 }
