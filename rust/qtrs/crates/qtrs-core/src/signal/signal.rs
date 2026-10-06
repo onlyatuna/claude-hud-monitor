@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::object::query_object_thread;
 use crate::object::{ObjectId, QObject, ThreadId};
@@ -227,6 +228,9 @@ struct Subscriber<T> {
     receiver_thread: Option<ThreadId>,
     conn_type: ConnectionType,
     dispatcher: SlotDispatcher<T>,
+    /// Cleared the moment the connection is severed. `emit` re-checks it before every call,
+    /// like `doActivate` re-checks `c->receiver` (qobject.cpp:4269).
+    connected: Arc<AtomicBool>,
 }
 
 impl<T> Clone for Subscriber<T> {
@@ -237,6 +241,7 @@ impl<T> Clone for Subscriber<T> {
             receiver_thread: self.receiver_thread,
             conn_type: self.conn_type,
             dispatcher: self.dispatcher.clone(),
+            connected: Arc::clone(&self.connected),
         }
     }
 }
@@ -259,6 +264,23 @@ pub type QueuedSignal<T> = Signal<T>;
 
 struct SignalInner<T> {
     subscribers: Vec<Subscriber<T>>,
+}
+
+impl<T> SignalInner<T> {
+    /// Removes every subscriber matching `pred` and marks it severed, so an emission that already
+    /// snapshotted it skips it. Returns how many were removed.
+    fn remove_where(&mut self, mut pred: impl FnMut(&Subscriber<T>) -> bool) -> usize {
+        let before = self.subscribers.len();
+        self.subscribers.retain(|sub| {
+            if pred(sub) {
+                sub.connected.store(false, Ordering::Release);
+                false
+            } else {
+                true
+            }
+        });
+        before - self.subscribers.len()
+    }
 }
 
 impl<T> Clone for Signal<T> {
@@ -330,6 +352,7 @@ impl<T> Signal<T> {
             receiver_id: None,
             receiver_thread: None,
             conn_type,
+            connected: Arc::new(AtomicBool::new(true)),
             dispatcher: SlotDispatcher::Direct(Arc::new(slot)),
         });
 
@@ -340,9 +363,7 @@ impl<T> Signal<T> {
     pub fn disconnect(&self, id: ConnectionId) -> bool {
         let removed = {
             let mut inner = self.inner.lock().unwrap();
-            let initial_len = inner.subscribers.len();
-            inner.subscribers.retain(|sub| sub.id != id);
-            inner.subscribers.len() < initial_len
+            inner.remove_where(|sub| sub.id == id) > 0
         };
         // Only the owner of a connection may retire its registry entry.
         if removed {
@@ -354,17 +375,13 @@ impl<T> Signal<T> {
     /// Disconnects all connections bound to a given receiver object ID.
     pub fn disconnect_receiver(&self, receiver_id: ObjectId) -> usize {
         let mut inner = self.inner.lock().unwrap();
-        let initial_len = inner.subscribers.len();
-        inner
-            .subscribers
-            .retain(|sub| sub.receiver_id != Some(receiver_id));
-        initial_len - inner.subscribers.len()
+        inner.remove_where(|sub| sub.receiver_id == Some(receiver_id))
     }
 
     /// Disconnects all connections from this signal.
     pub fn disconnect_all(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.subscribers.clear();
+        inner.remove_where(|_| true);
     }
 
     /// Emits the signal to all connected subscribers.
@@ -384,6 +401,9 @@ impl<T> Signal<T> {
         let current_thread = ThreadId::current();
 
         for sub in snapshot {
+            if !sub.connected.load(Ordering::Acquire) {
+                continue;
+            }
             let target_thread = sub
                 .receiver_thread
                 .or_else(|| sub.receiver_id.and_then(query_object_thread));
@@ -431,7 +451,7 @@ impl<T: 'static> Signal<T> {
         ScopedConnection::new(id, move |conn_id| {
             if let Some(inner_arc) = signal_weak.upgrade() {
                 let mut inner = inner_arc.lock().unwrap();
-                inner.subscribers.retain(|sub| sub.id != conn_id);
+                inner.remove_where(|sub| sub.id == conn_id);
             }
         })
     }
@@ -449,6 +469,7 @@ impl<T: 'static> Signal<T> {
             receiver_id: Some(receiver_id),
             receiver_thread: None,
             conn_type: ConnectionType::Direct,
+            connected: Arc::new(AtomicBool::new(true)),
             dispatcher: SlotDispatcher::Direct(Arc::new(slot)),
         });
 
@@ -456,7 +477,7 @@ impl<T: 'static> Signal<T> {
         let disconnect_fn = Arc::new(move || {
             if let Some(inner_arc) = inner_weak.upgrade() {
                 if let Ok(mut inner) = inner_arc.lock() {
-                    inner.subscribers.retain(|sub| sub.id != id);
+                    inner.remove_where(|sub| sub.id == id);
                 }
             }
         });
@@ -528,6 +549,7 @@ impl<T: Clone + Send + 'static> Signal<T> {
             receiver_id: Some(receiver_id),
             receiver_thread: Some(receiver_thread),
             conn_type,
+            connected: Arc::new(AtomicBool::new(true)),
             dispatcher,
         });
 
@@ -535,7 +557,7 @@ impl<T: Clone + Send + 'static> Signal<T> {
         let disconnect_fn = Arc::new(move || {
             if let Some(inner_arc) = inner_weak.upgrade() {
                 if let Ok(mut inner) = inner_arc.lock() {
-                    inner.subscribers.retain(|sub| sub.id != id);
+                    inner.remove_where(|sub| sub.id == id);
                 }
             }
         });
@@ -637,6 +659,7 @@ impl<T: Clone + Send + 'static> Signal<T> {
             receiver_id: Some(receiver_id),
             receiver_thread: Some(receiver_thread),
             conn_type: ConnectionType::BlockingQueued,
+            connected: Arc::new(AtomicBool::new(true)),
             dispatcher,
         });
 
@@ -644,7 +667,7 @@ impl<T: Clone + Send + 'static> Signal<T> {
         let disconnect_fn = Arc::new(move || {
             if let Some(inner_arc) = inner_weak.upgrade() {
                 if let Ok(mut inner) = inner_arc.lock() {
-                    inner.subscribers.retain(|sub| sub.id != id);
+                    inner.remove_where(|sub| sub.id == id);
                 }
             }
         });

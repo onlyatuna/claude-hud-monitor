@@ -379,7 +379,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 連線順序；MUST 重入 emit 與發射中 connect 安全；**MUST 在 slot 執行之前已被 disconnect 的連線不被呼叫**；MUST `disconnect` 回傳是否真的移除了東西。
 - **Current implementation**（`core/signal/signal.rs`）：`Signal<T>` 為 `Arc<Mutex<…>>` 訂閱者列表；`emit` 先**快照**列表、放掉鎖再呼叫，並有 `highest_id` 保護。`IMPLEMENTED`：順序（`test_basic_emission`）、發射中 connect（`test_signal_emit_highest_id_protection`、`test_reentrancy_and_highest_id_guard`）、connect／disconnect／scoped／concurrent emit／non-Send 載荷。
 - **Known gap**
-  - **G6.1.a [P0, RAN]** **發射期間被 disconnect 的 slot 仍會執行**（快照在呼叫前複製、之後不再檢查）。重現：slot A 在發射中 disconnect slot B → B 仍被呼叫 1 次。
+  - **G6.1.a [P0, RAN；已修復：RC-03]** **發射期間被 disconnect 的 slot 仍會執行**（快照在呼叫前複製、之後不再檢查）。重現：slot A 在發射中 disconnect slot B → B 仍被呼叫 1 次。
   - **G6.1.b [P0, RAN；已修復：RC-02]** **兩個 Signal 的 `ConnectionId` 在全域表 `GLOBAL_CONNECTIONS` 碰撞**。每個 Signal 以自己的計數器從 1 開始編號，卻共用以 id 為 key 的全域 `HashMap`。重現：兩個 `Signal<i32>` 各以 `connect_to` 接一個 receiver，`id_a=1 id_b=1`；銷毀 receiver 1 後 `a.emit` **仍呼叫 slot**（對照組：只有一個 Signal 時正確為 0 次）。後果：receiver 銷毀時的自動斷線**靜默失效**；`Signal::disconnect(id)` 會刪掉別的 Signal 的全域記錄。`ConnectionId::next()`（全域計數器）存在但沒有 Signal 使用。
   - **G6.1.c [P2, READ]** `disconnect_receiver`／`disconnect_all` 不清 `GLOBAL_CONNECTIONS`（洩漏、stale 記錄）。RC-02 之後 id 全域唯一，stale 記錄只剩**洩漏**，不再造成錯誤斷線；仍未修。
   - **G6.1.d [P1, READ]** 無 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線（`thread/channel.rs` 的 `connect_to_signal` 是 channel 適配器，不是）。
@@ -1123,7 +1123,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 284 項：D 12、P0 34、P1 124、P2 111、test gap 3（計數含已修復項；標籤含「已修復」者共 3 項：G6.1.b、G6.4.a、G6.4.d）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 284 項：D 12、P0 34、P1 124、P2 111、test gap 3（計數含已修復項；標籤含「已修復」者共 4 項：G6.1.a、G6.1.b、G6.4.a、G6.4.d）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1210,7 +1210,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G5.5.d | P2 | callback 必須 `Send + 'static` 且只在呼叫執行緒執行 |
 | G5.6.a | P2, READ | `remaining_time` 用 floor |
 | G5.6.b | P2, READ | Win32 一律以**原始**間隔 `SetTimer` |
-| G6.1.a | P0, RAN | **發射期間被 disconnect 的 slot 仍會執行** |
+| G6.1.a | P0, RAN；已修復：RC-03 | **發射期間被 disconnect 的 slot 仍會執行** |
 | G6.1.b | P0, RAN；已修復：RC-02 | **兩個 Signal 的 `ConnectionId` 在全域表 `GLOBAL_CONNECTIONS` 碰撞** |
 | G6.1.c | P2, READ | `disconnect_receiver`／`disconnect_all` 不清 `GLOBAL_CONNECTIONS` |
 | G6.1.d | P1, READ | 無 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線 |
@@ -1510,7 +1510,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Downstream**：G6.4.a；G6.1.c 一併檢查。HUD 的 signal 連線都是閉包、沒有 receiver 物件（`READ`），因此是 framework P0 而非 HUD 可見型。
 - **Can remove app workaround**：n/a。
 - **Phase**：1。
-- **Status**：**已修復**（RC-02）。修改：所有 Signal 以 `ConnectionId::next()`（全域原子計數）取 id，移除各 Signal 的 `next_id`；`Signal::disconnect` 只有在確實移除自己的連線時才 `unregister_connection`；刪除 `emit` 內永遠不成立的 `sub.id.0 >= highest_id` 檢查（快照與 `next_id` 在同一把鎖內取得）。驗證：`cargo test -j 1 --workspace -- --test-threads=1`（`qtrs`，62 個 test binary 全部 ok）；主 crate 67 通過、1 失敗（`providers::agy::tests::test_fetch_usage_live_benchmark`，需網路，預期失敗）。**未修**：G6.1.c（洩漏，P2）；G6.1.a（RC-03，同檔案，下一步）。
+- **Status**：**已修復**（RC-02）。修改：所有 Signal 以 `ConnectionId::next()`（全域原子計數）取 id，移除各 Signal 的 `next_id`；`Signal::disconnect` 只有在確實移除自己的連線時才 `unregister_connection`；刪除 `emit` 內永遠不成立的 `sub.id.0 >= highest_id` 檢查（快照與 `next_id` 在同一把鎖內取得）。驗證：`cargo test -j 1 --workspace -- --test-threads=1`（`qtrs`，62 個 test binary 全部 ok）；主 crate 67 通過、1 失敗（`providers::agy::tests::test_fetch_usage_live_benchmark`，需網路，預期失敗）。**未修**：G6.1.c（洩漏，P2）；G6.1.a 已由 RC-03 修復。
 
 #### RC-03 發射快照的有效性：發射中被 disconnect 的 slot 仍會執行
 - **Contract gaps**：G6.1.a（P0, RAN）。
@@ -1518,9 +1518,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`signal.rs` emit：先複製 slot 快照，呼叫前不再確認連線仍有效。
 - **Evidence**：`RAN`（slot A 在發射中 disconnect slot B → B 仍被呼叫 1 次）。
 - **Required observable**：發射開始後被 `disconnect` 的連線，在輪到它時不得執行；發射期間**新增**的連線不執行本次發射（Qt 同）。
-- **Required test**：`slot_disconnected_during_emit_is_not_called`（修改前 FAIL）；`slot_connected_during_emit_is_not_called_in_same_emit`。
+- **Required test**（`qtrs-core/tests/test_signal_emit_while_mutating.rs`，7 項；修改前 5 項 FAIL、2 項 PASS）：
+  - 修改前 FAIL、修改後 PASS：`slot_disconnected_during_emit_is_not_called`、`disconnect_all_during_emit_stops_the_remaining_slots`、`disconnect_receiver_during_emit_stops_that_receivers_slots`、`scoped_connection_dropped_during_emit_stops_its_slot`、`receiver_destroyed_during_emit_is_not_called`。
+  - 守護測試（修改前就 PASS，只釘住既有行為）：`slot_connected_during_emit_does_not_run_in_that_emit`、`slot_disconnecting_itself_still_finishes_and_later_slots_run`。
 - **Downstream**：RC-02（同一檔案，需同時確認連線有效性的判斷方式）。
 - **Phase**：1（RC-02 之後，同一檔案）。
+- **Status**：**已修復**（RC-03）。修改：每個 `Subscriber` 帶 `connected: Arc<AtomicBool>`；所有移除路徑（`disconnect`、`disconnect_receiver`、`disconnect_all`、`ScopedConnection`、`disconnect_all_for_object` 的 disconnect_fn，共 7 處）改走 `SignalInner::remove_where`，移除時清除旗標；`emit` 在每次呼叫前檢查旗標（對應 `doActivate` 每次迭代重新檢查 `receiver`）。無新鎖、無額外查表；每個連線多一個 `Arc<AtomicBool>` 配置。驗證：`qtrs` workspace `cargo test -j 1 --workspace -- --test-threads=1` exit 0，63 個 test binary 全部 ok；主 crate 68 通過、0 失敗（`test_fetch_usage_live_benchmark` 本次通過，屬網路／時間敏感測試）。**未涵蓋**：跨執行緒同時 disconnect 與 emit 只有旗標的 Acquire/Release 保證，無專門測試。
 
 #### RC-04 事件投遞保證：目標執行緒尚無 loop 時事件被丟棄
 - **Contract gaps**：G3.2.b、G6.2.c、G7.2.a（皆 P0, READ，**同一根因**）。相關 P1：G5.5.b、G6.2.d。**降級項**：G7.9.a（P2，見 D.4）。
