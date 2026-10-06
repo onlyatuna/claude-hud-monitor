@@ -186,7 +186,13 @@ fn register_object_metadata(data: &ObjectData, ptr: *mut dyn QObject) {
     });
     if let Ok(mut reg) = GLOBAL_OBJECT_REGISTRY.write() {
         if let Some(previous) = reg.insert(id, record) {
-            previous.liveness.store(false, Ordering::Release);
+            // Re-registering the same object (e.g. `Timer::start` after `stop`, possibly at a new
+            // address) shares the liveness token with the replaced record. Killing it would
+            // mark the live object dead and null every `QPointer` to it. Only a different
+            // object that reused the id is retired.
+            if !Arc::ptr_eq(&previous.liveness, &data.liveness) {
+                previous.liveness.store(false, Ordering::Release);
+            }
         }
     }
     QOBJECT_REGISTRY.with(|registry| {

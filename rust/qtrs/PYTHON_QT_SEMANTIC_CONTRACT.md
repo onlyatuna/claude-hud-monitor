@@ -314,6 +314,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G5.1.c [P1, READ]** `Timer::start` 是 `unsafe` 並以原始位址註冊（pinning 契約）；`Timer::new` 沒有 parent 參數，沒有 `QTimer(self)` 那種「隨 parent 銷毀」的生命週期。
   - **G5.1.d [P2, READ]** 執行緒沒有 timer context 時 `start` 靜默回 `TimerId::INVALID`（Qt 會警告）。
   - **G5.1.e [P2, READ]** `timeout` 是公開 `Signal<()>` 欄位，不在 meta-object 上。
+  - **G5.1.f [P1, RAN；已修復：RC-11a]** 對已啟動（或 `stop` 後再 `start`）的計時器重啟，`timeout` **永遠不再觸發**。根因不在 `Timer`：`register_object_metadata` 重新註冊同一物件時，把被取代的舊 record 的 `liveness` 設為 false，但新舊 record 共用同一個 `Arc<AtomicBool>`，等於把活著的物件標為死亡（所有 `QPointer` 變 null，`with_object_mut` 拒絕遞送 `timer_event`）。修復：只有舊 record 與新物件不共用 liveness（id 被別的物件重用）時才標死。測試 `qtrs-core/tests/test_timer_restart.rs`（5 項，修復前 5/5 FAIL）。同一缺陷也影響任何重複 `register_qobject` 的物件。
 - **Test**：既有如上。必要：`set_interval_while_active_restarts`（本次 RAN 重現失敗）；`set_single_shot_while_active_fires_once`；`start_inside_own_slot_restarts_single_shot`。
 - **HUD usage**：Python `QTimer(self)` 25 ms／1000 ms（`refresh_controller.py:35-44`）、250 ms 單發重啟（`hud_window.py:73-76,626,631`）、倒數 1000 ms（`:440-442`）；**從不在啟動中改 interval**。Rust：`Timer::new` + `set_interval`（啟動前）+ `start`（`main.rs:540-591`）。**差異**：Python 的 250 ms 單發、移動／縮放時重啟（debounce 儲存幾何）；Rust 用 `std::thread` 的 `ResizeDebouncer`（`config.rs:396`，只吃 resize）加 3000 ms 輪詢抓移動（`main.rs:575-591`）——行為不同，見 G12.5.d。
 
@@ -1142,7 +1143,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 303 項：D 12、P0 34、P1 133、P2 119、test gap 5（計數含已修復項；標籤含「已修復」者共 26 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 304 項：D 12、P0 34、P1 134、P2 119、test gap 5（計數含已修復項；標籤含「已修復」者共 27 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1217,6 +1218,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G5.1.c | P1, READ | `Timer::start` 是 `unsafe` 並以原始位址註冊 |
 | G5.1.d | P2, READ | 執行緒沒有 timer context 時 `start` 靜默回 `TimerId::INVALID` |
 | G5.1.e | P2, READ | `timeout` 是公開 `Signal<()>` 欄位，不在 meta-object 上 |
+| G5.1.f | P1, RAN；已修復：RC-11a | 重啟已啟動的 `Timer` 後 `timeout` 不再觸發（重新註冊物件時 liveness 被自己殺死） |
 | G5.2.a | P1, READ | Windows 路徑直接呼叫 `obj.timer_event(id)`，不建 `Event`、不經 `notify_helper`/`event()` |
 | G5.2.b | P2, READ | `send_timer_events` 持有 registry mutex 的同時遞送 |
 | G5.3.a | P1, RAN | 單發 0 ms 計時器觸發後 **registry 項殘留**：重現 `fired=1 registry_len=1 next_timeout=Some(0ns)` |
@@ -1737,9 +1739,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Contract gaps**：G8.8.a（= G12.5.i）。
 - **Qt behavior** `[QT-SRC qapplication.cpp:2731; qwidget.cpp:9381-9386]`：`toolTipWakeUp.start(delay, this)`（需要 QObject 計時器）→ 送 `ToolTip` 事件 → widget 的 `event()` 顯示 `QToolTip::showText`；無 tooltip 則 `ignore()`。
 - **qtrs root**：整個缺；`EventKind::ToolTip` 存在但無人處理。
-- **Evidence**：`READ`；前置 G5.4.a（`QObject::start_timer` 在 Windows 不觸發，`RAN`）。
-- **Depends on**：RC-06、G5.4.a。
+- **Evidence**：`READ`；wake-up 計時器用 `Timer`（QTimer 類），**不依賴 G5.4.a**（`QObject::start_timer`，不在 RC-11 範圍）。
+- **Depends on**：RC-06、RC-11a（`Timer` 重啟語意，G5.1.f）。
 - **Phase**：3。
+- **範圍（使用者核定）**：
+  - **RC-11a**（已完成，commit 另列）：`Timer` 重啟語意，G5.1.f。只改 `register_object_metadata` 的 liveness 處理；未改其他計時器語意（G5.4.a/b、單發、`remaining_time` 皆未動）。實作完成，無需手動驗證。
+  - **RC-11b**（待做）：`PlatformWindow::is_active()`（每個後端都要有真實實作，不可用假的 default）、非搶焦點顯示視窗型態。
+  - **RC-11c**（待做）：`QWidget::tool_tip`／`ToolTipChange`；`EventKind::ToolTip` 改為 `QHelpEvent` 形狀（pos＋global_pos，移除自創的 `text` 欄位，文字由 widget 的 `tool_tip` 取得）；wake-up（700 ms）／fall-asleep（2000 ms）狀態機；沿 parent 冒泡；`QToolTip::showText` 位置（翻轉＋夾入螢幕）與存活時間 `10000+40*max(0,len-100)`。
+  - **計時器規則**：700 ms／2 s 是 Qt tooltip 協定，明確豁免「不新增 timer／debounce」規則，不是 application debounce。
+  - **外觀**（圓角、深色底、字型）留手動驗證；自動化契約只鎖：觸發、取消、冒泡、位置、存活、不搶焦點。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
@@ -1760,7 +1768,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | 0 | Contract 清理（本次已完成）；實測 G11.5.a（已測：本機為 Layered）、G10.7.a、RC-14/15/16 的幾何 diff | 無 |
 | 1 | RC-01、RC-02、RC-03、RC-04；**每個 RC 一個提交**，各自附「修改前 FAIL、修改後 PASS」的測試 | RC-03 在 RC-02 之後（同一檔案）；RC-01、RC-04 與其他獨立 |
 | 2 | RC-05、RC-06 | Phase 1 完成 |
-| 3 | RC-07、RC-08、RC-09、RC-10、RC-11 | RC-08、RC-09 先實測；RC-10 依賴 RC-05；RC-11 依賴 RC-06 與 G5.4.a |
+| 3 | RC-07、RC-08、RC-09、RC-10、RC-11 | RC-08、RC-09 先實測；RC-10 依賴 RC-05；RC-11 依賴 RC-06 與 RC-11a（G5.1.f；不依賴 G5.4.a） |
 | 4 | RC-12 ～ RC-18；移除 RC-05/RC-06 已取代的 workaround | RC-14/15/16 先做幾何 diff；RC-17/18 依賴 RC-06 |
 
 ### D.4 未列入執行佇列的項目
