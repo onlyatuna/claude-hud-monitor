@@ -202,13 +202,13 @@ fn test_signal_sender_tracking_and_auto_disconnection() {
     assert_eq!(sender(), None);
 
     // Test automatic disconnection on object drop
+    let recv_count = Arc::new(AtomicUsize::new(0));
     {
         let mut receiver = Box::new(TestWidget::new("receiver"));
         // SAFETY: receiver remains boxed and unmoved until it is dropped below.
         unsafe { register_qobject(&mut *receiver) };
         let r_id = receiver.data.id;
 
-        let recv_count = Arc::new(AtomicUsize::new(0));
         let rc_clone = Arc::clone(&recv_count);
 
         sig.connect_to(&*receiver, move |_| {
@@ -226,6 +226,11 @@ fn test_signal_sender_tracking_and_auto_disconnection() {
 
     // Emitting now does not hit severed receiver slot
     sig.emit(&2);
+    assert_eq!(
+        recv_count.load(Ordering::SeqCst),
+        1,
+        "slot of a destroyed receiver ran"
+    );
     // SAFETY: emitter callbacks have ended on its registration thread.
     unsafe { unregister_qobject(emitter_id) };
 }

@@ -258,7 +258,6 @@ pub struct Signal<T> {
 pub type QueuedSignal<T> = Signal<T>;
 
 struct SignalInner<T> {
-    next_id: u64,
     subscribers: Vec<Subscriber<T>>,
 }
 
@@ -281,7 +280,6 @@ impl<T> Signal<T> {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(SignalInner {
-                next_id: 1,
                 subscribers: Vec::new(),
             })),
             emitter_id: None,
@@ -293,7 +291,6 @@ impl<T> Signal<T> {
     pub fn with_emitter(emitter_id: ObjectId) -> Self {
         Self {
             inner: Arc::new(Mutex::new(SignalInner {
-                next_id: 1,
                 subscribers: Vec::new(),
             })),
             emitter_id: Some(emitter_id),
@@ -326,8 +323,7 @@ impl<T> Signal<T> {
         F: Fn(&T) + Send + Sync + 'static,
     {
         let mut inner = self.inner.lock().unwrap();
-        let id = ConnectionId(inner.next_id);
-        inner.next_id += 1;
+        let id = ConnectionId::next();
 
         inner.subscribers.push(Subscriber {
             id,
@@ -342,11 +338,17 @@ impl<T> Signal<T> {
 
     /// Disconnects a connection by its ID.
     pub fn disconnect(&self, id: ConnectionId) -> bool {
-        unregister_connection(id);
-        let mut inner = self.inner.lock().unwrap();
-        let initial_len = inner.subscribers.len();
-        inner.subscribers.retain(|sub| sub.id != id);
-        inner.subscribers.len() < initial_len
+        let removed = {
+            let mut inner = self.inner.lock().unwrap();
+            let initial_len = inner.subscribers.len();
+            inner.subscribers.retain(|sub| sub.id != id);
+            inner.subscribers.len() < initial_len
+        };
+        // Only the owner of a connection may retire its registry entry.
+        if removed {
+            unregister_connection(id);
+        }
+        removed
     }
 
     /// Disconnects all connections bound to a given receiver object ID.
@@ -378,17 +380,10 @@ impl<T> Signal<T> {
 
         let _sender_guard = SenderGuard::new(self.emitter_id);
 
-        let (snapshot, highest_id) = {
-            let inner = self.inner.lock().unwrap();
-            (inner.subscribers.clone(), inner.next_id)
-        };
+        let snapshot = self.inner.lock().unwrap().subscribers.clone();
         let current_thread = ThreadId::current();
 
         for sub in snapshot {
-            if sub.id.0 >= highest_id {
-                continue;
-            }
-
             let target_thread = sub
                 .receiver_thread
                 .or_else(|| sub.receiver_id.and_then(query_object_thread));
@@ -447,8 +442,7 @@ impl<T: 'static> Signal<T> {
         F: Fn(&T) + Send + Sync + 'static,
     {
         let mut inner = self.inner.lock().unwrap();
-        let id = ConnectionId(inner.next_id);
-        inner.next_id += 1;
+        let id = ConnectionId::next();
 
         inner.subscribers.push(Subscriber {
             id,
@@ -497,8 +491,7 @@ impl<T: Clone + Send + 'static> Signal<T> {
         F: Fn(&T) + Send + Sync + 'static,
     {
         let mut inner = self.inner.lock().unwrap();
-        let id = ConnectionId(inner.next_id);
-        inner.next_id += 1;
+        let id = ConnectionId::next();
 
         let slot_arc = Arc::new(slot);
         let slot_for_queued = Arc::clone(&slot_arc);
@@ -596,8 +589,7 @@ impl<T: Clone + Send + 'static> Signal<T> {
         F: Fn(&T) + Send + Sync + 'static,
     {
         let mut inner = self.inner.lock().unwrap();
-        let id = ConnectionId(inner.next_id);
-        inner.next_id += 1;
+        let id = ConnectionId::next();
 
         let slot_arc = Arc::new(slot);
         let slot_for_blocking = Arc::clone(&slot_arc);
