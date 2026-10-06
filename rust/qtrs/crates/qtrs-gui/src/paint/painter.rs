@@ -190,6 +190,19 @@ impl<'a> Painter<'a> {
         self.state.transform = self.state.transform.pre_translate(dx, dy);
     }
 
+    /// Device pixel ratio of the paint device (`QPaintDevice::devicePixelRatio`).
+    pub fn device_pixel_ratio(&self) -> f32 {
+        self.device.device_pixel_ratio()
+    }
+
+    /// Translates by whole device pixels, after the current transform (no dpr scaling), so the
+    /// origin lands exactly on a pixel boundary. Qt gets this by giving every popup its own
+    /// native window at a whole-pixel position; per-glyph rounding then never depends on how
+    /// far the logical origin sits from the pixel grid.
+    pub fn translate_device(&mut self, dx: i32, dy: i32) {
+        self.state.transform = self.state.transform.post_translate(dx as f32, dy as f32);
+    }
+
     // Scales coordinates.
     pub fn scale(&mut self, sx: f32, sy: f32) {
         self.state.transform = self.state.transform.pre_scale(sx, sy);

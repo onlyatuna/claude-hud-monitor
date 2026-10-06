@@ -789,4 +789,56 @@ mod tests {
         assert!(!menu.actions().is_empty());
         assert!(menu.is_dark_mode());
     }
+
+    /// Restores the application device pixel ratio the other tests run under.
+    struct DevicePixelRatioGuard;
+
+    impl Drop for DevicePixelRatioGuard {
+        fn drop(&mut self) {
+            qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.0);
+        }
+    }
+
+    /// The popup window grows leftwards when a sub-menu opens, so the menu is painted at a
+    /// different offset inside it. The offset is whole device pixels, so the menu's own pixels
+    /// must be the same, only shifted: a fractional logical offset (1 logical px = 1.25 device
+    /// px) rounds every glyph differently and the letter spacing jumps.
+    #[test]
+    fn test_menu_text_does_not_depend_on_window_offset() {
+        use qtrs_gui::paint::{Painter, Pixmap};
+        use qtrs_widgets::Widget;
+        let _guard = DevicePixelRatioGuard;
+        qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
+        let mut menu = build_hud_context_menu(&Config::default());
+        menu.set_visible(true);
+        let size = menu.size_hint();
+        menu.set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, size.width, size.height));
+
+        let (w, h) = ((size.width as f32 * 1.25).ceil() as u32, (size.height as f32 * 1.25).ceil() as u32);
+        let mut render = |offset: i32| {
+            let mut pm = Pixmap::with_dpr(w + 16, h, 1.25).unwrap();
+            pm.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
+            {
+                let mut p = Painter::begin(&mut pm);
+                p.translate_device(offset, 0);
+                menu.paint_event(&mut p);
+            }
+            pm
+        };
+        let base = render(0);
+        let stride = (w + 16) as usize * 4;
+        for offset in 1..=7 {
+            let shifted = render(offset);
+            for y in 0..h as usize {
+                let row = &base.data()[y * stride..(y + 1) * stride];
+                let moved = &shifted.data()[y * stride..(y + 1) * stride];
+                let n = offset as usize * 4;
+                assert_eq!(
+                    &row[..stride - n - 8 * 4],
+                    &moved[n..stride - 8 * 4],
+                    "menu row {y} changed when painted {offset} device px to the right"
+                );
+            }
+        }
+    }
 }

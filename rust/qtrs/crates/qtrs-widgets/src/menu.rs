@@ -588,17 +588,7 @@ impl Menu {
         }
 
         window.show();
-        let covered = self.covered_rect();
-        let win_x = root_origin.x + covered.x;
-        let win_y = root_origin.y + covered.y;
-        let win_w = covered.width.max(size.width);
-        let win_h = covered.height.max(size.height);
-        window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
-            painter.save();
-            painter.translate(-covered.x as f32, -covered.y as f32);
-            self.paint_event(painter);
-            painter.restore();
-        });
+        self.present_popup(&mut window, root_origin, size);
 
         let mut chosen = None;
         unsafe {
@@ -627,17 +617,7 @@ impl Menu {
                         let new_signature = self.hover_signature();
 
                         if old_signature != new_signature {
-                            let covered = self.covered_rect();
-                            let win_x = root_origin.x + covered.x;
-                            let win_y = root_origin.y + covered.y;
-                            let win_w = covered.width.max(size.width);
-                            let win_h = covered.height.max(size.height);
-                            window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
-                                painter.save();
-                                painter.translate(-covered.x as f32, -covered.y as f32);
-                                self.paint_event(painter);
-                                painter.restore();
-                            });
+                            self.present_popup(&mut window, root_origin, size);
                         }
 
                         if let MenuOutcome::Activate(act, _) = outcome {
@@ -653,17 +633,7 @@ impl Menu {
                         if let MenuOutcome::Closed = outcome {
                             break;
                         }
-                        let covered = self.covered_rect();
-                        let win_x = root_origin.x + covered.x;
-                        let win_y = root_origin.y + covered.y;
-                        let win_w = covered.width.max(size.width);
-                        let win_h = covered.height.max(size.height);
-                        window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
-                            painter.save();
-                            painter.translate(-covered.x as f32, -covered.y as f32);
-                            self.paint_event(painter);
-                            painter.restore();
-                        });
+                        self.present_popup(&mut window, root_origin, size);
                     }
                     WM_LBUTTONUP => {
                         if !self.covers(local_pt) {
@@ -677,17 +647,7 @@ impl Menu {
                             }
                             MenuOutcome::Closed => break,
                             _ => {
-                                let covered = self.covered_rect();
-                                let win_x = root_origin.x + covered.x;
-                                let win_y = root_origin.y + covered.y;
-                                let win_w = covered.width.max(size.width);
-                                let win_h = covered.height.max(size.height);
-                                window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
-                                    painter.save();
-                                    painter.translate(-covered.x as f32, -covered.y as f32);
-                                    self.paint_event(painter);
-                                    painter.restore();
-                                });
+                                self.present_popup(&mut window, root_origin, size);
                             }
                         }
                     }
@@ -715,17 +675,7 @@ impl Menu {
                             }
                             _ => {}
                         }
-                        let covered = self.covered_rect();
-                        let win_x = root_origin.x + covered.x;
-                        let win_y = root_origin.y + covered.y;
-                        let win_w = covered.width.max(size.width);
-                        let win_h = covered.height.max(size.height);
-                        window.present_custom_at(Rect::new(win_x, win_y, win_w, win_h), |painter| {
-                            painter.save();
-                            painter.translate(-covered.x as f32, -covered.y as f32);
-                            self.paint_event(painter);
-                            painter.restore();
-                        });
+                        self.present_popup(&mut window, root_origin, size);
                     }
                     WM_KILLFOCUS => {
                         // Window lost keyboard/window focus (Win+L, Alt+Tab, clicked outside)
@@ -764,6 +714,35 @@ impl Menu {
         }
         self.hide_menu();
         chosen
+    }
+
+    /// Repaints the popup window and sizes it to the menu plus its open sub-menus.
+    ///
+    /// The window sits at the whole native pixel `round(x * dpr)` of its logical position, and
+    /// the menu is painted at the whole native pixel `round(root * dpr)`: the difference is a
+    /// whole number of device pixels, so the menu's own origin never moves relative to the pixel
+    /// grid when a sub-menu opens or closes and widens the window. A fractional logical shift
+    /// would round each glyph of every item differently and make the letter spacing jump.
+    #[cfg(windows)]
+    fn present_popup(&mut self, window: &mut crate::window::Window, root_origin: Point, min_size: Size) {
+        use qtrs_platform::high_dpi::to_native_point;
+        let dpr = qtrs_platform::platform().primary_screen().device_pixel_ratio();
+        let covered = self.covered_rect();
+        let win_pos = Point::new(root_origin.x + covered.x, root_origin.y + covered.y);
+        let win_rect = Rect::new(
+            win_pos.x,
+            win_pos.y,
+            covered.width.max(min_size.width),
+            covered.height.max(min_size.height),
+        );
+        let native_root = to_native_point(root_origin, dpr);
+        let native_win = to_native_point(win_pos, dpr);
+        window.present_custom_at(win_rect, |painter| {
+            painter.save();
+            painter.translate_device(native_root.x - native_win.x, native_root.y - native_win.y);
+            self.paint_event(painter);
+            painter.restore();
+        });
     }
     #[cfg(not(windows))]
     pub fn exec_popup(&mut self, pos: Point) -> Option<ActionRef> {
@@ -1707,7 +1686,12 @@ impl Widget for Menu {
             if let Ok(mut sub) = submenu.try_borrow_mut() {
                 let sg = sub.base.geometry();
                 painter.save();
-                painter.translate(sg.x as f32, sg.y as f32);
+                // A sub-menu is its own native window in Qt, so it starts on a whole pixel.
+                let dpr = painter.device_pixel_ratio();
+                painter.translate_device(
+                    (sg.x as f32 * dpr).round() as i32,
+                    (sg.y as f32 * dpr).round() as i32,
+                );
                 sub.paint_event(painter);
                 painter.restore();
             }
