@@ -1491,6 +1491,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Required observable**：解除 parent 之後 child **仍存活**，且所有權回到呼叫者；不得靜默丟棄。API 形狀由 Phase 1 計畫決定（§2.1 已寫 `Option<Box<dyn QObject>>` 或等價）。
 - **Required test**：`set_parent_none_on_owned_child_returns_ownership_and_child_survives`（修改前 FAIL：child 已 drop）；`set_parent_none_sends_child_removed_through_notify`。
 - **Downstream**：任何把 child 從容器移出再重新掛接的 widget／action 操作。HUD 目前沒有呼叫（`READ`），因此屬靜默資料遺失型 P0，不是 HUD 可見型。
+- **Impact analysis（Phase 1，未決定 API，未改程式）**：
+  - 所有權模型 `[READ]`：core 的擁有者是 `ObjectData.owned_children: Vec<Box<dyn QObject>>`（parent 持有 `Box`）。`GLOBAL_OBJECT_REGISTRY` 的 `Arc<ObjectRecord>` 只存 metadata（parent／children id、liveness、borrow flag），`QOBJECT_REGISTRY` 存 `*mut dyn QObject` 裸指標，兩者都**不擁有**物件。`Box` 移動不改堆位址，因此搬移 `Box` 時 registry 指標仍有效。
+  - widget 層是另一套模型：`WidgetRef = Rc<RefCell<Box<dyn Widget>>>`、parent 為 `Weak`、`WidgetBase.children: Vec<WidgetRef>`；widgets／gui／platform(Windows)／`rust/src` 都不寫 core 的 `ObjectData.parent/children/owned_children`，也不呼叫 `set_parent`／`add_owned_child`／`remove_owned_child`。
+  - 呼叫端（全工作區 grep）：`set_parent` 只有 `ObjectData::set_parent` 包裝（`qobject.rs:402`）與 5 處測試——`qobject.rs:1240/1245/1250`、`test_qobject_lifecycle_and_hierarchy.rs:186/191`、`test_qobject_safety_and_qt6_features.rs:97`。其中只有 `:97` 的 child 在 parent 的 `owned_children` 中；其餘 child 不是 owned，不受 G2.1.a 影響。生產程式零呼叫端。`remove_owned_child` 零呼叫端，且只改 `ObjectData.children`，不更新 `ObjectRecord`、不送 `ChildRemoved`。
+  - 結構性問題：`set_parent(child: &mut ObjectData, …)` 的 `child` 參數本身就是從 parent 的 `owned_children` 內部取得的借用（`:97` 即如此）。函式內再經 registry 指標取得 parent 的 `&mut`，與呼叫者手上的借用別名重疊；若把 `Box` 丟棄，呼叫者的 `&mut` 立即懸空。回傳 `Box` 也不能讓這個借用變合法。
+  - API 候選（**未選**）：(1) `set_parent` 改回 `Result`，對 owned child 解除 parent 時回 `Err(OwnedByParent)`，另以 id 為參數的 `take_owned_child(parent, child_id) -> Option<Box<dyn QObject>>`（補上 `ObjectRecord` 更新與經 notify 的 `ChildRemoved`）取回所有權——影響 5 處測試；(2) 新增 `reparent_owned(child_id: ObjectId, new_parent: Option<ObjectId>) -> Result<Option<Box<dyn QObject>>, _>`，`set_parent(&mut ObjectData)` 只保留給非 owned child，遇 owned child 回 `Err`；(3) `set_parent(None)` 把 `Box` 移到 thread-local 孤兒表（呼叫端不改，但引入無人負責釋放的隱含所有權，會洩漏，不建議）。不建議把 `owned_children` 改成 `Rc`／`Arc`：registry 的指標穩定性契約與 widget 層的 `Rc` 是兩套模型，改動面遠大於 G2.1.a。
 - **Can remove app workaround**：n/a。
 - **Phase**：1。
 
