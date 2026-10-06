@@ -590,7 +590,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`PARTIAL`。`Widget`/`WidgetBase` **沒有** `set_minimum_size/set_maximum_size/set_fixed_size`（grep：只有 `Window::set_minimum_size`）；min/max 只來自 QSS（Label、Button、Frame、ProgressBar）或自訂 `Widget` 覆寫；trait 預設 `set_size_policy` 是**靜默 no-op**，`Label` 沒有覆寫。`Widget::size_hint` 預設 (100,30)（QWidget 為無效 (-1,-1)）。
 - **Known gap**
   - **G8.3.a [P1, READ]** 無通用 min/max/fixed API。
-  - **G8.3.b [P0, READ]** **`Label.set_size_policy` 被丟棄**。Python `title.setSizePolicy(Minimum, Preferred)`（`provider_card.py:39`）在 Rust 無對應呼叫（grep `set_size_policy` 於 `provider_card.rs` 為空）→ 卡片模式標題寬度行為可能不同。
+  - **G8.3.b [P0, READ；已修復：RC-05]** **`Label.set_size_policy` 被丟棄**。Python `title.setSizePolicy(Minimum, Preferred)`（`provider_card.py:39`）在 Rust 無對應呼叫（grep `set_size_policy` 於 `provider_card.rs` 為空）→ 卡片模式標題寬度行為可能不同。
   - **G8.3.c [P2, READ]** `WidgetBase::set_geometry` 不夾 min/max（只有 `item_set_geometry` 夾）。
   - **G8.3.d [P2]** 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值。
   - **G8.3.e [P1, READ]** `UsageDial`：Python `setMinimumSize(84,84)`（`usage_table.py:138`）；Rust `minimum_size()` 為 0×0，並註解稱最小值「會限制 dial」（`usage_table.rs:160-163`）——最小值不會限制上限，`[INFERENCE]` 非刻意，視窗很窄時 dial 可縮到 84 以下。
@@ -619,12 +619,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G8.5.a [P1, READ]** 無繼承比對（`QFrame{}` 命不中 `QLabel`）；無 descendant/child 組合子（HUD 不用）。
   - **G8.5.b [P1, READ]** `attributes` 只有 Label；同一條規則對 Button／Frame／ProgressBar 無效。
-  - **G8.5.c [P0, READ]** **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty；`Label::set_text` 會 `request_layout`，但 `set_font`/`set_alignment`/style/property 不會，`Button::set_text/set_font` 也不會——需要手動 `update_layout`。
+  - **G8.5.c [P0, READ；已修復：RC-05]** **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty；`Label::set_text` 會 `request_layout`，但 `set_font`/`set_alignment`/style/property 不會，`Button::set_text/set_font` 也不會——需要手動 `update_layout`。
   - **G8.5.d [P0, READ]** `Window::set_style_sheet` 是**整個 Application 的**（呼叫 `Application::set_style_sheet`），Python `HUDWindow.setStyleSheet` 只作用於該子樹（`hud_window.py:246,250`）；Rust HUD 兩者都呼叫（`hud_window.rs:231-232`）→ 影響其他頂層視窗與 popup。
   - **G8.5.e [P1, READ]** `:disabled`/`:focus` 不支援。
   - **G8.5.f [P1, READ]** **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在；選單外觀來自寫死的 `MenuStyle`（`rust/src/ui/tray_icon.rs`），手動複製了 Python QSS 的數值；`QMenu::item:selected/:disabled` 不驅動 hover／停用色。
   - **G8.5.g [P2, READ]** `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄；`margin` 只有選單消費。
   - **G8.5.h [P2, READ]** 父 widget 的 `font` 繼承未實作（`[INFERENCE]`，未對照 `qstylesheetstyle.cpp`）。
+  - **G8.5.i [P1, READ]** RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排（`LayoutScheduler::invalidate(parent)`）；parent 自己的 size hint 因此改變時，不會再往祖先傳（Qt 的 `QLayout::invalidate` 會一路到最上層 layout 並對它 post `LayoutRequest`）；(2) widget 自己的 layout 在 `style_changed` 時只標 dirty，要靠 parent 的 `BoxLayout::activate` 順手重排（`child_layout.is_dirty()`）；沒有 parent 的 root，或 parent 沒有 layout 時，不會被排程。(3) `Application::set_style_sheet`／`set_font` 不會對既有 widget 送 `StyleChange`／`FontChange`（見 G8.5.d，RC-10）。
 - **Test**：既有 `test_stylesheet_style.rs::*`、`test_menu_style_box_model.rs`（測 `MenuStyle`，非 QSS）。必要：`qframe_rule_matches_qlabel`；`property_change_relayouts`；`window_stylesheet_is_scoped_to_subtree`；`attribute_selector_on_button_and_frame`；**樣式表字串逐項比對**（見 C12.3）。
 - **HUD usage**：Python `setStyleSheet`（`hud_window.py:149,246,250,457`、`provider_card.py:34-212`、`usage_table.py:330,368,381`）、`setProperty + polish`（`usage_table.py:258-260`）、`ui/styles.py` 全部規則；Rust `set_style_sheet`（`hud_window.rs:76,231,579,714`、`provider_card.rs:100,124`）、`set_property`（`usage_table.rs:879`）。
 
@@ -1124,7 +1125,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 285 項：D 12、P0 34、P1 124、P2 112、test gap 3（計數含已修復項；標籤含「已修復」者共 8 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 286 項：D 12、P0 34、P1 125、P2 112、test gap 3（計數含已修復項；標籤含「已修復」者共 10 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.5.c）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1273,7 +1274,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
 | G8.2.a | P1, READ | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
-| G8.3.b | P0, READ | **`Label.set_size_policy` 被丟棄** |
+| G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
 | G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
 | G8.3.d | P2 | 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值 |
 | G8.3.e | P1, READ | `UsageDial`：Python `setMinimumSize(84,84)` |
@@ -1286,12 +1287,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.4.g | P1 | `Window` 沒有 release／double-click／move handler |
 | G8.5.a | P1, READ | 無繼承比對 |
 | G8.5.b | P1, READ | `attributes` 只有 Label |
-| G8.5.c | P0, READ | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
+| G8.5.c | P0, READ；已修復：RC-05 | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
 | G8.5.d | P0, READ | `Window::set_style_sheet` 是**整個 Application 的** |
 | G8.5.e | P1, READ | `:disabled`/`:focus` 不支援 |
 | G8.5.f | P1, READ | **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在 |
 | G8.5.g | P2, READ | `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄 |
 | G8.5.h | P2, READ | 父 widget 的 `font` 繼承未實作 |
+| G8.5.i | P1, READ | RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排 |
 | G8.6.a | P2 | 無 per-widget `WA_*` 屬性 |
 | G8.6.b | P1, READ | `set_stays_on_top` 執行期路徑沒有測試 |
 | G8.6.c | P1 | 無 layout 導出的頂層最小尺寸 |
@@ -1557,9 +1559,24 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`qtrs-widgets/src/widget.rs:366-375` `WidgetBase::set_style_sheet` 只寫 `dirty`，不 post `UpdateRequest`、不要求 layout；`label.rs` 未覆寫 `set_size_policy`。
 - **Evidence**：`READ`。
 - **Required observable**：不呼叫任何手動 `update_layout()`／`render_and_present()`，在樣式字級改變、size policy 改變後，經過一次事件 pump，layout 與繪製的結果與 Qt 一致。
-- **Required test**：`style_sheet_font_size_change_relayouts_parent_after_one_pump`；`label_set_size_policy_changes_layout_result`（與 `qt_layout_compare.py` 對照）；`set_size_policy_on_every_widget_type_is_not_silently_dropped`。皆須修改前 FAIL。
+- **Required test**（`qtrs-widgets/tests/test_widget_invalidation.rs`，9 項；修改前 9 項 FAIL，修改後 9 項 PASS）：
+  - `style_sheet_font_size_change_relayouts_parent_after_one_pump`（Button，隔離 style sheet 路徑）、`label_set_size_policy_changes_layout_result`、`label_set_font_relayouts_parent_after_one_pump`、`button_set_text_relayouts_parent_after_one_pump`：真實 `Window`＋`EventLoop`，每次改動後只 pump，不呼叫 `update_layout`／`render_and_present`。
+  - `set_size_policy_on_every_widget_type_is_not_silently_dropped`、`set_style_sheet_on_every_widget_type_is_not_silently_dropped`、`set_property_on_every_widget_type_can_be_read_back`：涵蓋 10 個 widget 型別。
+  - `changing_the_size_policy_requests_a_parent_layout_and_an_unchanged_one_does_not`。
+  - `repolish_after_set_property_restyles_and_relayouts_after_one_pump`：新 API `repolish()`，舊程式沒有，無法在舊程式上跑（舊版 `set_property` 測試版本在修改前 FAIL）。
+  - 期望值對照 PySide6（`QHBoxLayout`，400 寬，spacing 6，兩個 `QLabel`）：`Fixed` 的 label 寬度＝size hint，另一個＝`400 - hint - 6`；`Expanding`／`Fixed` 互換後相反；`font-size: 28px` 的 `Fixed` label 寬 77＝hint，旁邊 x＝83。Qt 在一次 `processEvents` 後即達成。
+  - Contract 先前寫「`QObject::setProperty` 會觸發 repolish」**是錯的**：Qt 的 `QWidget`／`QApplication` 忽略 `DynamicPropertyChange`（`qwidget.cpp:9449`、`qapplication.cpp:2594`），Python HUD 因此在 `setProperty` 後手動 `style().unpolish/polish`（`usage_table.py:258-260`）。qtrs 照 Qt：`set_property` 只儲存，另有 `repolish()`。
 - **Downstream**：HUD 的 6 處 `update_layout()`（`hud_window.rs:636,737`、`provider_card.rs:435,707`、`usage_table.rs:1498,1559`）、1 處手動 `LayoutScheduler`（`usage_table.rs:1594-1595`）、約 8 處 `render_and_present()`。
 - **Can remove app workaround**：**是**，但只能在 RC-05 的測試通過**之後**逐一刪除，每刪一處重跑 HUD 快照與 layout harness；不得先刪。
+- **Status**：**已修復**（RC-05）。
+  - **根因**：失效協定散落在各 setter，且 `Widget` trait 對 `set_size_policy`／`set_style_sheet`／`set_property` 提供靜默 no-op 預設，各型別各自轉發（或忘了轉發；`ProgressBar` 的巨集甚至直接 `.set()` 繞過 base）。
+  - **修改**：`Widget` 新增必要方法 `widget_base() -> &WidgetBase`；`size_policy`／`set_size_policy`／`style_sheet`／`set_style_sheet`／`set_property`／`property` 改為經它的提供方法，並**刪除**逐型別轉發（`Button`、`Frame`、`KeySequenceEdit`、`Label`、`Menu`、`StackedWidget`、`EmptyWidget`、`ProgressBar` 所用巨集，以及 `layout_probe` 與 HUD 3 個 widget 的 `size_policy`），另新增 `update_geometry()`、`repolish()`。實作者不可能再靜默丟棄這些設定（缺 `widget_base` 即編譯失敗）。
+  - `WidgetBase::set_size_policy`：未變更則什麼都不做（對應 `QWidget::setSizePolicy`），否則 `update_geometry()`。`update_geometry()`：要求 parent layout 重排，並配一次 `update()`——qtrs 沒有 `LayoutRequest` 事件，佇列中的 layout 請求要靠下一次 render 的 `flush_layouts` 送達，沒有 `update()` 就沒有 render（這是測試第一次跑時 `label_set_size_policy…` 仍失敗所發現的）。`style_changed()`＝`update_geometry()`＋自身 layout 標 dirty（對應 `FontChange`／`StyleChange`）；`set_style_sheet` 呼叫它。
+  - 影響 size hint 的 setter 補上 `update_geometry()`：`Label::set_text/set_font/set_alignment`、`Button::set_text/set_font/set_action`、`ProgressBar::set_font`。
+  - 副帶修正：trait 的 `property()` 原本恆回 `None`（預設實作，無人覆寫），現在回傳 `WidgetBase` 儲存的值，簽名改為 `Option<String>`（零呼叫端）；`layout_probe` 範例的 policy 改存在 base。
+  - **驗證**：`qtrs` workspace exit 0、66 個 test binary ok；主 crate 68 通過、0 失敗（含 `test_fetch_usage_live_benchmark`，本次通過）。HUD `--snapshot` 四張圖修改前後比對：差異像素全部落在「同一版本連跑兩次本來就不同」的區域（時間／倒數文字，遮罩外差異 0 像素），`hud_context_menu.png` 完全相同。遮罩區域內的差異無法以此方法排除，**未做逐像素零差異驗證**。
+  - **未做**：沒有刪除任何 HUD workaround（`update_layout()`×6、手動 `LayoutScheduler`、`render_and_present()`）。這些多半與文字／可見性／幾何有關，不是 style／font／size policy；依本條規定須逐一刪除並重跑 HUD 快照與 layout harness，另行處理。HUD 的 `set_state`（`usage_table.rs:879`）仍只呼叫 `set_property`，Python 對應處有 `unpolish/polish`，應改呼叫 `repolish()`。
+  - **仍開放**：G8.5.i（失效傳播限制）、G8.5.d（RC-10）；`Menu::set_font`、`ScrollBar`／`ScrollArea` 的 style 尚未驗證 size hint 相依。
 - **Phase**：2。
 
 #### RC-06 事件翻譯與傳遞：accept／ignore／冒泡，及 Close／Show／Hide／Move／DblClick

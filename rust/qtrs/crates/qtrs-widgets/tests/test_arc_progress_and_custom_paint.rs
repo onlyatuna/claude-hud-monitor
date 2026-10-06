@@ -36,6 +36,10 @@ impl QObject for CustomPaintedGauge {
 }
 
 impl Widget for CustomPaintedGauge {
+    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }

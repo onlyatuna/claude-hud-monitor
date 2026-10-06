@@ -223,6 +223,7 @@ impl ProgressBar {
 
     pub fn set_font(&mut self, font: Font) {
         self.font = font;
+        self.update_geometry();
         self.update();
     }
 

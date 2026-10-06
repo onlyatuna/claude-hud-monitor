@@ -21,7 +21,6 @@ struct Probe {
     hint: Size,
     min: Size,
     max: Size,
-    policy: QSizePolicy,
 }
 
 impl QObject for Probe {
@@ -37,6 +36,10 @@ impl QObject for Probe {
 }
 
 impl Widget for Probe {
+    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -57,9 +60,6 @@ impl Widget for Probe {
     }
     fn maximum_size(&self) -> Size {
         self.max
-    }
-    fn size_policy(&self) -> QSizePolicy {
-        self.policy
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -135,8 +135,8 @@ fn main() {
                 hint: Size::new(n(0), n(1)),
                 min: Size::new(n(2), n(3)),
                 max: Size::new(n(4), n(5)),
-                policy: QSizePolicy::new(policy(f[6]), policy(f[7])),
             };
+            probe.base.set_size_policy(QSizePolicy::new(policy(f[6]), policy(f[7])));
             probe.base.set_visible(!hidden);
             widgets.push(Rc::new(RefCell::new(Box::new(probe))));
             stretches.push(n(8) as u32);

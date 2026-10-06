@@ -231,6 +231,10 @@ impl qtrs_core::object::QObject for HoverButton {
 }
 
 impl Widget for HoverButton {
+    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> qtrs_core::object::ObjectId {
         self.base.object_data.id
     }
@@ -461,6 +465,10 @@ fn test_dirty_region_culling_skips_non_intersecting_widgets() {
         }
     }
     impl Widget for TestWidget {
+        fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+            &self.base
+        }
+
         fn id(&self) -> qtrs_core::object::ObjectId { self.base.object_data.id }
         fn is_visible(&self) -> bool { self.base.is_visible() }
         fn set_visible(&self, v: bool) { self.base.set_visible(v); }

@@ -8,6 +8,10 @@
 
 macro_rules! leaf_widget_common {
     () => {
+        fn widget_base(&self) -> &crate::widget::WidgetBase {
+            &self.base
+        }
+
         fn id(&self) -> qtrs_core::object::ObjectId {
             self.base.object_data.id
         }
@@ -99,23 +103,8 @@ macro_rules! leaf_widget_common {
             self.base.has_focus.set(focus);
         }
 
-        fn size_policy(&self) -> crate::size_policy::QSizePolicy {
-            self.base.size_policy.get()
-        }
-
-        fn set_size_policy(&self, policy: crate::size_policy::QSizePolicy) {
-            self.base.size_policy.set(policy);
-        }
         fn as_any(&self) -> &dyn std::any::Any {
             self
-        }
-
-        fn set_style_sheet(&self, qss: &str) {
-            self.base.set_style_sheet(qss);
-        }
-
-        fn style_sheet(&self) -> Option<crate::style::stylesheet::QStyleSheetStyle> {
-            self.base.style_sheet.borrow().clone()
         }
 
         fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

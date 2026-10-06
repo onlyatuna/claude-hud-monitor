@@ -917,6 +917,10 @@ impl QObject for KeySequenceEdit {
 }
 
 impl Widget for KeySequenceEdit {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -934,14 +938,6 @@ impl Widget for KeySequenceEdit {
         let sample = "Ctrl+Shift+Alt+F12, ...";
         let w = metrics.horizontal_advance(sample, &self.font).ceil() as i32 + 16;
         Size::new(w, (metrics.height.ceil() as i32 + 12).max(28))
-    }
-
-    fn size_policy(&self) -> QSizePolicy {
-        self.base.size_policy()
-    }
-
-    fn set_size_policy(&self, policy: QSizePolicy) {
-        self.base.set_size_policy(policy);
     }
 
     fn is_visible(&self) -> bool {

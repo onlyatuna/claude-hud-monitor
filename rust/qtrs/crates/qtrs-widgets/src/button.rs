@@ -80,11 +80,13 @@ impl Button {
 
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
+        self.update_geometry();
         self.update();
     }
 
     pub fn set_font(&mut self, font: Font) {
         self.font = font;
+        self.update_geometry();
         self.update();
     }
 
@@ -120,6 +122,7 @@ impl Button {
             self.text = action.borrow().display_text();
         }
         self.action = action;
+        self.update_geometry();
         self.update();
     }
     pub fn resolved_style(&self) -> crate::style::stylesheet::ResolvedStyle {
@@ -247,6 +250,10 @@ impl QObject for Button {
 }
 
 impl Widget for Button {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -325,14 +332,6 @@ impl Widget for Button {
         let w = style.max_width.unwrap_or(16777215);
         let h = style.max_height.unwrap_or(16777215);
         Size::new(w, h)
-    }
-
-    fn size_policy(&self) -> crate::size_policy::QSizePolicy {
-        self.base.size_policy()
-    }
-
-    fn set_size_policy(&self, policy: crate::size_policy::QSizePolicy) {
-        self.base.set_size_policy(policy);
     }
 
     fn is_visible(&self) -> bool {
@@ -534,14 +533,6 @@ impl Widget for Button {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
-    }
-
-    fn set_style_sheet(&self, qss: &str) {
-        self.base.set_style_sheet(qss);
-    }
-
-    fn style_sheet(&self) -> Option<crate::style::stylesheet::QStyleSheetStyle> {
-        self.base.style_sheet.borrow().clone()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

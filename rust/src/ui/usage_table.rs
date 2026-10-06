@@ -145,6 +145,10 @@ impl QObject for UsageDial {
 }
 
 impl Widget for UsageDial {
+    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -486,6 +490,10 @@ impl QObject for ProviderIconWidget {
 }
 
 impl Widget for ProviderIconWidget {
+    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -500,9 +508,6 @@ impl Widget for ProviderIconWidget {
     }
     fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
         qtrs_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
-    }
-    fn size_policy(&self) -> qtrs_widgets::QSizePolicy {
-        self.base.size_policy()
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -616,6 +621,10 @@ impl QObject for GlyphWidget {
 }
 
 impl Widget for GlyphWidget {
+    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -630,9 +639,6 @@ impl Widget for GlyphWidget {
     }
     fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
         qtrs_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
-    }
-    fn size_policy(&self) -> qtrs_widgets::QSizePolicy {
-        self.base.size_policy()
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -760,6 +766,10 @@ impl QObject for SeparatorWidget {
 }
 
 impl Widget for SeparatorWidget {
+    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -774,9 +784,6 @@ impl Widget for SeparatorWidget {
     }
     fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
         qtrs_gui::geometry::primitives::Size::new(10, 1)
-    }
-    fn size_policy(&self) -> qtrs_widgets::QSizePolicy {
-        self.base.size_policy()
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()

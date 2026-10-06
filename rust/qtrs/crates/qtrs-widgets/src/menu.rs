@@ -1467,6 +1467,10 @@ impl QObject for Menu {
 }
 
 impl Widget for Menu {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -1518,14 +1522,6 @@ impl Widget for Menu {
 
     fn minimum_size_hint(&self) -> Size {
         self.size_hint()
-    }
-
-    fn size_policy(&self) -> QSizePolicy {
-        self.base.size_policy()
-    }
-
-    fn set_size_policy(&self, policy: QSizePolicy) {
-        self.base.set_size_policy(policy);
     }
 
     fn is_visible(&self) -> bool {

@@ -525,6 +525,10 @@ impl QObject for Frame {
 }
 
 impl Widget for Frame {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -573,14 +577,6 @@ impl Widget for Frame {
     fn minimum_size_hint(&self) -> Size {
         let fw = self.frame_width();
         Size::new(2 * fw, 2 * fw)
-    }
-
-    fn size_policy(&self) -> QSizePolicy {
-        self.base.size_policy()
-    }
-
-    fn set_size_policy(&self, policy: QSizePolicy) {
-        self.base.set_size_policy(policy);
     }
 
     fn is_visible(&self) -> bool {
@@ -707,14 +703,6 @@ impl Widget for Frame {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
-    }
-
-    fn set_style_sheet(&self, qss: &str) {
-        self.base.set_style_sheet(qss);
-    }
-
-    fn style_sheet(&self) -> Option<crate::style::stylesheet::QStyleSheetStyle> {
-        self.base.style_sheet.borrow().clone()
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

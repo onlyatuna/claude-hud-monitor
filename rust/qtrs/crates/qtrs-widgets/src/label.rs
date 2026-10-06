@@ -65,7 +65,7 @@ impl Label {
 
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
-        self.request_layout();
+        self.update_geometry();
         self.update();
     }
 
@@ -84,6 +84,8 @@ impl Label {
 
     pub fn set_font(&mut self, font: Font) {
         self.font = font;
+        // FontChange: update(); updateGeometry() (qwidget.cpp:9502).
+        self.update_geometry();
         self.update();
     }
 
@@ -98,6 +100,8 @@ impl Label {
 
     pub fn set_alignment(&mut self, alignment: Alignment) {
         self.alignment = alignment;
+        // `QLabel::setAlignment` -> updateLabel(): the text indent follows the alignment.
+        self.update_geometry();
         self.update();
     }
     /// Left, right, top and bottom space `QLabel` keeps around its text under a style sheet:
@@ -197,6 +201,10 @@ impl QObject for Label {
 }
 
 impl Widget for Label {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -393,18 +401,6 @@ impl Widget for Label {
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
-    }
-
-    fn set_style_sheet(&self, qss: &str) {
-        self.base.set_style_sheet(qss);
-    }
-
-    fn style_sheet(&self) -> Option<crate::style::stylesheet::QStyleSheetStyle> {
-        self.base.style_sheet.borrow().clone()
-    }
-
-    fn set_property(&self, name: &str, value: &str) {
-        self.base.set_property(name, value);
     }
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any {

@@ -209,6 +209,10 @@ impl QObject for ScrollBar {
 }
 
 impl Widget for ScrollBar {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -636,6 +640,10 @@ impl QObject for ScrollArea {
 }
 
 impl Widget for ScrollArea {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }

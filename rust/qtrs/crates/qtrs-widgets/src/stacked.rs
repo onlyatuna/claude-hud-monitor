@@ -290,6 +290,10 @@ impl QObject for StackedWidget {
 }
 
 impl Widget for StackedWidget {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -313,14 +317,6 @@ impl Widget for StackedWidget {
     fn minimum_size_hint(&self) -> Size {
         self.layout.borrow().minimum_size()
     }
-    fn size_policy(&self) -> crate::size_policy::QSizePolicy {
-        self.base.size_policy()
-    }
-
-    fn set_size_policy(&self, policy: crate::size_policy::QSizePolicy) {
-        self.base.set_size_policy(policy);
-    }
-
     fn is_visible(&self) -> bool {
         self.base.is_visible()
     }

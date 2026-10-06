@@ -46,6 +46,14 @@ pub fn adopt_tree(root: &WidgetRef) {
 }
 
 pub trait Widget: QObject + 'static {
+    /// The `WidgetBase` holding this widget's shared state.
+    ///
+    /// Size policy, style sheet and style properties live there, and changing them has to enter
+    /// the repaint/relayout protocol (`WidgetBase::update_geometry`, `style_changed`). Having one
+    /// accessor instead of per-type forwarding makes it impossible for a widget type to accept
+    /// such a change and silently drop it.
+    fn widget_base(&self) -> &WidgetBase;
+
     fn id(&self) -> ObjectId;
 
     fn geometry(&self) -> Rect;
@@ -68,10 +76,19 @@ pub trait Widget: QObject + 'static {
     }
 
     fn size_policy(&self) -> QSizePolicy {
-        QSizePolicy::default()
+        self.widget_base().size_policy()
     }
 
-    fn set_size_policy(&self, _policy: QSizePolicy) {}
+    /// `QWidget::setSizePolicy`: stores the policy and, if it changed, runs `updateGeometry`.
+    fn set_size_policy(&self, policy: QSizePolicy) {
+        self.widget_base().set_size_policy(policy);
+    }
+
+    /// `QWidget::updateGeometry`: this widget's size hint or policy changed, so the parent's
+    /// layout has to run again.
+    fn update_geometry(&self) {
+        self.widget_base().update_geometry();
+    }
     fn is_visible(&self) -> bool;
 
     fn set_visible(&self, visible: bool);
@@ -202,15 +219,33 @@ pub trait Widget: QObject + 'static {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 
-    fn set_style_sheet(&self, _qss: &str) {}
-    /// This widget's own style sheet (not its ancestors').
-    fn style_sheet(&self) -> Option<QStyleSheetStyle> {
-        None
+    /// `QWidget::setStyleSheet`: a `StyleChange` (repaint, `updateGeometry`, own layout invalid).
+    fn set_style_sheet(&self, qss: &str) {
+        self.widget_base().set_style_sheet(qss);
     }
 
-    fn set_property(&self, _name: &str, _value: &str) {}
-    fn property(&self, _name: &str) -> Option<&str> {
-        None
+    /// This widget's own style sheet (not its ancestors').
+    fn style_sheet(&self) -> Option<QStyleSheetStyle> {
+        self.widget_base().style_sheet.borrow().clone()
+    }
+
+    /// Sets a style property (`QObject::setProperty` on a dynamic property).
+    ///
+    /// As in Qt, this alone does not restyle the widget: a `[state="x"]` selector is only
+    /// re-evaluated when the widget is polished again, so call [`repolish`](Self::repolish)
+    /// afterwards (Python does `style().unpolish(w); style().polish(w)`).
+    fn set_property(&self, name: &str, value: &str) {
+        self.widget_base().set_property(name, value);
+    }
+
+    /// `style()->unpolish(w); style()->polish(w)`: re-evaluates the style sheet, which Qt
+    /// reports as a `StyleChange` (`update(); updateGeometry(); layout->invalidate()`).
+    fn repolish(&self) {
+        self.widget_base().style_changed();
+    }
+
+    fn property(&self, name: &str) -> Option<String> {
+        self.widget_base().property(name)
     }
 }
 
@@ -344,8 +379,37 @@ impl WidgetBase {
         self.size_policy.get()
     }
 
+    /// `QWidget::setSizePolicy`: nothing happens when the policy is unchanged.
     pub fn set_size_policy(&self, policy: QSizePolicy) {
+        if self.size_policy.get() == policy {
+            return;
+        }
         self.size_policy.set(policy);
+        self.update_geometry();
+    }
+
+    /// `QWidget::updateGeometry` (`QWidgetPrivate::updateGeometry_helper`, qwidget.cpp:10571):
+    /// asks the parent's layout to run again, since this widget's size hint or policy changed.
+    /// A widget without a parent has no layout above it, so there is no request to make.
+    ///
+    /// qtrs has no `LayoutRequest` event to wake the event loop: queued requests are delivered by
+    /// the next render (`WidgetCommandQueue::flush_layouts`). So the request is paired with an
+    /// `update()`, which is what schedules that render; without it a size-hint change on an
+    /// otherwise idle window would sit in the queue until something else repainted.
+    pub fn update_geometry(&self) {
+        self.request_layout();
+        self.update();
+    }
+
+    /// What `QWidget::event` does for `StyleChange` / `FontChange` (qwidget.cpp:9502-9510):
+    /// `update(); updateGeometry(); layout->invalidate();`.
+    pub fn style_changed(&self) {
+        self.update_geometry();
+        if let Ok(mut layout) = self.layout.try_borrow_mut() {
+            if let Some(layout) = layout.as_mut() {
+                layout.invalidate();
+            }
+        }
     }
 
     pub fn request_layout(&self) {
@@ -371,7 +435,7 @@ impl WidgetBase {
         } else {
             *self.style_sheet.borrow_mut() = Some(QStyleSheetStyle::parse(&format!("* {{ {qss} }}")));
         }
-        self.dirty.set(Some(self.geometry.get()));
+        self.style_changed();
     }
 
     pub fn style_sheet(&self) -> Option<std::cell::Ref<'_, QStyleSheetStyle>> {
@@ -414,6 +478,8 @@ impl WidgetBase {
         QStyleSheetStyle::resolve_chain(&sheets, ctx)
     }
 
+    /// Stores a style property. Like `QObject::setProperty`, this does not restyle the widget;
+    /// `style_changed` (the repolish) does.
     pub fn set_property(&self, name: &str, value: &str) {
         let mut props = self.properties.borrow_mut();
         if let Some(pos) = props.iter().position(|(k, _)| k == name) {
@@ -607,6 +673,10 @@ impl QObject for EmptyWidget {
 }
 
 impl Widget for EmptyWidget {
+    fn widget_base(&self) -> &crate::widget::WidgetBase {
+        &self.base
+    }
+
     fn id(&self) -> ObjectId {
         self.base.object_data.id
     }
@@ -776,22 +846,6 @@ impl Widget for EmptyWidget {
 
     fn set_has_focus(&self, focus: bool) {
         self.base.has_focus.set(focus);
-    }
-
-    fn size_policy(&self) -> QSizePolicy {
-        self.base.size_policy.get()
-    }
-
-    fn set_size_policy(&self, policy: QSizePolicy) {
-        self.base.size_policy.set(policy);
-    }
-
-    fn set_style_sheet(&self, qss: &str) {
-        self.base.set_style_sheet(qss);
-    }
-
-    fn style_sheet(&self) -> Option<QStyleSheetStyle> {
-        self.base.style_sheet.borrow().clone()
     }
 
     fn paint_event(&mut self, painter: &mut Painter) {
