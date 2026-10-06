@@ -40,16 +40,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SetWindowPos, ShowWindow,
     HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
     HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, NCCALCSIZE_PARAMS, SWP_FRAMECHANGED,
-    CS_DBLCLKS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WM_CLOSE,
+    CS_DBLCLKS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, WM_CLOSE,
     WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO,
     WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
     WM_NCCALCSIZE, WM_NCHITTEST, WM_PAINT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP,
     WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_THEMECHANGED,
     WNDCLASSEXW, IDC_ARROW, LoadCursorW,
-    WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW,
-    WS_POPUP, WS_THICKFRAME,
+    WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME, GetForegroundWindow, IsChild,
 };
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -61,6 +61,11 @@ bitflags::bitflags! {
         const LAYERED                = 1 << 3;
         const CLICK_THROUGH          = 1 << 4;
         const CUSTOM_FRAMELESS       = 1 << 5;
+        /// `Qt::ToolTip`: a frameless, always-on-top tool window that is shown without taking
+        /// activation (`WS_EX_NOACTIVATE` + `SW_SHOWNOACTIVATE`, `qwindowswindow.cpp:799-815,
+        /// 1019, 2031-2036`). It never becomes the active window, so showing it does not move
+        /// keyboard focus away from the window it annotates.
+        const TOOLTIP                = 1 << 6;
     }
 }
 
@@ -1183,7 +1188,7 @@ impl NativeWindow {
         let mut dw_style = WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
         let mut dw_ex_style = 0u32;
 
-        if flags.contains(WindowFlags::LAYERED) {
+        if flags.contains(WindowFlags::LAYERED) || flags.contains(WindowFlags::TOOLTIP) {
             dw_style |= WS_POPUP;
         } else if flags.contains(WindowFlags::CUSTOM_FRAMELESS) {
             dw_style |= WS_THICKFRAME | WS_CAPTION | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
@@ -1193,10 +1198,13 @@ impl NativeWindow {
             dw_style |= WS_OVERLAPPEDWINDOW;
         }
 
-        if flags.contains(WindowFlags::STAYS_ON_TOP) {
+        if flags.contains(WindowFlags::STAYS_ON_TOP) || flags.contains(WindowFlags::TOOLTIP) {
             dw_ex_style |= WS_EX_TOPMOST;
         }
-        if flags.contains(WindowFlags::TOOL) {
+        if flags.contains(WindowFlags::TOOLTIP) {
+            dw_ex_style |= WS_EX_NOACTIVATE;
+        }
+        if flags.contains(WindowFlags::TOOL) || flags.contains(WindowFlags::TOOLTIP) {
             dw_ex_style |= WS_EX_TOOLWINDOW;
         } else {
             dw_ex_style |= WS_EX_APPWINDOW;
@@ -1328,7 +1336,12 @@ impl NativeWindow {
     pub fn show(&self) {
         if !self.hwnd.is_null() {
             unsafe {
-                ShowWindow(self.hwnd, SW_SHOW);
+                let cmd = if self.flags.contains(WindowFlags::TOOLTIP) {
+                    SW_SHOWNOACTIVATE
+                } else {
+                    SW_SHOW
+                };
+                ShowWindow(self.hwnd, cmd);
             }
         }
     }
@@ -1600,6 +1613,17 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
 
     fn hide(&self) {
         self.hide();
+    }
+
+    /// `QWindowsWindow::isActive` (`qwindowswindow.cpp:1904-1910`): the window is the foreground
+    /// window, or a child of it.
+    fn is_active(&self) -> bool {
+        if self.hwnd.is_null() {
+            return false;
+        }
+        let foreground = unsafe { GetForegroundWindow() };
+        !foreground.is_null()
+            && (foreground == self.hwnd || unsafe { IsChild(foreground, self.hwnd) } != 0)
     }
 
     fn geometry(&self) -> Rect {

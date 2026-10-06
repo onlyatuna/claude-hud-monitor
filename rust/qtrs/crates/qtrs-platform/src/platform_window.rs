@@ -20,6 +20,12 @@ pub type WindowEdge = WindowEdges;
 pub trait PlatformWindow: 'static {
     fn show(&self);
     fn hide(&self);
+    /// Whether this window is the active window (`QPlatformWindow::isActive`, which on Windows is
+    /// the foreground-window check in `qwindowswindow.cpp:1904-1910`). Required, with no default:
+    /// the answer is platform state that a backend must report, not a value to assume. A hidden
+    /// window is never active, and a `WindowFlags::TOOLTIP` window never becomes active by being
+    /// shown.
+    fn is_active(&self) -> bool;
     fn geometry(&self) -> Rect;
     fn set_geometry(&mut self, rect: Rect);
     fn set_stays_on_top(&mut self, enabled: bool);
@@ -101,6 +107,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 pub struct GenericWindow {
+    /// Set by `FocusIn` and cleared by `FocusOut`/`hide`, from the events the window system
+    /// delivers (this backend has no OS window to query).
+    active: AtomicBool,
     geometry: Rect,
     visible: AtomicBool,
     stays_on_top: bool,
@@ -116,9 +125,11 @@ pub struct GenericWindow {
 impl GenericWindow {
     pub fn new(_title: &str, rect: Rect, flags: WindowFlags) -> Self {
         Self {
+            active: AtomicBool::new(false),
             geometry: rect,
             visible: AtomicBool::new(false),
-            stays_on_top: flags.contains(WindowFlags::STAYS_ON_TOP),
+            stays_on_top: flags.contains(WindowFlags::STAYS_ON_TOP)
+                || flags.contains(WindowFlags::TOOLTIP),
             click_through: flags.contains(WindowFlags::CLICK_THROUGH),
             handler: None,
             pending_events: Mutex::new(Vec::new()),
@@ -152,6 +163,11 @@ impl PlatformWindow for GenericWindow {
 
     fn hide(&self) {
         self.visible.store(false, Ordering::Release);
+        self.active.store(false, Ordering::Release);
+    }
+
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
     }
 
     fn geometry(&self) -> Rect {
@@ -221,6 +237,17 @@ impl PlatformWindow for GenericWindow {
     fn poll_events(&mut self) -> usize {
         let events = std::mem::take(&mut *self.pending_events.lock().unwrap());
         let count = events.len();
+        for event in &events {
+            match event {
+                crate::window_system_interface::WindowSystemEvent::FocusIn => {
+                    self.active.store(true, Ordering::Release)
+                }
+                crate::window_system_interface::WindowSystemEvent::FocusOut => {
+                    self.active.store(false, Ordering::Release)
+                }
+                _ => {}
+            }
+        }
         if let Some(handler) = self.handler.as_mut() {
             for event in events {
                 handler.handle_window_event(event);

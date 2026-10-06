@@ -849,7 +849,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`Frameless | Tool | StaysOnTop` 對應無邊框、tool、topmost 視窗；`WA_TranslucentBackground` 使其為 per-pixel alpha；`setWindowFlag(WindowStaysOnTopHint, v)` **重建**原生視窗並隱藏，呼叫端要再 `show()`。
 - **qtrs required**：HUD 旗標 MUST 產生 `WS_POPUP | WS_EX_TOOLWINDOW | WS_EX_LAYERED`，on-top 時加 `WS_EX_TOPMOST`；topmost 切換 MUST 保持視窗可見且幾何不變。
 - **Current implementation**：旗標 `IMPLEMENTED`，切換 `PARTIAL`。`NativeWindow::new`（`qtrs-platform/src/window.rs`）；HUD 請求 `FRAMELESS | CUSTOM_FRAMELESS | LAYERED | TOOL [| STAYS_ON_TOP] [| CLICK_THROUGH]`（`hud_window.rs:207-216`）；`LAYERED` 優先於 `CUSTOM_FRAMELESS`，所以不裝 NCHITTEST 設定，resize／move 走 `start_system_move/resize`（與 Python 的 `startSystemMove/Resize` 相同）；`set_stays_on_top` 就地 `SetWindowPos(HWND_TOPMOST/NOTOPMOST)`。
-- **Known gap**：**G11.1.a [P2]** 無 `set_window_flags`；就地 `SetWindowPos` 保持可見，可觀察終態與 Python 的 `setWindowFlag + show()` 一致；**G11.1.b [P1]** 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT`。
+- **Known gap**：**G11.1.a [P2]** 無 `set_window_flags`；就地 `SetWindowPos` 保持可見，可觀察終態與 Python 的 `setWindowFlag + show()` 一致；**G11.1.b [P1]** 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT`；**G11.1.c [P2, READ]** X11／Wayland／Cocoa 後端是模擬：沒有真實 X server／Wayland compositor／AppKit 連線（Cocoa 走 `MockObjcRuntime`）。RC-11b 之後 `is_active` 與 `WindowFlags::TOOLTIP` 在這些後端上由注入的事件或 mock 狀態驅動（X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Cocoa `isKeyWindow`），未對真實系統驗證；X11 沒有 window type／override-redirect，Wayland 沒有 popup role。Wayland 以 keyboard focus 為 active，qtwayland 原始碼不在 `qtbase/`，`[INFERENCE]`；**G11.1.d [P1, READ]** `Application::active_window()` 從不被設定（`set_active_window` 只有測試呼叫），沒有 `WindowActivate`／`WindowDeactivate`／`ActivationChange` 遞送給 widget，`QWidget::isActiveWindow` 不存在。平台層 `PlatformWindow::is_active` 已可用（RC-11b），但尚未接到 toolkit 層；RC-11c 的「只在 active window 顯示 tooltip」需要它。
 - **Test**：既有 `window.rs::test_window_flags_to_win32_styles`（建立時樣式）、`test_native_window_lifecycle_and_methods`（只查 `flags` 欄位）。必要：`set_stays_on_top(false)` 後 `GetWindowLongPtrW(GWL_EXSTYLE) & WS_EX_TOPMOST == 0`。
 - **HUD usage**：Python `hud_window.py:123-128,804-812`；Rust `hud_window.rs:538-545`。
 
@@ -1143,7 +1143,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 304 項：D 12、P0 34、P1 134、P2 119、test gap 5（計數含已修復項；標籤含「已修復」者共 27 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 306 項：D 12、P0 34、P1 135、P2 120、test gap 5（計數含已修復項；標籤含「已修復」者共 27 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1377,6 +1377,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.7.i | test gap | 沒有異 DPI 實機測試：RC-08 的測試以 fake platform |
 | G11.1.a | P2 | 無 `set_window_flags` |
 | G11.1.b | P1 | 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT` |
+| G11.1.c | P2, READ | X11／Wayland／Cocoa 後端是模擬，`is_active`／`TOOLTIP` 未對真實系統驗證 |
+| G11.1.d | P1, READ | `Application::active_window()` 從不被設定，無 `ActivationChange`／`isActiveWindow`（`is_active` 尚未接到 toolkit 層） |
 | G11.2.a | P1, READ；已修復：RC-06 | 無 `Window::is_visible()` |
 | G11.2.b | P0, READ；已修復：RC-06 | `CloseRequest` 在 `WindowEventHandler` 被 `_ => {}` 吞掉 |
 | G11.2.c | P0, READ；已修復：RC-06 | 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust  |
@@ -1744,7 +1746,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Phase**：3。
 - **範圍（使用者核定）**：
   - **RC-11a**（已完成，commit 另列）：`Timer` 重啟語意，G5.1.f。只改 `register_object_metadata` 的 liveness 處理；未改其他計時器語意（G5.4.a/b、單發、`remaining_time` 皆未動）。實作完成，無需手動驗證。
-  - **RC-11b**（待做）：`PlatformWindow::is_active()`（每個後端都要有真實實作，不可用假的 default）、非搶焦點顯示視窗型態。
+  - **RC-11b**（implementation complete / real X11、Wayland、macOS 驗證 pending）：`PlatformWindow::is_active()`（必要方法，無 default；Win32 = `QWindowsWindow::isActive` 的 `GetForegroundWindow` 檢查，真實驗證；Cocoa `isKeyWindow`、X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Generic `FocusIn/Out`，皆為模擬驗證）與 `WindowFlags::TOOLTIP`（Win32：`WS_POPUP`＋`WS_EX_NOACTIVATE|TOPMOST|TOOLWINDOW`＋`SW_SHOWNOACTIVATE`；Cocoa：`orderFront:` 不成為 key）。測試 `qtrs-platform/tests/test_window_activation.rs`（11 項，含「一般視窗 `show()` 會搶前景」的對照組；變異檢查：把 `SW_SHOWNOACTIVATE` 改回 `SW_SHOW` 時前景測試 FAIL）。新缺口 G11.1.c、G11.1.d。新 API 無法在舊 code 上執行，故無 before-FAIL，以變異檢查代替。
   - **RC-11c**（待做）：`QWidget::tool_tip`／`ToolTipChange`；`EventKind::ToolTip` 改為 `QHelpEvent` 形狀（pos＋global_pos，移除自創的 `text` 欄位，文字由 widget 的 `tool_tip` 取得）；wake-up（700 ms）／fall-asleep（2000 ms）狀態機；沿 parent 冒泡；`QToolTip::showText` 位置（翻轉＋夾入螢幕）與存活時間 `10000+40*max(0,len-100)`。
   - **計時器規則**：700 ms／2 s 是 Qt tooltip 協定，明確豁免「不新增 timer／debounce」規則，不是 application debounce。
   - **外觀**（圓角、深色底、字型）留手動驗證；自動化契約只鎖：觸發、取消、冒泡、位置、存活、不搶焦點。

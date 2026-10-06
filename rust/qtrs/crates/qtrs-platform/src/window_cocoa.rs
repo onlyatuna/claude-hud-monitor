@@ -67,7 +67,9 @@ impl CocoaNativeWindow {
             .or_else(|| Class::get("NSView"))
             .ok_or("Cannot find class (QNSView / NSView)")?;
 
-        let mut style_mask = if flags.contains(WindowFlags::FRAMELESS) {
+        let mut style_mask = if flags.contains(WindowFlags::FRAMELESS)
+            || flags.contains(WindowFlags::TOOLTIP)
+        {
             NS_WINDOW_STYLE_MASK_BORDERLESS
         } else {
             NS_WINDOW_STYLE_MASK_TITLED
@@ -116,7 +118,8 @@ impl CocoaNativeWindow {
 
         ObjcMsg::send_id(ns_window, Sel::register("setContentView:"), ns_view);
 
-        let stays_on_top = flags.contains(WindowFlags::STAYS_ON_TOP);
+        let stays_on_top =
+            flags.contains(WindowFlags::STAYS_ON_TOP) || flags.contains(WindowFlags::TOOLTIP);
         if stays_on_top {
             ObjcMsg::send_int(
                 ns_window,
@@ -354,12 +357,19 @@ impl CocoaNativeWindow {
 
 impl PlatformWindow for CocoaNativeWindow {
     fn show(&self) {
-        ObjcMsg::send_id(
-            self.ns_window,
-            Sel::register("makeKeyAndOrderFront:"),
-            Id::NIL,
-        );
+        // A tooltip is ordered front without becoming the key window (`Qt::ToolTip` does not
+        // take activation); every other window becomes key.
+        let order = if self.flags.contains(WindowFlags::TOOLTIP) {
+            "orderFront:"
+        } else {
+            "makeKeyAndOrderFront:"
+        };
+        ObjcMsg::send_id(self.ns_window, Sel::register(order), Id::NIL);
         self.visible.store(true, Ordering::Release);
+    }
+
+    fn is_active(&self) -> bool {
+        ObjcMsg::send_bool_return(self.ns_window, Sel::register("isKeyWindow"))
     }
 
     fn hide(&self) {

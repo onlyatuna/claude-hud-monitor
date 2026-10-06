@@ -42,6 +42,10 @@ pub enum WaylandEvent {
         state: u32,
         modifiers: u32,
     },
+    /// `wl_keyboard.enter`: the surface gained keyboard focus.
+    KeyboardEnter,
+    /// `wl_keyboard.leave`: the surface lost keyboard focus.
+    KeyboardLeave,
     CloseRequest,
     BufferRelease,
 }
@@ -83,6 +87,8 @@ pub struct WaylandNativeWindow {
     stays_on_top: bool,
     click_through: bool,
     visible: AtomicBool,
+    /// Keyboard focus (`wl_keyboard.enter`/`leave`); cleared when the surface is hidden.
+    active: AtomicBool,
     surface: Mutex<Option<WaylandShmSurface>>,
     connection_fd: SocketDescriptor,
     socket_notifier: Option<Arc<SocketNotifier>>,
@@ -127,7 +133,8 @@ impl WaylandNativeWindow {
         let connection_fd = (surface_id % 1000 + 20) as SocketDescriptor;
         let is_layer_shell =
             flags.contains(WindowFlags::FRAMELESS) || flags.contains(WindowFlags::STAYS_ON_TOP);
-        let stays_on_top = flags.contains(WindowFlags::STAYS_ON_TOP);
+        let stays_on_top =
+            flags.contains(WindowFlags::STAYS_ON_TOP) || flags.contains(WindowFlags::TOOLTIP);
         let click_through = flags.contains(WindowFlags::CLICK_THROUGH);
 
         let surface = if rect.width > 0 && rect.height > 0 {
@@ -154,6 +161,7 @@ impl WaylandNativeWindow {
             stays_on_top,
             click_through,
             visible: AtomicBool::new(false),
+            active: AtomicBool::new(false),
             surface: Mutex::new(surface),
             connection_fd,
             socket_notifier: None,
@@ -266,6 +274,12 @@ impl WaylandNativeWindow {
     }
 
     pub fn dispatch_wayland_event(&mut self, event: WaylandEvent) -> bool {
+        match event {
+            WaylandEvent::KeyboardEnter => self.active.store(true, Ordering::Release),
+            WaylandEvent::KeyboardLeave => self.active.store(false, Ordering::Release),
+            _ => {}
+        }
+
         if let WaylandEvent::BufferRelease = event {
             if let Some(surface) = self.surface.lock().unwrap().as_ref() {
                 surface.on_buffer_release();
@@ -355,6 +369,12 @@ impl WaylandNativeWindow {
                     });
                 }
             }
+            WaylandEvent::KeyboardEnter => {
+                handler.handle_window_event(WindowSystemEvent::FocusIn);
+            }
+            WaylandEvent::KeyboardLeave => {
+                handler.handle_window_event(WindowSystemEvent::FocusOut);
+            }
             WaylandEvent::CloseRequest => {
                 handler.handle_window_event(WindowSystemEvent::CloseRequest);
             }
@@ -375,6 +395,11 @@ impl PlatformWindow for WaylandNativeWindow {
 
     fn hide(&self) {
         self.visible.store(false, Ordering::Release);
+        self.active.store(false, Ordering::Release);
+    }
+
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
     }
 
     fn geometry(&self) -> Rect {

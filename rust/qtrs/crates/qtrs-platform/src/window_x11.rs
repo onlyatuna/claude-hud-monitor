@@ -184,6 +184,8 @@ pub struct X11NativeWindow {
     stays_on_top: bool,
     click_through: bool,
     visible: AtomicBool,
+    /// Input focus (`FocusIn`/`FocusOut`); cleared when the window is hidden.
+    active: AtomicBool,
     surface: Mutex<Option<X11ShmSurface>>,
     connection_fd: SocketDescriptor,
     socket_notifier: Option<Arc<SocketNotifier>>,
@@ -228,7 +230,8 @@ impl X11NativeWindow {
 
         #[cfg(not(target_os = "linux"))]
         let connection_fd = (xid % 1000 + 10) as SocketDescriptor;
-        let stays_on_top = flags.contains(WindowFlags::STAYS_ON_TOP);
+        let stays_on_top =
+            flags.contains(WindowFlags::STAYS_ON_TOP) || flags.contains(WindowFlags::TOOLTIP);
         let click_through = flags.contains(WindowFlags::CLICK_THROUGH);
 
         let surface = if rect.width > 0 && rect.height > 0 {
@@ -250,6 +253,7 @@ impl X11NativeWindow {
             stays_on_top,
             click_through,
             visible: AtomicBool::new(false),
+            active: AtomicBool::new(false),
             surface: Mutex::new(surface),
             connection_fd,
             socket_notifier: None,
@@ -310,6 +314,13 @@ impl X11NativeWindow {
     }
 
     pub fn dispatch_x11_event(&mut self, event: X11Event) -> bool {
+        // Window-system state changes whether or not anyone listens for the event.
+        match event {
+            X11Event::FocusIn => self.active.store(true, Ordering::Release),
+            X11Event::FocusOut => self.active.store(false, Ordering::Release),
+            _ => {}
+        }
+
         let Some(handler) = self.event_handler.as_mut() else {
             return false;
         };
@@ -437,6 +448,11 @@ impl PlatformWindow for X11NativeWindow {
 
     fn hide(&self) {
         self.visible.store(false, Ordering::Release);
+        self.active.store(false, Ordering::Release);
+    }
+
+    fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
     }
 
     fn geometry(&self) -> Rect {

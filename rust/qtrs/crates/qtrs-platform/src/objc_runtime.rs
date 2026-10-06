@@ -240,6 +240,8 @@ pub struct MockObjectData {
     pub ignores_mouse_events: bool,
     pub is_flipped: bool,
     pub is_visible: bool,
+    /// `-[NSWindow isKeyWindow]`: set by `makeKeyAndOrderFront:`, cleared by `orderOut:`.
+    pub is_key: bool,
     pub state: NSInteger,
     pub enabled: bool,
     pub children: Vec<Id>,
@@ -264,6 +266,7 @@ impl Default for MockObjectData {
             ignores_mouse_events: false,
             is_flipped: false,
             is_visible: false,
+            is_key: false,
             state: NS_CONTROL_STATE_VALUE_OFF,
             enabled: true,
             children: Vec::new(),
@@ -572,6 +575,20 @@ impl ObjcMsg {
                 runtime.update_object(receiver, |data| {
                     data.menu = arg;
                 });
+            } else if sel_name == "makeKeyAndOrderFront:" {
+                runtime.update_object(receiver, |data| {
+                    data.is_visible = true;
+                    data.is_key = true;
+                });
+            } else if sel_name == "orderFront:" {
+                runtime.update_object(receiver, |data| {
+                    data.is_visible = true;
+                });
+            } else if sel_name == "orderOut:" {
+                runtime.update_object(receiver, |data| {
+                    data.is_visible = false;
+                    data.is_key = false;
+                });
             } else if sel_name == "setContents:" {
                 runtime.update_object(receiver, |data| {
                     data.contents = arg;
@@ -823,6 +840,10 @@ impl ObjcMsg {
             if sel_name == "isFlipped" {
                 if let Some(obj) = runtime.get_object_data(receiver) {
                     return obj.is_flipped;
+                }
+            } else if sel_name == "isKeyWindow" {
+                if let Some(obj) = runtime.get_object_data(receiver) {
+                    return obj.is_key;
                 }
             }
             false

@@ -36,6 +36,10 @@ struct FakeWindow {
 impl PlatformWindow for FakeWindow {
     fn show(&self) {}
     fn hide(&self) {}
+    /// This double only exercises the device pixel ratio; it does not model activation.
+    fn is_active(&self) -> bool {
+        false
+    }
     fn geometry(&self) -> Rect {
         self.geometry
     }
