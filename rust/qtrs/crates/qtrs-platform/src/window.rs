@@ -40,7 +40,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     RegisterClassExW, SetWindowPos, ShowWindow,
     HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
     HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, NCCALCSIZE_PARAMS, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WM_CLOSE,
+    CS_DBLCLKS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, WM_CLOSE,
     WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO,
     WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
@@ -789,7 +789,7 @@ unsafe fn native_window_proc_inner(
             dispatch_window_system_event(
                 Delivery::Default,
                 hwnd,
-                WindowSystemEvent::MousePress {
+                WindowSystemEvent::MouseDoubleClick {
                     pos,
                     global_pos,
                     button,
@@ -1105,7 +1105,8 @@ fn ensure_native_window_class_registered() {
         let h_instance = GetModuleHandleW(ptr::null());
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
-            style: 0,
+            // Qt registers every window class with CS_DBLCLKS (qwindowswindowclassdescription.cpp:67).
+            style: CS_DBLCLKS,
             lpfnWndProc: Some(native_window_proc),
             cbClsExtra: 0,
             cbWndExtra: 0,

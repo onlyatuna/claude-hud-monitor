@@ -633,7 +633,9 @@ impl QObject for EmptyWidget {
                 ..
             } => {
                 self.wheel_event(Point::new(*x, *y), *angle_delta_y, *modifiers);
-                true
+                // The default `wheel_event` does nothing, like `QWidget::wheelEvent`, which
+                // ignores the event so that it reaches the parent (a scroll area).
+                false
             }
             EventKind::Resize {
                 width,

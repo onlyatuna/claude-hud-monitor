@@ -181,10 +181,17 @@ impl QObject for ScrollBar {
             }
             EventKind::MouseButtonPress { x, y, button } => {
                 self.mouse_press_event(Point::new(*x, *y), *button, 0);
+                // QAbstractSlider ignores every button but the left one.
+                if *button != 1 {
+                    event.ignore();
+                }
                 true
             }
             EventKind::MouseButtonRelease { x, y, button } => {
                 self.mouse_release_event(Point::new(*x, *y), *button, 0);
+                if *button != 1 {
+                    event.ignore();
+                }
                 true
             }
             EventKind::MouseMove { x, y } => {

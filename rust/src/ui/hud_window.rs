@@ -128,7 +128,6 @@ pub struct HUDWindow {
     pub refresh_ctrl: Arc<Mutex<RefreshController>>,
     pub providers: HashMap<String, Arc<dyn Provider + Send + Sync>>,
     pub window: Window,
-    pub is_visible: bool,
     pub is_click_through: bool,
     pub is_dark: bool,
     pub theme: Theme,
@@ -414,7 +413,6 @@ impl HUDWindow {
             refresh_ctrl,
             providers,
             window,
-            is_visible: true,
             is_click_through: ct,
             is_dark: dark,
             theme,
@@ -472,12 +470,10 @@ impl HUDWindow {
     }
 
     pub fn show(&mut self) {
-        self.is_visible = true;
         self.window.show();
     }
 
     pub fn hide(&mut self) {
-        self.is_visible = false;
         self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
@@ -486,7 +482,6 @@ impl HUDWindow {
 
     #[allow(dead_code)]
     pub fn close(&mut self) {
-        self.is_visible = false;
         self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
@@ -516,7 +511,7 @@ impl HUDWindow {
     }
 
     pub fn toggle_visibility(&mut self) {
-        if self.is_visible {
+        if self.window.is_visible() {
             self.hide();
         } else {
             self.show();

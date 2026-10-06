@@ -218,10 +218,17 @@ impl QObject for Button {
             }
             EventKind::MouseButtonPress { x, y, button } => {
                 self.mouse_press_event(Point::new(*x, *y), *button, 0);
+                // QAbstractButton::mousePressEvent ignores every button but the left one.
+                if *button != 1 {
+                    event.ignore();
+                }
                 true
             }
             EventKind::MouseButtonRelease { x, y, button } => {
                 self.mouse_release_event(Point::new(*x, *y), *button, 0);
+                if *button != 1 {
+                    event.ignore();
+                }
                 true
             }
             EventKind::FocusIn { reason } => {

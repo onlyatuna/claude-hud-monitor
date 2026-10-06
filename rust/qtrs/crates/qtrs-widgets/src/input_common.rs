@@ -172,7 +172,8 @@ pub(crate) fn dispatch_input_event<W: crate::widget::Widget + ?Sized>(
             ..
         } => {
             widget.wheel_event(Point::new(*x, *y), *angle_delta_y, *modifiers);
-            true
+            // Leaf input widgets have no wheel behaviour: let it reach the parent.
+            false
         }
         EventKind::Resize {
             width,

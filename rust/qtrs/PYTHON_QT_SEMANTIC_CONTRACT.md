@@ -602,13 +602,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 按住按鍵時 press／release／move 送給 press 目標；MUST 未 accept 的 press／release 上傳到祖先（HUD 的拖曳／縮放依賴此）；MUST Enter／Leave 送給祖先鏈扣除共同祖先；MUST 一般 MouseMove 只給 tracking widget（含吞掉規則）。
 - **Current implementation**：`PARTIAL`。`EventTreeDispatcher::dispatch_event_internal`（`hit_test.rs`）只送給 hit-test 的**單一葉節點**並回傳其 `event()` 結果——**沒有 parent fallback**；MouseMove 一律送（無 tracking 概念）；Enter/Leave 只在連續葉目標之間；grab 只存在於 popup（`PopupManager::mouse_grabber`），且只用於 press／release；無隱式 press grab；`ScrollBar` 拖曳離開 bar 後就不再跟隨；modifiers 對 press／release 恆為 0；`Button` 按下後移出再移回不會 click。`Window` 在派送的 press 回 `false` 時才退回 `mouse_press_cb`——只對 press 模擬「冒泡到頂層」。
 - **Known gap**
-  - **G8.4.a [P0, READ]** 無 parent 傳遞（只對 press 模擬）；HUD 的拖曳／縮放是 Python 依賴子 label／button 冒泡到視窗，Rust 靠 fallback 模擬。
+  - **G8.4.a [P0, READ；已修復：RC-06]** 無 parent 傳遞（只對 press 模擬）；HUD 的拖曳／縮放是 Python 依賴子 label／button 冒泡到視窗，Rust 靠 fallback 模擬。
   - **G8.4.b [P1]** 無 tracking 語意（Python HUD `setMouseTracking(True)`，`hud_window.py:129,140`；Rust 過度遞送，無害但不相等）。
   - **G8.4.c [P1]** 無隱式 grab。
   - **G8.4.d [P1]** Enter/Leave 非祖先鏈；既有 `test_hover_enter_leave_events_transition` 釘住「child→parent 送 Leave(child)+Enter(parent)」——**實作前先對照 `qapplication.cpp:2037-2123` 確認該序列是否為 Qt 行為，不是就改寫測試**。
   - **G8.4.e [P2]** 無 `WA_TransparentForMouseEvents`／`WA_NoMousePropagation`；視窗離開時 Leave 只送最後一個葉。
   - **G8.4.f [P1]** 右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關。
-  - **G8.4.g [P1]** `Window` 沒有 release／double-click／move handler（見 C11.2、G12.5.f）。
+  - **G8.4.g [P1；已修復：RC-06]** `Window` 沒有 release／double-click／move handler（見 C11.2、G12.5.f）。
+  - **G8.4.h [P1, READ]** RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTracking`（`qapplication.cpp:2735-2740`），qtrs 兩者都沒有（G8.4.b、G8.4.c）；(2) 雙擊只有 Win32 平台層會產生（視窗類別 `CS_DBLCLKS`，`qwindowswindowclassdescription.cpp:67`）；X11／Wayland／Cocoa 的第二次點擊仍是一般 `MousePress`——Qt 是在通用層用 `mouseDoubleClickInterval`／`mouseDoubleClickDistance` 判斷（`qguiapplication.cpp:2401-2425`），qtrs 沒有這一層；(3) 沒有 `WA_NoMousePropagation`（G8.4.e）。
+  - **G8.4.i [P2]** `Window::set_mouse_press_handler`／`set_mouse_move_handler`／`set_context_menu_handler` 與新的 `set_window_event_handler` 是兩套並存的視窗層 handler API；press 與 move 的語意（未被 widget 處理才呼叫）與 `set_window_event_handler` 一致，但沒有合併。
 - **Test**：既有 `test_widget_hit_test_and_event_dispatch`、`test_hover_enter_leave_events_transition`、`test_builtin_button_click_and_state_transition`。必要：`unaccepted_press_bubbles_to_parent`；`accepted_press_stops_bubbling`；`press_grab_routes_move_and_release_outside_widget`；`enter_leave_ancestor_chain_minus_common_ancestor`；`mousemove_without_tracking_is_swallowed`。
 - **HUD usage**：Python `mousePressEvent/MoveEvent/ReleaseEvent/resizeEvent/moveEvent`（`hud_window.py:560-606`）；`enterEvent/leaveEvent/eventFilter` 無。Rust：`set_mouse_move_handler/set_mouse_press_handler/set_resize_handler`（`hud_window.rs:325,352,368`）。
 
@@ -845,13 +847,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：`Window` MUST 回報真實可見性；關閉請求 MUST 到達 app，Alt+F4 MUST 隱藏 HUD 而不結束程式；Show／Hide 通知 MUST 到達 widget 樹。
 - **Current implementation**：`PARTIAL`。`show/hide` 呼叫 `ShowWindow`；`WM_CLOSE` post `CloseRequest`/`Close` 並回 0——**從不隱藏或銷毀**；`WM_SHOWWINDOW`/`WM_PAINT` 只對 `get_window_event_binding` post `Show/Hide/Expose`，HUD 從不綁定（grep `bind_event_loop` 只有定義）；widgets crate 從不處理這些事件。
 - **Known gap**
-  - **G11.2.a [P1, READ]** 無 `Window::is_visible()`；Rust `HUDWindow.is_visible` 是自行追蹤的 bool（`hud_window.rs:131,518-523`）。
-  - **G11.2.b [P0, READ]** `CloseRequest` 在 `WindowEventHandler` 被 `_ => {}` 吞掉（grep `CloseRequest` 於 `rust/src`、`qtrs-widgets/src` 為空）。**Alt+F4 什麼也不做**；Python 會隱藏 HUD 並儲存幾何。
-  - **G11.2.c [P0, READ]** 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust 對應（Rust 在 `hide()` 裡直接做，`hud_window.rs:479-485`）。
+  - **G11.2.a [P1, READ；已修復：RC-06]** 無 `Window::is_visible()`；Rust `HUDWindow.is_visible` 是自行追蹤的 bool（`hud_window.rs:131,518-523`）。
+  - **G11.2.b [P0, READ；已修復：RC-06]** `CloseRequest` 在 `WindowEventHandler` 被 `_ => {}` 吞掉（grep `CloseRequest` 於 `rust/src`、`qtrs-widgets/src` 為空）。**Alt+F4 什麼也不做**；Python 會隱藏 HUD 並儲存幾何。
+  - **G11.2.c [P0, READ；已修復：RC-06]** 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust 對應（Rust 在 `hide()` 裡直接做，`hud_window.rs:479-485`）。
   - **G11.2.d [P2]** 無 `Expose` 重繪（分層 presenter 保留內容，非分層 `Win32DcPresenter` 視窗被遮蓋後不會重繪）。
   - **G11.2.e [P1, READ]** `Application::unregister_window` 在 drop 時、`quit_on_last_window_closed` 為 true 就呼叫 `quit`；Qt 在**關閉**時發 `lastWindowClosed`，不是銷毀時。
   - **G11.2.f [P2]** `GuiApplication::set_application_state`、`last_window_closed`、`focus_window_changed` 從不發射。
   - **G11.2.g [P1]** `main.rs` 從不 `set quit_on_last_window_closed(false)`（Python：`main.py:48`）。
+  - **G11.2.h [P1, READ]** RC-06 之後 `Show`／`Hide` 仍只來自 `Window::show`／`hide`／`close`；原生發起的可見性改變（`WM_SHOWWINDOW` 被 post 給 `Window::event`，該處忽略；最小化／還原；他人呼叫 `ShowWindow`）不會送 `Show`／`Hide`，`Window::is_visible` 也不會跟著變。`close` 不發 `lastWindowClosed`、不處理 `WA_DeleteOnClose`（G11.2.e、G11.2.f 仍開放）。`Move` 只來自原生 `GeometryChange` 且 `old` 位置取自 qtrs 自己記錄的值。
 - **Test**：既有 `test_application_layers.rs::{test_widget_application_window_registry_and_focus, test_core_application_exec_quit_and_about_to_quit}`（無 `closeEvent` 涵蓋）。必要：合成 `WM_CLOSE`，斷言視窗隱藏、`quit_on_last_window_closed(false)` 時 app 不結束、close hook 被呼叫；`Window::is_visible()` 跟隨 `show/hide`。
 - **HUD usage**：Python `main.py:60`、`hud_window.py:861-866`、`main.py:48`；Rust `main.rs:335`、`hud_window.rs:518-523`。
 
@@ -1082,8 +1085,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.c [P1] | 面板底色不依 Acrylic 是否成功而改變 | `hud_window.rs:88-92,229` vs `hud_window.py:240-250` | 修復 |
 | G12.5.d [P0, READ] | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 只有 resize 的 `ResizeDebouncer` + 3 s 輪詢抓移動，且無 release handler | `hud_window.py:595-609,624-649` vs `config.rs:396`、`main.rs:575-591` | 修復 |
 | G12.5.e [P0, READ] | 喚醒偵測（倒數 tick 間隔 >15 s 就刷新）在 Rust 不存在 | `hud_window.py:461-467`；grep `gap|WM_POWERBROADCAST|resume` 於 `rust/src` 為空 | 修復 |
-| G12.5.f [P0, READ] | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 | `window.rs:1025`（platform 有發 release）；`window.rs:771-815` | 修復 |
-| G12.5.g [P0, READ；= G11.2.b] | Alt+F4 / `CloseRequest` 被吞 | G11.2.b | 修復 |
+| G12.5.f [P0, READ；已修復：RC-06] | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 | `window.rs:1025`（platform 有發 release）；`window.rs:771-815` | 修復 |
+| G12.5.g [P0, READ；= G11.2.b；已修復：RC-06] | Alt+F4 / `CloseRequest` 被吞 | G11.2.b | 修復 |
 | G12.5.h [P1] | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms（啟動後 trim）；Rust 在 `hide()` 立即 trim，且只有 2500 ms | `hud_window.py:108,114,215,459,613,617` vs `hud_window.rs:484`、`main.rs:594` | 修復或核准 |
 | G12.5.i [P0, READ；= G8.8.a] | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） | G8.8.a | 修復 |
 | G12.5.j [P0, READ；= G11.9.a] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
@@ -1125,7 +1128,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 286 項：D 12、P0 34、P1 125、P2 112、test gap 3（計數含已修復項；標籤含「已修復」者共 10 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.5.c）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 289 項：D 12、P0 34、P1 127、P2 113、test gap 3（計數含已修復項；標籤含「已修復」者共 17 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G11.2.a、G11.2.b、G11.2.c、G12.5.f、G12.5.g）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1278,13 +1281,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
 | G8.3.d | P2 | 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值 |
 | G8.3.e | P1, READ | `UsageDial`：Python `setMinimumSize(84,84)` |
-| G8.4.a | P0, READ | 無 parent 傳遞 |
+| G8.4.a | P0, READ；已修復：RC-06 | 無 parent 傳遞 |
 | G8.4.b | P1 | 無 tracking 語意 |
 | G8.4.c | P1 | 無隱式 grab |
 | G8.4.d | P1 | Enter/Leave 非祖先鏈 |
 | G8.4.e | P2 | 無 `WA_TransparentForMouseEvents`／`WA_NoMousePropagation` |
 | G8.4.f | P1 | 右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關 |
-| G8.4.g | P1 | `Window` 沒有 release／double-click／move handler |
+| G8.4.g | P1；已修復：RC-06 | `Window` 沒有 release／double-click／move handler |
+| G8.4.h | P1, READ | RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTr |
+| G8.4.i | P2 | `Window::set_mouse_press_handler`／`set_mouse_move_handler`／`set_context_menu_handler` 與新的  |
 | G8.5.a | P1, READ | 無繼承比對 |
 | G8.5.b | P1, READ | `attributes` 只有 Label |
 | G8.5.c | P0, READ；已修復：RC-05 | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
@@ -1346,13 +1351,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.7.c | P1, READ | `HighDpiScaleFactorRoundingPolicy` 存了但從不讀 |
 | G11.1.a | P2 | 無 `set_window_flags` |
 | G11.1.b | P1 | 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT` |
-| G11.2.a | P1, READ | 無 `Window::is_visible()` |
-| G11.2.b | P0, READ | `CloseRequest` 在 `WindowEventHandler` 被 `_ => {}` 吞掉 |
-| G11.2.c | P0, READ | 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust  |
+| G11.2.a | P1, READ；已修復：RC-06 | 無 `Window::is_visible()` |
+| G11.2.b | P0, READ；已修復：RC-06 | `CloseRequest` 在 `WindowEventHandler` 被 `_ => {}` 吞掉 |
+| G11.2.c | P0, READ；已修復：RC-06 | 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust  |
 | G11.2.d | P2 | 無 `Expose` 重繪 |
 | G11.2.e | P1, READ | `Application::unregister_window` 在 drop 時、`quit_on_last_window_closed` 為 true 就呼叫 `quit` |
 | G11.2.f | P2 | `GuiApplication::set_application_state`、`last_window_closed`、`focus_window_changed` 從不發射 |
 | G11.2.g | P1 | `main.rs` 從不 `set quit_on_last_window_closed(false)` |
+| G11.2.h | P1, READ | RC-06 之後 `Show`／`Hide` 仍只來自 `Window::show`／`hide`／`close` |
 | G11.3.a | P0, READ | DPI 混用：WM handler 用 `GetDpiForWindow`，`Window::set_geometry` 用主螢幕 DPR |
 | G11.3.b | P2 | 位置是 `i32` 邏輯值 |
 | G11.3.c | P1, READ | `NativeWindow::geometry()` 回實體 `GetWindowRect`，`Window::geometry()` 為邏輯 |
@@ -1397,8 +1403,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.c | P1 | 面板底色不依 Acrylic 是否成功而改變 |
 | G12.5.d | P0, READ | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 只有 resize 的 `ResizeDebouncer` |
 | G12.5.e | P0, READ | 喚醒偵測（倒數 tick 間隔 >15 s 就刷新）在 Rust 不存在 |
-| G12.5.f | P0, READ | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 |
-| G12.5.g | P0, READ；= G11.2.b | Alt+F4 / `CloseRequest` 被吞 |
+| G12.5.f | P0, READ；已修復：RC-06 | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 |
+| G12.5.g | P0, READ；= G11.2.b；已修復：RC-06 | Alt+F4 / `CloseRequest` 被吞 |
 | G12.5.h | P1 | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms |
 | G12.5.i | P0, READ；= G8.8.a | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） |
 | G12.5.j | P0, READ；= G11.9.a | 熱鍵註冊失敗不被回報；鎖定防護失效 |
@@ -1585,9 +1591,25 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`qtrs-widgets/src/hit_test.rs` 無 accept／冒泡；`qtrs-widgets/src/window.rs:990-1250` 的 `WindowSystemEvent` 處理沒有 `CloseRequest`、`Power`、雙擊、`Move` 的 arm；`EventKind` 已有 `Close`、`Show`、`Hide`、`Move`、`MouseButtonDblClick`（`event/mod.rs:68,85,236,242`）且 `Event` 有 `accepted`（`:754`），平台層也已產生 `CloseRequest`／`Power`（`qtrs-platform window.rs:525,1069`）。缺的是**翻譯**與**冒泡規則**。
 - **Evidence**：`READ`。
 - **Required observable**：子 widget 不 accept 的滑鼠事件到達 parent；視窗 Close 事件被 handler `ignore()` 後視窗保持可見，未被 ignore 時隱藏／關閉；Show／Hide 有 widget hook 且順序同 Qt。
-- **Required test**：`unaccepted_press_reaches_parent_widget`；`accepted_press_stops_at_child`；`close_event_ignored_keeps_window_visible`；`close_request_without_handler_hides_window`；`show_hide_events_delivered_in_order`。
+- **Required test**（`qtrs-widgets/tests/test_event_propagation.rs` 18 項、`qtrs-platform/tests/test_native_double_click.rs` 2 項；修改前：widgets 以舊程式執行 11／12 項 FAIL（`accepted_press_stops_at_child` 本來就過，作回歸護欄）、4 項需要新 API 而無法編譯、2 項內建 widget 測試以局部還原原始碼後 FAIL；platform 1 項（`CS_DBLCLKS`）FAIL、1 項無法編譯；修改後全 PASS）：
+  - 傳遞：`unaccepted_press_reaches_parent_widget`（每個祖先以**自己的座標**看到 press）、`accepted_press_stops_at_child`、`press_nobody_accepts_is_reported_unconsumed_after_visiting_every_ancestor`、`release_and_wheel_propagate_like_press`。
+  - disabled：`disabled_widget_passes_mouse_press_to_its_parent`、`press_on_child_of_disabled_parent_is_not_delivered_to_the_child`（`QWidget::event` 對 disabled 的滑鼠事件回 false，`qwidget.cpp:8978-8998`）。
+  - 雙擊：`double_click_a_widget_does_not_handle_is_delivered_to_it_as_a_press`（`QWidget::mouseDoubleClickEvent` 預設呼叫 `mousePressEvent`，`qwidget.cpp:9636`）、`unhandled_double_click_falls_back_to_the_press_handler`、`double_click_and_release_reach_the_window_handler_when_no_widget_takes_them`、平台層 `native_window_class_asks_the_os_for_double_clicks`（`CS_DBLCLKS`）與 `double_click_message_is_a_double_click_event_not_a_second_press`。
+  - 內建 widget：`right_press_on_a_button_reaches_the_parent`（`QAbstractButton` 忽略非左鍵）、`wheel_over_a_label_inside_a_scroll_area_scrolls_it`。
+  - 視窗：`close_request_without_handler_hides_window`、`close_event_ignored_keeps_window_visible`、`window_close_handler_can_refuse_the_close`、`accepted_close_hides_children_after_the_window`、`show_hide_events_delivered_in_order`（Show：子 → 自己；Hide：自己 → 子；重複 show／hide 不重發）、`explicitly_hidden_child_gets_no_show_event`、`window_move_reaches_the_window_widget_and_handler`。關閉測試用真正的 `WM_CLOSE`（`SendMessageW`）驅動。
 - **Downstream**：RC-11（tooltip）、RC-17（幾何持久化）、RC-18（喚醒偵測，`Power::Resume` 已存在）。
 - **Can remove app workaround**：`hud_window.rs:352` 的 `set_mouse_press_handler` 拖曳／縮放模擬；`hide()` 內的 trim（`hud_window.rs:479-485`）— **只有在 HUD 以真正的 `mousePressEvent` 冒泡重寫後**。
+- **Status**：**已修復**（RC-06）。
+  - **根因**：事件翻譯散在各處——`EventTreeDispatcher` 對每種滑鼠事件只送給最內層 widget 並回傳其 `bool`，沒有 accept／ignore 與 parent 鏈；`WindowEventHandler` 對 `CloseRequest`、雙擊、`Move` 沒有 arm（`_ => {}`），Win32 的 `WM_*DBLCLK` 被當成第二次 `MousePress`；`Show`／`Hide`／`Close` 從未送到任何 widget。
+  - **修改**：
+    - `hit_test.rs`：`hit_path`（root → 最內層，每層附自己座標與「有效 enabled」）；`deliver_with_propagation`（`QApplication::notify` 的迴圈：被 handle 且 accept 才停；disabled 跳過；到 root 為止）供 press／release／wheel／context menu 使用；`deliver_double_click`（widget 不處理 `DblClick` 就給它 press）。
+    - `window.rs`：`WindowCore`（`show`／`hide`／`close` 與原生 `CloseRequest` 共用 `handleClose`、`show_helper`、`hide_helper` 的順序）；`Window::close`、`Window::is_visible`、`Window::set_window_event_handler`（收 `Close`／`Show`／`Hide`／`Move`，以及沒有 widget 處理的 `MouseButtonRelease`／`MouseButtonDblClick`；忽略雙擊則退回 press handler）。`Move` 送給 window widget（root）。順帶修正：`WindowEventHandler` 原本持有建構時的 root 副本，`set_root_widget` 後事件仍送舊 root；現在一律取 `render_state.root`。
+    - 平台層：`WindowSystemEvent::MouseDoubleClick`；`WM_*DBLCLK` 改送它；視窗類別加 `CS_DBLCLKS`（Qt 同）。Qt 的 widget 層不會收到雙擊的第二次 press（`qwidgetwindow.cpp:570,680`），序列是 Press、Release、DblClick、Release，與此一致。
+    - 內建 widget：`Button`／`ScrollBar` 忽略非左鍵 press／release；`EmptyWidget` 與 `ProgressBar` 的預設 wheel 不再吞掉（回 false），滾輪才能到達 `ScrollArea`。
+  - **行為改變（需注意）**：Alt+F4／關閉要求現在**隱藏視窗**（以前什麼都不做）。`Window::hide` 現在會讓 `is_visible()` 為 false，HUD 的 `toggle_visibility` 改用它取代自己追蹤的 bool（以前 `main.rs:405,441` 直接呼叫 `window.hide()` 時該 bool 會失真）。關閉路徑**不會**呼叫 HUD 的 `persist_geometry`／`trim_memory`——Python 在 `closeEvent`／`hideEvent` 做這兩件事，需要 HUD 以 `set_window_event_handler` 註冊（RC-17）。
+  - **驗證**：`qtrs` workspace exit 0、68 個 test binary ok；主 crate 見提交說明。**未做** HUD 手動操作（Alt+F4、雙擊、拖曳、右鍵、滾輪）——只有上述測試與 `SendMessageW` 模擬的原生訊息；測試通過不等於真滑鼠行為已驗證。
+  - **未涵蓋**：G8.4.h（`MouseMove` 傳遞、非 Win32 的雙擊偵測）、G8.4.i、G11.2.h；press grab、enter／leave 祖先鏈、tooltip（RC-11）、右鍵選單在 release 觸發（G8.4.f）。
+  - **HUD workaround 未移除**：`hud_window.rs:352` 的 `set_mouse_press_handler` 拖曳／縮放仍在，且仍是唯一的拖曳來源；依本條規定須以 `mousePressEvent` 冒泡重寫後逐一移除，並重跑 HUD 快照與 layout harness。
 - **Phase**：2。
 
 #### RC-07 Layout item 對齊

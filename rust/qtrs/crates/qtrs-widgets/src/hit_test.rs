@@ -110,30 +110,31 @@ impl EventTreeDispatcher {
                     }
                 }
 
-                if let Some((target, local_pos)) = hit_test(root, win_pos) {
+                let path = hit_path(root, win_pos);
+                if let Some(target) = path.last() {
                     if *button == 1 {
-                        self.focus_manager.handle_mouse_click(root, &target);
+                        self.focus_manager.handle_mouse_click(root, &target.widget);
                     }
-                    let mut local_event = Event::new_spontaneous(EventKind::MouseButtonPress {
-                        x: local_pos.x,
-                        y: local_pos.y,
-                        button: *button,
-                    });
-                    return target.borrow_mut().event(&mut local_event);
                 }
-                false
+                let button = *button;
+                deliver_with_propagation(&path, |pos| EventKind::MouseButtonPress {
+                    x: pos.x,
+                    y: pos.y,
+                    button,
+                })
             }
             EventKind::MouseButtonDblClick { x, y, button } => {
                 let win_pos = Point::new(*x, *y);
-                if let Some((target, local_pos)) = hit_test(root, win_pos) {
-                    let mut local_event = Event::new_spontaneous(EventKind::MouseButtonDblClick {
-                        x: local_pos.x,
-                        y: local_pos.y,
-                        button: *button,
-                    });
-                    return target.borrow_mut().event(&mut local_event);
+                let button = *button;
+                let path = hit_path(root, win_pos);
+                if let Some(target) = path.last() {
+                    // The OS reports the second press of a double click as a double click only
+                    // (Qt does not deliver that press either), so it must also give focus.
+                    if button == 1 {
+                        self.focus_manager.handle_mouse_click(root, &target.widget);
+                    }
                 }
-                false
+                deliver_double_click(&path, button)
             }
             EventKind::ContextMenu {
                 x,
@@ -143,17 +144,15 @@ impl EventTreeDispatcher {
                 reason,
             } => {
                 let win_pos = Point::new(*x, *y);
-                if let Some((target, local_pos)) = hit_test(root, win_pos) {
-                    let mut local_event = Event::new_spontaneous(EventKind::ContextMenu {
-                        x: local_pos.x,
-                        y: local_pos.y,
-                        global_x: *global_x,
-                        global_y: *global_y,
-                        reason: *reason,
-                    });
-                    return target.borrow_mut().event(&mut local_event);
-                }
-                false
+                let (global_x, global_y, reason) = (*global_x, *global_y, *reason);
+                let path = hit_path(root, win_pos);
+                deliver_with_propagation(&path, |pos| EventKind::ContextMenu {
+                    x: pos.x,
+                    y: pos.y,
+                    global_x,
+                    global_y,
+                    reason,
+                })
             }
             EventKind::HoverMove {
                 pos,
@@ -211,15 +210,13 @@ impl EventTreeDispatcher {
                         return grabber.borrow_mut().event(&mut local_event);
                     }
                 }
-                if let Some((target, local_pos)) = hit_test(root, win_pos) {
-                    let mut local_event = Event::new_spontaneous(EventKind::MouseButtonRelease {
-                        x: local_pos.x,
-                        y: local_pos.y,
-                        button: *button,
-                    });
-                    return target.borrow_mut().event(&mut local_event);
-                }
-                false
+                let button = *button;
+                let path = hit_path(root, win_pos);
+                deliver_with_propagation(&path, |pos| EventKind::MouseButtonRelease {
+                    x: pos.x,
+                    y: pos.y,
+                    button,
+                })
             }
             EventKind::Wheel {
                 x,
@@ -231,19 +228,19 @@ impl EventTreeDispatcher {
                 modifiers,
             } => {
                 let win_pos = Point::new(*x, *y);
-                if let Some((target, local_pos)) = hit_test(root, win_pos) {
-                    let mut local_event = Event::new_spontaneous(EventKind::Wheel {
-                        x: local_pos.x,
-                        y: local_pos.y,
-                        pixel_delta_x: *pixel_delta_x,
-                        pixel_delta_y: *pixel_delta_y,
-                        angle_delta_x: *angle_delta_x,
-                        angle_delta_y: *angle_delta_y,
-                        modifiers: *modifiers,
-                    });
-                    return target.borrow_mut().event(&mut local_event);
-                }
-                false
+                let (pixel_delta_x, pixel_delta_y) = (*pixel_delta_x, *pixel_delta_y);
+                let (angle_delta_x, angle_delta_y, modifiers) =
+                    (*angle_delta_x, *angle_delta_y, *modifiers);
+                let path = hit_path(root, win_pos);
+                deliver_with_propagation(&path, |pos| EventKind::Wheel {
+                    x: pos.x,
+                    y: pos.y,
+                    pixel_delta_x,
+                    pixel_delta_y,
+                    angle_delta_x,
+                    angle_delta_y,
+                    modifiers,
+                })
             }
             EventKind::Resize {
                 width,
@@ -331,40 +328,113 @@ impl EventTreeDispatcher {
     }
 }
 
+/// One widget on the path from the window's root widget down to the widget under the cursor.
+pub struct HitStep {
+    pub widget: WidgetRef,
+    /// The cursor position in this widget's own coordinates.
+    pub pos: Point,
+    /// `QWidget::isEnabled`: false when this widget or any ancestor is disabled.
+    pub enabled: bool,
+}
+
+/// The widgets under `pos` (window coordinates), root first, innermost widget last. Empty when
+/// `pos` is outside a visible root.
+pub fn hit_path(root: &WidgetRef, pos: Point) -> Vec<HitStep> {
+    let mut path = Vec::new();
+    {
+        let r = root.borrow();
+        let g = r.geometry();
+        if !r.is_visible() || !Rect::new(0, 0, g.width, g.height).contains(pos) {
+            return path;
+        }
+        path.push(HitStep {
+            widget: root.clone(),
+            pos,
+            enabled: r.is_enabled(),
+        });
+    }
+    loop {
+        let (children, pos, enabled) = {
+            let cur = path.last().expect("path starts with the root");
+            (cur.widget.borrow().children(), cur.pos, cur.enabled)
+        };
+        let mut next = None;
+        for child in children.into_iter().rev() {
+            let (visible, geom, child_enabled) = {
+                let b = child.borrow();
+                (b.is_visible(), b.geometry(), b.is_enabled())
+            };
+            if visible && geom.contains(pos) {
+                next = Some(HitStep {
+                    pos: Point::new(pos.x - geom.x, pos.y - geom.y),
+                    enabled: enabled && child_enabled,
+                    widget: child,
+                });
+                break;
+            }
+        }
+        match next {
+            Some(step) => path.push(step),
+            None => return path,
+        }
+    }
+}
+
 pub fn hit_test(root: &WidgetRef, local_pos: Point) -> Option<(WidgetRef, Point)> {
-    let root_borrow = root.borrow();
-    if !root_borrow.is_visible() {
-        return None;
-    }
+    hit_path(root, local_pos).pop().map(|s| (s.widget, s.pos))
+}
 
-    let geom = root_borrow.geometry();
-    let local_rect = Rect::new(0, 0, geom.width, geom.height);
-    if !local_rect.contains(local_pos) {
-        return None;
-    }
-
-    let children = root_borrow.children();
-    drop(root_borrow);
-
-    for child in children.into_iter().rev() {
-        let child_borrow = child.borrow();
-        if !child_borrow.is_visible() {
+/// `QApplication::notify` for mouse, wheel and context-menu events (qapplication.cpp:2689-2762):
+/// the innermost widget gets the event first; while it is not handled and accepted, the event goes
+/// to the parent (in the parent's coordinates), up to and including the window's root widget.
+/// A disabled widget does not handle mouse events (`QWidget::event`, qwidget.cpp:8978-8998), so
+/// they pass through it. Returns whether some widget handled and accepted the event.
+fn deliver_with_propagation(path: &[HitStep], make_kind: impl Fn(Point) -> EventKind) -> bool {
+    for step in path.iter().rev() {
+        if !step.enabled {
             continue;
         }
-        let child_geom = child_borrow.geometry();
-        if child_geom.contains(local_pos) {
-            let child_local_pos =
-                Point::new(local_pos.x - child_geom.x, local_pos.y - child_geom.y);
-            drop(child_borrow);
-
-            if let Some(target) = hit_test(&child, child_local_pos) {
-                return Some(target);
-            }
-            return Some((child, child_local_pos));
+        let mut ev = Event::new_spontaneous(make_kind(step.pos));
+        let handled = step.widget.borrow_mut().event(&mut ev);
+        if handled && ev.is_accepted() {
+            return true;
         }
     }
+    false
+}
 
-    Some((root.clone(), local_pos))
+/// A double click propagates like `deliver_with_propagation`, except that a widget which does not
+/// handle `MouseButtonDblClick` is given the press instead: the default
+/// `QWidget::mouseDoubleClickEvent` calls `mousePressEvent` (qwidget.cpp:9636). The OS reports the
+/// second press of a double click only as the double click, so without this a button would lose
+/// the second click.
+fn deliver_double_click(path: &[HitStep], button: u32) -> bool {
+    for step in path.iter().rev() {
+        if !step.enabled {
+            continue;
+        }
+        let mut dbl = Event::new_spontaneous(EventKind::MouseButtonDblClick {
+            x: step.pos.x,
+            y: step.pos.y,
+            button,
+        });
+        let handled = step.widget.borrow_mut().event(&mut dbl);
+        if handled {
+            if dbl.is_accepted() {
+                return true;
+            }
+            continue;
+        }
+        let mut press = Event::new_spontaneous(EventKind::MouseButtonPress {
+            x: step.pos.x,
+            y: step.pos.y,
+            button,
+        });
+        if step.widget.borrow_mut().event(&mut press) && press.is_accepted() {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn dispatch_event_to_tree(root: &WidgetRef, event: &mut Event) -> bool {

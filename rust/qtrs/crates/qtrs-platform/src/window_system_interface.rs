@@ -91,6 +91,15 @@ pub enum WindowSystemEvent {
         button: MouseButton,
         modifiers: KeyboardModifiers,
     },
+    /// The OS recognised the second press of a double click. Qt delivers
+    /// `Press, Release, DblClick, Release` and does *not* deliver that second press
+    /// (`qguiapplication.cpp:2495-2540`, `qwidgetwindow.cpp:570,680`), so this replaces it.
+    MouseDoubleClick {
+        pos: Point,
+        global_pos: Point,
+        button: MouseButton,
+        modifiers: KeyboardModifiers,
+    },
     Wheel {
         pos: Point,
         global_pos: Point,

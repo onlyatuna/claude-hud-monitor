@@ -11,6 +11,94 @@ type ContextMenuCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Poin
 type MousePressCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point, qtrs_platform::MouseButton) -> bool>>>>;
 type MouseMoveCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Point)>>>>;
 type ResizeCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(Size)>>>>;
+type WindowEventCallback = std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn(&mut Event)>>>>;
+
+/// The state `Window::show/hide/close` and the native close request share, so that both paths run
+/// the same Qt sequence: `QWidgetPrivate::handleClose`, `show_helper`, `hide_helper`
+/// (qwidget.cpp:8074-8130, 8238-8260, 8604-8640).
+///
+/// The window widget of a Qt top-level window is the root widget here; the optional window event
+/// handler stands in for the `QWidget` subclass that overrides `closeEvent`, `moveEvent`, ...
+#[derive(Clone)]
+struct WindowCore {
+    platform_window: std::rc::Rc<std::cell::RefCell<Box<dyn PlatformWindow>>>,
+    render: std::rc::Rc<RenderState>,
+    event_cb: WindowEventCallback,
+    visible: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl WindowCore {
+    fn root(&self) -> WidgetRef {
+        self.render.root.borrow().clone()
+    }
+
+    /// Delivers `ev` to the window widget, then to the window event handler. Stops after the root
+    /// widget if it ignored the event, so a refusing widget is not overruled.
+    fn send_to_window(&self, ev: &mut Event) {
+        let root = self.root();
+        root.borrow_mut().event(ev);
+        if !ev.is_accepted() {
+            return;
+        }
+        if let Some(cb) = self.event_cb.borrow().as_ref() {
+            cb(ev);
+        }
+    }
+
+    /// `QShowEvent`s: every child that is not explicitly hidden first, then the window itself.
+    fn show(&self) {
+        if !self.visible.replace(true) {
+            fn show_children_first(widget: &WidgetRef) {
+                let children = widget.borrow().children();
+                for child in children {
+                    if child.borrow().is_visible() {
+                        show_children_first(&child);
+                        child.borrow_mut().event(&mut Event::new(EventKind::Show));
+                    }
+                }
+            }
+            let root = self.root();
+            show_children_first(&root);
+            self.send_to_window(&mut Event::new(EventKind::Show));
+        }
+        self.platform_window.borrow_mut().show();
+    }
+
+    /// `QHideEvent`s: the window itself first, then every child that is not explicitly hidden.
+    fn hide(&self) {
+        self.platform_window.borrow_mut().hide();
+        if self.visible.replace(false) {
+            fn hide_children(widget: &WidgetRef) {
+                let children = widget.borrow().children();
+                for child in children {
+                    if child.borrow().is_visible() {
+                        child.borrow_mut().event(&mut Event::new(EventKind::Hide));
+                        hide_children(&child);
+                    }
+                }
+            }
+            self.send_to_window(&mut Event::new(EventKind::Hide));
+            hide_children(&self.root());
+        }
+    }
+
+    /// `QWidget::close` / the system close request: the window may refuse by ignoring the
+    /// `QCloseEvent`; otherwise it is hidden. The event is delivered whether or not the window is
+    /// visible.
+    fn close(&self, spontaneous: bool) -> bool {
+        let mut ev = if spontaneous {
+            Event::new_spontaneous(EventKind::Close)
+        } else {
+            Event::new(EventKind::Close)
+        };
+        self.send_to_window(&mut ev);
+        if !ev.is_accepted() {
+            return false;
+        }
+        self.hide();
+        true
+    }
+}
 
 /// Resize/render counters for one window (diagnostics and tests).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -346,6 +434,7 @@ pub struct Window {
     mouse_move_cb: MouseMoveCallback,
     resize_cb: ResizeCallback,
     render_state: std::rc::Rc<RenderState>,
+    core: WindowCore,
 }
 
 impl Window {
@@ -398,11 +487,17 @@ impl Window {
             std::rc::Rc::clone(&geom_cell),
             root_widget.clone(),
         );
+        let core = WindowCore {
+            platform_window: std::rc::Rc::clone(&pw_rc),
+            render: std::rc::Rc::clone(&render_state),
+            event_cb: std::rc::Rc::new(std::cell::RefCell::new(None)),
+            visible: std::rc::Rc::new(std::cell::Cell::new(false)),
+        };
         let handler = WindowEventHandler {
             platform_window: pw_clone,
             backing_store: bs_clone,
             geometry: geom_clone,
-            root: root_widget.clone(),
+            core: core.clone(),
             dispatcher: EventTreeDispatcher::new(),
             context_menu_cb: cb_clone,
             mouse_press_cb: press_cb_clone,
@@ -423,6 +518,7 @@ impl Window {
             mouse_move_cb,
             resize_cb,
             render_state,
+            core,
         };
         crate::application::Application::register_window(window_id);
         Ok(win)
@@ -527,13 +623,33 @@ impl Window {
         let _t = qtrs_gui::startup_trace::span(|| "Window::show".into());
         {
             let _s = qtrs_gui::startup_trace::span(|| "platform_window.show() (ShowWindow + messages it dispatches)".into());
-            self.platform_window.borrow_mut().show();
+            self.core.show();
         }
         self.render_and_present();
     }
 
     pub fn hide(&mut self) {
-        self.platform_window.borrow_mut().hide();
+        self.core.hide();
+    }
+
+    /// `QWidget::close`: sends a `Close` event to the window widget and the window event handler;
+    /// if neither ignores it the window is hidden. Returns whether the window was closed.
+    pub fn close(&mut self) -> bool {
+        self.core.close(false)
+    }
+
+    /// Whether `show` has been called without a later `hide`/accepted `close`.
+    pub fn is_visible(&self) -> bool {
+        self.core.visible.get()
+    }
+
+    /// The handler a `QWidget` subclass would express by overriding the window-level event
+    /// handlers. It receives, with the window's coordinates and `accept`/`ignore`:
+    /// - `Close` (ignore it to refuse the close), `Show`, `Hide` and `Move`, after the root widget;
+    /// - `MouseButtonRelease` and `MouseButtonDblClick` that no widget handled. A double click the
+    ///   handler ignores falls back to the press handler, as `QWidget::mouseDoubleClickEvent` does.
+    pub fn set_window_event_handler<F: Fn(&mut Event) + 'static>(&mut self, handler: F) {
+        *self.core.event_cb.borrow_mut() = Some(Box::new(handler));
     }
 
     pub fn set_stays_on_top(&mut self, enabled: bool) {
@@ -974,7 +1090,7 @@ struct WindowEventHandler {
     platform_window: std::rc::Rc<std::cell::RefCell<Box<dyn PlatformWindow>>>,
     backing_store: std::rc::Rc<std::cell::RefCell<BackingStore>>,
     geometry: std::rc::Rc<std::cell::Cell<Rect>>,
-    root: WidgetRef,
+    core: WindowCore,
     dispatcher: EventTreeDispatcher,
     context_menu_cb: ContextMenuCallback,
     mouse_press_cb: MousePressCallback,
@@ -989,7 +1105,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
             let d = format!("{event:?}");
             format!("handle_window_event {}", d.chars().take(60).collect::<String>())
         });
-        let root = self.root.clone();
+        let root = self.core.root();
         match event {
             WindowSystemEvent::MouseMove { pos, .. } => {
                 let mut ev = Event::new_spontaneous(EventKind::MouseMove { x: pos.x, y: pos.y });
@@ -1038,10 +1154,52 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     y: pos.y,
                     button: btn,
                 });
-                self.dispatcher.dispatch_event(&root, &mut ev);
+                if !self.dispatcher.dispatch_event(&root, &mut ev) {
+                    let mut unhandled = Event::new_spontaneous(EventKind::MouseButtonRelease {
+                        x: pos.x,
+                        y: pos.y,
+                        button: btn,
+                    });
+                    if let Some(cb) = self.core.event_cb.borrow().as_ref() {
+                        cb(&mut unhandled);
+                    }
+                }
                 if button == qtrs_platform::MouseButton::Right {
                     if let Some(cb) = self.context_menu_cb.borrow().as_ref() {
                         cb(global_pos);
+                    }
+                }
+            }
+            WindowSystemEvent::MouseDoubleClick { pos, button, .. } => {
+                let btn = match button {
+                    qtrs_platform::MouseButton::Left => 1,
+                    qtrs_platform::MouseButton::Right => 2,
+                    qtrs_platform::MouseButton::Middle => 3,
+                    _ => 0,
+                };
+                let mut ev = Event::new_spontaneous(EventKind::MouseButtonDblClick {
+                    x: pos.x,
+                    y: pos.y,
+                    button: btn,
+                });
+                if !self.dispatcher.dispatch_event(&root, &mut ev) {
+                    let mut unhandled = Event::new_spontaneous(EventKind::MouseButtonDblClick {
+                        x: pos.x,
+                        y: pos.y,
+                        button: btn,
+                    });
+                    let handled = match self.core.event_cb.borrow().as_ref() {
+                        Some(cb) => {
+                            cb(&mut unhandled);
+                            unhandled.is_accepted()
+                        }
+                        None => false,
+                    };
+                    if !handled {
+                        // QWidget::mouseDoubleClickEvent default: mousePressEvent.
+                        if let Some(cb) = self.mouse_press_cb.borrow().as_ref() {
+                            cb(pos, button);
+                        }
                     }
                 }
             }
@@ -1087,8 +1245,12 @@ impl WindowSystemEventHandler for WindowEventHandler {
                         old_x: old_pos.x,
                         old_y: old_pos.y,
                     });
-                    self.dispatcher.dispatch_event(&root, &mut ev);
+                    // QMoveEvent goes to the window widget only, not to its children.
+                    self.core.send_to_window(&mut ev);
                 }
+            }
+            WindowSystemEvent::CloseRequest => {
+                self.core.close(true);
             }
             WindowSystemEvent::Resize { size } => {
                 let old_size = {
