@@ -469,6 +469,12 @@ impl PlatformWindow for CocoaNativeWindow {
         self.ns_window.0 as isize
     }
 
+    /// Per-window screen lookup is not implemented on this backend yet: the primary screen's
+    /// ratio (what every window used before `PlatformWindow::device_pixel_ratio` existed).
+    fn device_pixel_ratio(&self) -> f32 {
+        crate::platform().primary_screen().device_pixel_ratio()
+    }
+
     fn set_backdrop(&mut self, backdrop: crate::backdrop::BackdropType, dark_mode: bool) -> bool {
         crate::backdrop::set_cocoa_window_backdrop(
             self.ns_window,

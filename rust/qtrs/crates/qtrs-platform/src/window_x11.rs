@@ -516,6 +516,12 @@ impl PlatformWindow for X11NativeWindow {
         self.xid as isize
     }
 
+    /// Per-window screen lookup is not implemented on this backend yet: the primary screen's
+    /// ratio (what every window used before `PlatformWindow::device_pixel_ratio` existed).
+    fn device_pixel_ratio(&self) -> f32 {
+        crate::platform().primary_screen().device_pixel_ratio()
+    }
+
     fn poll_events(&mut self) -> usize {
         let events = std::mem::take(&mut *self.pending_events.lock().unwrap());
         let count = events.len();

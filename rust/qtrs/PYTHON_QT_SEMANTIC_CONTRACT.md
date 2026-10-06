@@ -823,9 +823,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：backing store 的 DPR MUST 等於視窗所在螢幕的 DPR；`DpiChanged` 之後 MUST 維持新 DPR。
 - **Current implementation**：`PARTIAL`。延遲 resize + 原生尺寸對齊（`backing_store.rs`、`window.rs`）；`DpiChanged` 處理（`window.rs`）。
 - **Known gap**
-  - **G10.7.a [P0, READ，未實測]** `DpiChanged` 處理把 store 調成 `dpi_x/96`，然後呼叫 `do_render_and_present`，後者又以 `platform().primary_screen().device_pixel_ratio()` 重新 resize——**在與主螢幕 DPI 不同的螢幕上，store 會退回主螢幕的 DPR**。同樣的「主螢幕 DPR」假設還出現在 `Window::new`、`set_geometry`、`set_geometry_silent`、`present_custom`、`present_custom_at`、`NativeWindow::present_region`、`menu.rs`、`tray_icon.rs:281`；而 WM handler 用的是每視窗的 `GetDpiForWindow`。
+  - **G10.7.a [P0, READ；已修復：RC-08（fake platform 測試；真實異 DPI 雙螢幕未實測）]** `DpiChanged` 處理把 store 調成 `dpi_x/96`，然後呼叫 `do_render_and_present`，後者又以 `platform().primary_screen().device_pixel_ratio()` 重新 resize——**在與主螢幕 DPI 不同的螢幕上，store 會退回主螢幕的 DPR**。同樣的「主螢幕 DPR」假設還出現在 `Window::new`、`set_geometry`、`set_geometry_silent`、`present_custom`、`present_custom_at`、`NativeWindow::present_region`、`menu.rs`、`tray_icon.rs:281`；而 WM handler 用的是每視窗的 `GetDpiForWindow`。
   - **G10.7.b [P1, READ]** `application_device_pixel_ratio`（各螢幕最大值）只在 `Application::new` 設一次，DPI 變更或螢幕熱插拔後 stale。
   - **G10.7.c [P1, READ]** `HighDpiScaleFactorRoundingPolicy` 存了但從不讀（grep `rounding_policy` 只有存取器）；DPR 恰為 `dpi/96`，等同 Python 設的 `PassThrough`（`main.py:46`），其他 policy 被忽略。
+  - **G10.7.d [P1, READ]** RC-08 之後視窗**內**的換算都用視窗自己的 DPR，但**視窗之間沒有共同的邏輯座標系**：`Window::new` 以主螢幕 DPR 決定原生位置（視窗尚未存在，無法先問它的螢幕），之後 `set_geometry` 以視窗 DPR 換位置。Qt 以 `QHighDpiScaling` 的螢幕原點映射處理（`qhighdpiscaling.cpp`）。僅在異 DPI 多螢幕下可見。
+  - **G10.7.e [P1, READ]** 彈出選單的螢幕夾限仍取 `primary_screen().available_geometry()`（`menu.rs:551`），選單不會出現在非主螢幕；同時 `tray_icon.rs:281` 以主螢幕 DPR 換算游標位置（G11.8.a 未修）。
+  - **G10.7.f [P2, READ]** `hit_test.rs:321` 的 `DpiChanged` 分支以固定的 `old_dpr = 1.0` 呼叫 `propagate_dpi_change_recursive`；`Window` 的兩條路徑已改用視窗快取的 DPR。
+  - **G10.7.g [P1, READ]** 視窗 DPR 只在建立時與 `DpiChanged`（`WM_DPICHANGED`）更新；Qt 另在 `handleWindowScreenChanged`／`QPlatformWindow::handleScreenChanged` 重算（`qguiapplication.cpp:3431,3504`、`qplatformwindow.cpp:824`）並送 `QEvent::DevicePixelRatioChange`。螢幕熱插拔與跨螢幕移動而不改 DPI 的情形未涵蓋。
+  - **G10.7.h [P2, READ]** `PlatformWindow::device_pixel_ratio` 只有 Windows（`GetDpiForWindow`）是每視窗；`GenericWindow`、Cocoa、Wayland、X11 回傳主螢幕 DPR（等於修改前的行為）。後三者在本機**無法編譯**，未驗證。
+  - **G10.7.i [test gap]** 沒有異 DPI 實機測試：RC-08 的測試以 fake platform（主螢幕 1.0、視窗所在螢幕 2.0）驗證，Win32 的 `GetDpiForWindow` 路徑只在單一 DPI 下被其他測試走過。
 - **Test**：既有 `test_per_monitor_dpi_sync.rs::test_per_monitor_v2_dpi_drag_propagation` 只斷言 observer callback 與 DPR 值，**從不檢查 backing store**。必要：`DpiChanged{168,168}` 並繪製後，`backing_store().device_pixel_ratio() == 1.75` 且實體大小為 `round(logical*1.75)`（在主螢幕 100% 時 READ 預測會失敗）。
 - **HUD usage**：Python PassThrough（`main.py:46`），無 `devicePixelRatio()` 呼叫；Rust PerMonitorV2 manifest（`rust/build.rs:22-23`）+ `set_dpi_awareness`。
 
@@ -864,7 +870,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：同上。
 - **Current implementation**：主要 resize 路徑 `IMPLEMENTED`。`WM_SIZE`/`WM_MOVE`/`WM_GETMINMAXINFO`（`qtrs-platform/src/window.rs`）；`high_dpi.rs` 位置與大小獨立取整。
 - **Known gap**
-  - **G11.3.a [P0, READ]** DPI 混用：WM handler 用 `GetDpiForWindow`，`Window::set_geometry` 用主螢幕 DPR（見 C10.7）。
+  - **G11.3.a [P0, READ；已修復：RC-08（fake platform 測試；真實異 DPI 雙螢幕未實測）]** DPI 混用：WM handler 用 `GetDpiForWindow`，`Window::set_geometry` 用主螢幕 DPR（見 C10.7）。
   - **G11.3.b [P2]** 位置是 `i32` 邏輯值；滑鼠位置以取整後到達 widget，Qt 給 `QPointF`。
   - **G11.3.c [P1, READ]** `NativeWindow::geometry()` 回實體 `GetWindowRect`，`Window::geometry()` 為邏輯；原生視窗內快取的 `self.geometry` 混合實體寬高與邏輯 x／y。
 - **Test**：既有 `test_resize_deferred_render.rs`（全部）、`test_single_resize_pipeline.rs::{interactive_one_wm_size_one_resize_one_present, normal_resize_stays_deferred_with_a_single_pipeline}`、`test_layered_geometry_sync.rs::hud_style_window_content_rect_equals_hwnd_rect_every_iteration`、`qtrs-platform/tests/{test_layered_interactive_resize.rs, test_dcomp_interactive_resize.rs}`。必要：邏輯→原生→邏輯在 125／150／175% 對奇數尺寸往返，對照已知 Qt 值。
@@ -1129,7 +1135,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 290 項：D 12、P0 34、P1 128、P2 113、test gap 3（計數含已修復項；標籤含「已修復」者共 19 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G9.1.c、G9.2.a、G11.2.a、G11.2.b、G11.2.c、G12.5.f、G12.5.g）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 296 項：D 12、P0 34、P1 131、P2 115、test gap 4（計數含已修復項；標籤含「已修復」者共 21 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G12.5.f、G12.5.g）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1348,9 +1354,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.5.e | P2 | 非 Windows 的 `exec_popup` 沒有原生視窗 |
 | G10.6.a | P2 | 無 `QPaintEvent` 矩形 |
 | G10.6.b | P2 | 無法防止畫到矩形外 |
-| G10.7.a | P0, READ，未實測 | `DpiChanged` 處理把 store 調成 `dpi_x/96`，然後呼叫 `do_render_and_present`，後者又以 `platform().primary |
+| G10.7.a | P0, READ；已修復：RC-08（fake platform 測試；真實異 DPI 雙螢幕未實測） | `DpiChanged` 處理把 store 調成 `dpi_x/96`，然後呼叫 `do_render_and_present`，後者又以 `platform().primary |
 | G10.7.b | P1, READ | `application_device_pixel_ratio` |
 | G10.7.c | P1, READ | `HighDpiScaleFactorRoundingPolicy` 存了但從不讀 |
+| G10.7.d | P1, READ | RC-08 之後視窗**內**的換算都用視窗自己的 DPR，但**視窗之間沒有共同的邏輯座標系**：`Window::new` 以主螢幕 DPR 決定原生位置 |
+| G10.7.e | P1, READ | 彈出選單的螢幕夾限仍取 `primary_screen().available_geometry()` |
+| G10.7.f | P2, READ | `hit_test.rs:321` 的 `DpiChanged` 分支以固定的 `old_dpr = 1.0` 呼叫 `propagate_dpi_change_recursive |
+| G10.7.g | P1, READ | 視窗 DPR 只在建立時與 `DpiChanged` |
+| G10.7.h | P2, READ | `PlatformWindow::device_pixel_ratio` 只有 Windows |
+| G10.7.i | test gap | 沒有異 DPI 實機測試：RC-08 的測試以 fake platform |
 | G11.1.a | P2 | 無 `set_window_flags` |
 | G11.1.b | P1 | 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT` |
 | G11.2.a | P1, READ；已修復：RC-06 | 無 `Window::is_visible()` |
@@ -1361,7 +1373,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.2.f | P2 | `GuiApplication::set_application_state`、`last_window_closed`、`focus_window_changed` 從不發射 |
 | G11.2.g | P1 | `main.rs` 從不 `set quit_on_last_window_closed(false)` |
 | G11.2.h | P1, READ | RC-06 之後 `Show`／`Hide` 仍只來自 `Window::show`／`hide`／`close` |
-| G11.3.a | P0, READ | DPI 混用：WM handler 用 `GetDpiForWindow`，`Window::set_geometry` 用主螢幕 DPR |
+| G11.3.a | P0, READ；已修復：RC-08（fake platform 測試；真實異 DPI 雙螢幕未實測） | DPI 混用：WM handler 用 `GetDpiForWindow`，`Window::set_geometry` 用主螢幕 DPR |
 | G11.3.b | P2 | 位置是 `i32` 邏輯值 |
 | G11.3.c | P1, READ | `NativeWindow::geometry()` 回實體 `GetWindowRect`，`Window::geometry()` 為邏輯 |
 | G11.4.a | P0, READ | Rust HUD 啟動時用 `primary_screen().geometry()` 與 `ensure_within_screen` |
@@ -1638,9 +1650,18 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：視窗的 `devicePixelRatio` 取自**所在螢幕**。須在實作前於 `qtbase/` 確認。
 - **qtrs root**：`primary_screen().device_pixel_ratio()` 出現在 `qtrs-widgets/src/window.rs:261,354,468,512,645,668,914`、`menu.rs:551,597,729`、`qtrs-platform/src/window.rs:1633,1891`、`tray_icon.rs:281`；`PlatformWindow` 沒有每視窗 DPR 查詢；WM handler 用 `GetDpiForWindow`（`qtrs-platform window.rs:404`）。
 - **Evidence**：`READ`；**只在異 DPI 多螢幕下可見**，本機未實測。
-- **Required observable**：視窗在非主螢幕時，backing store DPR 與該螢幕一致，且在 `DpiChanged` 之後不退回主螢幕 DPR。
-- **Required test**：擴充 `test_per_monitor_dpi_sync.rs`（已有 96↔168 的模擬），加入「`DpiChanged` 後呼叫 `do_render_and_present`，store DPR 仍為新值」。**無第二螢幕時只能用 fake platform，並須明說。**
-- **Phase**：3（先實測）。
+- **Required observable**：視窗在非主螢幕時，backing store DPR 與該視窗所在螢幕一致，且在 `DpiChanged` 之後不退回主螢幕 DPR。
+- **Required test**（`qtrs-widgets/tests/test_window_device_pixel_ratio.rs`；**以 fake platform 為之**——主螢幕 1.0、視窗所在螢幕 2.0，**沒有第二台螢幕**；修改前以「讓視窗每次讀主螢幕 DPR」模擬舊行為：4 項全 FAIL）：
+  - `a_window_takes_its_ratio_from_its_own_screen_not_the_primary_screen`
+  - `set_geometry_converts_with_the_window_ratio`
+  - `a_dpi_change_is_not_undone_by_the_next_render`（原 P0：`DpiChanged` → `render_and_present` → store 退回主螢幕 DPR）
+  - `custom_presentation_uses_the_window_ratio`（`present_custom`、`present_custom_at`）
+- **Phase**：3。
+- **Status**：**已修復**（RC-08；fake platform 層級）。
+  - **根因**：「視窗的 DPR」沒有單一來源；每個用到的地方各自讀 `primary_screen().device_pixel_ratio()`，只有 `DpiChanged` 路徑寫了視窗值，下一次 render 就覆蓋它。Qt 的 `QWindow::devicePixelRatio` 是每視窗快取（`qwindow.cpp:1425`），僅由 `updateDevicePixelRatio` 更新（建立、螢幕變更、DPI 變更）。
+  - **修改**：`PlatformWindow::device_pixel_ratio()`（**必要 trait 方法**，對應 `QPlatformWindow::devicePixelRatio`；Windows = `GetDpiForWindow`）；`RenderState.device_pixel_ratio` 為單一快取；`Window::new` 建立後讀回視窗 DPR，與放置用的主螢幕 DPR 不同時，保持原生原點並以視窗 DPR 重設原生尺寸；`do_render_and_present` 改收 `dpr` 參數；`Window::set_geometry`、`set_geometry_silent`、`present_custom`、`present_custom_at`、兩條 `DpiChanged` 路徑與 trace 全用該快取；公開 `Window::device_pixel_ratio()`；`NativeWindow::present_region` 的 `target_pos` 與 `calc_frameless_edge` 改用 `get_window_dpr(hwnd)`；`menu.rs` 的游標換算與 `present_popup` 改用彈出視窗的 DPR。
+  - **驗證**：新測試 4 項 PASS；qtrs workspace 與主 crate 結果見提交說明。**沒有做像素驗證**，也**沒有在異 DPI 實機驗證**（需人工：把視窗拖到不同縮放的螢幕，確認 backing store 尺寸與內容不被縮放兩次）。
+  - **未涵蓋**：G10.7.b、G10.7.d–i、G11.8.a。
 
 #### RC-09 Presenter 尊重 opacity
 - **Contract gaps**：G11.5.a（= G12.5.t）；新增 G11.5.c（test gap）。

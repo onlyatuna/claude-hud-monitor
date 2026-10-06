@@ -39,6 +39,11 @@ pub trait PlatformWindow: 'static {
     fn opacity(&self) -> f32;
     fn set_minimum_size(&mut self, min_w: i32, min_h: i32);
     fn minimum_size(&self) -> (i32, i32);
+    /// Ratio between this window's physical (native) pixels and its device-independent pixels,
+    /// taken from the screen the window is on (`QPlatformWindow::devicePixelRatio`, which
+    /// `QWindowPrivate::updateDevicePixelRatio` multiplies by the window's screen scale factor,
+    /// `qwindow.cpp:1436-1443`). Required: it differs between windows on different screens.
+    fn device_pixel_ratio(&self) -> f32;
     fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str>;
     fn present_dirty(
         &mut self,
@@ -191,6 +196,11 @@ impl PlatformWindow for GenericWindow {
 
     fn minimum_size(&self) -> (i32, i32) {
         self.min_size
+    }
+
+    /// `GenericWindow` has no screen of its own: it reports the primary screen's ratio.
+    fn device_pixel_ratio(&self) -> f32 {
+        crate::platform().primary_screen().device_pixel_ratio()
     }
 
     fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {

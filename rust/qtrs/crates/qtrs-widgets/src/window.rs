@@ -169,6 +169,10 @@ struct RenderState {
     interactive_resize: std::cell::Cell<bool>,
     /// A next-turn retry after a borrow conflict was already used for this request.
     retry_used: std::cell::Cell<bool>,
+    /// `QWindow::devicePixelRatio`: cached per window, set from the window's own screen when the
+    /// window is created and updated only by a DPI change (`QWindowPrivate::updateDevicePixelRatio`,
+    /// `qwindow.cpp:1436`). It is never re-read from the primary screen.
+    device_pixel_ratio: std::cell::Cell<f32>,
     stats: std::cell::Cell<RenderStats>,
 }
 
@@ -188,6 +192,7 @@ impl RenderState {
         backing_store: std::rc::Weak<std::cell::RefCell<BackingStore>>,
         geometry: std::rc::Rc<std::cell::Cell<Rect>>,
         root: WidgetRef,
+        device_pixel_ratio: f32,
     ) -> std::rc::Rc<Self> {
         let state = std::rc::Rc::new(Self {
             window_id,
@@ -201,6 +206,7 @@ impl RenderState {
             interactive_resize: std::cell::Cell::new(false),
             within_set_geometry: std::cell::Cell::new(false),
             retry_used: std::cell::Cell::new(false),
+            device_pixel_ratio: std::cell::Cell::new(device_pixel_ratio),
             stats: std::cell::Cell::new(RenderStats::default()),
         });
         RENDER_STATES.with(|m| m.borrow_mut().insert(window_id, std::rc::Rc::clone(&state)));
@@ -350,7 +356,8 @@ impl RenderState {
             qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::LayoutActivate, dbg_lay);
             let g = self.geometry.get();
             let trace_hwnd = pw.native_handle() as usize;
-            let trace_dpr = platform().primary_screen().device_pixel_ratio();
+            let dpr = self.device_pixel_ratio.get();
+            let trace_dpr = dpr;
             let trace_phys = (
                 (g.width as f32 * trace_dpr).round() as u32,
                 (g.height as f32 * trace_dpr).round() as u32,
@@ -372,7 +379,7 @@ impl RenderState {
                 (g.width as u32, g.height as u32),
                 trace_phys,
             );
-            let presented = do_render_and_present(&mut **pw, &mut bs, &root, g);
+            let presented = do_render_and_present(&mut **pw, &mut bs, &root, g, dpr);
             qtrs_platform::resize_debug::mark_rendered();
             qtrs_platform::resize_trace::record(
                 qtrs_platform::resize_trace::TraceKind::RenderEnd,
@@ -444,16 +451,33 @@ impl Window {
             let _t = qtrs_gui::startup_trace::span(|| "platform() first use".into());
             platform()
         };
-        let dpr = p.primary_screen().device_pixel_ratio();
-        let native_rect = if dpr > 1.0 {
-            qtrs_platform::high_dpi::to_native_rect(geometry, dpr)
+        // Where the window is placed is decided before it exists, so the primary screen's ratio
+        // positions it; the window's own ratio is read back from the created window below.
+        let placement_dpr = p.primary_screen().device_pixel_ratio();
+        let native_rect = if placement_dpr > 1.0 {
+            qtrs_platform::high_dpi::to_native_rect(geometry, placement_dpr)
         } else {
             geometry
         };
-        let platform_win = {
+        let mut platform_win = {
             let _t = qtrs_gui::startup_trace::span(|| "create_window (native)".into());
             p.create_window(title, native_rect, flags)?
         };
+        // QWindowPrivate::updateDevicePixelRatio: a window on another screen has that screen's
+        // ratio. Keep the native origin and give the window the native size of its own ratio.
+        let dpr = platform_win.device_pixel_ratio();
+        if dpr != placement_dpr {
+            let native_size = qtrs_platform::high_dpi::to_native_size(
+                Size::new(geometry.width, geometry.height),
+                dpr,
+            );
+            platform_win.set_geometry(Rect::new(
+                native_rect.x,
+                native_rect.y,
+                native_size.width,
+                native_size.height,
+            ));
+        }
         let backing_store = BackingStore::new(Size::new(geometry.width, geometry.height), dpr)
             .ok_or("Failed to create top-level window offscreen BackingStore")?;
         let window_id = ObjectId::next();
@@ -486,6 +510,7 @@ impl Window {
             std::rc::Rc::downgrade(&bs_rc),
             std::rc::Rc::clone(&geom_cell),
             root_widget.clone(),
+            dpr,
         );
         let core = WindowCore {
             platform_window: std::rc::Rc::clone(&pw_rc),
@@ -555,6 +580,12 @@ impl Window {
         self.geometry.get()
     }
 
+    /// `QWindow::devicePixelRatio`: the ratio of this window's physical to logical pixels, from
+    /// the screen the window is on. It changes only when the window receives a DPI change.
+    pub fn device_pixel_ratio(&self) -> f32 {
+        self.render_state.device_pixel_ratio.get()
+    }
+
     pub fn physical_geometry(&self) -> Rect {
         self.platform_window.borrow().geometry()
     }
@@ -565,7 +596,7 @@ impl Window {
         self.geometry.set(rect);
         let size_changed = old_size.width != rect.width || old_size.height != rect.height;
 
-        let dpr = platform().primary_screen().device_pixel_ratio();
+        let dpr = self.render_state.device_pixel_ratio.get();
         let native_rect = if dpr > 1.0 {
             qtrs_platform::high_dpi::to_native_rect(rect, dpr)
         } else {
@@ -608,8 +639,7 @@ impl Window {
     }
 
     pub fn set_geometry_silent(&mut self, rect: Rect) {
-        let p = platform();
-        let dpr = p.primary_screen().device_pixel_ratio();
+        let dpr = self.render_state.device_pixel_ratio.get();
         let native_rect = if dpr > 1.0 {
             qtrs_platform::high_dpi::to_native_rect(rect, dpr)
         } else {
@@ -748,7 +778,13 @@ impl Window {
         {
             let mut bs = self.backing_store.borrow_mut();
             let mut pw = self.platform_window.borrow_mut();
-            let presented = do_render_and_present(&mut **pw, &mut bs, &root, geom);
+            let presented = do_render_and_present(
+                &mut **pw,
+                &mut bs,
+                &root,
+                geom,
+                self.render_state.device_pixel_ratio.get(),
+            );
             self.render_state.bump(|s| {
                 s.direct_render_count += 1;
                 if presented {
@@ -762,7 +798,7 @@ impl Window {
 
     pub fn present_custom<F: FnOnce(&mut Painter)>(&mut self, f: F) {
         let geom = self.geometry.get();
-        let dpr = platform().primary_screen().device_pixel_ratio();
+        let dpr = self.render_state.device_pixel_ratio.get();
 
         let mut bs = self.backing_store.borrow_mut();
         bs.resize(Size::new(geom.width, geom.height), dpr);
@@ -785,7 +821,7 @@ impl Window {
     /// Atomic geometry update and presentation for layered windows (e.g. cascading popup menus).
     /// Avoids SetWindowPos prior to painting, preventing visual jumping / tearing.
     pub fn present_custom_at<F: FnOnce(&mut Painter)>(&mut self, rect: Rect, f: F) {
-        let dpr = platform().primary_screen().device_pixel_ratio();
+        let dpr = self.render_state.device_pixel_ratio.get();
         self.geometry.set(rect);
         {
             let mut pw = self.platform_window.borrow_mut();
@@ -908,8 +944,9 @@ impl QObject for Window {
                 true
             }
             EventKind::DpiChanged { dpi_x, .. } => {
-                let old_dpr = self.backing_store.borrow().device_pixel_ratio();
+                let old_dpr = self.render_state.device_pixel_ratio.get();
                 let new_dpr = (*dpi_x as f32) / 96.0;
+                self.render_state.device_pixel_ratio.set(new_dpr);
                 let cur_geom = self.geometry.get();
                 let size = Size::new(cur_geom.width, cur_geom.height);
                 self.backing_store.borrow_mut().resize(size, new_dpr);
@@ -1026,12 +1063,12 @@ fn do_render_and_present(
     backing_store: &mut BackingStore,
     root_widget: &WidgetRef,
     geometry: Rect,
+    dpr: f32,
 ) -> bool {
     let _t = qtrs_gui::startup_trace::span_min(0.5, || "do_render_and_present".into());
     // Qt delivers the LayoutRequest events that text and size-hint changes post before the paint.
     crate::command::WidgetCommandQueue::flush_layouts();
     crate::widget::adopt_tree(root_widget);
-    let dpr = platform().primary_screen().device_pixel_ratio();
     let logical_size = Size::new(geometry.width, geometry.height);
 
     // --- Lazy Backing Store Resize (Qt QWidgetRepaintManager::paintAndFlush parity) ---
@@ -1346,8 +1383,9 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
             WindowSystemEvent::DpiChanged { dpi_x, dpi_y } => {
-                let old_dpr = self.backing_store.borrow().device_pixel_ratio();
+                let old_dpr = self.render.device_pixel_ratio.get();
                 let new_dpr = (dpi_x as f32) / 96.0;
+                self.render.device_pixel_ratio.set(new_dpr);
                 let cur_geom = self.geometry.get();
                 let size = Size::new(cur_geom.width, cur_geom.height);
                 self.backing_store.borrow_mut().resize(size, new_dpr);
@@ -1365,7 +1403,13 @@ impl WindowSystemEventHandler for WindowEventHandler {
 
                 if let Ok(mut pw) = self.platform_window.try_borrow_mut() {
                     let mut bs = self.backing_store.borrow_mut();
-                    do_render_and_present(&mut **pw, &mut bs, &root, cur_geom);
+                    do_render_and_present(
+                        &mut **pw,
+                        &mut bs,
+                        &root,
+                        cur_geom,
+                        self.render.device_pixel_ratio.get(),
+                    );
                 }
             }
             WindowSystemEvent::InputMethod {

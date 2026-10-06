@@ -1631,7 +1631,7 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         let height = pixmap.physical_height();
         let opacity = self.opacity;
         let target_pos = self.target_pos.take();
-        let dpr = crate::platform().primary_screen().device_pixel_ratio();
+        let dpr = get_window_dpr(self.hwnd);
         let phys_target = target_pos.map(|p| {
             if dpr > 1.0 {
                 crate::high_dpi::to_native_point(p, dpr)
@@ -1716,6 +1716,10 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
 
     fn native_handle(&self) -> isize {
         self.hwnd as isize
+    }
+
+    fn device_pixel_ratio(&self) -> f32 {
+        get_window_dpr(self.hwnd)
     }
 
     fn native_size(&self) -> Option<(u32, u32)> {
@@ -1889,7 +1893,7 @@ pub fn calc_frameless_edge(_hwnd: isize, pos: qtrs_gui::geometry::primitives::Po
             use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
             let mut rect: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
             GetClientRect(_hwnd as HWND, &mut rect);
-            let dpr = crate::integration::platform().primary_screen().device_pixel_ratio();
+            let dpr = get_window_dpr(_hwnd as HWND);
             (
                 ((rect.right - rect.left) as f32 / dpr).round() as i32,
                 ((rect.bottom - rect.top) as f32 / dpr).round() as i32,

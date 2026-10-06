@@ -591,10 +591,11 @@ impl Menu {
         self.present_popup(&mut window, root_origin, size);
 
         let mut chosen = None;
+        // The cursor position is in native pixels: the popup window's own ratio converts it.
+        let dpr = window.device_pixel_ratio();
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) != 0 {
-                let dpr = platform().primary_screen().device_pixel_ratio();
                 let mouse_pt = Point::new(msg.pt.x, msg.pt.y);
                 let mouse_screen = if dpr > 1.0 {
                     qtrs_platform::high_dpi::from_native_point(mouse_pt, dpr)
@@ -726,7 +727,7 @@ impl Menu {
     #[cfg(windows)]
     fn present_popup(&mut self, window: &mut crate::window::Window, root_origin: Point, min_size: Size) {
         use qtrs_platform::high_dpi::to_native_point;
-        let dpr = qtrs_platform::platform().primary_screen().device_pixel_ratio();
+        let dpr = window.device_pixel_ratio();
         let covered = self.covered_rect();
         let win_pos = Point::new(root_origin.x + covered.x, root_origin.y + covered.y);
         let win_rect = Rect::new(
