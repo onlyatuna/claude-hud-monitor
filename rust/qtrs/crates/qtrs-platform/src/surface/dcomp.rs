@@ -219,7 +219,35 @@ pub struct DCompSurface {
     staging_h: u32,
     /// Back buffers were reallocated: the next present must cover the whole visible area.
     force_full: bool,
+    /// The window opacity the owner asked for; presented with every `present_region`.
+    opacity: f32,
+    /// The opacity the staging DIB's pixels were last scaled by. A different value means every
+    /// staged pixel is stale, so the next present covers the whole visible area.
+    staged_opacity: f32,
     stats: DCompStats,
+}
+
+/// Converts premultiplied RGBA pixels to the premultiplied BGRA of the staging DIB, scaling every
+/// channel (alpha included) by `opacity`.
+///
+/// Scaling a premultiplied pixel by a constant is exactly `UpdateLayeredWindow`'s
+/// `SourceConstantAlpha`, which is how Qt applies `windowOpacity` (`qwindowsbackingstore.cpp:66`:
+/// `BYTE(qRound(255.0 * opacity))`). DirectComposition's swap chain is premultiplied
+/// (`DXGI_ALPHA_MODE_PREMULTIPLIED`), so the composed result matches the layered window's.
+pub fn convert_rgba_to_staging_bgra(src: &[u8], dst: &mut [u8], opacity: f32) {
+    let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let (src_px, _) = src.as_chunks::<4>();
+    let (dst_px, _) = dst.as_chunks_mut::<4>();
+    if alpha == 255 {
+        for (s, d) in src_px.iter().zip(dst_px.iter_mut()) {
+            *d = [s[2], s[1], s[0], s[3]];
+        }
+    } else {
+        let scale = |c: u8| ((c as u32 * alpha + 127) / 255) as u8;
+        for (s, d) in src_px.iter().zip(dst_px.iter_mut()) {
+            *d = [scale(s[2]), scale(s[1]), scale(s[0]), scale(s[3])];
+        }
+    }
 }
 
 unsafe impl Send for DCompSurface {}
@@ -520,9 +548,30 @@ impl DCompSurface {
                 staging_w: alloc_w,
                 staging_h: alloc_h,
                 force_full: true,
+                opacity: 1.0,
+                staged_opacity: 1.0,
                 stats: DCompStats::default(),
             })
         }
+    }
+
+    /// Sets the window opacity applied by the next present.
+    pub fn set_opacity(&mut self, opacity: f32) {
+        self.opacity = opacity.clamp(0.0, 1.0);
+    }
+
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
+    /// The staged (about to be presented) pixel at `(x, y)` as `[b, g, r, a]`, for tests.
+    pub fn staged_pixel(&self, x: u32, y: u32) -> Option<[u8; 4]> {
+        if x >= self.width.min(self.staging_w) || y >= self.height.min(self.staging_h) {
+            return None;
+        }
+        let off = (y as usize * self.staging_w as usize + x as usize) * 4;
+        // SAFETY: (x, y) is inside the staging DIB, which is `staging_w * staging_h * 4` bytes.
+        Some(unsafe { *(self.staging_bits.add(off) as *const [u8; 4]) })
     }
 
     /// Allocated swap chain size (>= visible size).
@@ -652,7 +701,7 @@ impl DCompSurface {
     pub fn present_dirty_ref(
         &mut self,
         pixmap: &Pixmap,
-        _opacity: f32,
+        opacity: f32,
         dirty: Rect,
     ) -> Result<(), &'static str> {
         let p_width = pixmap.physical_width();
@@ -660,6 +709,9 @@ impl DCompSurface {
 
         if p_width != self.width || p_height != self.height {
             self.resize(p_width, p_height)?;
+        }
+        if opacity != self.staged_opacity {
+            self.force_full = true;
         }
 
         let full_window_rect = Rect::new(0, 0, self.width as i32, self.height as i32);
@@ -685,15 +737,9 @@ impl DCompSurface {
                 let src_row = std::slice::from_raw_parts(src_data.as_ptr().add(src_offset), copy_bytes);
                 let dst_row = std::slice::from_raw_parts_mut(self.staging_bits.add(dst_offset), copy_bytes);
 
-                let (src_chunks, _) = src_row.as_chunks::<4>();
-                let (dst_chunks, _) = dst_row.as_chunks_mut::<4>();
-                for (src_chunk, dst_chunk) in src_chunks.iter().zip(dst_chunks.iter_mut()) {
-                    dst_chunk[0] = src_chunk[2]; // B
-                    dst_chunk[1] = src_chunk[1]; // G
-                    dst_chunk[2] = src_chunk[0]; // R
-                    dst_chunk[3] = src_chunk[3]; // A
-                }
+                convert_rgba_to_staging_bgra(src_row, dst_row, opacity);
             }
+            self.staged_opacity = opacity;
 
             // 2. Query back buffer IDXGISurface1: GetBuffer is slot 9 on IDXGISwapChain
             let sc_vtbl = *(self.swap_chain as *mut *mut usize);

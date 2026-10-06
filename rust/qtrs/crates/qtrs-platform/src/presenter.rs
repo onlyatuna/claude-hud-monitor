@@ -342,8 +342,9 @@ pub mod win32 {
         fn set_opacity(&mut self, opacity: f32) {
             match self {
                 Self::Layered(p) => p.set_opacity(opacity),
+                // A standard window's opacity is the window's own layered attribute, not a blend.
                 Self::Dc(_) => {}
-                Self::DirectComposition(_) => {}
+                Self::DirectComposition(p) => p.set_opacity(opacity),
             }
         }
 
@@ -360,7 +361,7 @@ pub mod win32 {
                 Self::Dc(p) => p.present(surface, dirty),
                 Self::DirectComposition(p) => {
                     let br = dirty.bounding_rect();
-                    p.present_dirty_ref(surface, 1.0, br)
+                    p.present_dirty_ref(surface, p.opacity(), br)
                 }
             }
         }

@@ -893,8 +893,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：`set_opacity(v)` MUST 在 HUD 的分層視窗上改變可見 alpha，**不論選用哪個 surface**。
 - **Current implementation**：`PARTIAL`。`NativeWindow::set_opacity` 存值，僅對**非** `LAYERED` 視窗呼叫 `SetLayeredWindowAttributes`；`Win32LayeredPresenter` 用它當 `SourceConstantAlpha`；`get_or_create_presenter` 對 `LAYERED` 視窗**先試 `DCompSurface::new`**，失敗才退回 GDI layered presenter。
 - **Known gap**
-  - **G11.5.a [P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現]** **DComp 路徑丟棄 opacity**：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)`（`surface/dcomp.rs`）從不使用它；`WindowsPresenter::set_opacity` 對 `DirectComposition` 為 no-op；以寫死的 `1.0` 呈現。若 DComp 被選用，HUD 的不透明度設定**無效**（`hud_window.py:132,820` vs `hud_window.rs:223,782-788`）。
-  - **G11.5.c [test gap, RAN]** `test_dcomp_*`（5 項）在本機因 `CreateDXGIFactory1 failed for IDXGIFactory2` 全部 skip，卻顯示為 passed；`window.rs:1490-1492` 對所有 `LAYERED` 視窗**無閘門地先試 DComp**，另有 `test_layered_interactive_resize::window_pipeline_*` 在本機選到 Layered。DComp 路徑在本機完全沒被測試。
+  - **G11.5.a [P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現；已修復：RC-09 implementation complete / DirectComposition hardware verification pending]** **DComp 路徑丟棄 opacity**：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)`（`surface/dcomp.rs`）從不使用它；`WindowsPresenter::set_opacity` 對 `DirectComposition` 為 no-op；以寫死的 `1.0` 呈現。若 DComp 被選用，HUD 的不透明度設定**無效**（`hud_window.py:132,820` vs `hud_window.rs:223,782-788`）。
+  - **G11.5.c [test gap, RAN；部分處理：RC-09 新增明確標為 ignore 的 DComp 測試，既有 test_dcomp_* 仍靜默 skip]** `test_dcomp_*`（5 項）在本機因 `CreateDXGIFactory1 failed for IDXGIFactory2` 全部 skip，卻顯示為 passed；`window.rs:1490-1492` 對所有 `LAYERED` 視窗**無閘門地先試 DComp**，另有 `test_layered_interactive_resize::window_pipeline_*` 在本機選到 Layered。DComp 路徑在本機完全沒被測試。
+  - **G11.5.d [P1, RAN；已修復：RC-09]** 非 `LAYERED` 視窗的 `setWindowOpacity` 無效：`dyn PlatformWindow::set_opacity`（widgets `Window::set_opacity` 走的路徑）只寫入欄位並通知 presenter；`Win32DcPresenter` 不處理 opacity；另一個 inherent `NativeWindow::set_opacity` 呼叫 `SetLayeredWindowAttributes` 卻沒設 `WS_EX_LAYERED`（對沒有該樣式的視窗會失敗），且 trait 路徑根本不會呼叫它。Qt：`setWindowLayered` 在 `opacity < 1` 時加 `WS_EX_LAYERED`，再 `SetLayeredWindowAttributes(qRound(255*level))`（`qwindowswindow.cpp:494-530`）。
+  - **G11.5.e [test gap]** `Win32LayeredPresenter` 把 opacity 傳為 `UpdateLayeredWindowIndirect` 的 `SourceConstantAlpha`（與 Qt 的 `qRound(255*opacity)` 等價，讀碼確認）；沒有讀回合成結果的測試——桌面合成無法在不依賴桌面內容的前提下讀回。
+  - **G11.5.f [P2, 未量測]** DComp 的 opacity 以 CPU 在 staging DIB 複製時逐像素縮放實作（`opacity < 1` 時每次呈現多一次乘法；opacity 變更時整面重傳），而非 GPU 端的 `IDCompositionEffectGroup::SetOpacity`。後者的 vtable slot 在本機無法驗證（本機沒有 DXGI factory），因此未採用。
+  - **G11.5.g [P1, 未決策，不在 RC-09]** production 是否允許 DComp；`get_or_create_presenter` 對所有 `LAYERED` 視窗無閘門地先試 DComp，RC-09 未改選擇邏輯。
   - **G11.5.b [P2]** 非分層視窗 `SetLayeredWindowAttributes` 失敗時靜默（不補 `WS_EX_LAYERED`）；DC presenter 忽略 opacity。
 - **Test**：既有 `test_surface_presenter_dc_and_layered_alignment` 只斷言 `is_ok()`；`GenericWindow`/`X11NativeWindow` 的 opacity 測試只斷言儲存值。必要：以每個後端用純色 pixmap 在 0.5 opacity 呈現並讀回合成 alpha；`set_opacity` 對 DComp 視窗改變呈現 alpha。
 - **HUD usage**：Python `hud_window.py:131-132,818-820`；Rust `hud_window.rs:223,782-788`、`tray_icon.rs:647-667`。
@@ -1106,7 +1110,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.q [P1] | `UsageDial` 最小尺寸 0 vs 84 | G8.3.e | 修復 |
 | G12.5.r [P1] | 版面切換：`StackedWidget` vs 重建 | C9.6 | 決定 |
 | G12.5.s [P0, READ；= G8.5.d] | `Window::set_style_sheet` 為 app 全域 | G8.5.d | 修復 |
-| G12.5.t [P0, READ；= G11.5.a] | DComp 路徑 opacity 無效（待實測） | G11.5.a | 實測後修復 |
+| G12.5.t [P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending] | DComp 路徑 opacity 無效（待實測） | G11.5.a | 實測後修復 |
 | G12.5.u [P2] | 色彩／字型解析細節 | G12.3.e–h | 驗證 |
 | G12.5.v [P1] | 發佈 profile `panic = "abort"` vs Python excepthook | G7.9.b | 決定 |
 | G12.5.w [P2] | `rust/README.md` 仍描述 egui/eframe/reqwest | `rust/README.md:3,27,95` | 文件修正 |
@@ -1135,7 +1139,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 296 項：D 12、P0 34、P1 131、P2 115、test gap 4（計數含已修復項；標籤含「已修復」者共 21 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G12.5.f、G12.5.g）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 300 項：D 12、P0 34、P1 133、P2 116、test gap 5（計數含已修復項；標籤含「已修復」者共 24 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1380,9 +1384,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.4.b | P1, READ | `Window` 無 `screen()` |
 | G11.4.c | P1, INFERENCE | `Win32Screen::geometry` 以 dpr 除原點 |
 | G11.4.d | P2 | `Win32Screen::primary()` 寫死 `MonitorFromPoint(0,0)` |
-| G11.5.a | P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現 | **DComp 路徑丟棄 opacity**：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)` |
+| G11.5.a | P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現；已修復：RC-09 implementation complete / DirectComposition hardware verification pending | **DComp 路徑丟棄 opacity**：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)` |
 | G11.5.b | P2 | 非分層視窗 `SetLayeredWindowAttributes` 失敗時靜默 |
-| G11.5.c | test gap, RAN | `test_dcomp_*` |
+| G11.5.c | test gap, RAN；部分處理：RC-09 新增明確標為 ignore 的 DComp 測試，既有 test_dcomp_* 仍靜默 skip | `test_dcomp_*` |
+| G11.5.d | P1, RAN；已修復：RC-09 | 非 `LAYERED` 視窗的 `setWindowOpacity` 無效：`dyn PlatformWindow::set_opacity` |
+| G11.5.e | test gap | `Win32LayeredPresenter` 把 opacity 傳為 `UpdateLayeredWindowIndirect` 的 `SourceConstantAlpha` |
+| G11.5.f | P2, 未量測 | DComp 的 opacity 以 CPU 在 staging DIB 複製時逐像素縮放實作 |
+| G11.5.g | P1, 未決策，不在 RC-09 | production 是否允許 DComp |
 | G11.6.a | P2 | 非 `LAYERED` 視窗的 `set_click_through(true)` 只得 `WS_EX_TRANSPARENT`，沒有 `WS_EX_LAYERED` 時不穿透 |
 | G11.6.b | P1 | 沒有測試斷言樣式位元 |
 | G11.7.a | P1, READ | HUD 在視窗可見之前呼叫 `set_backdrop` |
@@ -1431,7 +1439,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.q | P1 | `UsageDial` 最小尺寸 0 vs 84 |
 | G12.5.r | P1 | 版面切換：`StackedWidget` vs 重建 |
 | G12.5.s | P0, READ；= G8.5.d | `Window::set_style_sheet` 為 app 全域 |
-| G12.5.t | P0, READ；= G11.5.a | DComp 路徑 opacity 無效（待實測） |
+| G12.5.t | P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending | DComp 路徑 opacity 無效（待實測） |
 | G12.5.u | P2 | 色彩／字型解析細節 |
 | G12.5.v | P1 | 發佈 profile `panic = "abort"` vs Python excepthook |
 | G12.5.w | P2 | `rust/README.md` 仍描述 egui/eframe/reqwest |
@@ -1670,9 +1678,18 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`presenter.rs:361-363` DComp 以寫死 `1.0` 呈現；`set_opacity` 對 DComp 為 no-op（`:342-348`）；`window.rs:1490-1492` **對所有 `LAYERED` 視窗無閘門地先試 DComp**。
 - **Evidence**：`READ` + `RAN`：本機 `FRAMELESS|LAYERED` 視窗選到 **Layered**；`test_dcomp_*` 5 項因 `CreateDXGIFactory1 failed for IDXGIFactory2` **全部 skip**（顯示為「通過」）。因此**本機未重現**，且 DComp 路徑在本機**完全沒被測試**。
 - **Required observable**：不論選到哪個後端，`set_opacity(0.5)` 後合成 alpha 為 0.5。
-- **Required test**：每個後端以純色 pixmap 在 0.5 opacity 呈現並讀回（DComp 不可用時測試必須明確標為 skipped，而非通過）。
-- **待決策**：production 是否允許 DComp（程式碼目前允許）。若不允許，這是 presenter 選擇的閘門問題，不是 opacity 實作問題。
+- **Required test**（`qtrs-platform/tests/test_window_opacity.rs`；修改前以「DComp 縮放忽略 opacity」「trait 路徑回到舊的 set_opacity」兩處模擬舊行為：2 項 FAIL）：
+  - `dcomp_staging_pixels_are_scaled_by_the_window_opacity`（純函式 `convert_rgba_to_staging_bgra`：1.0 只換通道序；0.5 → alpha 128、顏色減半、premultiplied 不變式；0.0 全透明）。
+  - `a_standard_window_becomes_translucent_through_the_trait`（非 `LAYERED` 視窗經 `dyn PlatformWindow` 設 0.5 → `WS_EX_LAYERED` 且 `GetLayeredWindowAttributes` alpha=128；設 1.0 → 樣式移除）。
+  - `dcomp_window_presents_with_the_window_opacity`：**標為 `ignore`（reason: requires DirectComposition）**，含 opacity 回到 1.0 且 dirty rect 不含探測像素時整面重傳。**本機以 `--ignored` 執行會失敗（「this machine selected a presenter other than DirectComposition」）——本機沒有 DComp，這項沒有通過過。**
 - **Phase**：3。
+- **Status**：**implementation complete / DirectComposition hardware verification pending**（RC-09）。
+  - 驗證等級：implementation fixed；pure-function 與 standard-window regression verified；**≠ DComp end-to-end verified**（ignore 的測試從未在有 DComp 的機器上跑過）；Layered 路徑未做合成讀回（G11.5.e）。
+  - **根因**：「opacity」在每個後端各自實作，DComp（`present_dirty_ref` 的 `_opacity` 被丟棄、`WindowsPresenter` 以寫死的 `1.0` 呈現）與標準視窗（兩個 `set_opacity`，trait 版不碰視窗樣式）都沒有實作；只有 Layered 有。
+  - **修改**：`surface::dcomp::convert_rgba_to_staging_bgra`（premultiplied RGBA → BGRA，每個通道含 alpha 乘以 `qRound(255*opacity)/255`，等價於 `SourceConstantAlpha`）；`DCompSurface` 記住 `opacity`／`staged_opacity`，opacity 變更時下一次呈現整面重傳；`WindowsPresenter` 對 DComp 傳 `p.opacity()` 並轉發 `set_opacity`；`NativeWindow::set_opacity` 合併為一個（trait 版轉呼叫 inherent 版），非 `LAYERED` 視窗依 Qt 的 `setWindowLayered`／`setWindowOpacity` 加／移除 `WS_EX_LAYERED` 並設 `SetLayeredWindowAttributes`；`NativeWindow::present_region` 原本就每次呈現前呼叫 `p.set_opacity`。
+  - **未動**：presenter 選擇（G11.5.g，production DComp 政策未決）。
+  - **未涵蓋**：G11.5.c（既有 `test_dcomp_*` 仍靜默 skip）、G11.5.e、G11.5.f、G11.5.g。
+  - **沒有做像素驗證。**
 
 #### RC-10 樣式範圍與 popup 擁有關係
 - **Contract gaps**：G8.5.d（= G12.5.s）。

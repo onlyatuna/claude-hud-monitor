@@ -398,6 +398,37 @@ fn get_cursor_global_pos() -> qtrs_gui::geometry::primitives::Point {
     }
 }
 
+/// `QWindowsWindow::setWindowLayered` + `setWindowOpacity` for a window that is not `LAYERED`:
+/// translucent (`opacity < 1`) means `WS_EX_LAYERED` plus `SetLayeredWindowAttributes(LWA_ALPHA)`
+/// with `qRound(255 * opacity)`; opaque removes the style again and repaints.
+#[cfg(windows)]
+fn apply_system_window_opacity(hwnd: HWND, opacity: f32) {
+    use windows_sys::Win32::Graphics::Gdi::InvalidateRect;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, IsWindowVisible, SetLayeredWindowAttributes, SetWindowLongPtrW,
+        GWL_EXSTYLE, LWA_ALPHA,
+    };
+    unsafe {
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let is_layered = ex_style & WS_EX_LAYERED as isize != 0;
+        let needs_layered = opacity < 1.0;
+        if needs_layered != is_layered {
+            let new_style = if needs_layered {
+                ex_style | WS_EX_LAYERED as isize
+            } else {
+                ex_style & !(WS_EX_LAYERED as isize)
+            };
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style);
+        }
+        if needs_layered {
+            let alpha = (opacity * 255.0).round() as u8;
+            SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
+        } else if IsWindowVisible(hwnd) != 0 {
+            InvalidateRect(hwnd, ptr::null(), 1);
+        }
+    }
+}
+
 #[cfg(windows)]
 pub fn get_window_dpr(hwnd: HWND) -> f32 {
     unsafe {
@@ -1418,16 +1449,18 @@ impl NativeWindow {
         }
     }
 
+    /// `QWindowsWindow::setOpacity`. A `LAYERED` window's presenter blends the opacity into every
+    /// present; any other window is made layered by the system while it is translucent
+    /// (`QWindowsWindow::setWindowLayered` / `setWindowOpacity`, `qwindowswindow.cpp:494-530`).
     pub fn set_opacity(&mut self, opacity: f32) {
-        self.opacity = opacity.clamp(0.0, 1.0);
-        if !self.hwnd.is_null() && !self.flags.contains(WindowFlags::LAYERED) {
-            unsafe {
-                use windows_sys::Win32::UI::WindowsAndMessaging::{
-                    SetLayeredWindowAttributes, LWA_ALPHA,
-                };
-                let alpha = (self.opacity * 255.0) as u8;
-                SetLayeredWindowAttributes(self.hwnd, 0, alpha, LWA_ALPHA);
-            }
+        let opacity = opacity.clamp(0.0, 1.0);
+        let changed = self.opacity != opacity;
+        self.opacity = opacity;
+        if let Some(p) = &mut self.presenter {
+            p.set_opacity(opacity);
+        }
+        if changed && !self.hwnd.is_null() && !self.flags.contains(WindowFlags::LAYERED) {
+            apply_system_window_opacity(self.hwnd, opacity);
         }
     }
 
@@ -1604,10 +1637,7 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
     }
 
     fn set_opacity(&mut self, opacity: f32) {
-        self.opacity = opacity.clamp(0.0, 1.0);
-        if let Some(p) = &mut self.presenter {
-            p.set_opacity(self.opacity);
-        }
+        self.set_opacity(opacity);
     }
 
     fn opacity(&self) -> f32 {
