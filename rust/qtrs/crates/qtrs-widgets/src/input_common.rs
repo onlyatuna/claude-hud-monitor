@@ -228,7 +228,7 @@ pub(crate) fn request_update(
 ) {
     base.dirty.set(Some(dirty));
     let target_receiver = base.window_id.get().unwrap_or(base.object_data.id);
-    let _ = qtrs_core::event_loop::post_event_to_thread(
+    qtrs_core::event_loop::post_event_to_thread(
         qtrs_core::object::ThreadId::current(),
         target_receiver,
         qtrs_core::event::Event::new(qtrs_core::event::EventKind::UpdateRequest),

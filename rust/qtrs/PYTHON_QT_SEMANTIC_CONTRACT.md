@@ -199,10 +199,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`IMPLEMENTED`：輪次邊界於 pump 開始時取得（`loop.rs` 的 `insertion_offset`）；post 時喚醒。`PARTIAL`：優先序插入用 `insertion_offset.min(len)`，`insertion_offset` 設為 pump 開始時的佇列長度、**從不遞減**，已送出的事件從頭移除，所以偏移過期。
 - **Known gap**
   - **G3.2.a [P1, READ]** 跨輪／下一輪的優先序錯誤。例：pump `[A,B]`，B 的 handler 先 post X(0) 再 post Y(100)，Y 落在 X 之後（Qt 先送 Y）；3 個事件 pump 完後 post L(0)、M(0)、H(100)，H 落在 M 之後（Qt 的 cleanup 會減掉 `startOffset`，H 先）。現有 `test_insertion_offset_priority_ordering` 只測 pump 期間，分辨不出。
-  - **G3.2.b [P0, READ]** 目標執行緒沒有已註冊 loop 時 `post_event_to_thread` 回 `false`，呼叫端（`CoreApplication::post_event_with_priority`、`signal.rs` 的 queued 閉包、`widget.rs:296`）**忽略回傳值 → 事件靜默遺失**（Qt 會排隊）。HUD 的 `run_on_main_thread` 在 loop 註冊前被 worker 呼叫即遺失；需實測啟動競態。
+  - **G3.2.b [P0, READ；已修復：RC-04]** 目標執行緒沒有已註冊 loop 時 `post_event_to_thread` 回 `false`，呼叫端（`CoreApplication::post_event_with_priority`、`signal.rs` 的 queued 閉包、`widget.rs:296`）**忽略回傳值 → 事件靜默遺失**（Qt 會排隊）。HUD 的 `run_on_main_thread` 在 loop 註冊前被 worker 呼叫即遺失；需實測啟動競態。
   - **G3.2.c [P2, READ]** 巢狀 pump（handler 內呼叫 `process_events`）吃掉外層剩餘事件後，外層迴圈 `processed_count < max_index` 會誤送下一輪事件。
   - **G3.2.d [P2]** 無 null receiver 警告；`ObjectId(0)` 被刻意當成「無接收者」哨兵（`main.rs:46`、`timer.rs:612`）。哨兵語意必須保留並明文記載（見 C3.6）。
   - **G3.2.e [D]** 無 `sendPostedEvents(receiver, type)` 篩選式 flush、`removePostedEvents`、`hasPendingEvents`。理由須在 C3.6 一併處理（`removePostedEvents` 是 G3.6.a 的必要前置）。
+  - **G3.2.f [P2, READ]** RC-04 之後，投遞給「永遠不會建立 loop 的執行緒」的事件會一直留在 pending 佇列直到行程結束（Qt 在執行緒結束時釋放 `QThreadData` 的 postEventList）。已套用與 live 佇列相同的壓縮，所以重複的 `UpdateRequest` 不會累積，但 `MetaCall` 等不可壓縮事件會。需要執行緒結束的清理掛鉤（`ThreadContext`），尚未實作。
 - **Test**：既有 `loop.rs::test_livelock_prevention`、`test_cross_thread_wakeup`、`layered_tests.rs::test_level2_loop_livelock_protection`。必要：`priority_across_pumps`（H,L,M）；`reentrant_pump_does_not_cross_turn_boundary`；`post_before_loop_exists_is_delivered_when_loop_starts`。
 - **HUD usage**：優先序不用。Rust worker → 主執行緒：`post_event_to_thread(main_thread_id, ObjectId(0), MetaCall)`（`main.rs:40-55,525-537`）；Python 用 25 ms `QTimer` 輪詢 `queue.SimpleQueue`（`refresh_controller.py:35-38`）。
 
@@ -395,8 +396,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G6.2.a [P1, READ]** receiver 執行緒在**連線時**擷取，且優先於即時查詢（`signal.rs` `receiver_thread.or_else(query_object_thread)`）。`move_to_thread` 之後 Auto 仍指向舊執行緒。
   - **G6.2.b [P2, READ]** 同執行緒 BlockingQueued 直接呼叫（Qt 死鎖並警告）——安全的偏離，須記載。
-  - **G6.2.c [P0, READ]** 目標執行緒無 loop 時 queued 閉包忽略 `post_event_to_thread` 回傳值 → **queued slot 靜默遺失**（見 G3.2.b）。
-  - **G6.2.d [P2, READ]** BlockingQueued 無逾時；loop 存在但不跑時發射者永久卡住（post 被丟棄時 `tx` 被 drop，`rx.recv()` 回 Err 而解除）。
+  - **G6.2.c [P0, READ；已修復：RC-04]** 目標執行緒無 loop 時 queued 閉包忽略 `post_event_to_thread` 回傳值 → **queued slot 靜默遺失**（見 G3.2.b）。
+  - **G6.2.d [P2, READ]** BlockingQueued 無逾時；loop 存在但不跑時發射者永久卡住。RC-04 之後，目標執行緒尚無 loop 時事件改為排隊，發射者會**阻塞到目標 loop 啟動並處理**（Qt 同樣如此）；先前是事件被丟棄、`tx` 被 drop、`rx.recv()` 回 Err 而解除。若目標執行緒永遠不建 loop，發射者永久阻塞。目前只有測試使用 BlockingQueued（grep 確認）。
   - **G6.2.e [P2]** queued 需 `T: Clone + Send + 'static`。
 - **Test**：必要：`auto_connection_queues_when_emitted_from_other_thread`；`auto_connection_reevaluated_after_move_to_thread`；`blocking_queued_same_thread_is_documented_or_rejected`。
 - **HUD usage**：**Python 的熱鍵信號從 `threading.Thread` 發射**（`system/hotkey.py:76-104,137`），連到主執行緒的 `hud.toggle_visibility`／`toggle_click_through`（`main.py:74-88`）——依賴 AutoConnection 排入 GUI 執行緒（綁定方法的 QObject 為 receiver context；純函式 `on_hotkey_failed` 的 context 為 `[INFERENCE]`）。Rust 不用 queued 連線，改以手動 `MetaCall` post（`main.rs:40-55,471-483,514-521,525-537`）；等價前提見 C7.9。
@@ -478,7 +479,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST A 執行緒 post 到 B 的佇列時喚醒 B 並依 FIFO／優先序送出；MUST **不遺失** B 的 loop 建立之前 post 的事件；SHOULD 所有入口共用同一壓縮／優先序路徑。
 - **Current implementation**：主路徑 `IMPLEMENTED`（`EventLoopHandle::post_event_with_priority`：鎖佇列、壓縮、依優先序插入、喚醒；`post_event_to_thread`）。測試 `loop.rs::test_cross_thread_wakeup`、`test_thread_system.rs::test_thread_with_event_loop`、`layered_tests.rs::test_level3_cross_thread_queued_connection`、`dispatcher_win.rs::test_wakeup_message_is_deduplicated_and_pumped_by_wnd_proc`（僅同執行緒）。
 - **Known gap**
-  - **G7.2.a [P0, READ]** 目標執行緒無已註冊 loop 時回 false／靜默丟（同 G3.2.b）。
+  - **G7.2.a [P0, READ；已修復：RC-04]** 目標執行緒無已註冊 loop 時回 false／靜默丟（同 G3.2.b）。
   - **G7.2.b [P2, READ]** `EventSender::send` 直接推進 `q.events`，**不壓縮、無優先序、忽略 `insertion_offset`**（僅 `move_to_thread` 與 `EventLoopThreadHandle::quit/post_event` 用）。
   - **G7.2.c [P2]** 兩份登記表可能分歧。
   - **G7.2.d [P1, READ]** 無 `removePostedEvents`（→ G3.6.a）。
@@ -1123,7 +1124,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 284 項：D 12、P0 34、P1 124、P2 111、test gap 3（計數含已修復項；標籤含「已修復」者共 4 項：G6.1.a、G6.1.b、G6.4.a、G6.4.d）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 285 項：D 12、P0 34、P1 124、P2 112、test gap 3（計數含已修復項；標籤含「已修復」者共 7 項：G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1159,10 +1160,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.1.b | D | `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)` |
 | G3.1.c | P1, READ | 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等 |
 | G3.2.a | P1, READ | 跨輪／下一輪的優先序錯誤 |
-| G3.2.b | P0, READ | 目標執行緒沒有已註冊 loop 時 `post_event_to_thread` 回 `false`，呼叫端 |
+| G3.2.b | P0, READ；已修復：RC-04 | 目標執行緒沒有已註冊 loop 時 `post_event_to_thread` 回 `false`，呼叫端 |
 | G3.2.c | P2, READ | 巢狀 pump |
 | G3.2.d | P2 | 無 null receiver 警告 |
 | G3.2.e | D | 無 `sendPostedEvents(receiver, type)` 篩選式 flush、`removePostedEvents`、`hasPendingEvents` |
+| G3.2.f | P2, READ | RC-04 之後，投遞給「永遠不會建立 loop 的執行緒」的事件會一直留在 pending 佇列直到行程結束 |
 | G3.3.a | P2, READ | `Quit` 保留**新的** exit code |
 | G3.3.b | P2, READ | `MouseMove`/`HoverMove` 被壓縮 |
 | G3.3.c | P2, READ | `Move`/`UpdateLater`/`LanguageChange` 壓縮不存在 |
@@ -1218,7 +1220,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.1.f | P1, READ | `connect_with_type(Queued, …)` 只儲存 direct dispatcher，`emit` 時被當 direct 呼叫——「Queued」連線若不是用知 |
 | G6.2.a | P1, READ | receiver 執行緒在**連線時**擷取，且優先於即時查詢 |
 | G6.2.b | P2, READ | 同執行緒 BlockingQueued 直接呼叫 |
-| G6.2.c | P0, READ | 目標執行緒無 loop 時 queued 閉包忽略 `post_event_to_thread` 回傳值 → **queued slot 靜默遺失** |
+| G6.2.c | P0, READ；已修復：RC-04 | 目標執行緒無 loop 時 queued 閉包忽略 `post_event_to_thread` 回傳值 → **queued slot 靜默遺失** |
 | G6.2.d | P2, READ | BlockingQueued 無逾時 |
 | G6.2.e | P2 | queued 需 `T: Clone + Send + 'static` |
 | G6.3.a | P1, READ | 無 emitter id 的 Signal |
@@ -1240,7 +1242,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.1.a | P1, READ | 無 TLS context 的執行緒 |
 | G7.1.b | P2 | 無 `QObject::thread()` |
 | G7.1.c | P1 | `ThreadPool` worker 從不呼叫 `init_current` |
-| G7.2.a | P0, READ | 目標執行緒無已註冊 loop 時回 false／靜默丟 |
+| G7.2.a | P0, READ；已修復：RC-04 | 目標執行緒無已註冊 loop 時回 false／靜默丟 |
 | G7.2.b | P2, READ | `EventSender::send` 直接推進 `q.events`，**不壓縮、無優先序、忽略 `insertion_offset`** |
 | G7.2.c | P2 | 兩份登記表可能分歧 |
 | G7.2.d | P1, READ | 無 `removePostedEvents` |
@@ -1531,9 +1533,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`qtrs-core/src/event_loop/loop.rs:621-632` `post_event_to_thread` 在 `THREAD_EVENT_HANDLES` 沒有該執行緒時回 `false`；呼叫端忽略回傳值：`signal.rs:522-524,629-631`、`widget.rs:296`、`timer.rs:402,610`（其中 `window.rs:153-163` 會檢查並退回同步渲染）。
 - **Evidence**：`READ`。HUD 目前啟動順序在 worker 產生前已註冊 loop（`main.rs:319` → `application/mod.rs:120`），因此**不是 HUD 可見型**。
 - **Required observable**：在執行緒的 loop 註冊之前 post 的事件，不遺失，於 loop 開始處理後送達，且保持 FIFO／優先序。
-- **Required test**：`post_before_loop_exists_is_delivered_when_loop_starts`（Contract 已列；修改前 FAIL）；`queued_signal_emitted_before_target_loop_exists_is_delivered`；`single_shot_zero_before_loop_runs_after_earlier_posted_events`。
+- **Required test**（`qtrs-core/tests/test_post_before_loop.rs`，6 項；修改前 6 項全 FAIL，修改後全 PASS）：`post_before_loop_exists_is_delivered_when_loop_starts`；`queued_signal_emitted_before_target_loop_exists_is_delivered`；`single_shot_zero_before_loop_runs_after_earlier_posted_events`；`events_posted_before_loop_keep_priority_and_fifo_order`；`events_posted_after_loop_exists_follow_the_buffered_ones`；`core_application_post_event_before_receiver_thread_has_loop_is_delivered`。修改前的 FAIL 是以「保留舊的丟棄語意、只加上新函式名 `post_event_to_thread_with_priority`」的版本跑出，測試檔與最終版相同。
 - **Downstream**：`Window::queue_render` 的「無 loop 就同步渲染」fallback 是否仍需要；G5.5.b、G6.2.d。
 - **Can remove app workaround**：`window.rs:141-144` 的同步渲染 fallback — **未確定**，須在 RC-04 完成後檢查渲染是否仍能在無 loop 時（`--snapshot`、`--smoke-test` 路徑）運作。
+- **Status**：**已修復**（RC-04）。`loop.rs`：註冊表改為單一 `Mutex<ThreadEventRegistry { handles, pending }>`；`post_event_to_thread[_with_priority]` 在沒有該執行緒的 loop 時把事件放進 `pending`（一個 `EventQueue`，沿用優先序與壓縮規則）；`register_thread_event_loop` 在同一把鎖內依序倒入新 loop 的佇列，所以併發的 poster 不會插隊。`post_event_to_thread` 不再回傳 `bool`（回傳值原本被所有呼叫端忽略，只有 `window.rs` 使用）。`CoreApplication::post_event_with_priority` 改走同一路徑。
+- **Cutover 影響**：`window.rs::queue_render` 原本靠 `post_event_to_thread` 的 `false` 判斷「沒有 loop → 同步渲染」；改為先以 `get_thread_event_sender(ThreadId::current()).is_some()` 明確詢問，行為不變（無 loop 時仍同步渲染，不會留下過期的 deferred render）。此 fallback **仍需要**，因為 `--snapshot`／`--smoke-test` 沒有 loop。
+- **驗證**：`qtrs` workspace exit 0、64 個 test binary ok；主 crate 68 通過、0 失敗。
+- **新增已知缺口**：G3.2.f（從不建 loop 的執行緒的 pending 事件不會釋放）；G6.2.d 行為改變（見該條）。
 - **Phase**：1（只動 `qtrs-core`，與 RC-01～03 彼此獨立）。
 
 #### RC-05 Widget 失效協定：樣式／字型／尺寸策略變更不更新也不重排

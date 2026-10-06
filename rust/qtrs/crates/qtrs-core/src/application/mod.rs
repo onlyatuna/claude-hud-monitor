@@ -6,7 +6,7 @@ use std::sync::RwLock;
 
 use crate::event::Event;
 use crate::event_loop::{
-    get_thread_event_sender, install_application_event_filter, remove_application_event_filter,
+    install_application_event_filter, remove_application_event_filter,
     EventLoop,
 };
 use crate::meta::MetaObject;
@@ -195,9 +195,12 @@ impl CoreApplication {
     /// Posts an event to a receiver object with priority.
     pub fn post_event_with_priority(receiver: ObjectId, event: Event, priority: i32) {
         let target_thread = query_object_thread(receiver).unwrap_or_else(ThreadId::current);
-        if let Some(sender) = get_thread_event_sender(target_thread) {
-            sender.post_event_with_priority(receiver, event, priority);
-        }
+        crate::event_loop::post_event_to_thread_with_priority(
+            target_thread,
+            receiver,
+            event,
+            priority,
+        );
     }
 
     /// Posts an event to a receiver object with normal priority.

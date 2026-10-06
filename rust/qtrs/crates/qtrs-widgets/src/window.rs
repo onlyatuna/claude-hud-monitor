@@ -150,17 +150,21 @@ impl RenderState {
         self.render_pending.set(true);
         qtrs_platform::resize_debug::count(qtrs_platform::resize_debug::Count::RenderQueuedDeferred);
         let id = self.window_id;
-        let queued = qtrs_core::event_loop::post_event_to_thread(
-            qtrs_core::object::ThreadId::current(),
-            ObjectId(0),
-            Event::new(EventKind::MetaCall(Box::new(move |_| run_deferred_render(id)))),
-        );
-        if queued {
+        let thread = qtrs_core::object::ThreadId::current();
+        // post_event_to_thread holds events for a thread without a loop instead of dropping
+        // them, so "can this render be deferred" must be asked explicitly.
+        let has_loop = qtrs_core::event_loop::get_thread_event_sender(thread).is_some();
+        if has_loop {
+            qtrs_core::event_loop::post_event_to_thread(
+                thread,
+                ObjectId(0),
+                Event::new(EventKind::MetaCall(Box::new(move |_| run_deferred_render(id)))),
+            );
             self.bump(|s| s.deferred_render_schedule_count += 1);
         } else {
             self.render_pending.set(false);
         }
-        queued
+        has_loop
     }
 
     /// Re-queues a render left `dirty` by a borrow conflict that exhausted its retry.

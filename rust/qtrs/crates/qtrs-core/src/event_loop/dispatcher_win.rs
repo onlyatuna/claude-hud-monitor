@@ -758,7 +758,7 @@ mod tests {
             ObjectId(900_003),
             crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(move |_| {
                 // Posts during dispatch: lands in the next turn and triggers a new wake-up.
-                let _ = crate::event_loop::post_event_to_thread(
+                crate::event_loop::post_event_to_thread(
                     crate::object::ThreadId::current(),
                     ObjectId(900_003),
                     counting_metacall(&inner),

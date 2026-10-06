@@ -1564,7 +1564,7 @@ impl Widget for Menu {
         self.base.dirty.set(Some(covered.united(&old_covered)));
         self.last_covered.set(covered);
         let target = self.base.window_id().unwrap_or(self.base.object_data.id);
-        let _ = qtrs_core::event_loop::post_event_to_thread(
+        qtrs_core::event_loop::post_event_to_thread(
             qtrs_core::object::ThreadId::current(),
             target,
             Event::new(EventKind::UpdateRequest),

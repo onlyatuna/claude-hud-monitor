@@ -2,7 +2,7 @@ use crate::event::EventFilterChain;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::object::ThreadId;
@@ -599,41 +599,83 @@ impl EventLoopHandle {
     }
 }
 
-static THREAD_EVENT_HANDLES: RwLock<Option<HashMap<ThreadId, EventLoopHandle>>> = RwLock::new(None);
+/// Per-thread posted-event routing: the live loop handle (if any) and events posted before one
+/// exists. Qt keeps `postEventList` in `QThreadData`, independent of the event dispatcher
+/// (`QCoreApplication::postEvent`, qcoreapplication.cpp:1694), so an event posted to a thread
+/// that has no loop yet is queued and delivered once the thread runs events.
+struct ThreadEventRegistry {
+    handles: HashMap<ThreadId, EventLoopHandle>,
+    /// Same ordering and compression rules as a live loop's queue (`EventQueue`), so a thread
+    /// that never starts a loop does not accumulate duplicate `UpdateRequest`s.
+    pending: HashMap<ThreadId, EventQueue>,
+}
 
+static THREAD_EVENT_HANDLES: Mutex<Option<ThreadEventRegistry>> = Mutex::new(None);
+
+impl ThreadEventRegistry {
+    fn new() -> Self {
+        Self {
+            handles: HashMap::new(),
+            pending: HashMap::new(),
+        }
+    }
+}
+
+/// Registers the live loop for `thread_id` and delivers, in posting order, every event that was
+/// posted to that thread before the loop existed. The drain happens under the registry
+/// lock so a concurrent poster cannot overtake the buffered events.
 pub fn register_thread_event_loop(thread_id: ThreadId, handle: EventLoopHandle) {
-    let mut reg = THREAD_EVENT_HANDLES.write().unwrap();
-    if reg.is_none() {
-        *reg = Some(HashMap::new());
+    let mut reg = THREAD_EVENT_HANDLES.lock().unwrap();
+    let reg = reg.get_or_insert_with(ThreadEventRegistry::new);
+    if let Some(buffered) = reg.pending.remove(&thread_id) {
+        for posted in buffered.events {
+            handle.post_event_with_priority(posted.receiver, posted.event, posted.priority);
+        }
     }
-    if let Some(map) = reg.as_mut() {
-        map.insert(thread_id, handle);
-    }
+    reg.handles.insert(thread_id, handle);
 }
 
 pub fn unregister_thread_event_loop(thread_id: ThreadId) {
-    let mut reg = THREAD_EVENT_HANDLES.write().unwrap();
-    if let Some(map) = reg.as_mut() {
-        map.remove(&thread_id);
+    let mut reg = THREAD_EVENT_HANDLES.lock().unwrap();
+    if let Some(reg) = reg.as_mut() {
+        reg.handles.remove(&thread_id);
     }
 }
 
-pub fn post_event_to_thread(thread_id: ThreadId, receiver: ObjectId, event: Event) -> bool {
-    let handle_opt = {
-        let reg = THREAD_EVENT_HANDLES.read().unwrap();
-        reg.as_ref().and_then(|map| map.get(&thread_id).cloned())
-    };
+/// Posts `event` to the thread's event queue. If the thread has no event loop yet the event is
+/// held until one registers (see [`register_thread_event_loop`]); it is never dropped.
+pub fn post_event_to_thread(thread_id: ThreadId, receiver: ObjectId, event: Event) {
+    post_event_to_thread_with_priority(thread_id, receiver, event, 0);
+}
 
-    if let Some(handle) = handle_opt {
-        handle.post_event(receiver, event);
-        return true;
-    }
-    false
+pub fn post_event_to_thread_with_priority(
+    thread_id: ThreadId,
+    receiver: ObjectId,
+    event: Event,
+    priority: i32,
+) {
+    // One lock covers "is there a loop?" and "buffer it", so a loop registering concurrently
+    // cannot slip between the two and strand the event.
+    let handle = {
+        let mut reg = THREAD_EVENT_HANDLES.lock().unwrap();
+        let reg = reg.get_or_insert_with(ThreadEventRegistry::new);
+        match reg.handles.get(&thread_id) {
+            Some(handle) => handle.clone(),
+            None => {
+                reg.pending
+                    .entry(thread_id)
+                    .or_default()
+                    .post_event_with_priority(receiver, event, priority);
+                return;
+            }
+        }
+    };
+    handle.post_event_with_priority(receiver, event, priority);
 }
 
 pub fn get_thread_event_sender(thread_id: ThreadId) -> Option<EventLoopHandle> {
-    let reg = THREAD_EVENT_HANDLES.read().unwrap();
-    reg.as_ref().and_then(|map| map.get(&thread_id).cloned())
+    let reg = THREAD_EVENT_HANDLES.lock().unwrap();
+    reg.as_ref().and_then(|r| r.handles.get(&thread_id).cloned())
 }
 
 impl Drop for EventLoop {
@@ -1415,11 +1457,7 @@ mod tests {
     }
 
     fn post_current(event: Event) {
-        assert!(post_event_to_thread(
-            ThreadId::current(),
-            ObjectId(900_001),
-            event
-        ));
+        post_event_to_thread(ThreadId::current(), ObjectId(900_001), event);
     }
 
     #[test]

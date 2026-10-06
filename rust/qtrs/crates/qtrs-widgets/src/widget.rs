@@ -293,7 +293,7 @@ impl WidgetBase {
         let g = self.geometry.get();
         self.dirty.set(Some(Rect::new(0, 0, g.width, g.height)));
         let target_receiver = self.window_id.get().unwrap_or(self.object_data.id);
-        let _ = post_event_to_thread(
+        post_event_to_thread(
             ThreadId::current(),
             target_receiver,
             Event::new(EventKind::UpdateRequest),
