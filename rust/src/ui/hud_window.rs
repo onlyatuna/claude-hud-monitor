@@ -571,7 +571,11 @@ impl HUDWindow {
 
     fn apply_ui_mode_internal(&mut self, mode: &str) {
         // Python `_apply_theme`: the mode picks which style sheet the labels cascade from.
-        qtrs_widgets::application::Application::set_style_sheet(style_sheet_for(mode, self.is_dark));
+        // `HUDWindow.setStyleSheet` is the window's own sheet; `Window::set_style_sheet` is scoped
+        // to it now (RC-10) and a stale window sheet would win over the application's.
+        let sheet = style_sheet_for(mode, self.is_dark);
+        self.window.set_style_sheet(sheet);
+        qtrs_widgets::application::Application::set_style_sheet(sheet);
         let (w, h) = if mode == "table" {
             if let Some(s) = self
                 .stack
@@ -882,5 +886,44 @@ mod tests {
         drop(hud);
 
         assert!(debouncer.is_worker_joined());
+    }
+
+    /// Python `_apply_theme` re-sets `HUDWindow.setStyleSheet` for the mode. A window sheet is
+    /// scoped to the window (RC-10) and outranks the application's, so a stale one from the other
+    /// mode would keep styling the labels.
+    #[test]
+    fn test_switching_ui_mode_restyles_labels_from_the_new_sheet() {
+        use qtrs_widgets::style::stylesheet::{QStyleSheetStyle, WidgetStyleContext};
+        use qtrs_widgets::Label;
+
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let mut hud = HUDWindow::new(Arc::clone(&cfg), refresh_ctrl).expect("HUDWindow::new failed");
+
+        let ctx = WidgetStyleContext {
+            type_name: "QLabel",
+            object_name: "HeaderTitle",
+            pseudo_states: &[],
+            sub_control: None,
+            attributes: &[],
+        };
+        let mut colours = Vec::new();
+        for mode in ["table", "cards", "table"] {
+            hud.apply_ui_mode(mode);
+            let expected = QStyleSheetStyle::parse(style_sheet_for(mode, hud.is_dark))
+                .resolve(&ctx)
+                .color;
+            let actual = hud
+                .title_label
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .expect("title is a Label")
+                .resolved_style()
+                .color;
+            assert_eq!(actual, expected, "title colour in {mode} mode");
+            colours.push(expected);
+        }
+        assert_ne!(colours[0], colours[1], "the two sheets must style the title differently");
     }
 }

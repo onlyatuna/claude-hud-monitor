@@ -45,6 +45,19 @@ pub fn adopt_tree(root: &WidgetRef) {
     }
 }
 
+/// Sends `StyleChange` (`WidgetBase::style_changed`) to every widget below `children`, depth
+/// first: `QStyleSheetStyle::updateObjects` (qstylesheetstyle.cpp:2780).
+///
+/// A widget that is mutably borrowed is the one currently being driven; it is skipped, as
+/// `resolve_style` also stops at it. Its caller is the one changing it.
+pub fn style_changed_below(children: Vec<WidgetRef>) {
+    for child in children {
+        let Ok(widget) = child.try_borrow() else { continue };
+        widget.widget_base().style_changed();
+        style_changed_below(widget.children());
+    }
+}
+
 pub trait Widget: QObject + 'static {
     /// The `WidgetBase` holding this widget's shared state.
     ///
@@ -219,9 +232,13 @@ pub trait Widget: QObject + 'static {
 
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 
-    /// `QWidget::setStyleSheet`: a `StyleChange` (repaint, `updateGeometry`, own layout invalid).
+    /// `QWidget::setStyleSheet`: the sheet applies to this widget and its subtree, so a
+    /// `StyleChange` (repaint, `updateGeometry`, own layout invalid) goes to this widget and to
+    /// every descendant, as `QStyleSheetStyle::repolish(w)` does (`updateObjects`,
+    /// qstylesheetstyle.cpp:2780).
     fn set_style_sheet(&self, qss: &str) {
         self.widget_base().set_style_sheet(qss);
+        style_changed_below(self.children());
     }
 
     /// This widget's own style sheet (not its ancestors').

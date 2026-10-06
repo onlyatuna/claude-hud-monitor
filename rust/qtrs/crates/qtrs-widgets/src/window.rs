@@ -694,8 +694,11 @@ impl Window {
         self.platform_window.borrow_mut().set_opacity(opacity);
         self.render_and_present();
     }
+    /// `HUDWindow.setStyleSheet` / `QWidget::setStyleSheet` on a top-level window: the sheet
+    /// applies to this window's widget tree only (the root widget is the window widget here).
+    /// The application's sheet is [`Application::set_style_sheet`].
     pub fn set_style_sheet(&mut self, qss: &str) {
-        crate::application::Application::set_style_sheet(qss);
+        self.root_widget.borrow().set_style_sheet(qss);
         self.render_and_present();
     }
 
@@ -1028,6 +1031,14 @@ fn render_widget_recursive(widget_ref: &WidgetRef, painter: &mut Painter, dirty_
     painter.restore();
 }
 
+/// The root widget of every live window on this thread: where `QApplication::allWidgets` starts
+/// for a style-sheet change that concerns the whole application.
+pub(crate) fn window_roots() -> Vec<WidgetRef> {
+    RENDER_STATES
+        .try_with(|m| m.borrow().values().map(|s| s.root.borrow().clone()).collect())
+        .unwrap_or_default()
+}
+
 /// Recursively collects and unifies dirty rectangles across the widget tree.
 pub fn collect_dirty_region(widget_ref: &WidgetRef, offset: Point) -> Option<Rect> {
     let w = widget_ref.borrow_mut();
@@ -1068,6 +1079,9 @@ fn do_render_and_present(
     let _t = qtrs_gui::startup_trace::span_min(0.5, || "do_render_and_present".into());
     // Qt delivers the LayoutRequest events that text and size-hint changes post before the paint.
     crate::command::WidgetCommandQueue::flush_layouts();
+    // Qt posts the `LayoutRequest` to the widget that owns the invalidated layout, parent or not.
+    // qtrs queues it on the parent (`WidgetBase::request_layout`), which the root does not have.
+    crate::layout_scheduler::LayoutScheduler::activate_if_dirty(root_widget);
     crate::widget::adopt_tree(root_widget);
     let logical_size = Size::new(geometry.width, geometry.height);
 

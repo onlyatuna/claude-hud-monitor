@@ -58,7 +58,10 @@ impl Application {
             focus_changed: Signal::new(),
         }
     }
-    /// Sets the application-wide style sheet.
+    /// Sets the application-wide style sheet (`QApplication::setStyleSheet`).
+    ///
+    /// Like `QStyleSheetStyle::repolish(qApp)`, it tells every widget of every window about the
+    /// change (`StyleChange`), so existing widgets repaint and relayout.
     pub fn set_style_sheet(qss: &str) {
         let style = if qss.trim().is_empty() {
             None
@@ -67,6 +70,12 @@ impl Application {
         };
         if let Ok(mut lock) = GLOBAL_STYLESHEET.write() {
             *lock = style;
+        }
+        for root in crate::window::window_roots() {
+            if let Ok(widget) = root.try_borrow() {
+                widget.widget_base().style_changed();
+                crate::widget::style_changed_below(widget.children());
+            }
         }
     }
 
@@ -266,6 +275,7 @@ impl Application {
         *GLOBAL_WHEEL_SCROLL_LINES.write().unwrap() = 3;
         *GLOBAL_START_DRAG_DISTANCE.write().unwrap() = 10;
         *GLOBAL_START_DRAG_TIME_MS.write().unwrap() = 500;
+        *GLOBAL_STYLESHEET.write().unwrap() = None;
     }
 }
 

@@ -622,12 +622,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.5.a [P1, READ]** 無繼承比對（`QFrame{}` 命不中 `QLabel`）；無 descendant/child 組合子（HUD 不用）。
   - **G8.5.b [P1, READ]** `attributes` 只有 Label；同一條規則對 Button／Frame／ProgressBar 無效。
   - **G8.5.c [P0, READ；已修復：RC-05]** **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty；`Label::set_text` 會 `request_layout`，但 `set_font`/`set_alignment`/style/property 不會，`Button::set_text/set_font` 也不會——需要手動 `update_layout`。
-  - **G8.5.d [P0, READ]** `Window::set_style_sheet` 是**整個 Application 的**（呼叫 `Application::set_style_sheet`），Python `HUDWindow.setStyleSheet` 只作用於該子樹（`hud_window.py:246,250`）；Rust HUD 兩者都呼叫（`hud_window.rs:231-232`）→ 影響其他頂層視窗與 popup。
+  - **G8.5.d [P0, READ；已修復：RC-10]** `Window::set_style_sheet` 是**整個 Application 的**（呼叫 `Application::set_style_sheet`），Python `HUDWindow.setStyleSheet` 只作用於該子樹（`hud_window.py:246,250`）；Rust HUD 兩者都呼叫（`hud_window.rs:231-232`）→ 影響其他頂層視窗與 popup。
   - **G8.5.e [P1, READ]** `:disabled`/`:focus` 不支援。
   - **G8.5.f [P1, READ]** **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在；選單外觀來自寫死的 `MenuStyle`（`rust/src/ui/tray_icon.rs`），手動複製了 Python QSS 的數值；`QMenu::item:selected/:disabled` 不驅動 hover／停用色。
   - **G8.5.g [P2, READ]** `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄；`margin` 只有選單消費。
   - **G8.5.h [P2, READ]** 父 widget 的 `font` 繼承未實作（`[INFERENCE]`，未對照 `qstylesheetstyle.cpp`）。
-  - **G8.5.i [P1, READ]** RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排（`LayoutScheduler::invalidate(parent)`）；parent 自己的 size hint 因此改變時，不會再往祖先傳（Qt 的 `QLayout::invalidate` 會一路到最上層 layout 並對它 post `LayoutRequest`）；(2) widget 自己的 layout 在 `style_changed` 時只標 dirty，要靠 parent 的 `BoxLayout::activate` 順手重排（`child_layout.is_dirty()`）；沒有 parent 的 root，或 parent 沒有 layout 時，不會被排程。(3) `Application::set_style_sheet`／`set_font` 不會對既有 widget 送 `StyleChange`／`FontChange`（見 G8.5.d，RC-10）。
+  - **G8.5.i [P1, READ]** RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排（`LayoutScheduler::invalidate(parent)`）；parent 自己的 size hint 因此改變時，不會再往祖先傳（Qt 的 `QLayout::invalidate` 會一路到最上層 layout 並對它 post `LayoutRequest`）；(2) widget 自己的 layout 在 `style_changed` 時只標 dirty，要靠 parent 的 `BoxLayout::activate` 順手重排（`child_layout.is_dirty()`）；沒有 parent 的 root，或 parent 沒有 layout 時，不會被排程（**G8.5.i(2) 的 root 部分 = RC-05 residual prerequisite，由 RC-10 一併消化**：沒有 parent 的 root 在 render 前由 `LayoutScheduler::activate_if_dirty` 排程，沒有新增 layout 子系統；「parent 沒有 layout」的情形未驗證，仍開放）。(3) `Application::set_style_sheet` 不通知既有 widget（RC-10 已修復）；`Application::set_font` 見 G8.5.j。
+  - **G8.5.j [P2, READ；實測]** `Application::set_font` 只寫 `GLOBAL_FONT`：沒有任何 widget 讀 `Application::font()`，也沒有 `FontChange`／`ApplicationFontChange`；各 widget 在建構時寫死字型（Label／Button 13、ProgressBar 12、Menu 12），也沒有「明確設定 vs. 沿用」的 resolve mask，所以新建的 widget 也不會用 app font。實測：既有 Label 的 size hint 在 `Application::set_font(40pt)` 後仍是 35→35；新建 Label 的字型為 13.0 而非 40.0。Qt：`QApplication::setFont` 對所有非 window 的 widget 送 `ApplicationFontChange`，`resolveFont()` 重新解析（`qapplication.cpp:1352-1386`、`qwidget.cpp:4763-4829, 9265`）。**HUD 不受影響**：Python 從未呼叫 `QApplication.setFont`（`grep` 全 `python/`），只用 widget 區域的 `setFont` 與 QSS。依使用者決定，**不在 RC-10 處理**。
+  - **G8.5.k [P2, READ]** HUD 的選單沒有 parent：Rust `Menu::new("")`（`tray_icon.rs:308`）；Python `QMenu(self.hud_window)`（`tray_icon.py:55`）、`QMenu(self)`（`hud_window.py:678`）。Qt 的 QMenu 沿 parent 鏈取得 sheet（`qstylesheetstyle.cpp:1654`）。qtrs 的 parent 鏈解析已可用（RC-10 的 `a_menu_takes_the_sheet_of_the_window_it_hangs_under_and_not_another`），但 `Menu` 不消費解析結果（G8.5.f），所以即使掛 parent 也沒有可見差異；兩者要一起處理。
+  - **G8.5.l [P2, READ]** `StyleChange` 通知以 `try_borrow` 走訪：`style_changed_below` 跳過目前被 mutably borrow 的 widget（正在被驅動的那個），`Application::set_style_sheet` 在某個 root 被借用時，整棵樹不會被通知。與 `resolve_style` 遇到被借用祖先就停止走訪同類（`widget.rs:463`）。未實測。
 - **Test**：既有 `test_stylesheet_style.rs::*`、`test_menu_style_box_model.rs`（測 `MenuStyle`，非 QSS）。必要：`qframe_rule_matches_qlabel`；`property_change_relayouts`；`window_stylesheet_is_scoped_to_subtree`；`attribute_selector_on_button_and_frame`；**樣式表字串逐項比對**（見 C12.3）。
 - **HUD usage**：Python `setStyleSheet`（`hud_window.py:149,246,250,457`、`provider_card.py:34-212`、`usage_table.py:330,368,381`）、`setProperty + polish`（`usage_table.py:258-260`）、`ui/styles.py` 全部規則；Rust `set_style_sheet`（`hud_window.rs:76,231,579,714`、`provider_card.rs:100,124`）、`set_property`（`usage_table.rs:879`）。
 
@@ -1109,7 +1112,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.p [P1] | `QColor.darker(110)` 缺失：Rust 用原色 | `usage_table.rs:690` vs `usage_table.py:88` | 修復（需逐像素比對） |
 | G12.5.q [P1] | `UsageDial` 最小尺寸 0 vs 84 | G8.3.e | 修復 |
 | G12.5.r [P1] | 版面切換：`StackedWidget` vs 重建 | C9.6 | 決定 |
-| G12.5.s [P0, READ；= G8.5.d] | `Window::set_style_sheet` 為 app 全域 | G8.5.d | 修復 |
+| G12.5.s [P0, READ；= G8.5.d；已修復：RC-10] | `Window::set_style_sheet` 為 app 全域 | G8.5.d | 修復 |
 | G12.5.t [P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending] | DComp 路徑 opacity 無效（待實測） | G11.5.a | 實測後修復 |
 | G12.5.u [P2] | 色彩／字型解析細節 | G12.3.e–h | 驗證 |
 | G12.5.v [P1] | 發佈 profile `panic = "abort"` vs Python excepthook | G7.9.b | 決定 |
@@ -1139,7 +1142,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 300 項：D 12、P0 34、P1 133、P2 116、test gap 5（計數含已修復項；標籤含「已修復」者共 24 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 303 項：D 12、P0 34、P1 133、P2 119、test gap 5（計數含已修復項；標籤含「已修復」者共 26 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1304,12 +1307,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.5.a | P1, READ | 無繼承比對 |
 | G8.5.b | P1, READ | `attributes` 只有 Label |
 | G8.5.c | P0, READ；已修復：RC-05 | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
-| G8.5.d | P0, READ | `Window::set_style_sheet` 是**整個 Application 的** |
+| G8.5.d | P0, READ；已修復：RC-10 | `Window::set_style_sheet` 是**整個 Application 的** |
 | G8.5.e | P1, READ | `:disabled`/`:focus` 不支援 |
 | G8.5.f | P1, READ | **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在 |
 | G8.5.g | P2, READ | `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄 |
 | G8.5.h | P2, READ | 父 widget 的 `font` 繼承未實作 |
 | G8.5.i | P1, READ | RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排 |
+| G8.5.j | P2, READ；實測 | `Application::set_font` 只寫 `GLOBAL_FONT`：沒有任何 widget 讀 `Application::font()`，也沒有 `FontChan |
+| G8.5.k | P2, READ | HUD 的選單沒有 parent：Rust `Menu::new("")` |
+| G8.5.l | P2, READ | `StyleChange` 通知以 `try_borrow` 走訪：`style_changed_below` 跳過目前被 mutably borrow 的 widget |
 | G8.6.a | P2 | 無 per-widget `WA_*` 屬性 |
 | G8.6.b | P1, READ | `set_stays_on_top` 執行期路徑沒有測試 |
 | G8.6.c | P1 | 無 layout 導出的頂層最小尺寸 |
@@ -1438,7 +1444,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.p | P1 | `QColor.darker(110)` 缺失：Rust 用原色 |
 | G12.5.q | P1 | `UsageDial` 最小尺寸 0 vs 84 |
 | G12.5.r | P1 | 版面切換：`StackedWidget` vs 重建 |
-| G12.5.s | P0, READ；= G8.5.d | `Window::set_style_sheet` 為 app 全域 |
+| G12.5.s | P0, READ；= G8.5.d；已修復：RC-10 | `Window::set_style_sheet` 為 app 全域 |
 | G12.5.t | P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending | DComp 路徑 opacity 無效（待實測） |
 | G12.5.u | P2 | 色彩／字型解析細節 |
 | G12.5.v | P1 | 發佈 profile `panic = "abort"` vs Python excepthook |
@@ -1604,7 +1610,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 副帶修正：trait 的 `property()` 原本恆回 `None`（預設實作，無人覆寫），現在回傳 `WidgetBase` 儲存的值，簽名改為 `Option<String>`（零呼叫端）；`layout_probe` 範例的 policy 改存在 base。
   - **驗證**：`qtrs` workspace exit 0、66 個 test binary ok；主 crate 68 通過、0 失敗（含 `test_fetch_usage_live_benchmark`，本次通過）。HUD `--snapshot` 四張圖修改前後比對：差異像素全部落在「同一版本連跑兩次本來就不同」的區域（時間／倒數文字，遮罩外差異 0 像素），`hud_context_menu.png` 完全相同。遮罩區域內的差異無法以此方法排除，**未做逐像素零差異驗證**。
   - **未做**：沒有刪除任何 HUD workaround（`update_layout()`×6、手動 `LayoutScheduler`、`render_and_present()`）。這些多半與文字／可見性／幾何有關，不是 style／font／size policy；依本條規定須逐一刪除並重跑 HUD 快照與 layout harness，另行處理。HUD 的 `set_state`（`usage_table.rs:879`）仍只呼叫 `set_property`，Python 對應處有 `unpolish/polish`，應改呼叫 `repolish()`。
-  - **仍開放**：G8.5.i（失效傳播限制）、G8.5.d（RC-10）；`Menu::set_font`、`ScrollBar`／`ScrollArea` 的 style 尚未驗證 size hint 相依。
+  - **仍開放**：G8.5.i（失效傳播限制；root 與 app 範圍的部分已由 RC-10 處理）；G8.5.d 已由 RC-10 修復；`Menu::set_font`、`ScrollBar`／`ScrollArea` 的 style 尚未驗證 size hint 相依。
 - **Phase**：2。
 
 #### RC-06 事件翻譯與傳遞：accept／ignore／冒泡，及 Close／Show／Hide／Move／DblClick
@@ -1691,13 +1697,40 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **未涵蓋**：G11.5.c（既有 `test_dcomp_*` 仍靜默 skip）、G11.5.e、G11.5.f、G11.5.g。
   - **沒有做像素驗證。**
 
-#### RC-10 樣式範圍與 popup 擁有關係
-- **Contract gaps**：G8.5.d（= G12.5.s）。
-- **Qt behavior** `[QT-SRC qwidget.cpp:2594-2632]`：`QWidget::setStyleSheet` 只作用於該 widget 及其子樹；`QMenu(parent)` 透過 parent 繼承樣式（Python `hud_window.py:678`、`tray_icon.py:55`）。
-- **qtrs root**：`window.rs:547-549` `Window::set_style_sheet` 呼叫 `Application::set_style_sheet`；`Menu::new(title)`（`menu.rs:160`）無 parent；`resolve_style` 已沿 parent 鏈走（`widget.rs:391-415`）。
-- **Evidence**：`READ`。HUD 自己也呼叫 `Application::set_style_sheet`（`hud_window.rs:232,579,715`），所以只改 `Window::set_style_sheet` 的範圍**不會改變 HUD 行為**；真正前提是 popup 能掛 parent。
-- **Required test**：兩個頂層視窗，A 的樣式不影響 B；掛在 A 下的 `Menu` 吃 A 的樣式。
-- **Depends on**：RC-05。
+#### RC-10 樣式範圍與通知
+- **Contract gaps**：G8.5.d（= G12.5.s）。相關新增：G8.5.j、G8.5.k、G8.5.l；G8.5.i 的 (2)(3) 部分。
+- **Qt behavior**：
+  - `QWidget::setStyleSheet` 只作用於該 widget 與其子樹，並對該 widget 及**所有後代**送 `StyleChange`（`QStyleSheetStyle::repolish(w)` → `updateObjects`）`[QT-SRC qwidget.cpp:2594-2631, qstylesheetstyle.cpp:2780-2800, 2978-2987]`。頂層視窗就是一個 `QWidget`，`HUDWindow.setStyleSheet` 只影響該視窗（`hud_window.py:246,250`）。
+  - `QApplication::setStyleSheet` 才是應用範圍：`repolish(qApp)` 對所有已 polish 的 widget 送 `StyleChange`（`qapplication.cpp:885-900`、`qstylesheetstyle.cpp:2989-2998`）。
+  - `StyleChange`／`FontChange` = `update(); updateGeometry(); layout->invalidate()`（`qwidget.cpp:9502-9510`）。
+  - 串接：`weight = specificity + (origin+depth)*0x10000000000`，depth 壓過 specificity：app < 祖先 < 自己（`qcssparser.cpp:2215`）。qtrs 的 `resolve_chain` 排序 `(depth, score)`，一致。
+  - `styleRules` 沿 `QObject::parent()` 收集每層的 `styleSheet`，所以 `QMenu(parent)` 取得 parent 的 sheet（`qstylesheetstyle.cpp:1496-1506, 1654-1675`；Python `hud_window.py:678`、`tray_icon.py:55`）。
+- **Root cause**：樣式「來源」改變時沒有通知受影響的 widget。(a) `Application::set_style_sheet` 只寫全域，不通知任何 widget；(b) `WidgetBase::set_style_sheet` 只通知自己，不通知子樹；(c) 沒有 parent 的 root 的 layout 在 `style_changed` 後只被標 dirty，沒有人排程（G8.5.i(2)）；(d) `Window::set_style_sheet` 轉呼叫 `Application::set_style_sheet`，範圍錯為整個應用。
+- **Contract 文字的更正**（舊版寫「真正前提是 popup 能掛 parent」，另寫「只改 `Window::set_style_sheet` 的範圍不會改變 HUD 行為」，兩者都不成立）：
+  > Popup 的 parent-chain style resolution 已存在且可用；RC-10 的核心問題是 Window stylesheet scope 錯誤，以及 application / widget style change 的通知與失效傳播不完整。Menu 對 QSS 的實際消費另屬 G8.5.f。
+  - 實測：掛在 A 下的 `QMenu` 取得 A 的 sheet，B 下的取不到（修改前就通過）。缺的是 `Menu` 不消費解析結果（G8.5.f）與 HUD 選單未掛 parent（G8.5.k），都不屬於 RC-10。
+  - **HUD 行為會變**：舊的 `Window::set_style_sheet` 與 `Application::set_style_sheet` 是同一個槽，`hud_window.rs:574`（只呼叫後者）因此能蓋掉視窗的舊 sheet。範圍拆開後，視窗上殘留的另一模式的 sheet 會壓過 app sheet（table 模式的標題、時間等標籤顏色錯；是 HEAD 與修改後的 snapshot 對比發現的，既有單元測試沒有發現）。`hud_window.rs:574` 因此補上 `self.window.set_style_sheet(sheet)`（Python `_apply_theme` 的 `self.setStyleSheet`）。這是跟著語意調整，**不是移除 workaround**。
+- **Evidence**：`RAN`。
+- **Required test**（`qtrs-widgets/tests/test_style_scope.rs`，真實 `Window` 與 `EventLoop`，每次改動後只 pump，不呼叫 `update_layout`／`render_and_present`）。**修改前（原始碼）FAIL 的 5 項**：
+  - `application_sheet_reaches_existing_widgets_after_one_pump`（size hint 31→71，geometry 停在 31）。
+  - `application_sheet_reaches_every_window`（`QApplication::setStyleSheet` 是應用的：兩個視窗都要變）。
+  - `window_set_style_sheet_reaches_its_existing_widgets_after_one_pump`。
+  - `window_set_style_sheet_does_not_reach_another_window`（B 的 hint 31→71；且 `Application::style_sheet()` 不得變成非空）。
+  - `a_sheet_on_a_root_widget_without_a_parent_relayouts_its_own_subtree`（G8.5.i(2)）。
+  - 另 2 項在修改前就通過（保護既有行為）：`a_menu_takes_the_sheet_of_the_window_it_hangs_under_and_not_another`（只驗解析層級）；`a_sheet_on_a_nested_container_reaches_widgets_below_it`。後者在其餘修改就位、僅拿掉子樹遞迴時 **FAIL**（因此它是子樹遞迴的回歸測試，但不是原始碼的 before-FAIL）。
+  - Before-FAIL 限制：Menu 的外觀「實際使用」解析結果無 API 可測（G8.5.f），沒有假造。
+- **Status**：**已修復：RC-10**（真實 Win32 視窗，geometry／解析層級驗證）。HUD 只做了 snapshot 對比（見下），**沒有做互動式目視驗證**。
+  - **修改**：
+    - `Widget::set_style_sheet`（trait 預設）在 `WidgetBase::set_style_sheet` 之後對子樹呼叫 `style_changed_below`（Qt `updateObjects`）。`Widget::repolish()` 維持單一 widget（對應 Python `style().unpolish(w); polish(w)`）。
+    - `Window::set_style_sheet` 改為 `root_widget().set_style_sheet(qss)`，不再碰 `Application`。
+    - `Application::set_style_sheet` 寫入全域後，對每個存活視窗的 root 與其子樹送 `StyleChange`（經 `window::window_roots()`，取自既有的 `RENDER_STATES` 登錄；沒有新建第二套 registry。沒有走 `TOP_LEVEL_WINDOWS`＋`with_object`：它只在視窗呼叫過 `unsafe register()` 時才查得到，而 `RENDER_STATES` 在 `Window::new` 就登錄、`Drop` 時移除）。
+    - `LayoutScheduler::activate_if_dirty`：`do_render_and_present` 在 `flush_layouts` 之後排程自己的 layout 為 dirty 的 root。
+    - `Application::reset_for_test` 也重置 app sheet。
+  - **HUD workaround 尚未移除**（HUD 仍在 `hud_window.rs:231,574,710` 呼叫 `Application::set_style_sheet`）。移除前提：`panel_look`（`hud_window.rs:94`）改讀 root 的 sheet；`:574` 改走 `window.set_style_sheet`；逐一移除並重跑 HUD snapshot 與 layout harness。注意：`Application::set_style_sheet` 現在會對所有視窗要求 repaint 與 relayout，HUD 每次換樣式都會多出這些請求，未做目視驗證。
+  - **HUD 回歸測試**（`rust/src/ui/hud_window.rs`）：`test_switching_ui_mode_restyles_labels_from_the_new_sheet`（table→cards→table，`HeaderTitle` 的顏色必須等於該模式 sheet 單獨解析的結果）。拿掉 `hud_window.rs:574` 的 `window.set_style_sheet` 時 **FAIL**（`#94a3b8` 對 `#ebebf5` α0.62），加上後 PASS。
+  - **HUD snapshot**（`--snapshot`，輸出含時鐘文字，非決定性）：HEAD 對 HEAD 兩次只差時鐘區（117 px）。調整前，table 模式與 HEAD 差 38489 px（標題、時間顏色錯）；調整後，與 HEAD 的差異只剩隨時間變動的文字與弧線（重設時間、`17:18`→`17:20`、小圓弧刻度）。cards 模式與 context menu 沒有看出結構差異（cards 差 257／441 px，與時鐘同區）。**沒有達到 per-pixel 差為零，所以：MANUAL WINDOWS VERIFICATION REQUIRED。**
+  - **未涵蓋**：G8.5.j（`Application::set_font`，依使用者決定不進 RC-10）、G8.5.k、G8.5.l、G8.5.f（Menu 消費 QSS）、G8.5.i(1) 與「parent 沒有 layout」。
+- **Depends on**：RC-05（已完成）、G8.5.i(2)（由本 RC 一併處理）。
 - **Phase**：3。
 
 #### RC-11 Tooltip

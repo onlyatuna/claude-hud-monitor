@@ -42,6 +42,23 @@ impl LayoutScheduler {
         }
     }
 
+    /// Runs `widget`'s own layout when it has been invalidated and nothing else is going to.
+    ///
+    /// `QLayout::invalidate` posts a `LayoutRequest` to the widget that owns the layout. qtrs
+    /// queues the request on the parent (`WidgetBase::request_layout`); a widget without one, a
+    /// window's root, would otherwise stay invalid until its size changed.
+    pub fn activate_if_dirty(widget: &WidgetRef) {
+        let dirty = widget
+            .try_borrow()
+            .ok()
+            .and_then(|w| w.layout_ref_mut().map(|layout| layout.is_dirty()))
+            .unwrap_or(false);
+        if dirty {
+            Self::invalidate(widget);
+            Self::activate_pending();
+        }
+    }
+
     /// Returns whether any layout is pending activation.
     pub fn has_pending() -> bool {
         DIRTY_LAYOUTS.with(|q| !q.borrow().is_empty())

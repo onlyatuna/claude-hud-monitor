@@ -179,18 +179,18 @@ mod pumped {
         // A Button: its size policy already works, so this isolates the style-sheet path.
         let mut fx = fixture(Box::new(Button::new("Alpha")), Box::new(Label::new("Beta")));
         let renders_before = fx.win.render_stats().render_count;
-        let width_before = fx.first.borrow().geometry().width;
 
         // Fixed so the first label's width follows its size hint exactly.
         fx.first
             .borrow()
             .set_size_policy(QSizePolicy::new(Policy::Fixed, Policy::Preferred));
         pump_idle(&mut fx);
+        let hint_before = fx.first.borrow().size_hint().width;
         fx.first.borrow().set_style_sheet("font-size: 28px;");
         let turns = pump_idle(&mut fx);
 
         let hint = fx.first.borrow().size_hint();
-        assert!(hint.width > width_before, "a 28px font must be wider than the 12pt label was");
+        assert!(hint.width > hint_before, "a 28px font must be wider than the 12pt label was");
         assert_eq!(
             fx.first.borrow().geometry().width,
             hint.width,
