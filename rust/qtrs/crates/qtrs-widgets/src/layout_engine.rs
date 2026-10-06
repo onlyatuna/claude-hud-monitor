@@ -6,6 +6,7 @@
 //! `QBoxLayout` and `QGridLayout` do, so the spare pixels, the spacing around empty items and the
 //! rounding all come out the same.
 
+use crate::layout::ItemAlignment;
 use crate::size_policy::Policy;
 use crate::widget::Widget;
 use qtrs_gui::geometry::primitives::{Rect, Size};
@@ -354,19 +355,29 @@ pub fn smart_min_size(widget: &dyn Widget) -> Size {
     Size::new(w.max(0), h.max(0))
 }
 
-/// `qSmartMaxSize` for `widget` without alignment.
-pub fn smart_max_size(widget: &dyn Widget) -> Size {
+/// `qSmartMaxSize(sizeHint, minSize, maxSize, sizePolicy, align)` for `widget`: an aligned axis
+/// may grow without limit, because the item is then placed inside the cell instead of filling it.
+pub fn smart_max_size(widget: &dyn Widget, align: ItemAlignment) -> Size {
+    if align.horizontal() && align.vertical() {
+        return Size::new(LAYOUT_SIZE_MAX, LAYOUT_SIZE_MAX);
+    }
     let hint = widget.size_hint();
     let min_hint = widget.minimum_size_hint();
     let min = widget.minimum_size();
     let policy = widget.size_policy();
     let mut s = widget.maximum_size();
     let hint = Size::new(hint.width.max(min_hint.width).max(min.width), hint.height.max(min_hint.height).max(min.height));
-    if s.width == WIDGET_SIZE_MAX && !policy.horizontal.can_grow() {
+    if s.width == WIDGET_SIZE_MAX && !align.horizontal() && !policy.horizontal.can_grow() {
         s.width = hint.width;
     }
-    if s.height == WIDGET_SIZE_MAX && !policy.vertical.can_grow() {
+    if s.height == WIDGET_SIZE_MAX && !align.vertical() && !policy.vertical.can_grow() {
         s.height = hint.height;
+    }
+    if align.horizontal() {
+        s.width = LAYOUT_SIZE_MAX;
+    }
+    if align.vertical() {
+        s.height = LAYOUT_SIZE_MAX;
     }
     s
 }
@@ -407,17 +418,17 @@ pub fn item_minimum_size(widget: &dyn Widget) -> Size {
 }
 
 /// `QWidgetItem::maximumSize`.
-pub fn item_maximum_size(widget: &dyn Widget) -> Size {
+pub fn item_maximum_size(widget: &dyn Widget, align: ItemAlignment) -> Size {
     if item_is_empty(widget) {
         Size::new(0, 0)
     } else {
-        smart_max_size(widget)
+        smart_max_size(widget, align)
     }
 }
 
 /// `QWidgetItem::expandingDirections` as (horizontal, vertical): the size policy's, plus those of
-/// the widget's own layout when the policy lets it grow.
-pub fn item_expanding(widget: &dyn Widget) -> (bool, bool) {
+/// the widget's own layout when the policy lets it grow, minus the axes the item is aligned in.
+pub fn item_expanding(widget: &dyn Widget, align: ItemAlignment) -> (bool, bool) {
     if item_is_empty(widget) {
         return (false, false);
     }
@@ -433,24 +444,53 @@ pub fn item_expanding(widget: &dyn Widget) -> (bool, bool) {
             vertical = true;
         }
     }
-    (horizontal, vertical)
+    (horizontal && !align.horizontal(), vertical && !align.vertical())
 }
 
-/// `QWidgetItem::setGeometry` without alignment: the widget gets the rectangle bounded by its
-/// maximum size. `QStyle::visualAlignment` makes a missing horizontal alignment `AlignLeft`, so
-/// it stays at the left edge, and a missing vertical alignment centres it vertically. A hidden
-/// widget keeps no geometry.
-pub fn item_set_geometry(widget: &dyn Widget, rect: Rect) {
+/// `QWidgetItem::setGeometry` (qlayoutitem.cpp:408-474) for a left-to-right layout.
+///
+/// The widget gets the rectangle bounded by the item's maximum size; on an aligned axis it is
+/// also cut down to the item's size hint and placed inside the rectangle. A missing horizontal
+/// alignment means `AlignLeft` (`QStyle::visualAlignment`), a missing vertical one centres. A
+/// hidden widget keeps no geometry. Without `heightForWidth` (not ported), a vertically aligned
+/// widget is cut to its size hint height.
+pub fn item_set_geometry(widget: &dyn Widget, rect: Rect, align: ItemAlignment) {
     if item_is_empty(widget) {
         widget.set_geometry(Rect::new(0, 0, 0, 0));
         return;
     }
-    let max = item_maximum_size(widget);
-    let width = rect.width.min(max.width);
-    let height = rect.height.min(max.height);
+    let max = item_maximum_size(widget, align);
+    let mut width = rect.width.min(max.width);
+    let mut height = rect.height.min(max.height);
+    if align.horizontal() || align.vertical() {
+        let policy = widget.size_policy();
+        let mut pref = item_size_hint(widget);
+        if policy.horizontal == Policy::Ignored {
+            pref.width = widget.size_hint().width.max(widget.minimum_size().width);
+        }
+        if policy.vertical == Policy::Ignored {
+            pref.height = widget.size_hint().height.max(widget.minimum_size().height);
+        }
+        if align.horizontal() {
+            width = width.min(pref.width);
+        }
+        if align.vertical() {
+            height = height.min(pref.height);
+        }
+    }
     let mut x = rect.x;
-    let mut y = rect.y + (rect.height - height) / 2;
-    let (mut width, mut height) = (width, height);
+    let mut y = rect.y;
+    let left = !align.horizontal() || align.contains(ItemAlignment::LEFT);
+    if align.contains(ItemAlignment::RIGHT) {
+        x += rect.width - width;
+    } else if !left {
+        x += (rect.width - width) / 2;
+    }
+    if align.contains(ItemAlignment::BOTTOM) {
+        y += rect.height - height;
+    } else if !align.contains(ItemAlignment::TOP) {
+        y += (rect.height - height) / 2;
+    }
     // Do not move outside of the parent.
     if x < 0 {
         width += x;

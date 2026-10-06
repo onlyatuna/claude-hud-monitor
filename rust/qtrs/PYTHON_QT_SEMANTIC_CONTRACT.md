@@ -669,7 +669,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G9.1.a [P1, READ]** `add_stretch(0)` 被強制成 1（`layout.rs` `stretch.max(1)`）；Qt 的 `addStretch(0)` stretch 為 0。
   - **G9.1.b [P1]** 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor`（grep 為空）。
-  - **G9.1.c [P1]** 無 item 對齊（見 C9.3）。
+  - **G9.1.c [P1；= G9.2.a；已修復：RC-07]** 無 item 對齊（見 C9.3）。
   - **G9.1.d [P1]** 無 `heightForWidth`（grep `height_for_width|has_height` 為空）——換行 label 無法如 Qt 排版。
   - **G9.1.e [P1]** 無 `retainSizeWhenHidden`、無 RTL（`Direction` 只有 TopToBottom／LeftToRight）、無 `SizeConstraint`。
 - **Test**：既有 `test_vbox_and_hbox_layout_calculation`、`test_box_layout_add_stretch`、`test_layout_stretch_minimum.rs`（6 項，用 `spacer=0`，而 layout 實際用 `-1`）、`qt_layout_compare.py`（手動，見 C9.7）。必要：`add_stretch_zero_matches_qt`（需 PySide6 參考值）。
@@ -680,9 +680,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 重現 HUD 用到的 row／col stretch、`setRowMinimumHeight`、span、對齊。
 - **Current implementation**：`IMPLEMENTED` + `DIFF`（Probe widget、2–3 欄、span ≤ 2、row 0 的欄 stretch、row stretch）。`GridLayout::setup_layout_data`、`activate`、`find_size`、`setup_spacings`、`distribute_multi_box`、`init_empty_multi_box`。`set_row_minimum_height`／`set_column_minimum_width` HUD 有用但**不在 harness 內**（只靠 `usage_table.rs` 的固定 PySide6 數值測試 `test_grid_matches_qt_geometry`）。
 - **Known gap**
-  - **G9.2.a [P0, READ]** **無 per-item 對齊**。Python 傳 `AlignVCenter|AlignLeft`／`AlignHCenter` 給 `addWidget`（`usage_table.py:392,417,430`）；Rust `add_widget(widget,row,col)`／`add_widget_with_span` 沒有對齊參數（`layout.rs`），Rust 表格以 wrapper + stretch 模擬垂直置中（`usage_table.rs:1173-1209`）。對齊也會改變 `expandingDirections` 與 max size（`[QT-SRC qlayoutitem.cpp:597-600]`），`item_expanding` 沒有此邏輯。
+  - **G9.2.a [P0, READ；已修復：RC-07]** **無 per-item 對齊**。Python 傳 `AlignVCenter|AlignLeft`／`AlignHCenter` 給 `addWidget`（`usage_table.py:392,417,430`）；Rust `add_widget(widget,row,col)`／`add_widget_with_span` 沒有對齊參數（`layout.rs`），Rust 表格以 wrapper + stretch 模擬垂直置中（`usage_table.rs:1173-1209`）。對齊也會改變 `expandingDirections` 與 max size（`[QT-SRC qlayoutitem.cpp:597-600]`），`item_expanding` 沒有此邏輯。
   - **G9.2.b [P1, READ]** `Layout::add_widget_with_stretch` 對 grid **靜默忽略 stretch** 並新增一列；`Layout::set_spacing` 兩軸都設但 `spacing()` 只回水平。
   - **G9.2.c [P1]** 無 `setRowStretch`／`setColumnStretch`／`setColumnMinimumWidth` 讀回；無 `addLayout` 進格；GridLayout 沒有 `remove_widget`。
+  - **G9.2.d [P1, READ]** RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth`（G9.1.d）時，垂直對齊的 widget 以 size hint 高度為準；Qt 的 `QWidgetItem::setGeometry` 在 `hasHeightForWidth()` 時改用 `heightForWidth(寬度)`（`qlayoutitem.cpp:443-446`）；(2) 沒有 layout 自身的對齊（`QLayout::setAlignment(Qt::Alignment)` 影響 `maximumSize` 與 `setGeometry`，`qgridlayout.cpp:1216,1324`、`qboxlayout.cpp:620,743`）；(3) 沒有 RTL，所以 `AlignAbsolute` 與 `QStyle::visualAlignment` 的翻轉不存在；(4) `QLayout::setAlignment(QLayout*, …)`（巢狀 layout 的對齊）隨 `addLayout`（C9.3）一起缺；(5) `ItemAlignment` 與 `Label` 的文字 `Alignment`、`qtrs_gui::TextAlignment` 是三個互不相通的型別，Qt 只有一個 `Qt::Alignment`。
 - **Test**：既有 `test_layout_stretch_minimum.rs`、`test_grid_matches_qt_geometry`、`test_columns_follow_widest_cell_hint`。必要：grid 對齊測試；harness 擴充 `setRowMinimumHeight/setColumnMinimumWidth` 與對齊旗標。
 - **HUD usage**：Python `QGridLayout`（`usage_table.py:384-434`：`setHorizontalSpacing(10)`、`setVerticalSpacing(4)`、`setColumnStretch`、`setRowStretch(5,1)`、`setRowMinimumHeight(2,18)`、span `:396`）；Rust `usage_table.rs:1136-1221`。
 
@@ -1128,7 +1129,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 289 項：D 12、P0 34、P1 127、P2 113、test gap 3（計數含已修復項；標籤含「已修復」者共 17 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G11.2.a、G11.2.b、G11.2.c、G12.5.f、G12.5.g）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 290 項：D 12、P0 34、P1 128、P2 113、test gap 3（計數含已修復項；標籤含「已修復」者共 19 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G9.1.c、G9.2.a、G11.2.a、G11.2.b、G11.2.c、G12.5.f、G12.5.g）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1307,12 +1308,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.8.a | P0, READ | Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,16 |
 | G9.1.a | P1, READ | `add_stretch(0)` 被強制成 1 |
 | G9.1.b | P1 | 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor` |
-| G9.1.c | P1 | 無 item 對齊 |
+| G9.1.c | P1；= G9.2.a；已修復：RC-07 | 無 item 對齊 |
 | G9.1.d | P1 | 無 `heightForWidth` |
 | G9.1.e | P1 | 無 `retainSizeWhenHidden`、無 RTL |
-| G9.2.a | P0, READ | **無 per-item 對齊** |
+| G9.2.a | P0, READ；已修復：RC-07 | **無 per-item 對齊** |
 | G9.2.b | P1, READ | `Layout::add_widget_with_stretch` 對 grid **靜默忽略 stretch** 並新增一列 |
 | G9.2.c | P1 | 無 `setRowStretch`／`setColumnStretch`／`setColumnMinimumWidth` 讀回 |
+| G9.2.d | P1, READ | RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth` |
 | G9.3.a | P1, INFERENCE | wrapper 是 QWidget item：其 `maximum_size` 為 16777215，而巢狀 `QLayout` 回報其子項最大值之和 |
 | G9.3.b | P2 | wrapper 多一個 child widget 進入 hit-test／paint 樹 |
 | G9.3.c | P0, READ | HUD 的 `header_widget` 額外被設為 `Expanding/Fixed` |
@@ -1618,8 +1620,17 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`qtrs-widgets/src/layout.rs`：`add_widget(widget,row,col)`／`add_widget_with_span` 無對齊參數；`item_expanding` 無對齊邏輯。
 - **Evidence**：`READ`；`qt_layout_compare.py` 目前**不涵蓋對齊**（`RAN` 的 7500×2 組 0 差異不能推論此項）。
 - **Required observable**：對齊的 item 在儲存格內依對齊放置，不撐滿；`expandingDirections` 與最大尺寸隨之改變。
-- **Required test**：擴充 harness 加入 per-item 對齊後 0 差異；`grid_item_alignment_does_not_fill_cell`。
-- **Can remove app workaround**：`usage_table.rs:1173-1209` 的 wrapper + stretch 模擬 — 只在 harness 涵蓋對齊後。
+- **Required test**（修改前以「讓對齊旗標不生效」的方式重現舊行為：7 項中 5 項 FAIL、2 項為回歸護欄；harness 以舊 probe 跑 600 組 460 組不同）：
+  - `qtrs-widgets/tests/test_layout_alignment.rs`：`grid_item_alignment_does_not_fill_cell`（HUD 三種對齊旗標，數值取自 PySide6：label `0,1,60,18`、legend `0,57,80,70`、pill `156,0,71,20`）、`grid_items_without_alignment_fill_their_cells`、`box_item_alignment_places_item_inside_the_cell`、`alignment_removes_the_aligned_axis_from_expanding_directions`、`aligned_expanding_item_is_placed_not_stretched`、`set_alignment_applies_to_an_existing_item_and_reports_unknown_widgets`、`stacked_layout_ignores_item_alignment_like_qt`（`qstackedlayout.cpp:453-467`）。
+  - `tools/second_layer_harness/qt_layout_compare.py` 加入每個 item 的對齊（60% 的 item 有 0–2 個旗標；box 與 grid），probe 讀第 16 欄（Qt 的數值旗標）。修改後 3000＋7500×2 組 0 差異。
+- **Downstream**：HUD workaround 的移除（見下）。
+- **Status**：**已修復**（RC-07）。
+  - **根因**：layout item 沒有對齊狀態。`QWidgetItem` 的 `align` 同時影響三處——`setGeometry`（對齊軸縮成 size hint 並定位）、`maximumSize`（`qSmartMaxSize`：對齊軸無上限，兩軸皆對齊則兩軸皆無上限）、`expandingDirections`（去掉對齊軸）——qtrs 的 `item_set_geometry` 只寫死「無對齊」特例，`smart_max_size`／`item_expanding` 不認對齊。
+  - **修改**：新增 `ItemAlignment`（Qt 的 `Qt::Alignment` 位元值；`NONE/LEFT/RIGHT/H_CENTER/JUSTIFY/ABSOLUTE/TOP/BOTTOM/V_CENTER/BASELINE/CENTER`、`|`、`contains`、`horizontal()`、`vertical()`）；`LayoutItem`／`GridItem` 加 `alignment`；`smart_max_size`、`item_maximum_size`、`item_expanding`、`item_set_geometry` 加對齊參數，box 的 `setup_geom`／`activate` 與 grid 的 `setup_layout_data`／`activate` 傳入；`item_set_geometry` 完整移植 `QWidgetItem::setGeometry`（含 `Ignored` 政策取 widget 的 size hint）。
+  - **API**：`Layout::set_alignment(&WidgetRef, ItemAlignment) -> bool`（`QLayout::setAlignment(QWidget*, …)`；**必要 trait 方法，沒有預設實作**，三個 layout 都實作；找不到 widget 回 false；只找直接 item）、`BoxLayout::add_widget_aligned(widget, stretch, alignment)`、`GridLayout::add_widget_aligned(widget, row, col, row_span, col_span, alignment)`。`StackedLayout::set_alignment` 找到頁面回 true，但不改變位置——與 Qt 相同（`QStackedLayout::setGeometry` 直接 `widget->setGeometry(rect)`），測試釘住這點。
+  - **驗證**：qtrs workspace 與主 crate 結果見提交說明。**沒有做像素驗證**；HUD 尚未使用對齊，不預期有變化。
+  - **未涵蓋**：G9.2.d。
+  - **HUD workaround 未移除**：`usage_table.rs:1173-1209` 的 legend wrapper＋前後 `add_stretch(1)` 仍在。Python 的對齊有 8 處（4 個 `sub_label` 與 legend 為 `AlignVCenter|AlignLeft`、3 個 `m2_val` 為 `AlignHCenter`），Rust 目前一處都沒有。補齊並移除 wrapper 會改變 widget 矩形（hit-test、日後 tooltip 區域、`sub_label` 的 `padding-left: 18px`），須逐一做並重跑 HUD 快照與 layout harness。
 - **Phase**：3。
 
 #### RC-08 每視窗 DPR／螢幕

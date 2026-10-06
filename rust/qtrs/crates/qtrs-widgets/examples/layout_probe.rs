@@ -4,8 +4,9 @@
 //!
 //! Line format: `kind spacing margin width height | item ; item ; ...` where `kind` is `H`, `V`
 //! or `G<columns>` and an item is `hint_w,hint_h,min_w,min_h,max_w,max_h,policy_h,policy_v,
-//! stretch,hidden`. A grid fills row by row; its stretch field is the column stretch of the
-//! item's column when it is in the first row. Policies are `Fixed`, `Minimum`, `Maximum`,
+//! stretch,hidden,row,column,row_span,column_span,row_stretch,alignment`. `alignment` is Qt's
+//! numeric `Qt::Alignment`. A grid fills row by row; its stretch field is the column stretch of
+//! the item's column when it is in the first row. Policies are `Fixed`, `Minimum`, `Maximum`,
 //! `Preferred`, `Expanding`, `MinimumExpanding` or `Ignored`.
 
 use qtrs_core::event::Event;
@@ -126,6 +127,7 @@ fn main() {
         let mut widgets: Vec<WidgetRef> = Vec::new();
         let mut stretches = Vec::new();
         let mut cells = Vec::new();
+        let mut alignments = Vec::new();
         for item in items.split(';') {
             let f: Vec<&str> = item.trim().split(',').collect();
             let n = |i: usize| f[i].parse::<i32>().unwrap();
@@ -141,6 +143,7 @@ fn main() {
             widgets.push(Rc::new(RefCell::new(Box::new(probe))));
             stretches.push(n(8) as u32);
             cells.push((n(10) as usize, n(11) as usize, n(12) as usize, n(13) as usize, n(14) as u32));
+            alignments.push(ItemAlignment::from_bits(n(15) as u32));
         }
 
         let container: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::with_geometry(
@@ -154,7 +157,7 @@ fn main() {
             grid.set_vertical_spacing(spacing);
             for (i, w) in widgets.iter().enumerate() {
                 let (row, col, row_span, col_span, row_stretch) = cells[i];
-                grid.add_widget_with_span(w.clone(), row, col, row_span, col_span);
+                grid.add_widget_aligned(w.clone(), row, col, row_span, col_span, alignments[i]);
                 if row == 0 && stretches[i] > 0 {
                     grid.set_column_stretch(col, stretches[i]);
                 }
@@ -167,8 +170,8 @@ fn main() {
             let mut layout = if kind == "H" { BoxLayout::horizontal() } else { BoxLayout::vertical() };
             layout.set_margins(margins);
             layout.set_spacing(spacing);
-            for (w, stretch) in widgets.iter().zip(&stretches) {
-                layout.add_widget_with_stretch(w.clone(), *stretch);
+            for ((w, stretch), alignment) in widgets.iter().zip(&stretches).zip(&alignments) {
+                layout.add_widget_aligned(w.clone(), *stretch, *alignment);
             }
             container.borrow_mut().set_layout(Box::new(layout));
         }

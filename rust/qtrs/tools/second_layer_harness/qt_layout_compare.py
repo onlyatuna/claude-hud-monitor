@@ -1,7 +1,7 @@
 """Differential test of the layout port against real Qt (PySide6).
 
 Random box and grid layouts of widgets with fixed size hints, minimum and maximum sizes, size
-policies and stretch factors are laid out by `QHBoxLayout` / `QVBoxLayout` / `QGridLayout` and by
+policies, stretch factors and item alignments are laid out by `QHBoxLayout` / `QVBoxLayout` / `QGridLayout` and by
 `BoxLayout` / `GridLayout` (through `examples/layout_probe.rs`); every visible item's rectangle
 must be identical.
 
@@ -14,7 +14,7 @@ import random
 import subprocess
 import sys
 
-from PySide6.QtCore import QSize
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout,
                                QWidget)
 
@@ -28,6 +28,19 @@ POLICIES = {
     "Ignored": QSizePolicy.Policy.Ignored,
 }
 NO_MAX = 16777215
+
+# `Qt::Alignment` of an item, as the numeric flag values the probe reads (qnamespace.h:151-170):
+# no alignment most of the time, otherwise any of the horizontal / vertical flags alone or together.
+A = Qt.AlignmentFlag
+ALIGN_H = [0, A.AlignLeft, A.AlignRight, A.AlignHCenter]
+ALIGN_V = [0, A.AlignTop, A.AlignBottom, A.AlignVCenter]
+
+
+def align_value(flags):
+    value = 0
+    for f in flags:
+        value |= int(f.value if hasattr(f, "value") else f)
+    return value
 
 
 class Probe(QWidget):
@@ -54,6 +67,7 @@ def random_item(rng):
         "pol": (rng.choice(list(POLICIES)), rng.choice(list(POLICIES))),
         "stretch": rng.choice([0, 0, 0, 1, 1, 2, 3]),
         "hidden": rng.random() < 0.1,
+        "align": align_value((rng.choice(ALIGN_H), rng.choice(ALIGN_V))) if rng.random() < 0.6 else 0,
     }
 
 
@@ -88,9 +102,9 @@ def make_case(rng):
 
 def probe_line(case):
     items = ";".join(
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}".format(
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}".format(
             *i["hint"], *i["min"], *i["max"], *i["pol"], i["stretch"], int(i["hidden"]),
-            *i.get("cell", (0, 0, 1, 1)), i.get("rstretch", 0))
+            *i.get("cell", (0, 0, 1, 1)), i.get("rstretch", 0), i["align"])
         for i in case["items"])
     return "{} {} {} {} {} | {}".format(
         case["kind"], case["spacing"], case["margin"], *case["size"], items)
@@ -115,15 +129,16 @@ def qt_layout(app, parent, case):
         w.setMinimumSize(*item["min"])
         w.setMaximumSize(*item["max"])
         w.setSizePolicy(QSizePolicy(POLICIES[item["pol"][0]], POLICIES[item["pol"][1]]))
+        align = Qt.AlignmentFlag(item["align"])
         if kind[0] == "G":
             row, col, row_span, col_span = item["cell"]
-            layout.addWidget(w, row, col, row_span, col_span)
+            layout.addWidget(w, row, col, row_span, col_span, align)
             if row == 0 and item["stretch"]:
                 layout.setColumnStretch(col, item["stretch"])
             if item["rstretch"]:
                 layout.setRowStretch(row, item["rstretch"])
         else:
-            layout.addWidget(w, item["stretch"])
+            layout.addWidget(w, item["stretch"], align)
         w.setVisible(not item["hidden"])
         widgets.append(w)
     container.setGeometry(0, 0, *case["size"])

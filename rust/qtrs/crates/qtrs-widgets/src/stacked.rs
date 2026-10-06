@@ -105,6 +105,14 @@ impl Layout for StackedLayout {
         self.add_widget(widget);
     }
 
+    /// `QLayout::setAlignment`: finds the page, then does nothing visible, because
+    /// `QStackedLayout::setGeometry` gives every page the whole rectangle with
+    /// `widget->setGeometry(rect)` and never consults the item's alignment
+    /// (qstackedlayout.cpp:453-467).
+    fn set_alignment(&mut self, widget: &WidgetRef, _alignment: crate::layout::ItemAlignment) -> bool {
+        self.widgets.iter().any(|page| std::rc::Rc::ptr_eq(page, widget))
+    }
+
     fn set_margins(&mut self, margins: Margins) {
         self.margins = margins;
         self.update_layout();
@@ -148,7 +156,7 @@ impl Layout for StackedLayout {
 
     fn expanding_directions(&self) -> (bool, bool) {
         self.current_widget()
-            .map(|curr| crate::layout_engine::item_expanding(&**curr.borrow()))
+            .map(|curr| crate::layout_engine::item_expanding(&**curr.borrow(), crate::layout::ItemAlignment::NONE))
             .unwrap_or((false, false))
     }
 

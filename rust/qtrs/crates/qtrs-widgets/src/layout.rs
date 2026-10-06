@@ -12,9 +12,69 @@ pub enum Direction {
     LeftToRight,
 }
 
+/// `Qt::Alignment` as a layout item uses it (`QLayoutItem::setAlignment`): where the item sits in
+/// the space the layout gives it. With no flag on an axis the item fills that axis (up to its
+/// maximum size); with a flag it shrinks to its size hint and is placed by the flag.
+///
+/// The bit values are Qt's (`qnamespace.h:151-170`). This is not the text alignment of a `Label`,
+/// which has its own `Alignment`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
+pub struct ItemAlignment(u32);
+
+impl ItemAlignment {
+    pub const NONE: Self = Self(0);
+    pub const LEFT: Self = Self(0x1);
+    pub const RIGHT: Self = Self(0x2);
+    pub const H_CENTER: Self = Self(0x4);
+    pub const JUSTIFY: Self = Self(0x8);
+    pub const ABSOLUTE: Self = Self(0x10);
+    pub const TOP: Self = Self(0x20);
+    pub const BOTTOM: Self = Self(0x40);
+    pub const V_CENTER: Self = Self(0x80);
+    pub const BASELINE: Self = Self(0x100);
+    pub const CENTER: Self = Self(0x4 | 0x80);
+    /// `Qt::AlignHorizontal_Mask`.
+    const HORIZONTAL_MASK: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x10;
+    /// `Qt::AlignVertical_Mask`.
+    const VERTICAL_MASK: u32 = 0x20 | 0x40 | 0x80 | 0x100;
+
+    /// From Qt's numeric flag value; bits that are not alignment flags are dropped.
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits & (Self::HORIZONTAL_MASK | Self::VERTICAL_MASK))
+    }
+
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+
+    /// Every flag of `other` is set.
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Some horizontal flag is set (`align & Qt::AlignHorizontal_Mask`).
+    pub const fn horizontal(self) -> bool {
+        self.0 & Self::HORIZONTAL_MASK != 0
+    }
+
+    /// Some vertical flag is set (`align & Qt::AlignVertical_Mask`).
+    pub const fn vertical(self) -> bool {
+        self.0 & Self::VERTICAL_MASK != 0
+    }
+}
+
+impl std::ops::BitOr for ItemAlignment {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Self(self.0 | rhs.0)
+    }
+}
+
 pub struct LayoutItem {
     pub widget: WidgetRef,
     pub stretch: u32,
+    /// `QLayoutItem::alignment`.
+    pub alignment: ItemAlignment,
     /// A `QSpacerItem`: it has no content of its own, so it takes no spacing.
     pub spacer: bool,
 }
@@ -27,6 +87,12 @@ pub trait Layout: 'static {
     fn add_widget(&mut self, widget: WidgetRef);
 
     fn add_widget_with_stretch(&mut self, widget: WidgetRef, stretch: u32);
+
+    /// `QLayout::setAlignment(QWidget*, Qt::Alignment)`: sets the alignment of the item that holds
+    /// `widget` (a direct child item only) and re-lays the layout out. Returns false when the
+    /// layout has no such item.
+    fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool;
+
     fn add_stretch(&mut self, stretch: u32) {
         let widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
         widget.set_size_policy(crate::size_policy::QSizePolicy::new(
@@ -124,7 +190,16 @@ impl BoxLayout {
 
     pub fn insert_widget(&mut self, index: usize, widget: WidgetRef, stretch: u32) {
         let clamped = index.min(self.items.len());
-        self.items.insert(clamped, LayoutItem { widget, stretch, spacer: false });
+        self.items.insert(
+            clamped,
+            LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: false },
+        );
+        self.update_layout();
+    }
+
+    /// `QBoxLayout::addWidget(widget, stretch, alignment)`.
+    pub fn add_widget_aligned(&mut self, widget: WidgetRef, stretch: u32, alignment: ItemAlignment) {
+        self.items.push(LayoutItem { widget, stretch, alignment, spacer: false });
         self.update_layout();
     }
 
@@ -159,8 +234,20 @@ impl Layout for BoxLayout {
     }
 
     fn add_widget_with_stretch(&mut self, widget: WidgetRef, stretch: u32) {
-        self.items.push(LayoutItem { widget, stretch, spacer: false });
+        self.add_widget_aligned(widget, stretch, ItemAlignment::NONE);
+    }
+
+    fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool {
+        let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| !item.spacer && std::rc::Rc::ptr_eq(&item.widget, widget))
+        else {
+            return false;
+        };
+        item.alignment = alignment;
         self.update_layout();
+        true
     }
 
     /// `QBoxLayout::addStretch`: an empty, expanding spacer that takes no spacing.
@@ -176,6 +263,7 @@ impl Layout for BoxLayout {
         self.items.push(LayoutItem {
             widget: spacer,
             stretch: stretch.max(1),
+            alignment: ItemAlignment::NONE,
             spacer: true,
         });
         self.update_layout();
@@ -261,7 +349,7 @@ impl Layout for BoxLayout {
                 // A `QSpacerItem` just remembers its rectangle.
                 item.widget.borrow().set_geometry(rect);
             } else {
-                item_set_geometry(&**item.widget.borrow(), rect);
+                item_set_geometry(&**item.widget.borrow(), rect, item.alignment);
             }
             let new_size = Size::new(rect.width, rect.height);
             if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
@@ -304,9 +392,9 @@ impl BoxLayout {
                 let w = item.widget.borrow();
                 let policy = w.size_policy();
                 let swap = |s: Size| if horz { (s.width, s.height) } else { (s.height, s.width) };
-                let exp = item_expanding(&**w);
+                let exp = item_expanding(&**w, item.alignment);
                 (
-                    swap(item_maximum_size(&**w)),
+                    swap(item_maximum_size(&**w, item.alignment)),
                     swap(item_minimum_size(&**w)),
                     swap(item_size_hint(&**w)),
                     if horz { exp } else { (exp.1, exp.0) },
@@ -376,6 +464,8 @@ pub struct GridItem {
     pub column: usize,
     pub row_span: usize,
     pub col_span: usize,
+    /// `QLayoutItem::alignment`.
+    pub alignment: ItemAlignment,
 }
 
 /// Grid layout laying out widgets in a 2D grid of rows and columns (`QGridLayout`).
@@ -420,12 +510,26 @@ impl GridLayout {
         row_span: usize,
         col_span: usize,
     ) {
+        self.add_widget_aligned(widget, row, column, row_span, col_span, ItemAlignment::NONE);
+    }
+
+    /// `QGridLayout::addWidget(widget, row, column, rowSpan, columnSpan, alignment)`.
+    pub fn add_widget_aligned(
+        &mut self,
+        widget: WidgetRef,
+        row: usize,
+        column: usize,
+        row_span: usize,
+        col_span: usize,
+        alignment: ItemAlignment,
+    ) {
         self.items.push(GridItem {
             widget,
             row,
             column,
             row_span: row_span.max(1),
             col_span: col_span.max(1),
+            alignment,
         });
         self.update_layout();
     }
@@ -525,6 +629,19 @@ impl Layout for GridLayout {
         self.add_widget(widget, r, 0);
     }
 
+    fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool {
+        let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| std::rc::Rc::ptr_eq(&item.widget, widget))
+        else {
+            return false;
+        };
+        item.alignment = alignment;
+        self.update_layout();
+        true
+    }
+
 
     fn widgets(&self) -> Vec<WidgetRef> {
         self.items.iter().map(|it| it.widget.clone()).collect()
@@ -611,7 +728,7 @@ impl Layout for GridLayout {
                 let g = widget.geometry();
                 Size::new(g.width, g.height)
             };
-            item_set_geometry(&**item.widget.borrow(), Rect::new(left, top, w, h));
+            item_set_geometry(&**item.widget.borrow(), Rect::new(left, top, w, h), item.alignment);
             let new_size = Size::new(w, h);
             if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
                 if old_size != new_size || child_layout.is_dirty() {
@@ -661,8 +778,8 @@ impl GridLayout {
                 Boxed {
                     min: item_minimum_size(&**w),
                     hint: item_size_hint(&**w),
-                    max: item_maximum_size(&**w),
-                    expanding: item_expanding(&**w),
+                    max: item_maximum_size(&**w, item.alignment),
+                    expanding: item_expanding(&**w, item.alignment),
                     empty: item_is_empty(&**w),
                     h_stretch: policy.horizontal_stretch as i32,
                     v_stretch: policy.vertical_stretch as i32,
