@@ -100,15 +100,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `~QObject` 先從 parent 解除連結，再依序刪除 children。跨執行緒 `setParent` 會失敗。
 - **qtrs required**
   - MUST：`set_parent` 雙向更新；對舊／新 parent 送 `ChildRemoved`／`ChildAdded`，且經過 notify（filter 看得到）。
-  - MUST：`set_parent(child, None)` **不得銷毀 child**；所有權要能回到呼叫者（回傳 `Option<Box<dyn QObject>>` 或等價）。
+  - MUST：解除 parent **不得銷毀 child**；所有權要能回到呼叫者。qtrs 的形狀（RC-01）：對 owned child，`set_parent` 回 `Err(ReparentError::OwnedByParent)`；以 id 為參數的 `reparent_owned(child_id, new_parent) -> Result<Option<Box<dyn QObject>>, ReparentError>` 移動或釋放 `Box`（`None` 目標回傳 `Some(box)`）。
   - MUST：drop parent 時依 children 順序銷毀擁有的子樹。
   - MUST：drop child 時從仍存活的 parent 解除連結，即使 parent 正在 callback 中。
   - SHOULD：拒絕自我 parent、環、跨執行緒 parent。
 - **Current implementation**（`qtrs-core/src/object/qobject.rs`）
   - `IMPLEMENTED`（READ + 既有測試）：邏輯／實體（`Box`）重新掛接 `set_parent`；parent drop 級聯；`ChildAdded/Removed`。
-  - `IMPLEMENTED-UNTESTED`：`remove_owned_child`；`ObjectData::drop` 解除連結並通知 parent。
+  - `IMPLEMENTED-UNTESTED`：`ObjectData::drop` 解除連結並通知 parent。（`remove_owned_child` 已於 RC-01 移除，由 `reparent_owned` 取代。）
 - **Known gap**
-  - **G2.1.a [P0, RAN]** `set_parent(owned_child, None)` **銷毀 child**。舊 parent 的 `Box` 被搬進區域變數 `transferred`，沒有新 parent 接手就在函式結尾 drop；回傳型別 `()`，呼叫者拿不回所有權。
+  - **G2.1.a [P0, RAN；已修復：RC-01]** `set_parent(owned_child, None)` **銷毀 child**。舊 parent 的 `Box` 被搬進區域變數 `transferred`，沒有新 parent 接手就在函式結尾 drop；回傳型別 `()`，呼叫者拿不回所有權。
   - **G2.1.b [P1, READ]** `add_owned_child` 不送 `ChildAdded`（Qt 在建構時帶 parent 就會送）。
   - **G2.1.c [P2, READ]** `ChildAdded/Removed` 經 `dispatch_to_object`／`event()` 直送，不經 `notify_helper`；object filter 與 application filter 看不到。
   - **G2.1.d [P1, READ]** parent 正被借用（dispatch 中）時 `with_object_mut` 回 `None`：`ObjectData::drop` 的解除連結與 `set_parent` 的 child-list 更新被**靜默略過**，留下 stale children id，事件遺失。
@@ -1124,11 +1124,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 285 項：D 12、P0 34、P1 124、P2 112、test gap 3（計數含已修復項；標籤含「已修復」者共 7 項：G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 285 項：D 12、P0 34、P1 124、P2 112、test gap 3（計數含已修復項；標籤含「已修復」者共 8 項：G2.1.a、G3.2.b、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
-| G2.1.a | P0, RAN | `set_parent(owned_child, None)` **銷毀 child** |
+| G2.1.a | P0, RAN；已修復：RC-01 | `set_parent(owned_child, None)` **銷毀 child** |
 | G2.1.b | P1, READ | `add_owned_child` 不送 `ChildAdded` |
 | G2.1.c | P2, READ | `ChildAdded/Removed` 經 `dispatch_to_object`／`event()` 直送，不經 `notify_helper` |
 | G2.1.d | P1, READ | parent 正被借用 |
@@ -1462,7 +1462,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - `test_signal_sender_tracking_and_auto_disconnection` 在 drop 後沒有 assertion（`test_qobject_safety_and_qt6_features.rs:214-228`）。
 - `Timer::set_interval` / `set_single_shot` 只寫欄位（`timer.rs`）。
 - `ConnectionId` 由每個 Signal 自己的 `next_id` 編號、全域表以 id 為 key（`signal.rs`）。（RC-02 已修復：現為全域唯一 id。）
-- `set_parent` 把舊 parent 的 owned `Box` 搬進區域變數（`qobject.rs`）。
+- `set_parent` 把舊 parent 的 owned `Box` 搬進區域變數（`qobject.rs`；RC-01 之前）。
 - 卡片 spacing 5 vs 2（`provider_card.py:27`、`provider_card.rs:159`）；`rust/src/ui/styles.rs` 有 `max-height: 15px`，`python/ui/styles.py` 沒有任何 `max-height`。
 - `rust/src/hotkey.rs:235-240` 註冊失敗只 `warn!`；`CloseRequest` 於 `rust/src` 與 `qtrs-widgets/src` 無任何處理（grep 為空）。
 
@@ -1491,14 +1491,23 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`qtrs-core/src/object/qobject.rs` `set_parent`：舊 parent 的 `Box` 被搬進區域變數，沒有新 parent 時於函式結尾 drop；回傳型別 `()`。
 - **Evidence**：`RAN`（拋棄式探針已重現，已刪除）。
 - **Required observable**：解除 parent 之後 child **仍存活**，且所有權回到呼叫者；不得靜默丟棄。API 形狀由 Phase 1 計畫決定（§2.1 已寫 `Option<Box<dyn QObject>>` 或等價）。
-- **Required test**：`set_parent_none_on_owned_child_returns_ownership_and_child_survives`（修改前 FAIL：child 已 drop）；`set_parent_none_sends_child_removed_through_notify`。
+- **Required test**（`qtrs-core/tests/test_owned_child_ownership.rs`，7 項）：
+  - 修改前 FAIL（以舊程式跑出：`set_parent(None destroyed an owned child)`）、修改後 PASS：`set_parent_none_on_owned_child_keeps_child_alive`。
+  - 新 API 的行為測試（舊程式沒有 `reparent_owned`，無法在舊程式上跑，不屬於 before-FAIL 證據）：`reparent_owned_to_none_returns_the_box_and_child_survives`、`reparent_owned_moves_ownership_to_a_new_parent`、`reparent_owned_notifies_both_parents_through_event_filters`、`reparent_owned_rejects_self_and_descendant_parents_without_changes`、`reparent_owned_rejects_children_that_are_not_owned`、`reparent_owned_fails_visibly_when_a_party_is_borrowed_and_changes_nothing`。
 - **Downstream**：任何把 child 從容器移出再重新掛接的 widget／action 操作。HUD 目前沒有呼叫（`READ`），因此屬靜默資料遺失型 P0，不是 HUD 可見型。
 - **Impact analysis（Phase 1，未決定 API，未改程式）**：
   - 所有權模型 `[READ]`：core 的擁有者是 `ObjectData.owned_children: Vec<Box<dyn QObject>>`（parent 持有 `Box`）。`GLOBAL_OBJECT_REGISTRY` 的 `Arc<ObjectRecord>` 只存 metadata（parent／children id、liveness、borrow flag），`QOBJECT_REGISTRY` 存 `*mut dyn QObject` 裸指標，兩者都**不擁有**物件。`Box` 移動不改堆位址，因此搬移 `Box` 時 registry 指標仍有效。
   - widget 層是另一套模型：`WidgetRef = Rc<RefCell<Box<dyn Widget>>>`、parent 為 `Weak`、`WidgetBase.children: Vec<WidgetRef>`；widgets／gui／platform(Windows)／`rust/src` 都不寫 core 的 `ObjectData.parent/children/owned_children`，也不呼叫 `set_parent`／`add_owned_child`／`remove_owned_child`。
   - 呼叫端（全工作區 grep）：`set_parent` 只有 `ObjectData::set_parent` 包裝（`qobject.rs:402`）與 5 處測試——`qobject.rs:1240/1245/1250`、`test_qobject_lifecycle_and_hierarchy.rs:186/191`、`test_qobject_safety_and_qt6_features.rs:97`。其中只有 `:97` 的 child 在 parent 的 `owned_children` 中；其餘 child 不是 owned，不受 G2.1.a 影響。生產程式零呼叫端。`remove_owned_child` 零呼叫端，且只改 `ObjectData.children`，不更新 `ObjectRecord`、不送 `ChildRemoved`。
   - 結構性問題：`set_parent(child: &mut ObjectData, …)` 的 `child` 參數本身就是從 parent 的 `owned_children` 內部取得的借用（`:97` 即如此）。函式內再經 registry 指標取得 parent 的 `&mut`，與呼叫者手上的借用別名重疊；若把 `Box` 丟棄，呼叫者的 `&mut` 立即懸空。回傳 `Box` 也不能讓這個借用變合法。
-  - API 候選（**未選**）：(1) `set_parent` 改回 `Result`，對 owned child 解除 parent 時回 `Err(OwnedByParent)`，另以 id 為參數的 `take_owned_child(parent, child_id) -> Option<Box<dyn QObject>>`（補上 `ObjectRecord` 更新與經 notify 的 `ChildRemoved`）取回所有權——影響 5 處測試；(2) 新增 `reparent_owned(child_id: ObjectId, new_parent: Option<ObjectId>) -> Result<Option<Box<dyn QObject>>, _>`，`set_parent(&mut ObjectData)` 只保留給非 owned child，遇 owned child 回 `Err`；(3) `set_parent(None)` 把 `Box` 移到 thread-local 孤兒表（呼叫端不改，但引入無人負責釋放的隱含所有權，會洩漏，不建議）。不建議把 `owned_children` 改成 `Rc`／`Arc`：registry 的指標穩定性契約與 widget 層的 `Rc` 是兩套模型，改動面遠大於 G2.1.a。
+  - API 候選 (1)(2)(3) 已評估，**選定 (2)**（使用者決定）。
+- **Status**：**已修復**（RC-01）。
+  - `ObjectData` 新增 `owned_by_parent`（`is_owned_by_parent()`）：`add_owned_child` 設為 true；`reparent_owned` 依目標更新。因為 `set_parent(&mut ObjectData)` 的借用就在擁有它的 `Box` 裡，必須由 child 自己帶著「被 parent 擁有」的事實，不能靠再借用 parent 去查。
+  - `set_parent(child, new_parent) -> Result<(), ReparentError>`：對 owned child 在任何變更前回 `Err(OwnedByParent)`；非 owned child 行為不變（移除了舊的 `transferred` 分支）。
+  - `reparent_owned(child_id, new_parent) -> Result<Option<Box<dyn QObject>>, ReparentError>`：在改動前取得 child／舊 parent／新 parent 的借用旗標並驗證，因此 `Err` 不留下半完成狀態。`Err`：`UnknownObject`、`NotOwned`、`InvalidParent`（自己、後代、未註冊）、`Busy`（任一方正在 callback 中——回報而非靜默略過）。child 的借用旗標只當旗標用、不解參考，避免 `&mut` 與正在搬移的 `Box` 別名。成功時 `ChildRemoved`／`ChildAdded` 走 `notify_helper`（object／application filter 看得到）。
+  - 移除 `remove_owned_child`（零呼叫端，且不更新 `ObjectRecord`、不送事件）；5 處測試呼叫端已遷移（`test_reparent_transfers_ownership_without_split_brain` 改用 `reparent_owned`）。
+  - 驗證：`qtrs` workspace exit 0、65 個 test binary ok、無 warning；主 crate 67 通過、1 失敗（僅 `test_fetch_usage_live_benchmark`，網路／時間敏感，已知）。
+  - **未涵蓋／仍開放**：G2.1.d（`set_parent` 非 owned 路徑與 `ObjectData::drop` 在 parent 被借用時仍靜默略過）、G2.1.c（`set_parent` 非 owned 路徑仍用 `dispatch_to_object` 而非 `notify_helper`）、G2.1.e 只在 `reparent_owned` 內檢查環，`set_parent` 仍無環檢查。`reparent_owned` 的「舊 parent 被借用」分支沒有專屬測試。
 - **Can remove app workaround**：n/a。
 - **Phase**：1。
 

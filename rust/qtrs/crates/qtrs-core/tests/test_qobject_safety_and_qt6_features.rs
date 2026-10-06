@@ -88,16 +88,14 @@ fn test_reparent_transfers_ownership_without_split_brain() {
     let child = Box::new(TestWidget::new("child_widget"));
     let child_liveness = child.data.liveness();
     // SAFETY: child remains boxed and owned at a stable address by parent_a.
-    let _child_id = unsafe { parent_a.data.add_owned_child(child) };
+    let child_id = unsafe { parent_a.data.add_owned_child(child) };
 
     assert_eq!(parent_a.data.children.len(), 1);
     assert_eq!(parent_b.data.children.len(), 0);
 
     // Reparent child to parent_b
-    qtrs_core::object::set_parent(
-        parent_a.data.owned_children[0].object_data_mut(),
-        Some(parent_b_id),
-    );
+    let released = qtrs_core::object::reparent_owned(child_id, Some(parent_b_id)).unwrap();
+    assert!(released.is_none(), "ownership moved to parent_b, nothing released");
 
     // Both logical children and physical ownership are transferred without leaking or trapping
     assert_eq!(parent_a.data.children.len(), 0);

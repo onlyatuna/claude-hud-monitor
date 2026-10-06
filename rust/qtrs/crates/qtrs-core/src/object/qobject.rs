@@ -313,6 +313,11 @@ pub struct ObjectData {
     /// Directly owned child objects for cascading destruction.
     pub owned_children: Vec<Box<dyn QObject>>,
     pub timers: Vec<crate::timer::TimerId>,
+
+    /// True while this object's `Box` lives in its parent's `owned_children`. Such an object's
+    /// lifetime belongs to the parent, so `set_parent` (which only sees `&mut ObjectData`, a
+    /// borrow *into* that `Box`) must not detach it; [`reparent_owned`] moves the `Box` safely.
+    owned_by_parent: bool,
 }
 
 impl fmt::Debug for ObjectData {
@@ -359,6 +364,7 @@ impl ObjectData {
             generation: 1,
             owned_children: Vec::new(),
             timers: Vec::new(),
+            owned_by_parent: false,
         }
     }
     /// Creates a new ObjectData with a unique auto-generated ObjectId.
@@ -384,6 +390,7 @@ impl ObjectData {
             generation: 1,
             owned_children: Vec::new(),
             timers: Vec::new(),
+            owned_by_parent: false,
         }
     }
 
@@ -399,8 +406,14 @@ impl ObjectData {
         remove_event_filter(self, filter);
     }
 
-    pub fn set_parent(&mut self, new_parent: Option<ObjectId>) {
-        set_parent(self, new_parent);
+    /// See [`set_parent`].
+    pub fn set_parent(&mut self, new_parent: Option<ObjectId>) -> Result<(), ReparentError> {
+        set_parent(self, new_parent)
+    }
+
+    /// True while a parent owns this object's `Box` (see [`reparent_owned`]).
+    pub fn is_owned_by_parent(&self) -> bool {
+        self.owned_by_parent
     }
 
     pub fn add_child(&mut self, child_id: ObjectId) {
@@ -450,29 +463,17 @@ impl ObjectData {
     /// physical-thread requirements of [`register_qobject`] apply.
     pub unsafe fn add_owned_child<T: QObject + 'static>(&mut self, mut child: Box<T>) -> ObjectId {
         let child_id = child.object_data().id;
-        child.object_data_mut().parent = Some(self.id);
+        {
+            let data = child.object_data_mut();
+            data.parent = Some(self.id);
+            data.owned_by_parent = true;
+        }
         self.add_child(child_id);
 
         // SAFETY: delegated to this method's caller contract.
         unsafe { register_qobject(&mut *child) };
         self.owned_children.push(child);
         child_id
-    }
-
-    /// Removes an owned child by ID without dropping it immediately.
-    pub fn remove_owned_child(&mut self, child_id: ObjectId) -> Option<Box<dyn QObject>> {
-        self.remove_child(child_id);
-        if let Some(pos) = self
-            .owned_children
-            .iter()
-            .position(|c| c.object_data().id == child_id)
-        {
-            let mut child = self.owned_children.remove(pos);
-            child.object_data_mut().parent = None;
-            Some(child)
-        } else {
-            None
-        }
     }
 
     /// Recursively cascades deletion to all children matching Qt `QObjectPrivate::deleteChildren`.
@@ -589,11 +590,35 @@ pub fn remove_event_filter(target: &mut ObjectData, filter: ObjectId) {
     target.event_filters.remove(filter);
 }
 
-/// Sets a child’s parent ID and updates only registered relationship metadata.
-/// It cannot mutate or notify a separately owned parent object.
-pub fn set_parent(child: &mut ObjectData, new_parent: Option<ObjectId>) {
+/// Why a parent change was refused. Nothing is changed when an error is returned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReparentError {
+    /// [`set_parent`]: the object's `Box` is held by its parent's `owned_children`. Detaching it
+    /// there would destroy it (or leave the caller's `&mut` dangling); use [`reparent_owned`].
+    OwnedByParent,
+    /// [`reparent_owned`]: the object has no parent that owns it.
+    NotOwned,
+    /// The object is not registered, is dead, or is registered on another thread.
+    UnknownObject,
+    /// The new parent is the object itself, one of its descendants, or not registered.
+    InvalidParent,
+    /// The object or a parent is borrowed by an active callback.
+    Busy,
+}
+
+/// Sets a non-owned child's parent and updates registered relationship metadata, sending
+/// `ChildRemoved`/`ChildAdded` to the registered parents.
+///
+/// Refuses with [`ReparentError::OwnedByParent`] when a parent owns the child's `Box`; use
+/// [`reparent_owned`] for those. Qt's `setParent_helper` (qobject.cpp:2287-2345) never destroys
+/// the child; here the borrow `child` points into the owning `Box`, so ownership has to move
+/// through an id-based call.
+pub fn set_parent(child: &mut ObjectData, new_parent: Option<ObjectId>) -> Result<(), ReparentError> {
     if child.parent == new_parent {
-        return;
+        return Ok(());
+    }
+    if child.owned_by_parent {
+        return Err(ReparentError::OwnedByParent);
     }
     let child_id = child.id;
 
@@ -617,20 +642,10 @@ pub fn set_parent(child: &mut ObjectData, new_parent: Option<ObjectId>) {
         }
     }
 
-    // Transfer physical ownership (Box) from old parent to new parent, update local children
-    // lists, and send ChildRemoved/ChildAdded events — all via registered object callbacks.
-    let mut transferred: Option<Box<dyn QObject>> = None;
+    // Update local children lists and send ChildRemoved/ChildAdded via registered callbacks.
     if let Some(old_parent_id) = child.parent {
         with_object_mut(old_parent_id, |obj| {
-            let data = obj.object_data_mut();
-            data.children.retain(|&id| id != child_id);
-            if let Some(pos) = data
-                .owned_children
-                .iter()
-                .position(|c| c.object_data().id == child_id)
-            {
-                transferred = Some(data.owned_children.remove(pos));
-            }
+            obj.object_data_mut().children.retain(|&id| id != child_id);
         });
         let mut ev = Event::new(EventKind::ChildRemoved { child_id });
         dispatch_to_object(old_parent_id, &mut ev);
@@ -642,13 +657,121 @@ pub fn set_parent(child: &mut ObjectData, new_parent: Option<ObjectId>) {
             if !data.children.contains(&child_id) {
                 data.children.push(child_id);
             }
-            if let Some(boxed) = transferred.take() {
-                data.owned_children.push(boxed);
-            }
         });
         let mut ev = Event::new(EventKind::ChildAdded { child_id });
         dispatch_to_object(new_parent_id, &mut ev);
     }
+    Ok(())
+}
+
+/// Moves an owned child to `new_parent`, or releases it to the caller when `new_parent` is
+/// `None` (`Ok(Some(box))`; the child stays alive and registered, with no parent).
+///
+/// Unlike Qt's `setParent`, ownership is explicit: the `Box` is the owner, so detaching returns
+/// it instead of dropping it. `ChildRemoved`/`ChildAdded` go through `notify_helper`, so object
+/// and application event filters see them. Validation and borrows are taken before anything is
+/// changed, so an `Err` leaves the hierarchy exactly as it was.
+pub fn reparent_owned(
+    child_id: ObjectId,
+    new_parent: Option<ObjectId>,
+) -> Result<Option<Box<dyn QObject>>, ReparentError> {
+    let (child_record, _) = registered_ptr(child_id).ok_or(ReparentError::UnknownObject)?;
+    // Only the borrow flag is used: the guard is never dereferenced, so no `&mut` aliases the
+    // `Box` that is about to move. It rejects a call made from inside the child's own callback.
+    let child_guard = borrow_registered(child_id).ok_or(ReparentError::Busy)?;
+    let old_parent_id = (*child_record.parent.read().unwrap()).ok_or(ReparentError::NotOwned)?;
+    registered_ptr(old_parent_id).ok_or(ReparentError::NotOwned)?;
+
+    if new_parent == Some(old_parent_id) {
+        let owned = with_object(old_parent_id, |p| {
+            p.object_data()
+                .owned_children
+                .iter()
+                .any(|c| c.object_data().id == child_id)
+        })
+        .ok_or(ReparentError::Busy)?;
+        return if owned { Ok(None) } else { Err(ReparentError::NotOwned) };
+    }
+
+    if let Some(np) = new_parent {
+        if np == child_id {
+            return Err(ReparentError::InvalidParent);
+        }
+        registered_ptr(np).ok_or(ReparentError::InvalidParent)?;
+        // The new parent must not be a descendant of the child (would orphan a cycle).
+        let registry = GLOBAL_OBJECT_REGISTRY.read().unwrap();
+        let mut cursor = Some(np);
+        for _ in 0..=registry.len() {
+            let Some(id) = cursor else { break };
+            if id == child_id {
+                return Err(ReparentError::InvalidParent);
+            }
+            cursor = registry.get(&id).and_then(|r| *r.parent.read().unwrap());
+        }
+    }
+
+    let mut old_guard = borrow_registered(old_parent_id).ok_or(ReparentError::Busy)?;
+    let mut new_guard = match new_parent {
+        Some(np) => Some(borrow_registered(np).ok_or(ReparentError::Busy)?),
+        None => None,
+    };
+
+    let mut boxed = {
+        let data = old_guard.object_data_mut();
+        let pos = data
+            .owned_children
+            .iter()
+            .position(|c| c.object_data().id == child_id)
+            .ok_or(ReparentError::NotOwned)?;
+        data.children.retain(|&id| id != child_id);
+        data.owned_children.remove(pos)
+    };
+    {
+        let data = boxed.object_data_mut();
+        data.parent = new_parent;
+        data.owned_by_parent = new_parent.is_some();
+    }
+
+    if let Ok(registry) = GLOBAL_OBJECT_REGISTRY.read() {
+        if let Some(old_record) = registry.get(&old_parent_id) {
+            old_record
+                .children
+                .write()
+                .unwrap()
+                .retain(|&id| id != child_id);
+        }
+        *child_record.parent.write().unwrap() = new_parent;
+        if let Some(new_record) = new_parent.and_then(|id| registry.get(&id)) {
+            let mut children = new_record.children.write().unwrap();
+            if !children.contains(&child_id) {
+                children.push(child_id);
+            }
+        }
+    }
+
+    let released = match new_guard.as_mut() {
+        Some(guard) => {
+            let data = guard.object_data_mut();
+            if !data.children.contains(&child_id) {
+                data.children.push(child_id);
+            }
+            data.owned_children.push(boxed);
+            None
+        }
+        None => Some(boxed),
+    };
+
+    drop(new_guard);
+    drop(old_guard);
+    drop(child_guard);
+
+    let mut removed = Event::new(EventKind::ChildRemoved { child_id });
+    crate::event_loop::notify_helper(old_parent_id, &mut removed);
+    if let Some(np) = new_parent {
+        let mut added = Event::new(EventKind::ChildAdded { child_id });
+        crate::event_loop::notify_helper(np, &mut added);
+    }
+    Ok(released)
 }
 
 pub fn reparent(
@@ -1237,17 +1360,17 @@ mod tests {
         let parent = ObjectData::new(ObjectId::next());
         let mut child = ObjectData::new(ObjectId::next());
 
-        set_parent(&mut child, Some(parent.id));
+        set_parent(&mut child, Some(parent.id)).unwrap();
         assert_eq!(child.parent, Some(parent.id));
         assert!(parent.children.is_empty());
 
         let parent2 = ObjectData::new(ObjectId::next());
-        set_parent(&mut child, Some(parent2.id));
+        set_parent(&mut child, Some(parent2.id)).unwrap();
         assert_eq!(child.parent, Some(parent2.id));
         assert!(parent.children.is_empty());
         assert!(parent2.children.is_empty());
 
-        set_parent(&mut child, None);
+        set_parent(&mut child, None).unwrap();
         assert_eq!(child.parent, None);
         assert!(parent2.children.is_empty());
     }
