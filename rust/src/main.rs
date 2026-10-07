@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use config::{Config, ConfigManager};
-use hotkey::HotkeyManager;
+use hotkey::{click_through_startup_allowed, HotkeyManager};
 use log::info;
 use parking_lot::Mutex;
 use qtrs_core::timer::Timer;
@@ -492,8 +492,24 @@ fn main() -> std::process::ExitCode {
         None
     };
 
-    // Safe click-through initialization: prevent lockout if hotkeys failed (mirrors Python _safe_init_click_through)
-    if hotkey.is_none() && config.lock().click_through {
+    // Registration failures are reported to the user (Python `hotkey_failed` -> `tray.showMessage`,
+    // main.py:77-88), one balloon per message, in Python's order.
+    let hotkey_registration = hotkey.as_ref().map(|hk| hk.registration().clone());
+    if let Some(registration) = &hotkey_registration {
+        for notice in registration.failure_notices() {
+            log::warn!("Hotkey registration issue: {}", notice);
+            let _ = tray.borrow_mut().tray.show_message(
+                "⚠️ 全域快捷鍵通知",
+                &format!("{notice}\n您仍可透過系統匣圖示完整操作所有功能。"),
+                TrayMessageIcon::Warning,
+                5000,
+            );
+        }
+    }
+
+    // Safe click-through initialization: prevent lockout unless the click-through hotkey is
+    // registered (mirrors Python _safe_init_click_through, which checks `clickthrough_registered`)
+    if !click_through_startup_allowed(hotkey_registration.as_ref()) && config.lock().click_through {
         log::warn!(
             "[HUD] Click-through mode disabled on startup: hotkeys unavailable to prevent lockout"
         );

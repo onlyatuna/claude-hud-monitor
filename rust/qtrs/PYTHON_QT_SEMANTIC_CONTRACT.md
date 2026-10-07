@@ -927,7 +927,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`QSystemTrayIcon(icon)`、`setToolTip`、`setContextMenu`、`show`、`showMessage(title, msg, icon, msecs)`、`activated(reason)`；HUD 在 `Trigger` 時切換顯示；Windows 上 Qt 在右鍵時自己顯示 context menu。
 - **qtrs required**：同樣的信號與訊息 API，選單 MUST 在游標處彈出。
 - **Current implementation**：`IMPLEMENTED-UNTESTED`（Windows 執行期）。`TrayIcon::new/show/hide/set_tooltip/show_message` 與 `on_activated/on_context_menu_requested/on_message_clicked`（`qtrs-platform/src/tray_icon.rs`）；`tray_window_proc` 把 `NIN_SELECT | WM_LBUTTONUP` 映射為 Trigger、`WM_LBUTTONDBLCLK` 為 DoubleClick，右鍵為 Context 加選單 exec，`TaskbarCreated` 時重新加入圖示。HUD 用 `on_activated` Trigger（`main.rs:355-357`）與 `on_menu_action`（`:431-449`）。
-- **Known gap**：**G11.8.a [P1]** 選單位置換算用主螢幕 DPR（`tray_icon.rs:281`）；**G11.8.b [P2]** `show_message` 只收 title／text／4 值圖示 enum／時間，不收自訂 `QIcon`（Python 傳 `tray.icon()`，`main.py:75-82`）；**G11.8.c [P0, READ；= G11.9.a 的重複登錄]** Python 的 `hotkey_failed` 訊息 Rust 沒有（→ G11.9.a）；**G11.8.d [P2]** 圖示：Python 依平台選 `.ico/.icns/.png`（`tray_icon.py:17-28`），Rust 內嵌 PNG；**G11.8.e [P2, INFERENCE]** 雙擊在 Windows 先 Trigger 兩次再 DoubleClick（如 Qt）；**G11.8.f [P2]** DBus／macOS 後端存在但未驗證。
+- **Known gap**：**G11.8.a [P1]** 選單位置換算用主螢幕 DPR（`tray_icon.rs:281`）；**G11.8.b [P2]** `show_message` 只收 title／text／4 值圖示 enum／時間，不收自訂 `QIcon`（Python 傳 `tray.icon()`，`main.py:75-82`）；**G11.8.c [P0, READ；= G11.9.a 的重複登錄；已修復：RC-12]** Python 的 `hotkey_failed` 訊息 Rust 沒有（→ G11.9.a）；**G11.8.d [P2]** 圖示：Python 依平台選 `.ico/.icns/.png`（`tray_icon.py:17-28`），Rust 內嵌 PNG；**G11.8.e [P2, INFERENCE]** 雙擊在 Windows 先 Trigger 兩次再 DoubleClick（如 Qt）；**G11.8.f [P2]** DBus／macOS 後端存在但未驗證。
 - **Test**：既有 `tray_icon.rs` 內聯測試（`test_menu_item_constructors`、`test_menu_builder_and_hmenu_lifecycle`、`test_create_hicon_from_pixmap`、`test_tray_icon_lifecycle`、`test_tray_signals_and_window_proc_dispatch`）；應用層 `test_context_menu_parity_cards_and_table_modes`、`test_tray_and_hud_menu_unified_parity`（只比選單內容）。必要：對 tray 視窗 post `WM_LBUTTONUP` 與 `WM_LBUTTONDBLCLK`，斷言發射序列。
 - **HUD usage**：Python `tray_icon.py:43-151`、`main.py:63-65,75-82`；Rust `rust/src/ui/tray_icon.rs:547-560`、`main.rs:343-357,431-449`。
 
@@ -936,10 +936,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：Alt+C 與 Alt+Shift+C MUST 切換可見性與 click-through；註冊失敗 MUST 被回報，且鎖定防護（lockout guard）MUST 使用**真實註冊結果**。
 - **Current implementation**：Windows 執行緒 `IMPLEMENTED-UNTESTED`（`rust/src/hotkey.rs`，id 9527/9528、`MOD_NOREPEAT`、drop 時 `WM_QUIT`）；`parse_hotkey`／`compute_ct_mods` 有單元測試。`qtrs-platform::Win32HotkeyManager` 存在但 **app 不用**。cocoa／unix／generic 的 `PlatformHotkeyManager` 只記錄 id 並回 `Ok`。
 - **Known gap**
-  - **G11.9.a [P0, READ]** `HotkeyManager::start` 在 Windows 即使 `RegisterHotKey` 失敗也回 `Ok`，失敗只在執行緒內 `warn!`（`hotkey.rs:235-261`）；`main.rs:496` 檢查 `hotkey.is_none()`，真實衝突時永不成立 → **鎖定防護與托盤警告不會觸發**（Python 檢查 `clickthrough_registered` 並顯示警告：`main.py:78-89`、`hud_window.py:426-437`）。
+  - **G11.9.a [P0, READ；已修復：RC-12]** `HotkeyManager::start` 在 Windows 即使 `RegisterHotKey` 失敗也回 `Ok`，失敗只在執行緒內 `warn!`（`hotkey.rs:235-261`）；`main.rs:496` 檢查 `hotkey.is_none()`，真實衝突時永不成立 → **鎖定防護與托盤警告不會觸發**（Python 檢查 `clickthrough_registered` 並顯示警告：`main.py:78-89`、`hud_window.py:426-437`）。修復：工作執行緒在兩次 `RegisterHotKey` 之後才回報（`start` 等該回報，與 Python 的 `_ready_event` 相同），`HotkeyManager::registration()` 回傳每個熱鍵的 `HotkeyStatus::{Registered, Failed(GetLastError), Unsupported}`；`click_through_startup_allowed` 只在穿透熱鍵已註冊時回 true（`_safe_init_click_through`）；`main.rs` 依 Python 順序為每個失敗送托盤訊息（`hotkey_failed` 再 `unavailable`）。**與 D.2 原閘門的差異**：`start` 在熱鍵被占用時**不**回 `Err`，因為兩個熱鍵獨立，只有穿透熱鍵失敗時 Python 仍保留可用的顯示／隱藏熱鍵；若 `start` 回 `Err`，`HotkeyManager` 會被丟棄而同時失去它。`Err` 只用於執行緒無法啟動或在回報前結束。測試 `rust/src/hotkey.rs` 的 `mod tests`（6 項新增，用 `RegisterHotKey` 在本程序先占用同一組合以得到真實的 1409）。**沒有 before-FAIL**：測試用的 `registration()` 在舊程式碼不存在；以變異檢查代替（不是 before-FAIL）：把 toggle 的失敗判斷改成永不失敗，`start_reports_a_taken_toggle_hotkey_and_keeps_the_other` FAIL。`main.rs` 的接線沒有自動測試；以真實 HUD 行程做煙霧測試（先占用 Alt+Shift+C、`click_through=true`）：log 出現 `Failed(1409)`、兩則 `Hotkey registration issue`、`Click-through mode disabled on startup`，設定檔隨後還原。托盤氣泡的實際顯示**未**目視驗證。
   - **G11.9.b [P1]** macOS 熱鍵明確未實作（`hotkey.rs:7-8,146-151`）；Python 用 pynput。
   - **G11.9.c [D]** `GenericHotkeyManager`／`CocoaHotkeyManager`／`UnixHotkeyManager` 為 stub，回報成功卻未註冊。理由：未驗證平台；**但 stub 回 `Ok` 違反規則 3（誤用須可見失敗）**——必須改回錯誤。
   - **G11.9.d [P2]** app 以原子旗標 + `run_on_main_thread`（`main.rs:466-483`）取代 queued 信號。
+  - **G11.9.e [P2, READ]** 穿透鎖定訊息文字不同：Rust「全域快捷鍵未註冊成功，…」（`main.rs`），Python「全域快捷鍵註冊失敗，…」（`hud_window.py:432`）。
+  - **G11.9.f [P2, READ]** Rust 的主熱鍵取自設定 `hotkey`，穿透熱鍵由 `compute_ct_mods` 推導；Python 固定 `Alt+C`／`Alt+Shift+C`（`main.py:89`、`hotkey.py:70,79`）。預設設定下相同；訊息文字使用實際註冊的組合，而非固定的 `Alt+`。
+  - **G11.9.g [P2, INFERENCE]** `HotkeyManager::start` 等工作執行緒回報，沒有逾時（Python 最多等 1.5 s）；`RegisterHotKey` 本身不會長時間阻塞，但此處未驗證執行緒卡住的情況。
+  - **G11.9.h [P2]** 熱鍵失敗時的托盤氣泡（`main.rs`）只以 log 煙霧測試驗證，沒有自動測試，也沒有目視確認氣泡內容與連續兩則訊息的顯示。
 - **Test**：既有 `rust/src/hotkey.rs::{test_parse_hotkey, test_compute_ct_mods}`（Windows）、`qtrs-platform/src/hotkey.rs::{test_cocoa_hotkey_manager, test_unix_hotkey_manager}`、`test_cross_platform_hotkeys`。必要：兩次註冊相同組合，第二次 `start` 回報失敗且 app 停用啟動 click-through；對執行緒 post `WM_HOTKEY`，斷言主執行緒 callback 每次按下觸發一次。
 - **HUD usage**：Python `main.py:67-90`、`hud_window.py:426-437`；Rust `main.rs:462-509`。
 
@@ -1104,7 +1108,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.g [P0, READ；= G11.2.b；已修復：RC-06] | Alt+F4 / `CloseRequest` 被吞 | G11.2.b | 修復 |
 | G12.5.h [P1] | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms（啟動後 trim）；Rust 在 `hide()` 立即 trim，且只有 2500 ms | `hud_window.py:108,114,215,459,613,617` vs `hud_window.rs:484`、`main.rs:594` | 修復或核准 |
 | G12.5.i [P0, READ；= G8.8.a] | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） | G8.8.a | 修復 |
-| G12.5.j [P0, READ；= G11.9.a] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
+| G12.5.j [P0, READ；= G11.9.a；已修復：RC-12] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
 | G12.5.k [P1] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 修復 |
 | G12.5.l [P0, READ；= G11.4.a] | 螢幕選擇／脫離螢幕還原規則 | G11.4.a | 修復 |
 | G12.5.m [P1] | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu | `tray_icon.py:54-122` vs `rust/src/ui/tray_icon.rs:73-240` | 需決定 |
@@ -1143,7 +1147,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 312 項：D 12、P0 34、P1 136、P2 125、test gap 5（計數含已修復項；標籤含「已修復」者共 27 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 316 項：D 12、P0 34、P1 136、P2 129、test gap 5（計數含已修復項；標籤含「已修復」者共 30 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.f、G12.5.g、G12.5.j、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1414,14 +1418,18 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.7.c | P2 | macOS 路徑只對 `MockObjcRuntime` 測過 |
 | G11.8.a | P1 | 選單位置換算用主螢幕 DPR |
 | G11.8.b | P2 | `show_message` 只收 title／text／4 值圖示 enum／時間，不收自訂 `QIcon` |
-| G11.8.c | P0, READ；= G11.9.a 的重複登錄 | Python 的 `hotkey_failed` 訊息 Rust 沒有 |
+| G11.8.c | P0, READ；= G11.9.a 的重複登錄；已修復：RC-12 | Python 的 `hotkey_failed` 訊息 Rust 沒有 |
 | G11.8.d | P2 | 圖示：Python 依平台選 `.ico/.icns/.png` |
 | G11.8.e | P2, INFERENCE | 雙擊在 Windows 先 Trigger 兩次再 DoubleClick |
 | G11.8.f | P2 | DBus／macOS 後端存在但未驗證 |
-| G11.9.a | P0, READ | `HotkeyManager::start` 在 Windows 即使 `RegisterHotKey` 失敗也回 `Ok`，失敗只在執行緒內 `warn!` |
+| G11.9.a | P0, READ；已修復：RC-12 | `HotkeyManager::start` 在 Windows 即使 `RegisterHotKey` 失敗也回 `Ok`，失敗只在執行緒內 `warn!` |
 | G11.9.b | P1 | macOS 熱鍵明確未實作 |
 | G11.9.c | D | `GenericHotkeyManager`／`CocoaHotkeyManager`／`UnixHotkeyManager` 為 stub，回報成功卻未註冊 |
 | G11.9.d | P2 | app 以原子旗標 + `run_on_main_thread` |
+| G11.9.e | P2, READ | 穿透鎖定訊息文字與 Python 不同 |
+| G11.9.f | P2, READ | 主熱鍵取自設定、穿透熱鍵推導；Python 固定 |
+| G11.9.g | P2, INFERENCE | `start` 等回報無逾時 |
+| G11.9.h | P2 | 熱鍵失敗氣泡只以 log 煙霧測試驗證 |
 | G11.10.a | P2 | 高對比與 `ShouldAppsUseDarkMode` 未驗證 |
 | G11.10.b | P2 | `GuiApplication::new` 預設 `Palette::dark()`，不跟隨系統配置 |
 | G11.10.c | P2 | `theme.rs` 無單元測試 |
@@ -1445,7 +1453,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.g | P0, READ；= G11.2.b；已修復：RC-06 | Alt+F4 / `CloseRequest` 被吞 |
 | G12.5.h | P1 | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms |
 | G12.5.i | P0, READ；= G8.8.a | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） |
-| G12.5.j | P0, READ；= G11.9.a | 熱鍵註冊失敗不被回報；鎖定防護失效 |
+| G12.5.j | P0, READ；= G11.9.a；已修復：RC-12 | 熱鍵註冊失敗不被回報；鎖定防護失效 |
 | G12.5.k | P1 | `--smoke-test` 不檢查設定持久化 |
 | G12.5.l | P0, READ；= G11.4.a | 螢幕選擇／脫離螢幕還原規則 |
 | G12.5.m | P1 | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu |
@@ -1761,7 +1769,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 | RC | 對應 gap | 位置 | 閘門（動手前必須先做） |
 |---|---|---|---|
-| RC-12 熱鍵註冊失敗不回報 | G11.9.a、G11.8.c、G12.5.j | `hotkey.rs:235-261`、`main.rs:496` | 無。`start` 必須回報 `RegisterHotKey` 失敗；測試：衝突的熱鍵使 `start` 回 `Err`，且 `click_through` 啟動時被關閉 |
+| RC-12 熱鍵註冊失敗不回報 | G11.9.a、G11.8.c、G12.5.j | `hotkey.rs:235-261`、`main.rs:496` | 無。`start` 必須回報 `RegisterHotKey` 失敗；測試：衝突的熱鍵使 `start` 回 `Err`，且 `click_through` 啟動時被關閉。**已完成（RC-12，Win32 真實 `RegisterHotKey` 衝突驗證）**：失敗改由 `HotkeyManager::registration()` 回報，而非 `start` 的 `Err`（理由見 G11.9.a）；新缺口 G11.9.e–G11.9.h |
 | RC-13 螢幕選擇／還原 | G11.4.a、G12.5.l | `hud_window.rs:178-193,640-662,823-824` | 對照 Python 規則；使用已存在的 `clamp_window_rect_to_screens`（`qtrs-platform/src/screen.rs:532`） |
 | RC-14 卡片根 spacing 2 vs 5 | G9.4.b、G12.5.b | `provider_card.rs:159` vs `provider_card.py:27` | **先做逐 widget rect 的 Python/Rust 幾何 diff**：若 2 是用來補 qtrs 的高度差異，則真正的 root cause 在 qtrs，不得直接改成 5 |
 | RC-15 Badge `max-height: 15px` | G12.3.b、G12.5.a | `styles.rs:192,291` | 同 RC-14 的閘門 |
