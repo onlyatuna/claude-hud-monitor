@@ -1600,6 +1600,7 @@ mod tests {
     /// A table built under the application style sheet the table-mode HUD installs. Labels take
     /// their sizes from it and from the table's own sheet, so a sheet another test left in the
     /// process-wide slot would change every measurement.
+    #[cfg_attr(not(windows), allow(dead_code))] // the PySide6 oracle tests are Windows-only
     fn table_mode_table() -> UsageTable {
         qtrs_widgets::application::Application::set_style_sheet(
             crate::ui::styles::get_hud_stylesheet(true),
@@ -1697,6 +1698,7 @@ mod tests {
     }
 
     /// Restores the application device pixel ratio the other tests run under.
+    #[cfg_attr(not(windows), allow(dead_code))] // the PySide6 oracle tests are Windows-only
     struct DevicePixelRatioGuard;
 
     impl Drop for DevicePixelRatioGuard {
