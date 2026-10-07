@@ -105,6 +105,8 @@ pub enum QCssValue {
     Length(f32),
     Number(f32),
     String(String),
+    /// `font-family: a, 'b c', d` (`setFontFamilyFromValues`, `qcssparser.cpp:1252`): the families in order.
+    FontFamilies(Vec<String>),
     Identifier(String),
     Edges([f32; 4]), // [top, right, bottom, left]
     Border(QCssBorder),
@@ -356,6 +358,14 @@ fn parse_value(property: &QCssProperty, val_str: &str) -> QCssValue {
         return parse_border(val_str);
     }
 
+    // `font-family` is a comma separated list (`QFont::setFamilies`), each name optionally quoted.
+    if matches!(property, QCssProperty::FontFamily) {
+        let families: Vec<String> = split_font_families(val_str);
+        if !families.is_empty() {
+            return QCssValue::FontFamilies(families);
+        }
+    }
+
     // Check padding / margin multi-values
     if matches!(
         property,
@@ -397,6 +407,30 @@ fn parse_value(property: &QCssProperty, val_str: &str) -> QCssValue {
     }
 
     QCssValue::Identifier(val_str.to_string())
+}
+
+/// Splits a `font-family` value at the commas outside quotes and strips one pair of quotes per name.
+fn split_font_families(val_str: &str) -> Vec<String> {
+    let mut families = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in val_str.chars() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => current.push(ch),
+            None if ch == '\'' || ch == '"' => quote = Some(ch),
+            None if ch == ',' => {
+                families.push(std::mem::take(&mut current));
+            }
+            None => current.push(ch),
+        }
+    }
+    families.push(current);
+    families
+        .into_iter()
+        .map(|f| f.trim().to_string())
+        .filter(|f| !f.is_empty())
+        .collect()
 }
 
 /// Parses border shorthand: `1px solid rgba(255, 255, 255, 0.14)`.

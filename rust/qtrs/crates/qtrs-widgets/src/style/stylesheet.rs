@@ -29,7 +29,8 @@ pub struct ResolvedStyle {
     pub height: Option<i32>,
     pub font_size: Option<f32>,
     pub font_weight: Option<u16>,
-    pub font_family: Option<String>,
+    /// `font-family` list in declaration order (`QFont::setFamilies`); see [`Self::font_family`].
+    pub font_families: Option<Vec<String>>,
     pub letter_spacing: Option<f32>,
     pub padding: Option<[f32; 4]>, // [top, right, bottom, left]
     pub margin: Option<[f32; 4]>,
@@ -37,6 +38,16 @@ pub struct ResolvedStyle {
 }
 
 impl ResolvedStyle {
+    /// The family a `font-family` list selects: the first installed one (`QFontDatabase` matches
+    /// `QFont::families()` in order), else the first listed (the font database then falls back).
+    pub fn font_family(&self) -> Option<String> {
+        let list = self.font_families.as_ref()?;
+        let installed = qtrs_gui::text::font_database::with_global_font_database(|db| {
+            list.iter().find(|f| db.has_family(f)).cloned()
+        });
+        installed.or_else(|| list.first().cloned())
+    }
+
     /// Horizontal and vertical extent that `QRenderRule::boxSize` adds around a content size:
     /// border plus padding on both sides of each axis (`qstylesheetstyle.cpp:1116-1121`).
     pub fn box_extra(&self) -> (i32, i32) {
@@ -295,8 +306,8 @@ fn apply_declaration(style: &mut ResolvedStyle, decl: &QCssDeclaration) {
             _ => {}
         },
         QCssProperty::FontFamily => match &decl.value {
-            QCssValue::String(s) | QCssValue::Identifier(s) => {
-                style.font_family = Some(s.clone());
+            QCssValue::FontFamilies(list) => {
+                style.font_families = Some(list.clone());
             }
             _ => {}
         },

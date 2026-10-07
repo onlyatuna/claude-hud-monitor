@@ -147,8 +147,8 @@ impl Button {
         if let Some(sz) = style.font_size {
             font.size = sz.round();
         }
-        if let Some(fam) = &style.font_family {
-            font.family = fam.clone();
+        if let Some(fam) = style.font_family() {
+            font.family = fam;
         }
         if let Some(w) = style.font_weight {
             font.weight = match w {

@@ -76,7 +76,7 @@ fn info(w: &WidgetRef) -> Value {
         if let Some(s) = style.font_size {
             f.size = s.round();
         }
-        if let Some(fam) = &style.font_family {
+        if let Some(fam) = &style.font_family() {
             f.family = fam.clone();
         }
         if let Some(wt) = style.font_weight {

@@ -352,8 +352,8 @@ impl ProgressBar {
             // `QCss` applies `font-size: Npx` with `QFont::setPixelSize(int)`.
             font.size = sz.round();
         }
-        if let Some(fam) = &style.font_family {
-            font.family = fam.clone();
+        if let Some(fam) = style.font_family() {
+            font.family = fam;
         }
         font
     }

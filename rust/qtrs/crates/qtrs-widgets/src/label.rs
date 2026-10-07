@@ -144,8 +144,8 @@ impl Label {
             // `QCss` applies `font-size: Npx` with `QFont::setPixelSize(int)`, so 10.5px is 11px.
             font.size = sz.round();
         }
-        if let Some(fam) = &style.font_family {
-            font.family = fam.clone();
+        if let Some(fam) = style.font_family() {
+            font.family = fam;
         }
         if let Some(w) = style.font_weight {
             font.weight = match w {
