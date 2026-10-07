@@ -377,7 +377,17 @@ pub fn get_hud_stylesheet(dark: bool) -> &'static str {
 }
 
 fn hud_sheet(t: &SheetTheme) -> String {
-    let SheetTheme { panel_solid, panel_border, radius, text, text2, text3, separator, menu_bg, menu_hover } = t;
+    let SheetTheme {
+        panel_solid,
+        panel_border,
+        radius,
+        text,
+        text2,
+        text3,
+        separator,
+        menu_bg,
+        menu_hover,
+    } = t;
     format!(
         r#"
     QWidget#CentralWidget {{
@@ -430,7 +440,13 @@ pub fn get_table_stylesheet(dark: bool) -> &'static str {
 }
 
 fn table_sheet(t: &SheetTheme) -> String {
-    let SheetTheme { text, text2, text3, separator, .. } = t;
+    let SheetTheme {
+        text,
+        text2,
+        text3,
+        separator,
+        ..
+    } = t;
     format!(
         r#"
     QLabel {{ color: {text}; }}

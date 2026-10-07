@@ -12,7 +12,9 @@ impl CardsOracleSetup {
     /// The same cards-mode sheet at another device pixel ratio (the oracle was also measured at 1.0).
     pub(crate) fn at_dpr(dpr: f32) -> Self {
         qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
-        qtrs_widgets::application::Application::set_style_sheet(crate::ui::styles::get_cards_stylesheet(true));
+        qtrs_widgets::application::Application::set_style_sheet(
+            crate::ui::styles::get_cards_stylesheet(true),
+        );
         Self
     }
 }

@@ -146,7 +146,9 @@ fn apply_python_structure(hud: &mut HUDWindow, horizontal: bool) {
     use qtrs_widgets::{BoxLayout, Layout, QSizePolicy};
     let root = hud.window.root_widget();
     let kids = root.borrow().children();
-    kids[0].borrow().set_size_policy(QSizePolicy::new(Policy::Preferred, Policy::Preferred));
+    kids[0]
+        .borrow()
+        .set_size_policy(QSizePolicy::new(Policy::Preferred, Policy::Preferred));
     let mut l = BoxLayout::vertical();
     l.set_margins(qtrs_gui::geometry::primitives::Margins::new(12, 8, 12, 10));
     l.set_spacing(6);
@@ -155,7 +157,12 @@ fn apply_python_structure(hud: &mut HUDWindow, horizontal: bool) {
     root.borrow_mut().set_layout(Box::new(l));
 
     eprintln!("V5 horizontal={horizontal} root kids={}", kids.len());
-    let items = hud.cards_container.borrow().layout_ref_mut().map(|l| l.widgets()).unwrap_or_default();
+    let items = hud
+        .cards_container
+        .borrow()
+        .layout_ref_mut()
+        .map(|l| l.widgets())
+        .unwrap_or_default();
     let mut nl = BoxLayout::new(if horizontal {
         qtrs_widgets::layout::Direction::LeftToRight
     } else {
@@ -163,7 +170,10 @@ fn apply_python_structure(hud: &mut HUDWindow, horizontal: bool) {
     });
     nl.set_spacing(if horizontal { 8 } else { 6 });
     for w in items {
-        let is_card = hud.cards.values().any(|c| std::rc::Rc::ptr_eq(&c.widget(), &w));
+        let is_card = hud
+            .cards
+            .values()
+            .any(|c| std::rc::Rc::ptr_eq(&c.widget(), &w));
         if is_card && horizontal {
             nl.add_widget_with_stretch(w, 1);
         } else {
@@ -190,7 +200,8 @@ fn dump(mode: &str, w: i32, h: i32, variant: u32) -> Value {
     cfg.vertical_height = h as u32;
     let cfg = Arc::new(Mutex::new(cfg));
     let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-    let mut hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new");
+    let mut hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers())
+        .expect("HUDWindow::new");
     hud.show();
     hud.window.root_widget().borrow().update_layout();
     apply_variant(&mut hud, variant, mode == "horizontal");
@@ -215,16 +226,27 @@ fn dump(mode: &str, w: i32, h: i32, variant: u32) -> Value {
             out.insert(format!("{pid}.{n}"), d);
         }
         for (n, wd) in [
-            ("dot", &c.dot), ("title", &c.title), ("badge", &c.badge), ("badge2", &c.badge2),
-            ("m1_label", &c.m1_label), ("m1_val", &c.m1_val), ("m1_bar", &c.m1_bar), ("m1_sub", &c.m1_sub),
-            ("m2_label", &c.m2_label), ("m2_val", &c.m2_val), ("m2_bar", &c.m2_bar), ("m2_sub", &c.m2_sub),
+            ("dot", &c.dot),
+            ("title", &c.title),
+            ("badge", &c.badge),
+            ("badge2", &c.badge2),
+            ("m1_label", &c.m1_label),
+            ("m1_val", &c.m1_val),
+            ("m1_bar", &c.m1_bar),
+            ("m1_sub", &c.m1_sub),
+            ("m2_label", &c.m2_label),
+            ("m2_val", &c.m2_val),
+            ("m2_bar", &c.m2_bar),
+            ("m2_sub", &c.m2_sub),
         ] {
             out.insert(format!("{pid}.{n}"), info(wd));
         }
     }
     for (n, wd) in [
-        ("title_label", &hud.title_label), ("time_label", &hud.time_label),
-        ("layout_toggle_btn", &hud.layout_toggle_btn), ("status_dot", &hud.status_dot),
+        ("title_label", &hud.title_label),
+        ("time_label", &hud.time_label),
+        ("layout_toggle_btn", &hud.layout_toggle_btn),
+        ("status_dot", &hud.status_dot),
         ("ghost_label", &hud.ghost_label),
     ] {
         out.insert(format!("hud.{n}"), info(wd));
@@ -243,7 +265,12 @@ fn dump(mode: &str, w: i32, h: i32, variant: u32) -> Value {
 fn probe_badge_font() {
     qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
     use qtrs_gui::text::Font;
-    for (fam, px, w) in [("Consolas", 9.0, FontWeight::Normal), ("Consolas", 9.0, FontWeight::Bold), ("Segoe UI", 10.0, FontWeight::Normal), ("Consolas", 14.0, FontWeight::Black)] {
+    for (fam, px, w) in [
+        ("Consolas", 9.0, FontWeight::Normal),
+        ("Consolas", 9.0, FontWeight::Bold),
+        ("Segoe UI", 10.0, FontWeight::Normal),
+        ("Consolas", 14.0, FontWeight::Black),
+    ] {
         let f = Font::new(fam, px).with_weight(w);
         let m = FontMetrics::from_font(&f);
         let b = m.bounding_rect_exact("--", &f);
@@ -261,7 +288,11 @@ fn dump_hud_geometry() {
     for variant in 0..=7 {
         for (mode, w, h) in [("horizontal", 690, 145), ("vertical", 280, 410)] {
             let v = dump(mode, w, h, variant);
-            std::fs::write(format!("{dir}/rs{variant}_{mode}.json"), serde_json::to_string_pretty(&v).unwrap()).unwrap();
+            std::fs::write(
+                format!("{dir}/rs{variant}_{mode}.json"),
+                serde_json::to_string_pretty(&v).unwrap(),
+            )
+            .unwrap();
         }
     }
 }

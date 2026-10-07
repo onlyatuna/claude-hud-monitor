@@ -44,19 +44,43 @@ fn fx() -> Fx {
     c.table_height = 500;
     let cfg = Arc::new(Mutex::new(c));
     let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-    let hud = HUDWindow::with_providers(Arc::clone(&cfg), ctrl, crate::providers::stub::stub_providers())
-        .unwrap();
+    let hud = HUDWindow::with_providers(
+        Arc::clone(&cfg),
+        ctrl,
+        crate::providers::stub::stub_providers(),
+    )
+    .unwrap();
     let hwnd = hud.window.native_handle() as Hwnd;
     Fx { hud, cfg, hwnd }
 }
 
 fn move_to(f: &Fx, x: i32, y: i32) {
-    let ok = unsafe { SetWindowPos(f.hwnd, null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
+    let ok = unsafe {
+        SetWindowPos(
+            f.hwnd,
+            null_mut(),
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
     assert_ne!(ok, 0);
 }
 
 fn resize_to(f: &Fx, w: i32, h: i32) {
-    let ok = unsafe { SetWindowPos(f.hwnd, null_mut(), 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
+    let ok = unsafe {
+        SetWindowPos(
+            f.hwnd,
+            null_mut(),
+            0,
+            0,
+            w,
+            h,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+    };
     assert_ne!(ok, 0);
 }
 
@@ -70,12 +94,22 @@ fn geom(f: &Fx) -> (i32, i32, i32, i32) {
 /// raised to the mode's minimum.
 fn expected(f: &Fx) -> (i32, i32, i32, i32) {
     let g = geom(f);
-    (g.0, g.1, g.2.max(MIN_TABLE_WIDTH as i32), g.3.max(MIN_TABLE_HEIGHT as i32))
+    (
+        g.0,
+        g.1,
+        g.2.max(MIN_TABLE_WIDTH as i32),
+        g.3.max(MIN_TABLE_HEIGHT as i32),
+    )
 }
 
 fn stored(f: &Fx) -> (i32, i32, i32, i32) {
     let c = f.cfg.lock();
-    (c.window_x.unwrap(), c.window_y.unwrap(), c.table_width as i32, c.table_height as i32)
+    (
+        c.window_x.unwrap(),
+        c.window_y.unwrap(),
+        c.table_width as i32,
+        c.table_height as i32,
+    )
 }
 
 fn wait_until(mut done: impl FnMut() -> bool) {
@@ -94,8 +128,15 @@ fn a_move_updates_the_config_position_and_schedules_one_save() {
     assert_ne!((g.0, g.1), (10, 10), "the window moved");
     let s = stored(&f);
     assert_eq!((s.0, s.1), (g.0, g.1));
-    assert!(f.hud.debouncer.is_pending(), "a move must schedule the debounced save");
-    assert_eq!(f.hud.debouncer.save_count(), 0, "and not save synchronously");
+    assert!(
+        f.hud.debouncer.is_pending(),
+        "a move must schedule the debounced save"
+    );
+    assert_eq!(
+        f.hud.debouncer.save_count(),
+        0,
+        "and not save synchronously"
+    );
 }
 
 #[test]
@@ -104,7 +145,10 @@ fn mouse_release_persists_at_once_and_cancels_the_pending_save() {
     move_to(&f, 200, 150);
     assert!(f.hud.debouncer.is_pending());
     unsafe { SendMessageW(f.hwnd, WM_LBUTTONUP, 0, (30 << 16) | 30) };
-    assert!(!f.hud.debouncer.is_pending(), "Python _persist_geometry stops the timer");
+    assert!(
+        !f.hud.debouncer.is_pending(),
+        "Python _persist_geometry stops the timer"
+    );
     assert_eq!(f.hud.debouncer.save_count(), 1);
     assert_eq!(stored(&f), expected(&f));
     assert_ne!((geom(&f).0, geom(&f).1), (10, 10), "the window moved");
@@ -130,7 +174,10 @@ fn a_size_below_the_minimum_is_stored_clamped() {
     f.hud.window.set_minimum_size(1, 1);
     resize_to(&f, 50, 40);
     let c = f.cfg.lock();
-    assert_eq!((c.table_width, c.table_height), (MIN_TABLE_WIDTH, MIN_TABLE_HEIGHT));
+    assert_eq!(
+        (c.table_width, c.table_height),
+        (MIN_TABLE_WIDTH, MIN_TABLE_HEIGHT)
+    );
 }
 
 #[test]

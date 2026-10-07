@@ -200,7 +200,10 @@ impl ProviderCardWidget {
         // `self.title.setSizePolicy(Minimum, Preferred)` (`provider_card.py:39`)
         title
             .borrow_mut()
-            .set_size_policy(qtrs_widgets::QSizePolicy::new(qtrs_widgets::Policy::Minimum, qtrs_widgets::Policy::Preferred));
+            .set_size_policy(qtrs_widgets::QSizePolicy::new(
+                qtrs_widgets::Policy::Minimum,
+                qtrs_widgets::Policy::Preferred,
+            ));
         set_title_style(&title, theme_color);
         set_label_color(&dot, theme_color);
         header_layout.add_widget(title.clone());
@@ -344,7 +347,9 @@ impl ProviderCardWidget {
         self.current_metrics = data.clone();
         let default_name = default_provider_name(&self.provider_id);
         // `self.setToolTip(data.error or "")` (`provider_card.py:125`); the card is `container`.
-        self.container.borrow().set_tool_tip(data.error.as_deref().unwrap_or(""));
+        self.container
+            .borrow()
+            .set_tool_tip(data.error.as_deref().unwrap_or(""));
         if !data.provider_name.is_empty() {
             set_label_text(&self.title, &data.provider_name);
         } else {
@@ -664,7 +669,10 @@ mod tests {
             let _setup = crate::ui::test_support::CardsOracleSetup::at_dpr(dpr);
             let card = ProviderCardWidget::new("claude");
             let hint = card.badge.borrow().size_hint();
-            assert_eq!(hint.height, expected, "badge height at DPR {dpr} (PySide6: {expected}); hint {hint:?}");
+            assert_eq!(
+                hint.height, expected,
+                "badge height at DPR {dpr} (PySide6: {expected}); hint {hint:?}"
+            );
         }
     }
 
@@ -678,7 +686,12 @@ mod tests {
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
             crate::refresh_controller::RefreshController::new(60),
         ));
-        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(config, refresh_ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(
+            config,
+            refresh_ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap();
 
         // 1. Horizontal mode
         hud.window
@@ -709,7 +722,9 @@ mod tests {
         let stack_geom_v = hud.stack.borrow().geometry();
         // PySide6: the extra height of a taller vertical window belongs to the header row (RC-16),
         // so the stack starts right under it (root spacing 6) instead of at a fixed y.
-        let header_geom = hud.window.root_widget().borrow().children()[0].borrow().geometry();
+        let header_geom = hud.window.root_widget().borrow().children()[0]
+            .borrow()
+            .geometry();
         assert_eq!(
             stack_geom_v.y,
             header_geom.y + header_geom.height + 6,
@@ -749,13 +764,21 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn test_horizontal_cards_fit_the_window_with_populated_badges() {
-        let mut cfg = crate::config::Config { layout_mode: "horizontal".to_string(), ..Default::default() };
+        let mut cfg = crate::config::Config {
+            layout_mode: "horizontal".to_string(),
+            ..Default::default()
+        };
         crate::config::ConfigManager::sanitize(&mut cfg);
         let config = std::sync::Arc::new(parking_lot::Mutex::new(cfg));
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
             crate::refresh_controller::RefreshController::new(60),
         ));
-        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(config, refresh_ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(
+            config,
+            refresh_ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap();
         hud.apply_cards_layout_mode("horizontal");
         for (pid, name, b1, b2) in [
             ("claude", "Claude Code", "Code: 100%", "Chat: 0%"),
@@ -808,7 +831,12 @@ mod tests {
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
             crate::refresh_controller::RefreshController::new(60),
         ));
-        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(config, refresh_ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(
+            config,
+            refresh_ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap();
 
         // 1. Initial state is vertical
         assert_eq!(hud.config.lock().layout_mode, "vertical");
@@ -879,7 +907,12 @@ mod tests {
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
             crate::refresh_controller::RefreshController::new(60),
         ));
-        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(config, refresh_ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(
+            config,
+            refresh_ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap();
         hud.window
             .set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 883, 574));
         hud.apply_cards_layout_mode("vertical");

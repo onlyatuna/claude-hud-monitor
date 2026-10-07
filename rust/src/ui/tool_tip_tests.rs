@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{Local, TimeZone, Utc};
 use parking_lot::Mutex;
-use qtrs_core::event_loop::EventLoop;
 use qtrs_core::event::MouseButtons;
+use qtrs_core::event_loop::EventLoop;
 use qtrs_gui::geometry::primitives::Point;
 use qtrs_widgets::tooltip::ToolTip;
 use qtrs_widgets::{EventTreeDispatcher, WidgetRef};
@@ -35,9 +35,13 @@ fn hud(ui_mode: &str) -> HUDWindow {
     cfg.table_height = 500;
     let cfg = Arc::new(Mutex::new(cfg));
     let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-    let hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+    let hud =
+        HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
     // A test window is never the active window; Qt shows tips for an inactive one only with this.
-    hud.window.root_widget().borrow().set_always_show_tool_tips(true);
+    hud.window
+        .root_widget()
+        .borrow()
+        .set_always_show_tool_tips(true);
     hud.window.root_widget().borrow().update_layout();
     // Parent links are made when the window paints; a hover only ever follows a paint.
     qtrs_widgets::widget::adopt_tree(&hud.window.root_widget());
@@ -59,7 +63,11 @@ fn healthy(id: &str) -> UsageMetrics {
 }
 
 fn offline(id: &str, error: &str) -> UsageMetrics {
-    UsageMetrics { provider_id: id.into(), error: Some(error.into()), ..Default::default() }
+    UsageMetrics {
+        provider_id: id.into(),
+        error: Some(error.into()),
+        ..Default::default()
+    }
 }
 
 fn stale(id: &str, error: &str) -> UsageMetrics {
@@ -109,7 +117,12 @@ fn real_cursor() -> Point {
 
 fn hover(d: &mut EventTreeDispatcher, hud: &HUDWindow, target: &WidgetRef) {
     let p = centre(target);
-    d.dispatch_mouse_move(&hud.window.root_widget(), p, real_cursor(), MouseButtons::NO_BUTTON);
+    d.dispatch_mouse_move(
+        &hud.window.root_widget(),
+        p,
+        real_cursor(),
+        MouseButtons::NO_BUTTON,
+    );
 }
 
 fn pump_until(el: &mut EventLoop, ms: u64, cond: impl Fn() -> bool) -> bool {
@@ -127,7 +140,10 @@ fn pump_until(el: &mut EventLoop, ms: u64, cond: impl Fn() -> bool) -> bool {
 /// `QToolTip::hideText` hides after Qt's 300 ms hide delay; waits for it.
 fn settle(el: &mut EventLoop) {
     ToolTip::hide_text();
-    assert!(pump_until(el, 1500, || !ToolTip::is_visible()), "tip never hid");
+    assert!(
+        pump_until(el, 1500, || !ToolTip::is_visible()),
+        "tip never hid"
+    );
 }
 
 /// Hovers `target` and returns the tip that appears (None if none does within 2.5 s).
@@ -154,28 +170,54 @@ fn table_tool_tips_follow_usage_table_py() {
 
     let c = &h.table.columns["claude"];
     // Offline: `for w in value_cells + [header]: setToolTip(error)` and `dial.setToolTip(error)`.
-    for (name, w) in [("header", &c.header), ("m1_reset", &c.m1_reset), ("m1_countdown", &c.m1_countdown),
-                      ("m2_val", &c.m2_val), ("m2_reset", &c.m2_reset), ("m2_countdown", &c.m2_countdown),
-                      ("dial", &c.dial)] {
+    for (name, w) in [
+        ("header", &c.header),
+        ("m1_reset", &c.m1_reset),
+        ("m1_countdown", &c.m1_countdown),
+        ("m2_val", &c.m2_val),
+        ("m2_reset", &c.m2_reset),
+        ("m2_countdown", &c.m2_countdown),
+        ("dial", &c.dial),
+    ] {
         assert_eq!(tip(w), "boom", "offline {name}");
     }
-    assert_eq!(tip(&c.name), "", "name has no tip of its own; the header's applies");
+    assert_eq!(
+        tip(&c.name),
+        "",
+        "name has no tip of its own; the header's applies"
+    );
 
     // Healthy: no error, no stale: the cells have no tip; the dial and the pill carry the run-out notes.
     let c = &h.table.columns["codex"];
-    for w in [&c.header, &c.m1_reset, &c.m1_countdown, &c.m2_reset, &c.m2_countdown] {
+    for w in [
+        &c.header,
+        &c.m1_reset,
+        &c.m1_countdown,
+        &c.m2_reset,
+        &c.m2_countdown,
+    ] {
         assert_eq!(tip(w), "");
     }
     assert_eq!(tip(&c.m2_val), WEEK_NOTE);
-    assert_eq!(tip(&c.dial), format!("5 小時：{WEEK_NOTE}\n1 週：{WEEK_NOTE}"));
+    assert_eq!(
+        tip(&c.dial),
+        format!("5 小時：{WEEK_NOTE}\n1 週：{WEEK_NOTE}")
+    );
 
     // Stale: header "舊資料 <stamp>\n<error>", pill and dial end with the error.
     let c = &h.table.columns["agy"];
-    let stamp = Utc.with_ymd_and_hms(2024, 3, 5, 14, 7, 9).unwrap().with_timezone(&Local).format("%m/%d %H:%M:%S");
+    let stamp = Utc
+        .with_ymd_and_hms(2024, 3, 5, 14, 7, 9)
+        .unwrap()
+        .with_timezone(&Local)
+        .format("%m/%d %H:%M:%S");
     assert_eq!(tip(&c.header), format!("舊資料 {stamp}\nlate"));
     assert_eq!(tip(&c.m1_reset), "late");
     assert_eq!(tip(&c.m2_val), format!("{WEEK_NOTE}\nlate"));
-    assert_eq!(tip(&c.dial), format!("5 小時：{WEEK_NOTE}\n1 週：{WEEK_NOTE}\nlate"));
+    assert_eq!(
+        tip(&c.dial),
+        format!("5 小時：{WEEK_NOTE}\n1 週：{WEEK_NOTE}\nlate")
+    );
 }
 
 #[test]
@@ -186,7 +228,10 @@ fn a_recovered_column_loses_its_error_tool_tips() {
     let c = &h.table.columns["claude"];
     assert_eq!(tip(&c.header), "");
     assert_eq!(tip(&c.m1_reset), "");
-    assert_eq!(tip(&c.dial), format!("5 小時：{WEEK_NOTE}\n1 週：{WEEK_NOTE}"));
+    assert_eq!(
+        tip(&c.dial),
+        format!("5 小時：{WEEK_NOTE}\n1 週：{WEEK_NOTE}")
+    );
 }
 
 #[test]
@@ -194,10 +239,20 @@ fn card_and_header_button_tool_tips_follow_python() {
     let mut h = hud("cards");
     assert_eq!(tip(&h.ghost_label), "滑鼠穿透中 (Alt+Shift+C 解除)");
     assert_eq!(tip(&h.layout_toggle_btn), "切換 橫向並排 / 直式堆疊 佈局");
-    h.cards.get_mut("claude").unwrap().update_metrics(&offline("claude", "card-boom"));
+    h.cards
+        .get_mut("claude")
+        .unwrap()
+        .update_metrics(&offline("claude", "card-boom"));
     assert_eq!(tip(&h.cards["claude"].widget()), "card-boom");
-    h.cards.get_mut("claude").unwrap().update_metrics(&healthy("claude"));
-    assert_eq!(tip(&h.cards["claude"].widget()), "", "`setToolTip(data.error or \"\")` clears it");
+    h.cards
+        .get_mut("claude")
+        .unwrap()
+        .update_metrics(&healthy("claude"));
+    assert_eq!(
+        tip(&h.cards["claude"].widget()),
+        "",
+        "`setToolTip(data.error or \"\")` clears it"
+    );
 }
 
 #[test]
@@ -212,13 +267,19 @@ fn hovering_a_table_widget_shows_its_tool_tip_after_the_wake_up_delay() {
     let mut d = EventTreeDispatcher::new();
     settle(&mut el);
     hover(&mut d, &h, &claude.dial);
-    assert!(!pump_until(&mut el, 300, ToolTip::is_visible), "shown before the 700 ms wake-up");
+    assert!(
+        !pump_until(&mut el, 300, ToolTip::is_visible),
+        "shown before the 700 ms wake-up"
+    );
     assert!(pump_until(&mut el, 2500, ToolTip::is_visible));
     assert_eq!(ToolTip::text(), "boom");
     d.handle_mouse_leave();
     settle(&mut el);
 
-    assert_eq!(tip_after_hover(&mut el, &h, &claude.m2_val).as_deref(), Some("boom"));
+    assert_eq!(
+        tip_after_hover(&mut el, &h, &claude.m2_val).as_deref(),
+        Some("boom")
+    );
     // The run-out note of a healthy column's dial.
     assert_eq!(
         tip_after_hover(&mut el, &h, &codex.dial).as_deref(),
@@ -234,14 +295,26 @@ fn a_child_without_a_tip_falls_back_to_its_parents() {
     let mut h = hud("table");
     h.table.update_metrics(&offline("claude", "boom"));
     // `name` sits in a child widget of `header` and has no tip: the tip bubbles up to the header.
-    assert_eq!(tip_after_hover(&mut el, &h, &h.table.columns["claude"].name).as_deref(), Some("boom"));
+    assert_eq!(
+        tip_after_hover(&mut el, &h, &h.table.columns["claude"].name).as_deref(),
+        Some("boom")
+    );
 
     let mut h = hud("cards");
-    h.cards.get_mut("claude").unwrap().update_metrics(&offline("claude", "card-boom"));
+    h.cards
+        .get_mut("claude")
+        .unwrap()
+        .update_metrics(&offline("claude", "card-boom"));
     let card = &h.cards["claude"];
     // The Python card is one widget with the tip; its title and value labels have none.
-    assert_eq!(tip_after_hover(&mut el, &h, &card.title).as_deref(), Some("card-boom"));
-    assert_eq!(tip_after_hover(&mut el, &h, &card.m1_val).as_deref(), Some("card-boom"));
+    assert_eq!(
+        tip_after_hover(&mut el, &h, &card.title).as_deref(),
+        Some("card-boom")
+    );
+    assert_eq!(
+        tip_after_hover(&mut el, &h, &card.m1_val).as_deref(),
+        Some("card-boom")
+    );
 }
 
 #[test]
@@ -272,14 +345,23 @@ fn leaving_before_the_wake_up_shows_no_tip_and_a_click_hides_it() {
     hover(&mut d, &h, &dial);
     pump_until(&mut el, 300, || false);
     d.handle_mouse_leave();
-    assert!(!pump_until(&mut el, 1200, ToolTip::is_visible), "a tip appeared after the cursor left");
+    assert!(
+        !pump_until(&mut el, 1200, ToolTip::is_visible),
+        "a tip appeared after the cursor left"
+    );
 
     hover(&mut d, &h, &dial);
     assert!(pump_until(&mut el, 2500, ToolTip::is_visible));
     let p = centre(&dial);
     d.dispatch_event(
         &h.window.root_widget(),
-        &mut qtrs_core::event::Event::new_spontaneous(qtrs_core::event::EventKind::MouseButtonPress { x: p.x, y: p.y, button: 1 }),
+        &mut qtrs_core::event::Event::new_spontaneous(
+            qtrs_core::event::EventKind::MouseButtonPress {
+                x: p.x,
+                y: p.y,
+                button: 1,
+            },
+        ),
     );
     assert!(!ToolTip::is_visible(), "a click hides the tip at once");
 }

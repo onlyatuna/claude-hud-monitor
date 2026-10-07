@@ -257,9 +257,21 @@ fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
     let rgba = |r: u8, g: u8, b: u8, a: u8| Color::from_rgba8(r, g, b, a);
     if table {
         let (background, border, text, hover, disabled) = if dark {
-            (rgba(40, 40, 46, 247), rgba(255, 255, 255, 31), rgba(242, 242, 247, 255), rgba(255, 255, 255, 26), rgba(235, 235, 245, 82))
+            (
+                rgba(40, 40, 46, 247),
+                rgba(255, 255, 255, 31),
+                rgba(242, 242, 247, 255),
+                rgba(255, 255, 255, 26),
+                rgba(235, 235, 245, 82),
+            )
         } else {
-            (rgba(250, 250, 252, 247), rgba(40, 40, 50, 36), rgba(31, 31, 36, 255), rgba(0, 0, 0, 18), rgba(40, 40, 50, 87))
+            (
+                rgba(250, 250, 252, 247),
+                rgba(40, 40, 50, 36),
+                rgba(31, 31, 36, 255),
+                rgba(0, 0, 0, 18),
+                rgba(40, 40, 50, 87),
+            )
         };
         qtrs_widgets::menu::MenuStyle {
             font: Font::new(family, 12.0),
@@ -278,9 +290,23 @@ fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
         }
     } else {
         let (background, border, text, hover, hover_text, separator) = if dark {
-            (rgba(22, 25, 32, 255), rgba(255, 255, 255, 46), rgba(226, 232, 240, 255), rgba(39, 47, 61, 255), rgba(56, 189, 248, 255), rgba(255, 255, 255, 31))
+            (
+                rgba(22, 25, 32, 255),
+                rgba(255, 255, 255, 46),
+                rgba(226, 232, 240, 255),
+                rgba(39, 47, 61, 255),
+                rgba(56, 189, 248, 255),
+                rgba(255, 255, 255, 31),
+            )
         } else {
-            (rgba(248, 250, 252, 255), rgba(15, 23, 42, 46), rgba(23, 32, 51, 255), rgba(226, 232, 240, 255), rgba(3, 105, 161, 255), rgba(15, 23, 42, 31))
+            (
+                rgba(248, 250, 252, 255),
+                rgba(15, 23, 42, 46),
+                rgba(23, 32, 51, 255),
+                rgba(226, 232, 240, 255),
+                rgba(3, 105, 161, 255),
+                rgba(15, 23, 42, 31),
+            )
         };
         qtrs_widgets::menu::MenuStyle {
             font: Font::new(family, 11.0),
@@ -817,9 +843,17 @@ mod tests {
         let mut menu = build_hud_context_menu(&Config::default());
         menu.set_visible(true);
         let size = menu.size_hint();
-        menu.set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, size.width, size.height));
+        menu.set_geometry(qtrs_gui::geometry::primitives::Rect::new(
+            0,
+            0,
+            size.width,
+            size.height,
+        ));
 
-        let (w, h) = ((size.width as f32 * 1.25).ceil() as u32, (size.height as f32 * 1.25).ceil() as u32);
+        let (w, h) = (
+            (size.width as f32 * 1.25).ceil() as u32,
+            (size.height as f32 * 1.25).ceil() as u32,
+        );
         let mut render = |offset: i32| {
             let mut pm = Pixmap::with_dpr(w + 16, h, 1.25).unwrap();
             pm.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);

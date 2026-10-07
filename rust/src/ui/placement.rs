@@ -25,7 +25,10 @@ fn qt_bottom(r: Rect) -> i64 {
 
 /// `QRect::center()`: integer division truncating toward zero, like C++.
 fn qt_center(r: Rect) -> (i64, i64) {
-    ((r.x as i64 + qt_right(r)) / 2, (r.y as i64 + qt_bottom(r)) / 2)
+    (
+        (r.x as i64 + qt_right(r)) / 2,
+        (r.y as i64 + qt_bottom(r)) / 2,
+    )
 }
 
 /// `QRect::contains(QPoint)` (inclusive on all four edges).
@@ -177,7 +180,10 @@ mod tests {
     /// `key=value` field of an oracle line.
     fn field<'a>(line: &'a str, key: &str) -> &'a str {
         let pat = format!("{key}=");
-        let start = line.find(&pat).unwrap_or_else(|| panic!("no {key} in {line}")) + pat.len();
+        let start = line
+            .find(&pat)
+            .unwrap_or_else(|| panic!("no {key} in {line}"))
+            + pat.len();
         line[start..].split(' ').next().unwrap()
     }
 
@@ -214,7 +220,10 @@ mod tests {
             moved += (got != (geom.x, geom.y)) as usize;
         }
         assert!(n > 1000, "oracle has {n} E cases");
-        assert!(moved > 300, "only {moved} of {n} cases move the window: the oracle is too tame");
+        assert!(
+            moved > 300,
+            "only {moved} of {n} cases move the window: the oracle is too tame"
+        );
     }
 
     #[test]
@@ -227,7 +236,13 @@ mod tests {
                 s => Some(pair(s)),
             };
             let (w, h) = pair(field(line, "size"));
-            let got = restore_or_default_position(saved, w, h, &screens, pick(&screens, field(line, "primary")));
+            let got = restore_or_default_position(
+                saved,
+                w,
+                h,
+                &screens,
+                pick(&screens, field(line, "primary")),
+            );
             assert_eq!(pair(expected(line)), got, "{line}");
             n += 1;
             match saved {
@@ -236,7 +251,10 @@ mod tests {
             }
         }
         assert!(n > 400, "oracle has {n} R cases");
-        assert!(kept > 50 && defaulted > 50, "kept {kept}, defaulted {defaulted}: oracle one-sided");
+        assert!(
+            kept > 50 && defaulted > 50,
+            "kept {kept}, defaulted {defaulted}: oracle one-sided"
+        );
     }
 
     #[test]
@@ -244,7 +262,10 @@ mod tests {
         let mut n = 0;
         for line in ORACLE.lines().filter(|l| l.starts_with("X ")) {
             let primary = rect(field(line, "primary"));
-            let v: Vec<i32> = expected(line).split(',').map(|n| n.parse().unwrap()).collect();
+            let v: Vec<i32> = expected(line)
+                .split(',')
+                .map(|n| n.parse().unwrap())
+                .collect();
             assert_eq!((v[2], v[3]), reset_position(v[0], primary), "{line}");
             n += 1;
         }
@@ -261,7 +282,11 @@ mod tests {
         assert_eq!(qt_center(r), (959, 519), "(0 + 1919) / 2, not 1920 / 2");
         // Truncation toward zero for negative coordinates, as C++ `/`.
         assert_eq!(qt_center(Rect::new(-1920, 0, 1920, 100)), (-960, 49));
-        assert_eq!(qt_center(Rect::new(-3, 0, 2, 1)), (-2, 0), "(-3 + -2) / 2 = -2 (trunc), not -3");
+        assert_eq!(
+            qt_center(Rect::new(-3, 0, 2, 1)),
+            (-2, 0),
+            "(-3 + -2) / 2 = -2 (trunc), not -3"
+        );
     }
 
     #[test]
@@ -271,8 +296,14 @@ mod tests {
             full: vec![Rect::new(0, 0, 1000, 800), Rect::new(1000, 0, 1000, 800)],
             primary: Some(Rect::new(0, 0, 1000, 760)),
         };
-        assert_eq!(s.window_screen(Rect::new(900, 0, 400, 300)), Some(s.available[1]));
-        assert_eq!(s.window_screen(Rect::new(700, 0, 400, 300)), Some(s.available[0]));
+        assert_eq!(
+            s.window_screen(Rect::new(900, 0, 400, 300)),
+            Some(s.available[1])
+        );
+        assert_eq!(
+            s.window_screen(Rect::new(700, 0, 400, 300)),
+            Some(s.available[0])
+        );
         assert_eq!(s.window_screen(Rect::new(5000, 0, 400, 300)), None);
     }
 }

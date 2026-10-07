@@ -65,7 +65,10 @@ impl HotkeyRegistration {
                 "{} 穿透模式快捷鍵註冊失敗 (Win32 Error: {err})，可能已被其他程式佔用",
                 self.clickthrough_label
             ));
-            notices.push(format!("{} 已被占用，請使用系統匣操作", self.clickthrough_label));
+            notices.push(format!(
+                "{} 已被占用，請使用系統匣操作",
+                self.clickthrough_label
+            ));
         }
         notices
     }
@@ -171,7 +174,12 @@ pub fn parse_hotkey(s: &str) -> (u32, u32) {
 #[cfg(target_os = "windows")]
 pub fn format_hotkey(mods: u32, vk: u32) -> String {
     let mut s = String::new();
-    for (bit, name) in [(0x0002, "Ctrl"), (0x0001, "Alt"), (0x0004, "Shift"), (0x0008, "Win")] {
+    for (bit, name) in [
+        (0x0002, "Ctrl"),
+        (0x0001, "Alt"),
+        (0x0004, "Shift"),
+        (0x0008, "Win"),
+    ] {
         if mods & bit != 0 {
             s.push_str(name);
             s.push('+');
@@ -522,7 +530,11 @@ mod tests {
                 fn RegisterHotKey(hWnd: isize, id: i32, fsModifiers: u32, vk: u32) -> i32;
             }
             // Same flags as the manager uses: `MOD_NOREPEAT` is part of what conflicts.
-            assert_ne!(unsafe { RegisterHotKey(0, id, mods | 0x4000, vk) }, 0, "test setup: combo is free");
+            assert_ne!(
+                unsafe { RegisterHotKey(0, id, mods | 0x4000, vk) },
+                0,
+                "test setup: combo is free"
+            );
             Squatter(id)
         }
     }
@@ -551,11 +563,22 @@ mod tests {
     fn start_reports_a_taken_toggle_hotkey_and_keeps_the_other() {
         // Toggle = Ctrl+Alt+Shift+F22 is taken; click-through = Ctrl+Alt+F22 is free.
         let _squat = Squatter::new(1, MOD_CONTROL | MOD_ALT | MOD_SHIFT, VK_F22);
-        let hk = HotkeyManager::start("Ctrl+Alt+Shift+F22").expect("start still returns the manager");
+        let hk =
+            HotkeyManager::start("Ctrl+Alt+Shift+F22").expect("start still returns the manager");
         let r = hk.registration();
-        assert_eq!(r.toggle, HotkeyStatus::Failed(ERROR_HOTKEY_ALREADY_REGISTERED));
-        assert_eq!(r.clickthrough, HotkeyStatus::Registered, "an independent hotkey is not given up");
-        assert!(click_through_startup_allowed(Some(r)), "the click-through way out still exists");
+        assert_eq!(
+            r.toggle,
+            HotkeyStatus::Failed(ERROR_HOTKEY_ALREADY_REGISTERED)
+        );
+        assert_eq!(
+            r.clickthrough,
+            HotkeyStatus::Registered,
+            "an independent hotkey is not given up"
+        );
+        assert!(
+            click_through_startup_allowed(Some(r)),
+            "the click-through way out still exists"
+        );
         let notices = r.failure_notices();
         assert_eq!(notices.len(), 2);
         assert_eq!(
@@ -571,7 +594,10 @@ mod tests {
         let hk = HotkeyManager::start("Ctrl+Alt+F21").expect("start");
         let r = hk.registration();
         assert_eq!(r.toggle, HotkeyStatus::Registered);
-        assert_eq!(r.clickthrough, HotkeyStatus::Failed(ERROR_HOTKEY_ALREADY_REGISTERED));
+        assert_eq!(
+            r.clickthrough,
+            HotkeyStatus::Failed(ERROR_HOTKEY_ALREADY_REGISTERED)
+        );
         assert!(!r.clickthrough_registered());
         assert!(
             !click_through_startup_allowed(Some(r)),
@@ -611,17 +637,32 @@ mod tests {
             clickthrough: ct,
             clickthrough_label: String::new(),
         };
-        assert!(click_through_startup_allowed(Some(&reg(HotkeyStatus::Registered))));
-        assert!(!click_through_startup_allowed(Some(&reg(HotkeyStatus::Failed(1409)))));
-        assert!(!click_through_startup_allowed(Some(&reg(HotkeyStatus::Unsupported))));
-        assert!(!click_through_startup_allowed(None), "hotkeys disabled or not started");
+        assert!(click_through_startup_allowed(Some(&reg(
+            HotkeyStatus::Registered
+        ))));
+        assert!(!click_through_startup_allowed(Some(&reg(
+            HotkeyStatus::Failed(1409)
+        ))));
+        assert!(!click_through_startup_allowed(Some(&reg(
+            HotkeyStatus::Unsupported
+        ))));
+        assert!(
+            !click_through_startup_allowed(None),
+            "hotkeys disabled or not started"
+        );
     }
 
     #[test]
     fn hotkey_labels_name_modifiers_then_key() {
         assert_eq!(format_hotkey(MOD_ALT, b'C' as u32), "Alt+C");
-        assert_eq!(format_hotkey(MOD_ALT | MOD_SHIFT, b'C' as u32), "Alt+Shift+C");
-        assert_eq!(format_hotkey(MOD_CONTROL | MOD_SHIFT | MOD_ALT, 0x70 + 11), "Ctrl+Alt+Shift+F12");
+        assert_eq!(
+            format_hotkey(MOD_ALT | MOD_SHIFT, b'C' as u32),
+            "Alt+Shift+C"
+        );
+        assert_eq!(
+            format_hotkey(MOD_CONTROL | MOD_SHIFT | MOD_ALT, 0x70 + 11),
+            "Ctrl+Alt+Shift+F12"
+        );
         assert_eq!(format_hotkey(0, 0x20), "Space");
     }
 }

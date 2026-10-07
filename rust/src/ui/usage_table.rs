@@ -39,7 +39,12 @@ fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
 
 /// Python `setToolTip`: `"\n".join(s for s in parts if s)`.
 fn join_tip(parts: &[&str]) -> String {
-    parts.iter().copied().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n")
+    parts
+        .iter()
+        .copied()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
@@ -250,9 +255,13 @@ impl Widget for UsageDial {
                     if pct > mark {
                         let mark_deg = Self::deg(mark);
                         let span = Self::deg(pct) - mark_deg;
-                        if let Some(arc_path) = create_donut_arc_path(ring_rect, ring_width, 90.0 + mark_deg, span) {
+                        if let Some(arc_path) =
+                            create_donut_arc_path(ring_rect, ring_width, 90.0 + mark_deg, span)
+                        {
                             painter.set_pen(None);
-                            painter.set_brush(Brush::Hatched { color: self.theme.hatch });
+                            painter.set_brush(Brush::Hatched {
+                                color: self.theme.hatch,
+                            });
                             painter.fill_path(&arc_path);
                         }
                     }
@@ -300,7 +309,9 @@ impl Widget for UsageDial {
                         let span = Self::deg(pct) - mark_deg;
                         if let Some(pie_path) = create_pie_path(inner_rect, 90.0 + mark_deg, span) {
                             painter.set_pen(None);
-                            painter.set_brush(Brush::Hatched { color: self.theme.hatch });
+                            painter.set_brush(Brush::Hatched {
+                                color: self.theme.hatch,
+                            });
                             painter.fill_path(&pie_path);
                         }
                     }
@@ -340,7 +351,12 @@ impl Widget for UsageDial {
             0.0
         };
         let x = center.x - (num_w + suf_w) / 2.0;
-        let cy = center.y - if !self.caption.is_empty() { inner_side * 0.05 } else { 0.0 };
+        let cy = center.y
+            - if !self.caption.is_empty() {
+                inner_side * 0.05
+            } else {
+                0.0
+            };
         let cap_height = FontMetrics::cap_height(&num_font).unwrap_or(num_metrics.ascent * 0.7);
         let base_y = cy + cap_height / 2.0;
 
@@ -349,7 +365,9 @@ impl Widget for UsageDial {
             builder.push_path(&p);
         }
         if has_pct {
-            if let Some(p) = Painter::text_path(PointF::new(x + num_w + 1.0, base_y), "%", &suf_font) {
+            if let Some(p) =
+                Painter::text_path(PointF::new(x + num_w + 1.0, base_y), "%", &suf_font)
+            {
                 builder.push_path(&p);
             }
         }
@@ -378,7 +396,8 @@ impl Widget for UsageDial {
         if !self.caption.is_empty() {
             let cap_px = ((inner_side * 0.13) as i32).max(9);
             let cap_font = app_font(cap_px);
-            let cap_w = FontMetrics::from_font(&cap_font).horizontal_advance_exact(&self.caption, &cap_font);
+            let cap_w = FontMetrics::from_font(&cap_font)
+                .horizontal_advance_exact(&self.caption, &cap_font);
             let origin = PointF::new(center.x - cap_w / 2.0, center.y + inner_side * 0.32);
             if let Some(path) = Painter::text_path(origin, &self.caption, &cap_font) {
                 painter.set_brush(Brush::NoBrush);
@@ -468,11 +487,7 @@ impl ProviderIconWidget {
                 // agy: Arch lifting off matching Python provider_icon
                 let mut pb = PathBuilder::new();
                 pb.move_to(s * 0.14, s * 0.86);
-                pb.cubic_to(
-                    s * 0.28, s * 0.10,
-                    s * 0.72, s * 0.10,
-                    s * 0.86, s * 0.86,
-                );
+                pb.cubic_to(s * 0.28, s * 0.10, s * 0.72, s * 0.10, s * 0.86, s * 0.86);
                 if let Some(path) = pb.finish() {
                     painter.stroke_path(&path);
                 }
@@ -482,7 +497,6 @@ impl ProviderIconWidget {
             }
         }
     }
-
 }
 
 impl QObject for ProviderIconWidget {
@@ -704,7 +718,12 @@ impl Widget for GlyphWidget {
                 painter.draw_pie(r, 90.0, -250.0);
             }
             "ring" => {
-                let inset = RectF::new(r.x + 1.0, r.y + 1.0, (r.width - 2.0).max(1.0), (r.height - 2.0).max(1.0));
+                let inset = RectF::new(
+                    r.x + 1.0,
+                    r.y + 1.0,
+                    (r.width - 2.0).max(1.0),
+                    (r.height - 2.0).max(1.0),
+                );
                 painter.set_brush(Brush::NoBrush);
                 painter.set_pen(Pen::new(self.theme.track, 2.2));
                 painter.draw_ellipse(inset);
@@ -724,7 +743,9 @@ impl Widget for GlyphWidget {
                 painter.set_pen(None);
                 painter.set_brush(Brush::Color(self.color));
                 painter.draw_rounded_rect(r, 2.0, 2.0);
-                painter.set_brush(Brush::Hatched { color: self.theme.hatch });
+                painter.set_brush(Brush::Hatched {
+                    color: self.theme.hatch,
+                });
                 painter.draw_rounded_rect(r, 2.0, 2.0);
             }
             _ => {}
@@ -992,7 +1013,12 @@ impl ProviderColumn {
     pub fn set_theme(&mut self, theme: Theme, scheme: &str) {
         self.theme = theme.clone();
         self.scheme = scheme.to_string();
-        if let Some(ic) = self.icon.borrow_mut().as_any_mut().downcast_mut::<ProviderIconWidget>() {
+        if let Some(ic) = self
+            .icon
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<ProviderIconWidget>()
+        {
             ic.set_color(theme.text);
         }
         if let Some(d) = self
@@ -1038,7 +1064,12 @@ impl ProviderColumn {
         }
 
         if is_offline {
-            if let Some(ic) = self.icon.borrow_mut().as_any_mut().downcast_mut::<ProviderIconWidget>() {
+            if let Some(ic) = self
+                .icon
+                .borrow_mut()
+                .as_any_mut()
+                .downcast_mut::<ProviderIconWidget>()
+            {
                 ic.set_color(self.theme.text3);
             }
             set_label_text(&self.badge, "OFFLINE");
@@ -1067,7 +1098,12 @@ impl ProviderColumn {
             return;
         }
 
-        if let Some(ic) = self.icon.borrow_mut().as_any_mut().downcast_mut::<ProviderIconWidget>() {
+        if let Some(ic) = self
+            .icon
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<ProviderIconWidget>()
+        {
             ic.set_color(self.theme.text);
         }
 
@@ -1084,7 +1120,10 @@ impl ProviderColumn {
 
         if data.stale {
             let stamp = match data.last_success {
-                Some(t) => t.with_timezone(&chrono::Local).format("%m/%d %H:%M:%S").to_string(),
+                Some(t) => t
+                    .with_timezone(&chrono::Local)
+                    .format("%m/%d %H:%M:%S")
+                    .to_string(),
                 None => "--".to_string(),
             };
             self.header
@@ -1159,10 +1198,22 @@ impl ProviderColumn {
             (Some(e), true) => e.as_str(),
             _ => "",
         };
-        self.m2_val.borrow().set_tool_tip(&join_tip(&[&tip2, stale_tip]));
-        let dial1 = if tip1.is_empty() { String::new() } else { format!("5 小時：{tip1}") };
-        let dial2 = if tip2.is_empty() { String::new() } else { format!("1 週：{tip2}") };
-        self.dial.borrow().set_tool_tip(&join_tip(&[&dial1, &dial2, stale_tip]));
+        self.m2_val
+            .borrow()
+            .set_tool_tip(&join_tip(&[&tip2, stale_tip]));
+        let dial1 = if tip1.is_empty() {
+            String::new()
+        } else {
+            format!("5 小時：{tip1}")
+        };
+        let dial2 = if tip2.is_empty() {
+            String::new()
+        } else {
+            format!("1 週：{tip2}")
+        };
+        self.dial
+            .borrow()
+            .set_tool_tip(&join_tip(&[&dial1, &dial2, stale_tip]));
     }
 }
 
@@ -1205,7 +1256,8 @@ impl UsageTable {
         grid.add_widget_with_span(sep1.clone(), 1, 0, 1, 4);
 
         // Row 2: Section title "5 小時" with 13px pie glyph
-        let (row2_w, row2_g, _) = make_glyph_row("pie", inner_c, "5 小時", &theme, 13.0, "SectionTitle");
+        let (row2_w, row2_g, _) =
+            make_glyph_row("pie", inner_c, "5 小時", &theme, 13.0, "SectionTitle");
         glyphs.push(row2_g);
         grid.add_widget(row2_w, 2, 0);
 
@@ -1240,7 +1292,8 @@ impl UsageTable {
         grid.add_widget_with_span(sep2.clone(), 6, 0, 1, 4);
 
         // Row 7: Section title "1 週" with 13px ring glyph
-        let (row7_w, row7_g, _) = make_glyph_row("ring", outer_c, "1 週", &theme, 13.0, "SectionTitle");
+        let (row7_w, row7_g, _) =
+            make_glyph_row("ring", outer_c, "1 週", &theme, 13.0, "SectionTitle");
         glyphs.push(row7_g);
         grid.add_widget(row7_w, 7, 0);
 
@@ -1267,9 +1320,9 @@ impl UsageTable {
         grid.set_row_stretch(5, 1);
 
         container.borrow_mut().set_layout(Box::new(grid));
-        container.borrow_mut().set_style_sheet(crate::ui::styles::get_table_stylesheet(
-            theme.is_dark,
-        ));
+        container
+            .borrow_mut()
+            .set_style_sheet(crate::ui::styles::get_table_stylesheet(theme.is_dark));
         qtrs_widgets::widget::adopt_tree(&container);
 
         Self {
@@ -1297,10 +1350,20 @@ impl UsageTable {
             .borrow_mut()
             .set_style_sheet(crate::ui::styles::get_table_stylesheet(theme.is_dark));
 
-        if let Some(s) = self.sep1.borrow_mut().as_any_mut().downcast_mut::<SeparatorWidget>() {
+        if let Some(s) = self
+            .sep1
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<SeparatorWidget>()
+        {
             s.set_color(theme.separator);
         }
-        if let Some(s) = self.sep2.borrow_mut().as_any_mut().downcast_mut::<SeparatorWidget>() {
+        if let Some(s) = self
+            .sep2
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<SeparatorWidget>()
+        {
             s.set_color(theme.separator);
         }
 
@@ -1317,7 +1380,6 @@ impl UsageTable {
                 gw.set_theme(theme.clone(), c);
             }
         }
-
     }
 
     pub fn update_metrics(&mut self, data: &UsageMetrics) {
@@ -1511,12 +1573,27 @@ mod tests {
     fn test_table_layout_contains_icons_separators_and_glyphs() {
         let table = UsageTable::new(Theme::dark(), "scale");
         assert_eq!(table.columns.len(), 3);
-        assert!(table.sep1.borrow().as_any().downcast_ref::<SeparatorWidget>().is_some());
-        assert!(table.sep2.borrow().as_any().downcast_ref::<SeparatorWidget>().is_some());
+        assert!(table
+            .sep1
+            .borrow()
+            .as_any()
+            .downcast_ref::<SeparatorWidget>()
+            .is_some());
+        assert!(table
+            .sep2
+            .borrow()
+            .as_any()
+            .downcast_ref::<SeparatorWidget>()
+            .is_some());
         assert_eq!(table.glyphs.len(), 6); // row 2, leg1, leg2, leg3, leg4, row 7
         for pid in PROVIDER_ORDER {
             let col = table.columns.get(pid).unwrap();
-            assert!(col.icon.borrow().as_any().downcast_ref::<ProviderIconWidget>().is_some());
+            assert!(col
+                .icon
+                .borrow()
+                .as_any()
+                .downcast_ref::<ProviderIconWidget>()
+                .is_some());
         }
     }
 
@@ -1524,7 +1601,9 @@ mod tests {
     /// their sizes from it and from the table's own sheet, so a sheet another test left in the
     /// process-wide slot would change every measurement.
     fn table_mode_table() -> UsageTable {
-        qtrs_widgets::application::Application::set_style_sheet(crate::ui::styles::get_hud_stylesheet(true));
+        qtrs_widgets::application::Application::set_style_sheet(
+            crate::ui::styles::get_hud_stylesheet(true),
+        );
         UsageTable::new(Theme::dark(), "scale")
     }
 
@@ -1641,14 +1720,20 @@ mod tests {
         let _guard = DevicePixelRatioGuard;
         qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
         let table = table_mode_table();
-        let cells = [("claude", "95 %  ▲1"), ("codex", "-- · SECONDARY"), ("agy", "100 %  ▲24")];
+        let cells = [
+            ("claude", "95 %  ▲1"),
+            ("codex", "-- · SECONDARY"),
+            ("agy", "100 %  ▲24"),
+        ];
         for (pid, pill) in cells {
             let c = table.columns.get(pid).unwrap();
             set_label_text(&c.m2_val, pill);
             set_label_text(&c.m2_reset, "週二 02:59");
         }
         let container = table.widget();
-        container.borrow_mut().set_geometry(Rect::new(0, 0, 426, 312));
+        container
+            .borrow_mut()
+            .set_geometry(Rect::new(0, 0, 426, 312));
         qtrs_widgets::LayoutScheduler::invalidate(&container);
         qtrs_widgets::LayoutScheduler::activate_pending();
 

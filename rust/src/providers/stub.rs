@@ -35,13 +35,22 @@ impl Provider for StubProvider {
 }
 
 /// One stub per id in `PROVIDER_IDS`, plus a receiver that gets the id each time a stub is fetched.
-pub fn stub_providers_with_receiver() -> (HashMap<String, Arc<dyn Provider + Send + Sync>>, Receiver<String>) {
+pub fn stub_providers_with_receiver() -> (
+    HashMap<String, Arc<dyn Provider + Send + Sync>>,
+    Receiver<String>,
+) {
     let (tx, rx) = channel();
     let map = super::PROVIDER_IDS
         .iter()
         .map(|id| {
-            let stub = StubProvider { id: (*id).to_owned(), fetched: Mutex::new(tx.clone()) };
-            ((*id).to_owned(), Arc::new(stub) as Arc<dyn Provider + Send + Sync>)
+            let stub = StubProvider {
+                id: (*id).to_owned(),
+                fetched: Mutex::new(tx.clone()),
+            };
+            (
+                (*id).to_owned(),
+                Arc::new(stub) as Arc<dyn Provider + Send + Sync>,
+            )
         })
         .collect();
     (map, rx)

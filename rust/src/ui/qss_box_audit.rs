@@ -13,12 +13,27 @@ fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
 }
 
 pub(crate) fn dump(cases: &Value) -> Value {
-    let sheet: &'static str = Box::leak(cases["sheet"].as_str().unwrap().to_string().into_boxed_str());
+    let sheet: &'static str = Box::leak(
+        cases["sheet"]
+            .as_str()
+            .unwrap()
+            .to_string()
+            .into_boxed_str(),
+    );
     qtrs_widgets::application::Application::set_style_sheet(sheet);
     let mut out = Map::new();
     for c in cases["cases"].as_array().unwrap() {
-        let (name, typ, text) = (c[0].as_str().unwrap(), c[1].as_str().unwrap(), c[2].as_str().unwrap());
-        let vertical = c.as_array().unwrap().iter().skip(3).any(|o| o == "vertical");
+        let (name, typ, text) = (
+            c[0].as_str().unwrap(),
+            c[1].as_str().unwrap(),
+            c[2].as_str().unwrap(),
+        );
+        let vertical = c
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(3)
+            .any(|o| o == "vertical");
         let w = match typ {
             "QPushButton" => make_widget(Button::new(text)),
             "QLabel" => make_widget(Label::new(text)),
@@ -48,10 +63,13 @@ pub(crate) fn dump(cases: &Value) -> Value {
 #[ignore]
 fn dump_qss_box() {
     let path = std::env::var("BOX_OUT").expect("BOX_OUT");
-    let dpr: f32 = std::env::var("BOX_DPR").ok().and_then(|v| v.parse().ok()).unwrap_or(1.25);
+    let dpr: f32 = std::env::var("BOX_DPR")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.25);
     qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
-    let cases: Value =
-        serde_json::from_str(include_str!("../../tools/qss_box_audit/cases.json")).expect("cases.json");
+    let cases: Value = serde_json::from_str(include_str!("../../tools/qss_box_audit/cases.json"))
+        .expect("cases.json");
     let mut v = dump(&cases);
     v["meta"] = json!({"dpr": dpr});
     std::fs::write(path, serde_json::to_string_pretty(&v).unwrap()).unwrap();

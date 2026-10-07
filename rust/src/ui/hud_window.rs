@@ -113,7 +113,10 @@ fn set_status_dot_color(dot: &WidgetRef, color: qtrs_gui::tiny_skia::Color) {
 /// Background, border colour and corner radius of the window panel. In cards mode they come from
 /// the application style sheet's `QWidget#CentralWidget` rule, as in the Python HUD; the table
 /// mode (and a sheet without that rule) uses the theme.
-fn panel_look(cards_mode: bool, theme: &Theme) -> (qtrs_gui::tiny_skia::Color, qtrs_gui::tiny_skia::Color, f32) {
+fn panel_look(
+    cards_mode: bool,
+    theme: &Theme,
+) -> (qtrs_gui::tiny_skia::Color, qtrs_gui::tiny_skia::Color, f32) {
     if !cards_mode {
         // Table mode uses vibrant panel on top of Acrylic backdrop blur, matching Python (radius 12.0)
         return (theme.panel_bg_vibrant, theme.panel_border, 12.0);
@@ -194,20 +197,31 @@ pub struct HUDWindow {
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
 /// provider, so tests construct windows with `HUDWindow::with_providers` and stubs.
 #[cfg(not(test))]
-fn default_providers(config: &Arc<Mutex<Config>>) -> HashMap<String, Arc<dyn Provider + Send + Sync>> {
+fn default_providers(
+    config: &Arc<Mutex<Config>>,
+) -> HashMap<String, Arc<dyn Provider + Send + Sync>> {
     use crate::providers::{agy::AgyProvider, claude::ClaudeProvider, codex::CodexProvider};
     HashMap::from([
         (
             "claude".to_string(),
-            Arc::new(ClaudeProvider::with_config(Some(Arc::clone(config)))) as Arc<dyn Provider + Send + Sync>,
+            Arc::new(ClaudeProvider::with_config(Some(Arc::clone(config))))
+                as Arc<dyn Provider + Send + Sync>,
         ),
-        ("agy".to_string(), Arc::new(AgyProvider::new()) as Arc<dyn Provider + Send + Sync>),
-        ("codex".to_string(), Arc::new(CodexProvider::new()) as Arc<dyn Provider + Send + Sync>),
+        (
+            "agy".to_string(),
+            Arc::new(AgyProvider::new()) as Arc<dyn Provider + Send + Sync>,
+        ),
+        (
+            "codex".to_string(),
+            Arc::new(CodexProvider::new()) as Arc<dyn Provider + Send + Sync>,
+        ),
     ])
 }
 
 #[cfg(test)]
-fn default_providers(_config: &Arc<Mutex<Config>>) -> HashMap<String, Arc<dyn Provider + Send + Sync>> {
+fn default_providers(
+    _config: &Arc<Mutex<Config>>,
+) -> HashMap<String, Arc<dyn Provider + Send + Sync>> {
     panic!("HUDWindow::new would launch live provider fetches; tests must use HUDWindow::with_providers with providers::stub")
 }
 
@@ -310,13 +324,17 @@ impl HUDWindow {
         let title_label = make_widget(title);
 
         let ghost_label = make_widget(Label::new("👻"));
-        ghost_label.borrow().set_tool_tip("滑鼠穿透中 (Alt+Shift+C 解除)");
+        ghost_label
+            .borrow()
+            .set_tool_tip("滑鼠穿透中 (Alt+Shift+C 解除)");
         ghost_label.borrow_mut().set_visible(ct);
 
         let mut btn = Button::new("⇄");
         btn.set_object_name("LayoutToggleBtn");
         let layout_toggle_btn = make_widget(btn);
-        layout_toggle_btn.borrow().set_tool_tip("切換 橫向並排 / 直式堆疊 佈局");
+        layout_toggle_btn
+            .borrow()
+            .set_tool_tip("切換 橫向並排 / 直式堆疊 佈局");
         layout_toggle_btn.borrow().set_visible(ui_mode != "table");
 
         let mut time_lbl = Label::new("--:--:--");
@@ -356,7 +374,9 @@ impl HUDWindow {
 
         // Stacked container
         let stack: WidgetRef = make_widget(StackedWidget::new());
-        stack.borrow_mut().set_size_policy(Self::stack_policy(ui_mode == "table"));
+        stack
+            .borrow_mut()
+            .set_size_policy(Self::stack_policy(ui_mode == "table"));
         if let Some(s) = stack
             .borrow_mut()
             .as_any_mut()
@@ -502,7 +522,11 @@ impl HUDWindow {
     /// header, `hud_window.py:141-145,308`), while the table's grid makes its item expand and take
     /// all the extra height (measured: 462 px of a 500 px window). The stack stands in for both.
     fn stack_policy(table: bool) -> qtrs_widgets::QSizePolicy {
-        let p = if table { qtrs_widgets::Policy::Expanding } else { qtrs_widgets::Policy::Preferred };
+        let p = if table {
+            qtrs_widgets::Policy::Expanding
+        } else {
+            qtrs_widgets::Policy::Preferred
+        };
         qtrs_widgets::QSizePolicy::new(p, p)
     }
 
@@ -652,7 +676,9 @@ impl HUDWindow {
             {
                 s.set_current_index(1);
             }
-            self.stack.borrow_mut().set_size_policy(Self::stack_policy(true));
+            self.stack
+                .borrow_mut()
+                .set_size_policy(Self::stack_policy(true));
             set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
             self.layout_toggle_btn.borrow().set_visible(false);
             self.window
@@ -671,7 +697,9 @@ impl HUDWindow {
             {
                 s.set_current_index(0);
             }
-            self.stack.borrow_mut().set_size_policy(Self::stack_policy(false));
+            self.stack
+                .borrow_mut()
+                .set_size_policy(Self::stack_policy(false));
             set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
             self.layout_toggle_btn.borrow().set_visible(true);
             let cfg = self.config.lock();
@@ -786,7 +814,10 @@ impl HUDWindow {
         self.table.update_metrics(data);
         // Python `_on_data_fetched`: the header time is the time of the last fetch, and the
         // status dot is amber while any provider reports an error, green otherwise.
-        set_label_text(&self.time_label, Local::now().format("%H:%M:%S").to_string());
+        set_label_text(
+            &self.time_label,
+            Local::now().format("%H:%M:%S").to_string(),
+        );
         self.refresh_status_dot();
         self.cards_container.borrow().update_layout();
         self.window.render_and_present();
@@ -817,7 +848,10 @@ impl HUDWindow {
     }
 
     fn refresh_status_dot(&self) {
-        let any_error = self.cards.values().any(|card| card.current_metrics.error.is_some());
+        let any_error = self
+            .cards
+            .values()
+            .any(|card| card.current_metrics.error.is_some());
         set_status_dot_color(&self.status_dot, status_dot_color(self.busy, any_error));
     }
 
@@ -842,8 +876,13 @@ impl HUDWindow {
             self.wake_refresh_seq += 1;
             #[cfg(debug_assertions)]
             {
-                let ms = |t: SystemTime| t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
-                let gap_ms = previous.and_then(|p| now.duration_since(p).ok()).map_or(0, |d| d.as_millis());
+                let ms = |t: SystemTime| {
+                    t.duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, |d| d.as_millis())
+                };
+                let gap_ms = previous
+                    .and_then(|p| now.duration_since(p).ok())
+                    .map_or(0, |d| d.as_millis());
                 eprintln!(
                     "[rc18] wake refresh #{} previous_ms={} now_ms={} gap_ms={}",
                     self.wake_refresh_seq,
@@ -944,7 +983,9 @@ mod tests {
             .collect();
         let container = make_widget(qtrs_widgets::EmptyWidget::new());
         HUDWindow::apply_cards_layout_inner(&container, &cards, "horizontal");
-        container.borrow_mut().set_geometry(qtrs_gui::geometry::primitives::Rect::new(12, 32, 666, 103));
+        container
+            .borrow_mut()
+            .set_geometry(qtrs_gui::geometry::primitives::Rect::new(12, 32, 666, 103));
         container.borrow().update_layout();
 
         let widths: Vec<i32> = ["claude", "agy", "codex"]
@@ -972,17 +1013,30 @@ mod tests {
         cfg.vertical_height = 463;
         let cfg = Arc::new(Mutex::new(cfg));
         let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
         hud.window.root_widget().borrow().update_layout();
 
         let root = hud.window.root_widget();
         let header = root.borrow().children()[0].clone();
-        assert_eq!(header.borrow().geometry().height, 86, "header row height (PySide6: 86)");
-        assert_eq!(hud.title_label.borrow().geometry().height, 86, "title label height (PySide6: 86)");
+        assert_eq!(
+            header.borrow().geometry().height,
+            86,
+            "header row height (PySide6: 86)"
+        );
+        assert_eq!(
+            hud.title_label.borrow().geometry().height,
+            86,
+            "title label height (PySide6: 86)"
+        );
         // RC-19 / G12.8.g: `max-height: 18px` is the content box, so the button is 22 high (PySide6:
         // `layout_toggle_btn` [175, 40, 28, 22] in the window, i.e. y 32 inside the header at y 8).
         let toggle = hud.layout_toggle_btn.borrow().geometry();
-        assert_eq!((toggle.y, toggle.width, toggle.height), (32, 28, 22), "layout toggle button (PySide6: y 32, 28x22)");
+        assert_eq!(
+            (toggle.y, toggle.width, toggle.height),
+            (32, 28, 22),
+            "layout toggle button (PySide6: y 32, 28x22)"
+        );
         let heights: Vec<i32> = ["claude", "agy", "codex"]
             .iter()
             .map(|id| hud.cards[*id].widget().borrow().geometry().height)
@@ -992,7 +1046,11 @@ mod tests {
             .iter()
             .map(|id| hud.cards[*id].widget().borrow().geometry().y)
             .collect();
-        assert_eq!(ys, [0, 122, 244], "card y inside the container (PySide6: 100/222/344 in the window)");
+        assert_eq!(
+            ys,
+            [0, 122, 244],
+            "card y inside the container (PySide6: 100/222/344 in the window)"
+        );
     }
 
     /// RC-16 side check. PySide6 (DPR 1.25, table mode 400x500): the title label stays 14 high and
@@ -1010,11 +1068,20 @@ mod tests {
         cfg.table_height = 500;
         let cfg = Arc::new(Mutex::new(cfg));
         let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
         hud.window.root_widget().borrow().update_layout();
 
-        assert_eq!(hud.title_label.borrow().geometry().height, 14, "title label height (PySide6: 14)");
-        assert_eq!(hud.stack.borrow().geometry().height, 462, "table height (PySide6: 462)");
+        assert_eq!(
+            hud.title_label.borrow().geometry().height,
+            14,
+            "title label height (PySide6: 14)"
+        );
+        assert_eq!(
+            hud.stack.borrow().geometry().height,
+            462,
+            "table height (PySide6: 462)"
+        );
     }
 
     /// RC-16: the stack policy follows the page, so switching cards -> table -> cards keeps both
@@ -1035,16 +1102,29 @@ mod tests {
         cfg.table_height = 500;
         let cfg = Arc::new(Mutex::new(cfg));
         let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let mut hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let mut hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
 
         hud.apply_ui_mode("table");
         hud.window.root_widget().borrow().update_layout();
-        assert_eq!(hud.title_label.borrow().geometry().height, 14, "table mode title height (PySide6: 14)");
-        assert_eq!(hud.stack.borrow().geometry().height, 462, "table mode table height (PySide6: 462)");
+        assert_eq!(
+            hud.title_label.borrow().geometry().height,
+            14,
+            "table mode title height (PySide6: 14)"
+        );
+        assert_eq!(
+            hud.stack.borrow().geometry().height,
+            462,
+            "table mode table height (PySide6: 462)"
+        );
 
         hud.apply_ui_mode("cards");
         hud.window.root_widget().borrow().update_layout();
-        assert_eq!(hud.title_label.borrow().geometry().height, 86, "cards mode title height (PySide6: 86)");
+        assert_eq!(
+            hud.title_label.borrow().geometry().height,
+            86,
+            "cards mode title height (PySide6: 86)"
+        );
     }
 
     /// TI-01: a window built with injected providers fetches from exactly those providers — one
@@ -1055,10 +1135,15 @@ mod tests {
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
         let (providers, fetched) = crate::providers::stub::stub_providers_with_receiver();
 
-        let hud = HUDWindow::with_providers(cfg, refresh_ctrl, providers).expect("with_providers failed");
+        let hud =
+            HUDWindow::with_providers(cfg, refresh_ctrl, providers).expect("with_providers failed");
 
         let mut ids: Vec<String> = (0..crate::providers::PROVIDER_IDS.len())
-            .map(|_| fetched.recv_timeout(std::time::Duration::from_secs(10)).expect("stub was not fetched"))
+            .map(|_| {
+                fetched
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .expect("stub was not fetched")
+            })
             .collect();
         ids.sort();
         assert_eq!(ids, ["agy", "claude", "codex"]);
@@ -1074,11 +1159,17 @@ mod tests {
     #[test]
     fn tick_gap_is_false_for_the_first_tick_and_up_to_exactly_15_seconds() {
         let t0 = SystemTime::now();
-        assert!(!tick_gap_exceeded(None, t0), "first tick only records a timestamp");
+        assert!(
+            !tick_gap_exceeded(None, t0),
+            "first tick only records a timestamp"
+        );
         assert!(!tick_gap_exceeded(Some(t0), after(t0, 1.0)));
         assert!(!tick_gap_exceeded(Some(t0), after(t0, 10.0)));
         assert!(!tick_gap_exceeded(Some(t0), after(t0, 14.999)));
-        assert!(!tick_gap_exceeded(Some(t0), after(t0, 15.0)), "Python: gap > 15.0, so exactly 15 s is no wake-up");
+        assert!(
+            !tick_gap_exceeded(Some(t0), after(t0, 15.0)),
+            "Python: gap > 15.0, so exactly 15 s is no wake-up"
+        );
     }
 
     #[test]
@@ -1101,12 +1192,17 @@ mod tests {
         let hud = HUDWindow::with_providers(cfg, ctrl, providers).expect("with_providers failed");
         // Let the initial fetches finish and be collected, so later fetches are only refresh() ones.
         for _ in 0..crate::providers::PROVIDER_IDS.len() {
-            fetched.recv_timeout(Duration::from_secs(10)).expect("initial fetch");
+            fetched
+                .recv_timeout(Duration::from_secs(10))
+                .expect("initial fetch");
         }
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         while hud.refresh_ctrl.lock().is_busy() {
             hud.refresh_ctrl.lock().drain_results(&hud.providers);
-            assert!(std::time::Instant::now() < deadline, "initial fetches never completed");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "initial fetches never completed"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         (hud, fetched)
@@ -1131,15 +1227,27 @@ mod tests {
 
         hud.on_clock_tick(t0);
         hud.on_clock_tick(after(t0, 1.0));
-        assert_eq!(fetches_within(&fetched, 400), 0, "normal ticks must not refresh");
+        assert_eq!(
+            fetches_within(&fetched, 400),
+            0,
+            "normal ticks must not refresh"
+        );
 
         hud.on_clock_tick(after(t0, 17.0));
-        assert_eq!(fetches_within(&fetched, 800), providers, "one long gap = one refresh() = one fetch per provider");
+        assert_eq!(
+            fetches_within(&fetched, 800),
+            providers,
+            "one long gap = one refresh() = one fetch per provider"
+        );
 
         // previous timestamp was updated to t0+17: the next ordinary tick is not another wake-up
         hud.refresh_ctrl.lock().drain_results(&hud.providers);
         hud.on_clock_tick(after(t0, 18.0));
-        assert_eq!(fetches_within(&fetched, 400), 0, "the gap is measured from the previous tick, not from t0");
+        assert_eq!(
+            fetches_within(&fetched, 400),
+            0,
+            "the gap is measured from the previous tick, not from t0"
+        );
     }
 
     #[test]
@@ -1151,13 +1259,25 @@ mod tests {
         hud.on_clock_tick(t0);
         hud.on_clock_tick(after(t0, 1.0));
         hud.on_clock_tick(after(t0, 2.0));
-        assert_eq!(hud.wake_refresh_seq(), 0, "normal ticks leave the sequence alone");
+        assert_eq!(
+            hud.wake_refresh_seq(),
+            0,
+            "normal ticks leave the sequence alone"
+        );
 
         hud.on_clock_tick(after(t0, 19.0));
-        assert_eq!(hud.wake_refresh_seq(), 1, "a 17 s gap is exactly one refresh");
+        assert_eq!(
+            hud.wake_refresh_seq(),
+            1,
+            "a 17 s gap is exactly one refresh"
+        );
 
         hud.on_clock_tick(after(t0, 20.0));
-        assert_eq!(hud.wake_refresh_seq(), 1, "the next 1 s tick is not a second wake-up");
+        assert_eq!(
+            hud.wake_refresh_seq(),
+            1,
+            "the next 1 s tick is not a second wake-up"
+        );
 
         hud.on_clock_tick(after(t0, 20.0 + 15.0));
         assert_eq!(hud.wake_refresh_seq(), 1, "exactly 15 s is not a wake-up");
@@ -1170,7 +1290,12 @@ mod tests {
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
 
-        let hud = HUDWindow::with_providers(Arc::clone(&cfg), refresh_ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new failed");
+        let hud = HUDWindow::with_providers(
+            Arc::clone(&cfg),
+            refresh_ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .expect("HUDWindow::new failed");
 
         // Debouncer was in restoring mode during HUDWindow::new
         // It must have prevented any saves during init
@@ -1182,8 +1307,12 @@ mod tests {
     fn test_hud_window_close_flushes_pending_resize() {
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let mut hud =
-            HUDWindow::with_providers(Arc::clone(&cfg), refresh_ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new failed");
+        let mut hud = HUDWindow::with_providers(
+            Arc::clone(&cfg),
+            refresh_ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .expect("HUDWindow::new failed");
 
         // Simulate resize request
         hud.debouncer.request_save();
@@ -1198,7 +1327,12 @@ mod tests {
     fn test_hud_window_drop_triggers_shutdown_and_worker_join() {
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let hud = HUDWindow::with_providers(Arc::clone(&cfg), refresh_ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new failed");
+        let hud = HUDWindow::with_providers(
+            Arc::clone(&cfg),
+            refresh_ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .expect("HUDWindow::new failed");
         let debouncer = Arc::clone(&hud.debouncer);
 
         assert!(!debouncer.is_worker_joined());
@@ -1218,7 +1352,12 @@ mod tests {
 
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let mut hud = HUDWindow::with_providers(Arc::clone(&cfg), refresh_ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new failed");
+        let mut hud = HUDWindow::with_providers(
+            Arc::clone(&cfg),
+            refresh_ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .expect("HUDWindow::new failed");
 
         let ctx = WidgetStyleContext {
             type_name: "QLabel",
@@ -1244,6 +1383,9 @@ mod tests {
             assert_eq!(actual, expected, "title colour in {mode} mode");
             colours.push(expected);
         }
-        assert_ne!(colours[0], colours[1], "the two sheets must style the title differently");
+        assert_ne!(
+            colours[0], colours[1],
+            "the two sheets must style the title differently"
+        );
     }
 }

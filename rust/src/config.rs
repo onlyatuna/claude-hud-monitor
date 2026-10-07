@@ -201,7 +201,9 @@ impl ConfigManager {
     pub fn config_path() -> PathBuf {
         #[cfg(test)]
         {
-            std::env::temp_dir().join("ClaudeHUDMonitor-tests").join("config.json")
+            std::env::temp_dir()
+                .join("ClaudeHUDMonitor-tests")
+                .join("config.json")
         }
         #[cfg(not(test))]
         {
@@ -212,7 +214,9 @@ impl ConfigManager {
     #[cfg(not(test))]
     fn portable_config_path() -> Option<PathBuf> {
         let portable = std::env::current_exe().ok()?.parent()?.join("config.json");
-        let writable = fs::metadata(&portable).ok().is_some_and(|m| !m.permissions().readonly());
+        let writable = fs::metadata(&portable)
+            .ok()
+            .is_some_and(|m| !m.permissions().readonly());
         writable.then_some(portable)
     }
 

@@ -1,21 +1,21 @@
 // src/ui/mod.rs — Qt HUD UI module
 
-pub mod hud_window;
 #[cfg(test)]
 mod geometry_audit;
-#[cfg(test)]
-mod qss_box_audit;
-#[cfg(test)]
-pub(crate) mod test_support;
-pub mod placement;
-pub mod provider_card;
-pub mod styles;
-pub mod tray_icon;
-pub mod usage_table;
-#[cfg(all(test, windows))]
-mod tool_tip_tests;
 #[cfg(all(test, windows))]
 mod geometry_persist_tests;
+pub mod hud_window;
+pub mod placement;
+pub mod provider_card;
+#[cfg(test)]
+mod qss_box_audit;
+pub mod styles;
+#[cfg(test)]
+pub(crate) mod test_support;
+#[cfg(all(test, windows))]
+mod tool_tip_tests;
+pub mod tray_icon;
+pub mod usage_table;
 
 #[cfg(target_os = "windows")]
 pub fn enable_win32_dark_mode(hwnd: isize) {
@@ -97,10 +97,7 @@ pub fn enable_win32_dark_mode(hwnd: isize) {
 /// Sets a label's text colour the way the Python HUD does (`label.setStyleSheet("color: …;")`):
 /// a widget-local style sheet, which outranks the application's `QLabel { color }` rule.
 /// `Label::set_color` is the palette colour, which that rule overrides.
-pub(crate) fn set_label_color(
-    w: &qtrs_widgets::WidgetRef,
-    color: qtrs_gui::tiny_skia::Color,
-) {
+pub(crate) fn set_label_color(w: &qtrs_widgets::WidgetRef, color: qtrs_gui::tiny_skia::Color) {
     if let Some(lbl) = w
         .borrow_mut()
         .as_any_mut()
