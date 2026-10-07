@@ -253,6 +253,7 @@ pub fn is_interactive_resize(hwnd: HWND) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(windows)]
 fn set_interactive_resize_flag(hwnd: HWND, active: bool) {
     let _ = INTERACTIVE_RESIZE_HWNDS.try_with(|s| {
         let mut s = s.borrow_mut();

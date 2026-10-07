@@ -26,6 +26,7 @@ pub enum HotkeyStatus {
     Registered,
     /// The system refused the registration. The payload is `GetLastError()` taken right after
     /// `RegisterHotKey` (1409 = `ERROR_HOTKEY_ALREADY_REGISTERED`).
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Failed(u32),
     /// This platform has no global-hotkey backend.
     #[cfg_attr(target_os = "windows", allow(dead_code))]
