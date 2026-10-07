@@ -88,9 +88,28 @@ fn centre(w: &WidgetRef) -> Point {
     Point::new(x, y)
 }
 
+/// Where the OS cursor is: the global position of a real hover. A tip is placed beside the cursor
+/// (`place_tip`), so it never ends up under it. A made-up position can put the tip under the real
+/// cursor of the machine running the test (a CI desktop parks it mid-screen); the tip window then
+/// gets real mouse enter/move/leave messages, which go through the same tool tip controller and
+/// cancel the wake-up timer of the next hover.
+fn real_cursor() -> Point {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::POINT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+        let mut pt = POINT { x: 0, y: 0 };
+        // SAFETY: a valid out pointer.
+        if unsafe { GetCursorPos(&mut pt) } != 0 {
+            return Point::new(pt.x, pt.y);
+        }
+    }
+    Point::new(300, 300)
+}
+
 fn hover(d: &mut EventTreeDispatcher, hud: &HUDWindow, target: &WidgetRef) {
     let p = centre(target);
-    d.dispatch_mouse_move(&hud.window.root_widget(), p, Point::new(300 + p.x, 300 + p.y), MouseButtons::NO_BUTTON);
+    d.dispatch_mouse_move(&hud.window.root_widget(), p, real_cursor(), MouseButtons::NO_BUTTON);
 }
 
 fn pump_until(el: &mut EventLoop, ms: u64, cond: impl Fn() -> bool) -> bool {
