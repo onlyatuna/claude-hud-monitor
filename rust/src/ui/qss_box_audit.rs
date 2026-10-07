@@ -18,11 +18,18 @@ pub(crate) fn dump(cases: &Value) -> Value {
     let mut out = Map::new();
     for c in cases["cases"].as_array().unwrap() {
         let (name, typ, text) = (c[0].as_str().unwrap(), c[1].as_str().unwrap(), c[2].as_str().unwrap());
+        let vertical = c.as_array().unwrap().iter().skip(3).any(|o| o == "vertical");
         let w = match typ {
             "QPushButton" => make_widget(Button::new(text)),
             "QLabel" => make_widget(Label::new(text)),
             "QFrame" => make_widget(Frame::new()),
-            "QProgressBar" => make_widget(ProgressBar::new()),
+            "QProgressBar" => {
+                let mut p = ProgressBar::new();
+                if vertical {
+                    p.set_orientation(qtrs_widgets::scroll::Orientation::Vertical);
+                }
+                make_widget(p)
+            }
             t => panic!("unknown type {t}"),
         };
         w.borrow_mut().set_object_name(name);

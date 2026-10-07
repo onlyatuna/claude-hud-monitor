@@ -1170,7 +1170,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.8.k | P2, RAN | **qtrs** | Button 的原生路徑判準與原生邊框：QSS 只有 `min-width`（無 padding／border）時 Python `QPushButton` 走原生 hint（81×24 @1.25、98×28 @1.0）、`minimumSize` 含原生邊框（22 vs 18）；qtrs 判準 `padding/border/min_width/max_height` 皆無才走原生，且原生路徑的 hint 是 18×15。HUD 沒有這種按鈕（`LayoutToggleBtn` 有 padding 與 border） |
 | G12.8.l | P2, RAN | **qtrs** | `Frame` 無內容時 `size_hint`：Python `QFrame.sizeHint()` 為 (-1,-1)，qtrs 為 100×30（`frame.rs`，`None => Size::new(100, 30)`），`minimumSizeHint` 0×0。HUD 的分隔線 `min == max` 所以不受影響 |
 | G12.8.m | P2, RAN | **qtrs** | `Button::minimum_size_hint`：Qt `QPushButton::minimumSizeHint() = sizeHint()`（B1 28×18）；qtrs 回傳 `minimum_size()`（28×0 或 18×0），layout 的最小值判斷（`qSmartMinSize`）會少 18 px |
-| G12.8.n | P2, RAN | **qtrs** | `Button::size_hint` 以**原始** `max-*`／`min-*` 夾 hint（`button.rs`，`h.min(max_h)`）：Qt 的 hint 不夾（夾的是 `QWidgetItem`，用 box 後的 min/max）。這個夾制目前遮住文字高度 1 px 的差（B1：qtrs 文字高 15、Python 14，hint 19 vs 18；與 G12.8.j 同族）；移除夾制會讓 HUD 標頭多 1 px，所以未動 |
+| G12.8.n | P2, RAN | `Button::size_hint` 以**原始** `max-*`／`min-*` 夾 hint（`button.rs`，`h.min(max_h)`）。Qt **也**夾 hint，但在**內容盒**：`QStyleSheetStyle::sizeFromContents` 開頭 `rule.adjustSize(csz)`（`qstylesheetstyle.cpp:560-571`，先夾 max 再 expand 到 min），之後才 `boxSize`。qtrs 夾的是含 padding／border 的總尺寸，目前剛好遮住文字高度 1 px 的差（B1：qtrs 文字高 15、Python 14，不夾會是 19 vs 18；與 G12.8.j 同族）。（初稿寫成「Qt 的 hint 不夾」是錯的，已更正。） |
+| G12.8.o | P2, RAN | **qtrs** | `ProgressBar::minimum_size`／`maximum_size` 在垂直方向把 min／max 轉置（`progress_bar.rs`，`Orientation::Vertical => Size::new(h, w)`）；QSS 的 `min-width` 是實體寬度，Qt 不轉置。PySide6 垂直 bar（`min-width: 5px; max-width: 5px`）→ min [5,0]、max [5,∞]；qtrs [0,5]、[∞,5]。RC-19 的測試沒有涵蓋垂直方向，這是它的缺口 |
+| G12.8.p | P2, RAN | **qtrs** | QSS `width`／`height`（內容尺寸，`contentsSize`）被解析成 `min_* = max_* = 值`（`style/stylesheet.rs`），Qt 兩者是不同東西：`width`／`height` 只影響 `sizeFromContents`（`rule.size()`），不設 `minimumSize`／`maximumSize`。PySide6 `QProgressBar { width:120px; height:9px }` → min [0,0]、max [∞,∞]、hint 120×9；qtrs min／max 都是 120×9 |
 
 - **修復歸屬**：a–f 屬 HUD（`rust/src`）；g–j 是 qtrs 層，各自是獨立 root cause，不併入 RC-14／15／16，也不得用 HUD 端的數值補償（Contract 規則 7）。
 - **本節不代表任何項目已修復。**
@@ -1192,7 +1194,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 337 項：D 12、P0 34、P1 147、P2 139、test gap 5（計數含已修復項；標籤含「已修復」者共 43 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.g、G12.8.h）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 339 項：D 12、P0 34、P1 147、P2 141、test gap 5（計數含已修復項；標籤含「已修復」者共 43 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.g、G12.8.h）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1533,6 +1535,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.8.l | P2, RAN | `Frame` 無內容時 `size_hint`：Python `QFrame.sizeHint()` 為 (-1,-1)，qtrs 為 100×30（`frame.rs`，`None => Size::new(100, 30)`），`minimumSizeHint` 0×0。HUD 的分隔線 `min == max` 所以不受影響 |
 | G12.8.m | P2, RAN | `Button::minimum_size_hint`：Qt `QPushButton::minimumSizeHint() = sizeHint()`（B1 28×18）；qtrs 回傳 `minimum_size()`（28×0 或 18×0），layout 的最小值判斷（`qSmartMinSize`）會少 18 px |
 | G12.8.n | P2, RAN | `Button::size_hint` 以**原始** `max-*`／`min-*` 夾 hint（`button.rs`，`h.min(max_h)`）：Qt 的 hint 不夾（夾的是 `QWidgetItem`，用 box 後的 min/max）。這個夾制目前遮住文字高度 1 px 的差（B1：qtrs 文字高 15、Python 14，hint 19 vs 18；與 G12.8.j 同族）；移除夾制會讓 HUD 標頭多 1 px，所以未動 |
+| G12.8.o | P2, RAN | `ProgressBar::minimum_size`／`maximum_size` 在垂直方向把 min／max 轉置（`progress_bar.rs`，`Orientation::Vertical => Size::new(h, w)`）；QSS 的 `min-width` 是實體寬度，Qt 不轉置。PySide6 垂直 bar（`min-width: 5px; max-width: 5px`）→ min [5,0]、max [5,∞]；qtrs [0,5]、[∞,5]。RC-19 的測試沒有涵蓋垂直方向，這是它的缺口 |
+| G12.8.p | P2, RAN | QSS `width`／`height`（內容尺寸，`contentsSize`）被解析成 `min_* = max_* = 值`（`style/stylesheet.rs`），Qt 兩者是不同東西：`width`／`height` 只影響 `sizeFromContents`（`rule.size()`），不設 `minimumSize`／`maximumSize`。PySide6 `QProgressBar { width:120px; height:9px }` → min [0,0]、max [∞,∞]、hint 120×9；qtrs min／max 都是 120×9 |
 
 ---
 
@@ -1846,6 +1850,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`progress_bar.rs:398-436` 固定 160 或 QSS 高度，`minimumSizeHint` 只看 QSS。
 - **Evidence**：`RAN`（Python 91×5／91×17；qtrs 160×5／0×5）。
 - **Required observable**：預設與樣式表下的 hint 與 Python 相同。
+- **Audit（已完成，未實作）**：`rust/tools/qss_box_audit/`（`cases.json` 的 P1–P13，PySide6 與 qtrs 在 DPR 1.25／1.0 比對）。**根因確認**，演算法為（`qprogressbar.cpp:396-418`、`qstylesheetstyle.cpp:5304-5320,5485-5490`）：`csz = (max(9, chunkWidth)*7 + advance('0')*4, fm.height()+8)`（垂直則轉置）→ `rule.adjustSize(csz)`（先夾 `max-*`、再 expand 到 `min-*`，皆為內容盒）→ `CT_ProgressBar`：有 `width`/`height` 內容尺寸則 `rule.size(sz)`，否則 `rule.boxSize(sz)`；`minimumSizeHint = (hint.width, fm.height()+2)`（垂直為 `(fm.height()+2, hint.height)`）。`chunkWidth` 來自 `::chunk { width }`（`PM_ProgressBarChunkWidth`，預設 9）。已用 PySide6 驗證各項（均 DPR 無關，因為都用明確 `font-size`）：P4 12px→91×23；P5 20px→111×33；P10 Segoe UI 14px→95×27；P6 border1+padding(2,3)→99×29；P12 `::chunk{width:20px}`→168×23；P13 `::chunk{width:5px}`→91×23；P1／P2 min=max=5→91×5／97×11；垂直 P11→5×91。qtrs 現況：水平固定 160 寬，高度為 QSS 的 `max/min-height`（原始值）或 `max(ceil(height)+6, 18)`；`minimum_size_hint` = `minimum_size()`。13 項中 hint 不符 13／13（水平全部、垂直 1），minHint 不符 13／13。**不用 `width`/`height` 的案例（P1–P7、P10–P13）屬 RC-20；P8／P9 另屬 G12.8.p（RC-22 候選）；P11 的 min/max 另屬 G12.8.o。** 注意：qtrs 的 `ProgressBar` 沒有 QSS 字型（只有 `self.font`），實作需要先取得 QSS `font-size`／`font-family`（`Label::styled_font` 已有同類邏輯），且預設字型與 Qt 應用程式預設字型的對應屬「Application font」項，不在此處決定。HUD 影響：卡片 `m*_bar` 的 hint 寬 Python 91（DPR 1.25）／99（DPR 1.0，預設字型）對 qtrs 160，影響卡片 `sizeHint` 寬。
 - **Status**：**未修復，未核定**。**Phase**：4（qtrs 側）。
 
 #### RC-21 文字寬度 1 px 差（候選，根因未確認）
@@ -1853,6 +1858,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（`WEEKLY 7D` 59 vs 59.589→60；`AI AGENT HUD (3-IN-1)` 144 vs 144.107→145）。
 - **Open question**：是 Qt 整數 `horizontalAdvance` 的取整／hinting，還是 qtrs 量測路徑（`horizontal_advance_exact().ceil()`，`label.rs:226`）；未調查，不得先動 `ceil`。
 - **Status**：**未調查**。**Phase**：4（qtrs 側），須先有根因才成為 RC。
+
+#### RC-22 QSS `width`／`height` 內容尺寸被當作 min＝max（候選，未核定）
+- **Contract gaps**：G12.8.p。
+- **Qt behavior** `[QT-SRC qstylesheetstyle.cpp:2595-2612, 551-559]`：`width`／`height` 是 `contentsSize`，`setGeometry` 只有在有 `min-*`／`max-*` 宣告時才設 `minimumSize`／`maximumSize`；`hasContentsSize()` 影響 `sizeFromContents`（`rule.size()`）。
+- **qtrs root**：`style/stylesheet.rs` 把 `width`／`height` 直接寫成 `min_* = max_* = 值`，沒有獨立欄位，因此 `min`／`max` 變成固定、hint 路徑也看不到「有內容尺寸」。
+- **Evidence**：`RAN`（P8、P9：PySide6 min [0,0]、max [∞,∞]；qtrs min／max 為 120×9／0×15）。HUD 的樣式表只有 `Separator` 用 `height: 1px`（`styles.py:176`）；其餘沒有。
+- **Status**：**未修復，未核定，只做了審計**。**Phase**：4（qtrs 側）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
