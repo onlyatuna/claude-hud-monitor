@@ -438,11 +438,9 @@ impl Widget for ProgressBar {
 
     fn minimum_size(&self) -> Size {
         let style = self.resolved_groove_style();
+        // QSS `min-*` are widget coordinates; Qt does not transpose them for a vertical bar.
         let (w, h) = style.min_box_size();
-        match self.orientation {
-            Orientation::Horizontal => Size::new(w, h),
-            Orientation::Vertical => Size::new(h, w),
-        }
+        Size::new(w, h)
     }
 
     /// `QProgressBar::minimumSizeHint` (`qprogressbar.cpp:411-418`): the styled `sizeHint` along the
@@ -459,11 +457,9 @@ impl Widget for ProgressBar {
 
     fn maximum_size(&self) -> Size {
         let style = self.resolved_groove_style();
+        // QSS `max-*` are widget coordinates; Qt does not transpose them for a vertical bar.
         let (w, h) = style.max_box_size();
-        match self.orientation {
-            Orientation::Horizontal => Size::new(w, h),
-            Orientation::Vertical => Size::new(h, w),
-        }
+        Size::new(w, h)
     }
 
     fn update(&self) {

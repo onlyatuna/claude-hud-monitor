@@ -66,3 +66,14 @@ fn test_vertical_progress_bar_hint_is_transposed_before_the_style() {
         ([5, 87], [18, 87])
     );
 }
+
+#[test]
+fn test_vertical_progress_bar_min_max_are_not_transposed() {
+    // PySide6 P11: QSS `min-width`/`max-width` are widget coordinates whatever the orientation:
+    // minimumSize 5x0, maximumSize 5xQWIDGETSIZE_MAX (`QStyleSheetStyle::setGeometry`).
+    let mut p = ProgressBar::new();
+    p.set_style_sheet("QProgressBar { border: none; min-width: 5px; max-width: 5px; }");
+    p.set_orientation(Orientation::Vertical);
+    let (min, max) = (p.minimum_size(), p.maximum_size());
+    assert_eq!(([min.width, min.height], [max.width, max.height]), ([5, 0], [5, 16777215]));
+}
