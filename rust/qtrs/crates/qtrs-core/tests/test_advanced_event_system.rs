@@ -171,7 +171,8 @@ fn test_event_type_mapping() {
     let ev6 = Event::new(EventKind::ToolTip {
         x: 50,
         y: 50,
-        text: "Helpful Tip".to_string(),
+        global_x: 150,
+        global_y: 250,
     });
     assert_eq!(ev6.event_type(), EventType::ToolTip);
 }

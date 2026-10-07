@@ -264,6 +264,36 @@ pub trait Widget: QObject + 'static {
     fn property(&self, name: &str) -> Option<String> {
         self.widget_base().property(name)
     }
+
+    /// `QWidget::toolTip`: the text shown when the cursor rests on the widget. Empty means none.
+    fn tool_tip(&self) -> String {
+        self.widget_base().tool_tip.borrow().clone()
+    }
+
+    /// `QWidget::setToolTip`.
+    fn set_tool_tip(&self, text: &str) {
+        *self.widget_base().tool_tip.borrow_mut() = text.to_string();
+    }
+
+    /// `QWidget::toolTipDuration`: how long the tip stays, in ms; -1 (the default) derives it from
+    /// the text length.
+    fn tool_tip_duration(&self) -> i32 {
+        self.widget_base().tool_tip_duration.get()
+    }
+
+    fn set_tool_tip_duration(&self, msec: i32) {
+        self.widget_base().tool_tip_duration.set(msec);
+    }
+
+    /// `Qt::WA_AlwaysShowToolTips` on a window widget: its widgets show tool tips even when the
+    /// window is not the active one (`QApplication::event`, qapplication.cpp:1710-1735).
+    fn always_show_tool_tips(&self) -> bool {
+        self.widget_base().always_show_tool_tips.get()
+    }
+
+    fn set_always_show_tool_tips(&self, on: bool) {
+        self.widget_base().always_show_tool_tips.set(on);
+    }
 }
 
 pub struct WidgetBase {
@@ -281,6 +311,9 @@ pub struct WidgetBase {
     pub size_policy: Cell<QSizePolicy>,
     pub style_sheet: RefCell<Option<QStyleSheetStyle>>,
     pub properties: RefCell<Vec<(String, String)>>,
+    pub tool_tip: RefCell<String>,
+    pub tool_tip_duration: Cell<i32>,
+    pub always_show_tool_tips: Cell<bool>,
 }
 
 impl WidgetBase {
@@ -301,6 +334,9 @@ impl WidgetBase {
             size_policy: Cell::new(QSizePolicy::default()),
             style_sheet: RefCell::new(None),
             properties: RefCell::new(Vec::new()),
+            tool_tip: RefCell::new(String::new()),
+            tool_tip_duration: Cell::new(-1),
+            always_show_tool_tips: Cell::new(false),
         }
     }
 

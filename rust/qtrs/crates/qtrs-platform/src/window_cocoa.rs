@@ -15,7 +15,8 @@ use crate::platform_window::PlatformWindow;
 use crate::surface::{CocoaLayerSurface, PlatformSurface};
 use crate::window::WindowFlags;
 use crate::window_system_interface::{
-    KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent, WindowSystemEventHandler,
+    KeyboardModifiers, MouseButton, PressedButtons, WheelDelta, WindowSystemEvent,
+    WindowSystemEventHandler,
 };
 
 /// Visual effect materials for macOS translucent vibrancy backgrounds (`NSVisualEffectView`).
@@ -46,6 +47,8 @@ pub struct CocoaNativeWindow {
     stays_on_top: bool,
     click_through: bool,
     visible: AtomicBool,
+    /// Buttons pressed and not yet released, reported on every `MouseMove`.
+    pressed: PressedButtons,
     surface: CocoaLayerSurface,
     pending_events: Mutex<Vec<CocoaNativeEvent>>,
     event_handler: Option<Box<dyn WindowSystemEventHandler>>,
@@ -148,6 +151,7 @@ impl CocoaNativeWindow {
             stays_on_top,
             click_through,
             visible: AtomicBool::new(false),
+            pressed: PressedButtons::default(),
             surface,
             pending_events: Mutex::new(Vec::new()),
             event_handler: None,
@@ -254,6 +258,7 @@ impl CocoaNativeWindow {
                     2 => MouseButton::Middle,
                     _ => MouseButton::Left,
                 };
+                self.pressed.press(btn);
                 handler.handle_window_event(WindowSystemEvent::MousePress {
                     pos: local_pos,
                     global_pos,
@@ -275,6 +280,7 @@ impl CocoaNativeWindow {
                     2 => MouseButton::Middle,
                     _ => MouseButton::Left,
                 };
+                self.pressed.release(btn);
                 handler.handle_window_event(WindowSystemEvent::MouseRelease {
                     pos: local_pos,
                     global_pos,
@@ -288,6 +294,7 @@ impl CocoaNativeWindow {
                 handler.handle_window_event(WindowSystemEvent::MouseMove {
                     pos: local_pos,
                     global_pos,
+                    buttons: self.pressed.buttons(),
                 });
             }
             CocoaNativeEvent::ScrollWheel {

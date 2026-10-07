@@ -266,11 +266,14 @@ pub enum EventKind {
         reason: ContextMenuReason,
     },
 
-    /// Help, ToolTip and What's This events (`QHelpEvent`).
+    /// `QHelpEvent(QEvent::ToolTip)`: the position under the cursor in the receiving widget's
+    /// coordinates and in global coordinates. It carries no text; the widget supplies its own
+    /// `toolTip` (`QWidget::event`, qwidget.cpp:9381-9386).
     ToolTip {
         x: i32,
         y: i32,
-        text: String,
+        global_x: i32,
+        global_y: i32,
     },
     StatusTip {
         text: String,
@@ -593,7 +596,12 @@ impl fmt::Debug for EventKind {
                     x, y, global_x, global_y, reason
                 )
             }
-            EventKind::ToolTip { x, y, text } => write!(f, "ToolTip(({},{}), \"{}\")", x, y, text),
+            EventKind::ToolTip {
+                x,
+                y,
+                global_x,
+                global_y,
+            } => write!(f, "ToolTip(({},{}), global ({},{}))", x, y, global_x, global_y),
             EventKind::StatusTip { text } => write!(f, "StatusTip(\"{}\")", text),
             EventKind::WhatsThis { x, y, text } => {
                 write!(f, "WhatsThis(({},{}), \"{}\")", x, y, text)

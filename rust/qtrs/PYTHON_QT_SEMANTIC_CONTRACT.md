@@ -657,10 +657,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 ### C8.8 Tooltip
 - **Qt behavior** `[QT-DOC]`：`setToolTip` 在 hover 一段時間後顯示。
 - **qtrs required**：MUST widget 層級 tooltip（Python HUD 以 tooltip 顯示錯誤與過期資料）。
-- **Current implementation**：`ABSENT` for widgets（grep `tooltip` 只有 `action.rs` 與 tray）。tray tooltip 存在。
-- **Known gap**：**G8.8.a [P0, READ]** Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` 設定 tooltip；Rust 一個也沒有。
-- **Test**：必要：`widget_tooltip_shows_after_hover_delay`（真機）。
-- **HUD usage**：見上。
+- **Current implementation**：`IMPLEMENTED`（RC-11c；Win32 真實視窗驗證）。`Widget::tool_tip/set_tool_tip/tool_tip_duration/always_show_tool_tips`、`EventKind::ToolTip{x,y,global_x,global_y}`（`QHelpEvent` 形狀，無 `text`）、`qtrs-widgets/src/tooltip.rs`（`ToolTip::show_text/hide_text/is_visible/text/geometry`、純函式 `place_tip`／`expire_time_ms`）、`EventTreeDispatcher::dispatch_mouse_move`。
+- **Known gap**：**G8.8.a [P0, READ；qtrs 層 RC-11c 已完成，HUD 接線待 Phase 4]** Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` 設定 tooltip；qtrs 現在提供 widget tooltip，但 HUD 一個也沒設定，所以此 gap 在 HUD 端仍開著（不計入已修復）；**G8.8.b [P2, READ]** 無 `QToolTip::showText` 的 `rect` 參數（`setTipRect`，游標離開該矩形即隱藏）與 `QToolTip::font/palette/setFont/setPalette`；**G8.8.c [P2, READ]** 游標大小固定為 `QPlatformCursor` 預設的 16×16（偏移 `(2,16)`）；Windows 的 `QWindowsCursor::size()` 讀登錄檔 `CursorBaseSize` 並依 DPI 縮放（`qwindowscursor.cpp:675-690`），實機偏移可能不同，須手動驗證；**G8.8.d [P1, READ]** tip 內容是單行 `Label`：沒有自動換行（Qt 在比螢幕寬時換行，`qtooltip.cpp:152-157`）、沒有 rich text（`Qt::mightBeRichText`）、字串中的換行未驗證。Python 的 tooltip 是否含換行／HTML 待 Phase 4 核對；**G8.8.e [P2, READ]** `set_tool_tip` 不送 `ToolTipChange`（無 `EventKind`、無 `changeEvent`）；`StatusTip`、`WhatsThis` 未實作；`Action::tool_tip` 未接到 menu／toolbar；**G8.8.f [P2, READ]** tip 視窗只重用一個實例（Qt 每次新建並 `deleteLater`）；無淡入淡出；`WindowActivate/Deactivate/ActivationChange` 不存在（G11.1.d），tip 因 `FocusIn/FocusOut` 而隱藏，不因啟用狀態改變；**G8.8.g [P2, `[INFERENCE]`]** 混合 DPI：tip 視窗以主螢幕 DPR 建立，再移到游標所在螢幕；未在異質 DPI 實機驗證。
+- **Test**：`qtrs-widgets/tests/test_tooltip.rs`（26 項：純函式 `place_tip`／`expire_time_ms`；喚醒延遲、取消、fall-asleep、冒泡與座標、`showText` 更換／位置／存活；真實視窗：按鈕狀態、非活動視窗與 `WA_AlwaysShowToolTips`、不搶前景）。tip 外觀（顏色、字型、圓角）不自動斷言，須手動驗證。
+- **HUD usage**：見上；HUD 尚未設定 tooltip（Phase 4）。
 
 ---
 
@@ -849,7 +849,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`Frameless | Tool | StaysOnTop` 對應無邊框、tool、topmost 視窗；`WA_TranslucentBackground` 使其為 per-pixel alpha；`setWindowFlag(WindowStaysOnTopHint, v)` **重建**原生視窗並隱藏，呼叫端要再 `show()`。
 - **qtrs required**：HUD 旗標 MUST 產生 `WS_POPUP | WS_EX_TOOLWINDOW | WS_EX_LAYERED`，on-top 時加 `WS_EX_TOPMOST`；topmost 切換 MUST 保持視窗可見且幾何不變。
 - **Current implementation**：旗標 `IMPLEMENTED`，切換 `PARTIAL`。`NativeWindow::new`（`qtrs-platform/src/window.rs`）；HUD 請求 `FRAMELESS | CUSTOM_FRAMELESS | LAYERED | TOOL [| STAYS_ON_TOP] [| CLICK_THROUGH]`（`hud_window.rs:207-216`）；`LAYERED` 優先於 `CUSTOM_FRAMELESS`，所以不裝 NCHITTEST 設定，resize／move 走 `start_system_move/resize`（與 Python 的 `startSystemMove/Resize` 相同）；`set_stays_on_top` 就地 `SetWindowPos(HWND_TOPMOST/NOTOPMOST)`。
-- **Known gap**：**G11.1.a [P2]** 無 `set_window_flags`；就地 `SetWindowPos` 保持可見，可觀察終態與 Python 的 `setWindowFlag + show()` 一致；**G11.1.b [P1]** 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT`；**G11.1.c [P2, READ]** X11／Wayland／Cocoa 後端是模擬：沒有真實 X server／Wayland compositor／AppKit 連線（Cocoa 走 `MockObjcRuntime`）。RC-11b 之後 `is_active` 與 `WindowFlags::TOOLTIP` 在這些後端上由注入的事件或 mock 狀態驅動（X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Cocoa `isKeyWindow`），未對真實系統驗證；X11 沒有 window type／override-redirect，Wayland 沒有 popup role。Wayland 以 keyboard focus 為 active，qtwayland 原始碼不在 `qtbase/`，`[INFERENCE]`；**G11.1.d [P1, READ]** `Application::active_window()` 從不被設定（`set_active_window` 只有測試呼叫），沒有 `WindowActivate`／`WindowDeactivate`／`ActivationChange` 遞送給 widget，`QWidget::isActiveWindow` 不存在。平台層 `PlatformWindow::is_active` 已可用（RC-11b），但尚未接到 toolkit 層；RC-11c 的「只在 active window 顯示 tooltip」需要它。
+- **Known gap**：**G11.1.a [P2]** 無 `set_window_flags`；就地 `SetWindowPos` 保持可見，可觀察終態與 Python 的 `setWindowFlag + show()` 一致；**G11.1.b [P1]** 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT`；**G11.1.c [P2, READ]** X11／Wayland／Cocoa 後端是模擬：沒有真實 X server／Wayland compositor／AppKit 連線（Cocoa 走 `MockObjcRuntime`）。RC-11b 之後 `is_active` 與 `WindowFlags::TOOLTIP` 在這些後端上由注入的事件或 mock 狀態驅動（X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Cocoa `isKeyWindow`），未對真實系統驗證；X11 沒有 window type／override-redirect，Wayland 沒有 popup role。`WindowSystemEvent::MouseMove.buttons` 在 Win32 來自 `wParam` 的 `MK_*`（真實）；X11／Wayland／Cocoa 後端由視窗物件記錄自己看到的 press／release（模擬事件沒有按鈕狀態遮罩）。Wayland 以 keyboard focus 為 active，qtwayland 原始碼不在 `qtbase/`，`[INFERENCE]`；**G11.1.d [P1, READ]** `Application::active_window()` 從不被設定（`set_active_window` 只有測試呼叫），沒有 `WindowActivate`／`WindowDeactivate`／`ActivationChange` 遞送給 widget，`QWidget::isActiveWindow` 不存在。平台層 `PlatformWindow::is_active` 已可用（RC-11b），但尚未接到 toolkit 層；RC-11c 的「只在 active window 顯示 tooltip」需要它。
 - **Test**：既有 `window.rs::test_window_flags_to_win32_styles`（建立時樣式）、`test_native_window_lifecycle_and_methods`（只查 `flags` 欄位）。必要：`set_stays_on_top(false)` 後 `GetWindowLongPtrW(GWL_EXSTYLE) & WS_EX_TOPMOST == 0`。
 - **HUD usage**：Python `hud_window.py:123-128,804-812`；Rust `hud_window.rs:538-545`。
 
@@ -1143,7 +1143,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 306 項：D 12、P0 34、P1 135、P2 120、test gap 5（計數含已修復項；標籤含「已修復」者共 27 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 312 項：D 12、P0 34、P1 136、P2 125、test gap 5（計數含已修復項；標籤含「已修復」者共 27 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G12.5.f、G12.5.g、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1323,7 +1323,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.6.c | P1 | 無 layout 導出的頂層最小尺寸 |
 | G8.7.a | P1, READ | 無 child 裁剪 |
 | G8.7.b | P2 | 髒區只有整個 widget |
-| G8.8.a | P0, READ | Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,16 |
+| G8.8.a | P0, READ；qtrs 層 RC-11c 已完成、HUD 接線待 Phase 4 | Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,16 |
+| G8.8.b | P2, READ | 無 `showText` 的 `rect` 參數、`QToolTip::font/palette` |
+| G8.8.c | P2, READ | 游標大小固定 16×16；Windows `QWindowsCursor::size()` 未建模 |
+| G8.8.d | P1, READ | tip 無自動換行、無 rich text |
+| G8.8.e | P2, READ | 不送 `ToolTipChange`；`StatusTip`／`WhatsThis`／`Action::tool_tip` 未接 |
+| G8.8.f | P2, READ | tip 視窗重用、無淡入淡出、不因啟用狀態改變而隱藏（G11.1.d） |
+| G8.8.g | P2, `[INFERENCE]` | 混合 DPI 的 tip 視窗未實測 |
 | G9.1.a | P1, READ | `add_stretch(0)` 被強制成 1 |
 | G9.1.b | P1 | 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor` |
 | G9.1.c | P1；= G9.2.a；已修復：RC-07 | 無 item 對齊 |
@@ -1747,7 +1753,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **範圍（使用者核定）**：
   - **RC-11a**（已完成，commit 另列）：`Timer` 重啟語意，G5.1.f。只改 `register_object_metadata` 的 liveness 處理；未改其他計時器語意（G5.4.a/b、單發、`remaining_time` 皆未動）。實作完成，無需手動驗證。
   - **RC-11b**（implementation complete / real X11、Wayland、macOS 驗證 pending）：`PlatformWindow::is_active()`（必要方法，無 default；Win32 = `QWindowsWindow::isActive` 的 `GetForegroundWindow` 檢查，真實驗證；Cocoa `isKeyWindow`、X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Generic `FocusIn/Out`，皆為模擬驗證）與 `WindowFlags::TOOLTIP`（Win32：`WS_POPUP`＋`WS_EX_NOACTIVATE|TOPMOST|TOOLWINDOW`＋`SW_SHOWNOACTIVATE`；Cocoa：`orderFront:` 不成為 key）。測試 `qtrs-platform/tests/test_window_activation.rs`（11 項，含「一般視窗 `show()` 會搶前景」的對照組；變異檢查：把 `SW_SHOWNOACTIVATE` 改回 `SW_SHOW` 時前景測試 FAIL）。新缺口 G11.1.c、G11.1.d。新 API 無法在舊 code 上執行，故無 before-FAIL，以變異檢查代替。
-  - **RC-11c**（待做）：`QWidget::tool_tip`／`ToolTipChange`；`EventKind::ToolTip` 改為 `QHelpEvent` 形狀（pos＋global_pos，移除自創的 `text` 欄位，文字由 widget 的 `tool_tip` 取得）；wake-up（700 ms）／fall-asleep（2000 ms）狀態機；沿 parent 冒泡；`QToolTip::showText` 位置（翻轉＋夾入螢幕）與存活時間 `10000+40*max(0,len-100)`。
+  - **RC-11c**（implementation complete；Win32 真實視窗驗證；外觀、X11／Wayland／Cocoa 真實驗證 pending）：`Widget::tool_tip` 等屬性；`EventKind::ToolTip` 改為 `{x,y,global_x,global_y}`（移除 `text`，並改寫 `test_advanced_event_system.rs` 原本釘住 `text` 的斷言）；`WindowSystemEvent::MouseMove` 新增 `buttons`（Win32 `MK_*`；其他後端記錄 press／release）；`EventTreeDispatcher::dispatch_mouse_move`（`QApplication::notify` 的喚醒）；wake-up 700 ms／20 ms、fall-asleep 2000 ms、hide 300 ms、存活 `10000+40*max(0,len-100)`；沿 parent 冒泡；`QToolTip::showText` 位置（翻轉＋夾入螢幕，純函式 `place_tip`）；以 `PlatformWindow::is_active`（RC-11b）判斷「視窗為 active 或 `WA_AlwaysShowToolTips`」。**慣例**：widget 的 `event()` 對 `ToolTip` 回傳 `false` 表示「交給 `QWidget::event` 的預設行為」（顯示自己的 `tool_tip`，空字串則 `ignore`）；回傳 `true` 則由該 widget 自行決定接受與否。**不修 G11.1.d**：RC-11c 直接查 `PlatformWindow::is_active`，沒有建 `Application::active_window`／`ActivationChange`。**證據分類**：新 API 在舊程式碼上無法執行，所以沒有 before-FAIL；以變異檢查取代（不是 before-FAIL）：喚醒延遲 700→70 ms 使 `hover_shows…` FAIL；移除 active 閘門使 `an_inactive_window…` FAIL；忽略按鈕狀態使 `a_move_with_a_button_down…` 與真實視窗的按鈕測試 FAIL。測試會把真實游標移到測試視窗上再還原（否則 Windows 對 `TrackMouseEvent` 立刻回 `WM_MOUSELEAVE`，那是真實的 `Leave`，會取消 tip）。新缺口 G8.8.b–G8.8.g。HUD 接線（Phase 4）未做，G8.8.a／G12.5.i 在 HUD 端仍開著。
   - **計時器規則**：700 ms／2 s 是 Qt tooltip 協定，明確豁免「不新增 timer／debounce」規則，不是 application debounce。
   - **外觀**（圓角、深色底、字型）留手動驗證；自動化契約只鎖：觸發、取消、冒泡、位置、存活、不搶焦點。
 

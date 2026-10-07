@@ -1,3 +1,4 @@
+use qtrs_core::event::MouseButtons;
 use qtrs_gui::geometry::primitives::{Point, Rect, Size};
 
 /// Delivery policy for window system events, aligned with Qt's QWindowSystemInterface::Delivery.
@@ -19,6 +20,35 @@ pub enum MouseButton {
     Right,
     Middle,
     Other(u16),
+}
+
+/// The mouse buttons a window has seen pressed and not yet released (`Qt::MouseButtons` as
+/// `QGuiApplicationPrivate::mouse_buttons` tracks it). A backend whose native motion event does not
+/// carry the button state keeps one of these and reports it on every `MouseMove`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PressedButtons(MouseButtons);
+
+impl PressedButtons {
+    fn bit(button: MouseButton) -> MouseButtons {
+        match button {
+            MouseButton::Left => MouseButtons::LEFT,
+            MouseButton::Right => MouseButtons::RIGHT,
+            MouseButton::Middle => MouseButtons::MIDDLE,
+            MouseButton::None | MouseButton::Other(_) => MouseButtons::NO_BUTTON,
+        }
+    }
+
+    pub fn press(&mut self, button: MouseButton) {
+        self.0 = self.0.union(Self::bit(button));
+    }
+
+    pub fn release(&mut self, button: MouseButton) {
+        self.0 = MouseButtons(self.0 .0 & !Self::bit(button).0);
+    }
+
+    pub fn buttons(self) -> MouseButtons {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -78,6 +108,9 @@ pub enum WindowSystemEvent {
     MouseMove {
         pos: Point,
         global_pos: Point,
+        /// The buttons held down while the pointer moves (`QMouseEvent::buttons`). Qt shows a
+        /// tool tip only for a move with no button down (`qapplication.cpp:2722`).
+        buttons: MouseButtons,
     },
     MousePress {
         pos: Point,

@@ -14,7 +14,8 @@ use crate::surface::wayland::WaylandShmSurface;
 use crate::surface::PlatformSurface;
 use crate::window::WindowFlags;
 use crate::window_system_interface::{
-    KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent, WindowSystemEventHandler,
+    KeyboardModifiers, MouseButton, PressedButtons, WheelDelta, WindowSystemEvent,
+    WindowSystemEventHandler,
 };
 
 #[derive(Debug, Clone)]
@@ -89,6 +90,8 @@ pub struct WaylandNativeWindow {
     visible: AtomicBool,
     /// Keyboard focus (`wl_keyboard.enter`/`leave`); cleared when the surface is hidden.
     active: AtomicBool,
+    /// Buttons pressed and not yet released, reported on every `MouseMove`.
+    pressed: PressedButtons,
     surface: Mutex<Option<WaylandShmSurface>>,
     connection_fd: SocketDescriptor,
     socket_notifier: Option<Arc<SocketNotifier>>,
@@ -162,6 +165,7 @@ impl WaylandNativeWindow {
             click_through,
             visible: AtomicBool::new(false),
             active: AtomicBool::new(false),
+            pressed: PressedButtons::default(),
             surface: Mutex::new(surface),
             connection_fd,
             socket_notifier: None,
@@ -309,6 +313,7 @@ impl WaylandNativeWindow {
                 handler.handle_window_event(WindowSystemEvent::MouseMove {
                     pos: Point::new(surface_x, surface_y),
                     global_pos: Point::new(origin_x + surface_x, origin_y + surface_y),
+                    buttons: self.pressed.buttons(),
                 });
             }
             WaylandEvent::PointerButton {
@@ -327,6 +332,7 @@ impl WaylandNativeWindow {
                 let mods = KeyboardModifiers::from_bits(modifiers);
 
                 if state == 1 {
+                    self.pressed.press(btn);
                     handler.handle_window_event(WindowSystemEvent::MousePress {
                         pos: local_pos,
                         global_pos,
@@ -334,6 +340,7 @@ impl WaylandNativeWindow {
                         modifiers: mods,
                     });
                 } else {
+                    self.pressed.release(btn);
                     handler.handle_window_event(WindowSystemEvent::MouseRelease {
                         pos: local_pos,
                         global_pos,

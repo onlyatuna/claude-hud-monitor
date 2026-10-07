@@ -23,6 +23,9 @@ pub use hit_test::*;
 pub mod window;
 pub use window::*;
 
+pub mod tooltip;
+pub use tooltip::ToolTip;
+
 pub mod label;
 pub use label::*;
 

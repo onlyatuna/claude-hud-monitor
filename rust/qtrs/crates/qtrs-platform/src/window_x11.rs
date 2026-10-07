@@ -14,7 +14,8 @@ use crate::surface::x11::X11ShmSurface;
 use crate::surface::PlatformSurface;
 use crate::window::WindowFlags;
 use crate::window_system_interface::{
-    KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent, WindowSystemEventHandler,
+    KeyboardModifiers, MouseButton, PressedButtons, WheelDelta, WindowSystemEvent,
+    WindowSystemEventHandler,
 };
 
 #[derive(Debug, Clone)]
@@ -186,6 +187,8 @@ pub struct X11NativeWindow {
     visible: AtomicBool,
     /// Input focus (`FocusIn`/`FocusOut`); cleared when the window is hidden.
     active: AtomicBool,
+    /// Buttons pressed and not yet released, reported on every `MouseMove`.
+    pressed: PressedButtons,
     surface: Mutex<Option<X11ShmSurface>>,
     connection_fd: SocketDescriptor,
     socket_notifier: Option<Arc<SocketNotifier>>,
@@ -254,6 +257,7 @@ impl X11NativeWindow {
             click_through,
             visible: AtomicBool::new(false),
             active: AtomicBool::new(false),
+            pressed: PressedButtons::default(),
             surface: Mutex::new(surface),
             connection_fd,
             socket_notifier: None,
@@ -374,6 +378,7 @@ impl X11NativeWindow {
                     }
                     _ => MouseButton::Left,
                 };
+                self.pressed.press(btn);
                 handler.handle_window_event(WindowSystemEvent::MousePress {
                     pos: local_pos,
                     global_pos,
@@ -397,6 +402,7 @@ impl X11NativeWindow {
                     3 => MouseButton::Right,
                     _ => MouseButton::Left,
                 };
+                self.pressed.release(btn);
                 handler.handle_window_event(WindowSystemEvent::MouseRelease {
                     pos: local_pos,
                     global_pos,
@@ -408,6 +414,7 @@ impl X11NativeWindow {
                 handler.handle_window_event(WindowSystemEvent::MouseMove {
                     pos: Point::new(x, y),
                     global_pos: Point::new(origin_x + x, origin_y + y),
+                    buttons: self.pressed.buttons(),
                 });
             }
             X11Event::KeyPress { keycode, modifiers } => {

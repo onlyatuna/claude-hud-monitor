@@ -2,7 +2,7 @@ use crate::focus::{find_widget_by_id, FocusManager};
 use crate::popup::PopupManager;
 use crate::widget::WidgetRef;
 use qtrs_core::event::FocusReason;
-use qtrs_core::event::{Event, EventKind, EventPointPos};
+use qtrs_core::event::{Event, EventKind, EventPointPos, MouseButtons};
 use qtrs_core::object::ObjectId;
 use qtrs_gui::geometry::primitives::{Point, Rect};
 
@@ -42,16 +42,45 @@ impl EventTreeDispatcher {
             let mut leave_ev = Event::new_spontaneous(EventKind::Leave);
             let _ = old_widget.borrow_mut().event(&mut leave_ev);
         }
+        crate::tooltip::leave();
         crate::command::WidgetCommandQueue::flush();
     }
 
     pub fn dispatch_event(&mut self, root: &WidgetRef, event: &mut Event) -> bool {
-        let result = self.dispatch_event_internal(root, event);
+        crate::tooltip::user_input(&event.kind);
+        let result = self.dispatch_event_internal(root, event, None);
         crate::command::WidgetCommandQueue::flush();
         result
     }
 
-    fn dispatch_event_internal(&mut self, root: &WidgetRef, event: &mut Event) -> bool {
+    /// A spontaneous mouse move from the window system. Besides what `dispatch_event` does for a
+    /// `MouseMove`, it is what `QApplication::notify` sees as a mouse move with a global position
+    /// and button state: with no button down it starts the tool tip wake-up for the widget under
+    /// the cursor (qapplication.cpp:2712-2737).
+    pub fn dispatch_mouse_move(
+        &mut self,
+        root: &WidgetRef,
+        win_pos: Point,
+        global_pos: Point,
+        buttons: MouseButtons,
+    ) -> bool {
+        let mut event = Event::new_spontaneous(EventKind::MouseMove {
+            x: win_pos.x,
+            y: win_pos.y,
+        });
+        let tool_tip_pos = buttons.is_empty().then_some(global_pos);
+        let result = self.dispatch_event_internal(root, &mut event, tool_tip_pos);
+        crate::command::WidgetCommandQueue::flush();
+        result
+    }
+
+    /// `tool_tip_global_pos` is set for a mouse move that may start a tool tip.
+    fn dispatch_event_internal(
+        &mut self,
+        root: &WidgetRef,
+        event: &mut Event,
+        tool_tip_global_pos: Option<Point>,
+    ) -> bool {
         match &event.kind {
             EventKind::MouseMove { x, y } => {
                 let win_pos = Point::new(*x, *y);
@@ -70,6 +99,7 @@ impl EventTreeDispatcher {
                             if let Some((_old_id, old_widget)) = self.last_hovered.take() {
                                 let mut leave_ev = Event::new_spontaneous(EventKind::Leave);
                                 let _ = old_widget.borrow_mut().event(&mut leave_ev);
+                                crate::tooltip::leave();
                             }
 
                             let mut enter_ev = Event::new_spontaneous(EventKind::Enter {
@@ -79,6 +109,10 @@ impl EventTreeDispatcher {
                             let _ = target.borrow_mut().event(&mut enter_ev);
 
                             self.last_hovered = Some((target_id, target.clone()));
+                        }
+
+                        if let Some(global_pos) = tool_tip_global_pos {
+                            crate::tooltip::mouse_moved(&target, local_pos, global_pos);
                         }
 
                         let mut local_event = Event::new_spontaneous(EventKind::MouseMove {

@@ -394,6 +394,31 @@ fn query_keyboard_modifiers() -> KeyboardModifiers {
     }
 }
 
+/// `QWindowsMouseHandler::keyStateToMouseButtons`: the `MK_*` flags a mouse message carries in
+/// `wParam` are the buttons held down while it was generated.
+#[cfg(windows)]
+fn mouse_buttons_from_mk(wparam: WPARAM) -> qtrs_core::event::MouseButtons {
+    use qtrs_core::event::MouseButtons;
+    const MK_LBUTTON: usize = 0x0001;
+    const MK_RBUTTON: usize = 0x0002;
+    const MK_MBUTTON: usize = 0x0010;
+    const MK_XBUTTON1: usize = 0x0020;
+    const MK_XBUTTON2: usize = 0x0040;
+    let mut buttons = MouseButtons::NO_BUTTON;
+    for (flag, button) in [
+        (MK_LBUTTON, MouseButtons::LEFT),
+        (MK_RBUTTON, MouseButtons::RIGHT),
+        (MK_MBUTTON, MouseButtons::MIDDLE),
+        (MK_XBUTTON1, MouseButtons::BACK),
+        (MK_XBUTTON2, MouseButtons::FORWARD),
+    ] {
+        if wparam & flag != 0 {
+            buttons = buttons.union(button);
+        }
+    }
+    buttons
+}
+
 #[cfg(windows)]
 fn get_cursor_global_pos() -> qtrs_gui::geometry::primitives::Point {
     unsafe {
@@ -920,7 +945,11 @@ unsafe fn native_window_proc_inner(
             dispatch_window_system_event(
                 Delivery::Default,
                 hwnd,
-                WindowSystemEvent::MouseMove { pos, global_pos },
+                WindowSystemEvent::MouseMove {
+                    pos,
+                    global_pos,
+                    buttons: mouse_buttons_from_mk(wparam),
+                },
             );
 
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {

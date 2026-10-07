@@ -176,6 +176,29 @@ struct RenderState {
     stats: std::cell::Cell<RenderStats>,
 }
 
+/// `QApplication::event(Timer)` gate for showing a tool tip (qapplication.cpp:1715-1726): the tip
+/// shows when the widget's window has `WA_AlwaysShowToolTips`, or is the active window. A widget
+/// tree that belongs to no `Window` is not an active window.
+pub(crate) fn window_shows_tool_tips(top_level: &WidgetRef) -> bool {
+    if top_level.borrow().always_show_tool_tips() {
+        return true;
+    }
+    let Some(window_id) = top_level.borrow().window_id() else {
+        return false;
+    };
+    let Some(state) = RENDER_STATES.with(|m| m.borrow().get(&window_id).cloned()) else {
+        return false;
+    };
+    let Some(platform_window) = state.platform_window.upgrade() else {
+        return false;
+    };
+    let active = platform_window
+        .try_borrow()
+        .map(|w| w.is_active())
+        .unwrap_or(false);
+    active
+}
+
 /// Clears a flag on every exit path, including unwinding.
 struct FlagGuard<'a>(&'a std::cell::Cell<bool>);
 
@@ -1158,9 +1181,13 @@ impl WindowSystemEventHandler for WindowEventHandler {
         });
         let root = self.core.root();
         match event {
-            WindowSystemEvent::MouseMove { pos, .. } => {
-                let mut ev = Event::new_spontaneous(EventKind::MouseMove { x: pos.x, y: pos.y });
-                self.dispatcher.dispatch_event(&root, &mut ev);
+            WindowSystemEvent::MouseMove {
+                pos,
+                global_pos,
+                buttons,
+            } => {
+                self.dispatcher
+                    .dispatch_mouse_move(&root, pos, global_pos, buttons);
                 if let Some(cb) = self.mouse_move_cb.borrow().as_ref() {
                     cb(pos);
                 }
