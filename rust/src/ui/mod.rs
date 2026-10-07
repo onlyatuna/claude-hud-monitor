@@ -1,6 +1,7 @@
 // src/ui/mod.rs — Qt HUD UI module
 
 pub mod hud_window;
+pub mod placement;
 pub mod provider_card;
 pub mod styles;
 pub mod tray_icon;

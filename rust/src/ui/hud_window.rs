@@ -172,24 +172,16 @@ impl HUDWindow {
                     cfg.vertical_height.max(MIN_VERTICAL_HEIGHT) as i32,
                 )
             };
-            let raw_x = cfg.window_x.unwrap_or(100);
-            let raw_y = cfg.window_y.unwrap_or(100);
-            let screen = qtrs_platform::platform().primary_screen();
-            let avail = screen.geometry();
-            let mut cl_x = raw_x;
-            let mut cl_y = raw_y;
-            if cl_x + w > avail.right() {
-                cl_x = (avail.right() - w).max(avail.x);
-            }
-            if cl_x < avail.x {
-                cl_x = avail.x;
-            }
-            if cl_y + h > avail.bottom() {
-                cl_y = (avail.bottom() - h).max(avail.y);
-            }
-            if cl_y < avail.y {
-                cl_y = avail.y;
-            }
+            // `_restore_or_default_position`: the saved position if it shows enough of some
+            // screen, otherwise the default spot on the primary screen.
+            let screens = super::placement::Screens::current();
+            let (cl_x, cl_y) = super::placement::restore_or_default_position(
+                cfg.window_x.zip(cfg.window_y),
+                w,
+                h,
+                &screens.available,
+                screens.primary,
+            );
             (
                 cl_x,
                 cl_y,
@@ -629,36 +621,22 @@ impl HUDWindow {
         };
         self.window.set_backdrop(backdrop, self.is_dark);
 
+        // `_ensure_within_screen(w, h)` runs after the resize, so the screen is picked from the
+        // centre of the window at its new size.
         let cur_geom = self.window.geometry();
-        let (nx, ny) = self.ensure_within_screen(cur_geom.x, cur_geom.y, w, h);
+        let resized = Rect::new(cur_geom.x, cur_geom.y, w, h);
+        let screens = super::placement::Screens::current();
+        let (nx, ny) = super::placement::ensure_within_screen(
+            resized,
+            &screens.available,
+            screens.window_screen(resized),
+            screens.primary,
+        );
         self.window.set_geometry(Rect::new(nx, ny, w, h));
         self.cards_container.borrow().update_layout();
         self.window.render_and_present();
     }
 
-    pub fn ensure_within_screen(&self, x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
-        let screen = qtrs_platform::platform().primary_screen();
-        let avail = screen.geometry();
-
-        let mut cur_x = x;
-        let mut cur_y = y;
-
-        if cur_x + w > avail.right() {
-            cur_x = (avail.right() - w).max(avail.x);
-        }
-        if cur_x < avail.x {
-            cur_x = avail.x;
-        }
-
-        if cur_y + h > avail.bottom() {
-            cur_y = (avail.bottom() - h).max(avail.y);
-        }
-        if cur_y < avail.y {
-            cur_y = avail.y;
-        }
-
-        (cur_x, cur_y)
-    }
     pub fn apply_cards_layout_mode(&mut self, mode: &str) {
         let (old_mode, old_layout) = {
             let cfg = self.config.lock();
@@ -819,11 +797,10 @@ impl HUDWindow {
             }
         };
 
+        // `_reset_geometry` moves to the spot near the top right of the primary screen's work area
+        // without clamping it.
         let screen = qtrs_platform::platform().primary_screen();
-        let screen_geom = screen.available_geometry();
-        let target_x = screen_geom.x + screen_geom.width - w - 40;
-        let target_y = screen_geom.y + 50;
-        let (nx, ny) = self.ensure_within_screen(target_x, target_y, w, h);
+        let (nx, ny) = super::placement::reset_position(w, screen.available_geometry());
 
         self.window.set_geometry(Rect::new(nx, ny, w, h));
         self.persist_geometry();

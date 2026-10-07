@@ -883,14 +883,16 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 ### C11.4 螢幕與保持視窗在螢幕內
 - **Qt behavior** `[QT-DOC]`：`screens()`、`primaryScreen()`、`widget.screen()`、`availableGeometry()`；`screenChanged` per window。Python HUD 用**視窗中心所在螢幕**；還原時要求至少 50×30 可見於任一螢幕，否則停靠到主螢幕 `avail.right - w - 40, avail.top + 50`（`hud_window.py:376-424`）。
 - **qtrs required**：同上，且 MUST 以相同規則還原位置。
-- **Current implementation**：`PARTIAL`。`Win32Screen`（`geometry`、`available_geometry`＝`rcWork`、`dpr`、`all_screens`）；`ensure_within_screens`／`clamp_window_rect_to_screens` 支援多螢幕。
+- **Current implementation**：`PARTIAL`（HUD 端 RC-13 已完成）。`Win32Screen`（`geometry`、`available_geometry`＝`rcWork`、`dpr`、`all_screens`）；`ensure_within_screens`／`clamp_window_rect_to_screens` 是 qtrs 自己的 helper（Qt 沒有對應 API），規則與 Python 不同（最大交集面積選螢幕、32×32 門檻、完全離開時置中），HUD **不使用**。HUD 的放置規則在 `rust/src/ui/placement.rs`（`restore_or_default_position`、`ensure_within_screen`、`reset_position`，純函式，以 `QRect` 的 inclusive `right()/bottom()/center()` 語意實作）。
 - **Known gap**
-  - **G11.4.a [P0, READ]** Rust HUD 啟動時用 `primary_screen().geometry()` 與 `ensure_within_screen`（`hud_window.rs:178-193,640-662`），且與 `:823-824` 的 `available_geometry()` 不一致；**從不使用 `clamp_window_rect_to_screens`**；沒有以中心選螢幕、沒有「脫離所有螢幕就停靠右上」、沒有 50×30 門檻。
-  - **G11.4.b [P1, READ]** `Window` 無 `screen()`；`screen_changed` 只在 `WM_DISPLAYCHANGE` 發射，無訂閱者。
+  - **G11.4.a [P0, READ；已修復：RC-13]** Rust HUD 啟動時用 `primary_screen().geometry()` 與 `ensure_within_screen`（`hud_window.rs:178-193,640-662`），且與 `:823-824` 的 `available_geometry()` 不一致；**從不使用 `clamp_window_rect_to_screens`**；沒有以中心選螢幕、沒有「脫離所有螢幕就停靠右上」、沒有 50×30 門檻。修復：三個放置點（啟動還原、`apply_ui_mode_internal`、`reset_geometry`）改用 `placement.rs`。額外發現並一併修正（同一組規則）：(1) 啟動時 Rust 把位置夾進螢幕，Python 只在「至少 50×30 可見」時原樣 `move(x,y)`，不夾；(2) 只有一個座標存在時 Python 視為沒有儲存位置；(3) 模式切換時 Rust 以**舊尺寸**的視窗中心選螢幕，Python 在 `resize` 之後（新尺寸）；(4) `reset_geometry` Python 不夾，Rust 夾；(5) Rust 用 `geometry()`（含工作列），Python 用 `availableGeometry()`。證據：`rust/tools/gen_hud_placement_oracle.py` 以**未修改的 Python** `_ensure_within_screen`／`_restore_or_default_position`／`_reset_geometry` 對假螢幕（只假造螢幕清單）產生 3751 筆 oracle（`rust/src/ui/placement_oracle.txt`；6 種螢幕配置含負座標與上下堆疊、含「視窗中心在螢幕邊緣 ±1 px」），Rust 三個函式逐筆相同。舊算法（重新實作的算術，不是出貨程式碼）對同一 oracle 的結果：E 案例 1623／2714 筆不同、R 案例 959／992 筆不同（略過無主螢幕的案例；舊邏輯以主螢幕工作區近似，舊程式碼實際用含工作列的 `geometry()`），因此 oracle 能區分新舊；**沒有 before-FAIL**（舊邏輯內嵌在需要真實視窗的方法裡，無法呼叫）。變異檢查（不是 before-FAIL）：`right()` 改成 `x+width`、`center()` 改成 `x+width/2`、50×30 門檻改成 32×32，各使 oracle 測試 FAIL。Win32 煙霧測試（單螢幕 1536×864 邏輯，工作區 816 高）：儲存位置 (-3000,300) 與只露出 36 px 的 (1500,100) 都落到預設位置 (1216,50)；(1400,100)（露出 136 px）原樣保留，舊程式碼會夾到 x=846。多螢幕只以假螢幕 oracle 驗證，本機只有一個螢幕。  - **G11.4.b [P1, READ]** `Window` 無 `screen()`；`screen_changed` 只在 `WM_DISPLAYCHANGE` 發射，無訂閱者。RC-13 的 `Screens::window_screen` 以「完整幾何與視窗交集面積最大的螢幕」近似 `QWidget.screen()`；無交集時 Qt 用 `MonitorFromWindow(…NEAREST)`，近似版回到主螢幕。此 gap 仍開著。
   - **G11.4.c [P1, INFERENCE]** `Win32Screen::geometry` 以 dpr 除原點（`high_dpi::from_native_rect`），在 DPI 不同的副螢幕上不是 Qt 的虛擬桌面映射。
   - **G11.4.d [P2]** `Win32Screen::primary()` 寫死 `MonitorFromPoint(0,0)`；DPR 夾到最小 1.0。
+  - **G11.4.e [P1, READ]** `qtrs_gui::Rect::right()`／`bottom()` 回傳 `x + width`／`y + height`，`QRect::right()`／`bottom()` 是 `x + width - 1`（`qrect.h:199-203`）；`center()` 是 `x + width / 2`，`QRect::center()` 是 `(x1 + x2) / 2`（`qrect.h:253-257`）。`contains`／`intersects` 的半開語意與 `QRect` 一致，只有這幾個存取器不同，名稱相同而數值差 1，移植 Python 程式碼時會靜默偏 1 px。qtrs 非測試程式碼約 83 處使用 `.right()`／`.bottom()`，**未修**（改語意影響全部呼叫者，是獨立 RC）；RC-13 的 `placement.rs` 不使用它們。
+  - **G11.4.f [P2, INFERENCE]** 設定載入（`config.rs` sanitize）把 `window_x/y` 超出 −5000..10000 的值改為 `None`；Python 的 `hud_window.py` 沒有這個範圍檢查（未檢查 Python 設定模組）。
+  - **G11.4.g [P2, INFERENCE]** 混合 DPI 多螢幕的工作區座標經 `high_dpi::from_native_rect`（G11.4.c）；RC-13 的 oracle 使用合成的單一座標系，本機只有一個螢幕，真實多螢幕、混合 DPI 未驗證。
 - **Test**：既有 `test_power_events_and_screen_clamping`、`test_platform_screen_primary_and_multi_screens`（只練 helper，沒呼叫 HUD 邏輯）。必要：以「儲存位置在所有螢幕之外」與「在第二螢幕」兩種情況驅動 HUD 還原，斷言 Python 的停靠規則。
-- **HUD usage**：Python `hud_window.py:376-424,856-858`；Rust `hud_window.rs:176-193,640-662,823-831`。
+- **HUD usage**：Python `hud_window.py:376-424,856-858`；Rust `rust/src/ui/placement.rs`（被 `hud_window.rs` 的三個放置點呼叫）。
 
 ### C11.5 不透明度與呈現
 - **Qt behavior** `[QT-DOC/INFERENCE]`：`setWindowOpacity(v)` 使整個視窗 `v` 透明；分層視窗以 `UpdateLayeredWindowIndirect` 的 `SourceConstantAlpha` 呈現。
@@ -1110,7 +1112,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.i [P0, READ；= G8.8.a] | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） | G8.8.a | 修復 |
 | G12.5.j [P0, READ；= G11.9.a；已修復：RC-12] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
 | G12.5.k [P1] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 修復 |
-| G12.5.l [P0, READ；= G11.4.a] | 螢幕選擇／脫離螢幕還原規則 | G11.4.a | 修復 |
+| G12.5.l [P0, READ；= G11.4.a；已修復：RC-13] | 螢幕選擇／脫離螢幕還原規則 | G11.4.a | 修復 |
 | G12.5.m [P1] | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu | `tray_icon.py:54-122` vs `rust/src/ui/tray_icon.rs:73-240` | 需決定 |
 | G12.5.n [P1] | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 | `main.rs:503`、`main.rs:486-488`、`hud_window.rs:526-532`、`tray_icon.rs:686-690` | 修復 |
 | G12.5.o [P1] | QMenu 外觀為寫死數值，非 QSS | G8.5.f | 修復或核准 |
@@ -1147,7 +1149,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 316 項：D 12、P0 34、P1 136、P2 129、test gap 5（計數含已修復項；標籤含「已修復」者共 30 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.f、G12.5.g、G12.5.j、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 319 項：D 12、P0 34、P1 137、P2 131、test gap 5（計數含已修復項；標籤含「已修復」者共 32 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1400,10 +1402,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.3.a | P0, READ；已修復：RC-08 implementation complete / real heterogeneous-DPI verification pending | DPI 混用：WM handler 用 `GetDpiForWindow`，`Window::set_geometry` 用主螢幕 DPR |
 | G11.3.b | P2 | 位置是 `i32` 邏輯值 |
 | G11.3.c | P1, READ | `NativeWindow::geometry()` 回實體 `GetWindowRect`，`Window::geometry()` 為邏輯 |
-| G11.4.a | P0, READ | Rust HUD 啟動時用 `primary_screen().geometry()` 與 `ensure_within_screen` |
+| G11.4.a | P0, READ；已修復：RC-13 | Rust HUD 啟動時用 `primary_screen().geometry()` 與 `ensure_within_screen` |
 | G11.4.b | P1, READ | `Window` 無 `screen()` |
 | G11.4.c | P1, INFERENCE | `Win32Screen::geometry` 以 dpr 除原點 |
 | G11.4.d | P2 | `Win32Screen::primary()` 寫死 `MonitorFromPoint(0,0)` |
+| G11.4.e | P1, READ | qtrs `Rect::right/bottom/center` 與 `QRect` 差 1（`x+w` vs `x+w-1`） |
+| G11.4.f | P2, INFERENCE | 設定載入把 window_x/y 超出 ±範圍者改為 None，Python 沒有 |
+| G11.4.g | P2, INFERENCE | 混合 DPI 多螢幕未驗證 |
 | G11.5.a | P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現；已修復：RC-09 implementation complete / DirectComposition hardware verification pending | **DComp 路徑丟棄 opacity**：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)` |
 | G11.5.b | P2 | 非分層視窗 `SetLayeredWindowAttributes` 失敗時靜默 |
 | G11.5.c | test gap, RAN；部分處理：RC-09 新增明確標為 ignore 的 DComp 測試，既有 test_dcomp_* 仍靜默 skip | `test_dcomp_*` |
@@ -1455,7 +1460,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.i | P0, READ；= G8.8.a | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） |
 | G12.5.j | P0, READ；= G11.9.a；已修復：RC-12 | 熱鍵註冊失敗不被回報；鎖定防護失效 |
 | G12.5.k | P1 | `--smoke-test` 不檢查設定持久化 |
-| G12.5.l | P0, READ；= G11.4.a | 螢幕選擇／脫離螢幕還原規則 |
+| G12.5.l | P0, READ；= G11.4.a；已修復：RC-13 | 螢幕選擇／脫離螢幕還原規則 |
 | G12.5.m | P1 | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu |
 | G12.5.n | P1 | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 |
 | G12.5.o | P1 | QMenu 外觀為寫死數值，非 QSS |
@@ -1770,7 +1775,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | RC | 對應 gap | 位置 | 閘門（動手前必須先做） |
 |---|---|---|---|
 | RC-12 熱鍵註冊失敗不回報 | G11.9.a、G11.8.c、G12.5.j | `hotkey.rs:235-261`、`main.rs:496` | 無。`start` 必須回報 `RegisterHotKey` 失敗；測試：衝突的熱鍵使 `start` 回 `Err`，且 `click_through` 啟動時被關閉。**已完成（RC-12，Win32 真實 `RegisterHotKey` 衝突驗證）**：失敗改由 `HotkeyManager::registration()` 回報，而非 `start` 的 `Err`（理由見 G11.9.a）；新缺口 G11.9.e–G11.9.h |
-| RC-13 螢幕選擇／還原 | G11.4.a、G12.5.l | `hud_window.rs:178-193,640-662,823-824` | 對照 Python 規則；使用已存在的 `clamp_window_rect_to_screens`（`qtrs-platform/src/screen.rs:532`） |
+| RC-13 螢幕選擇／還原 | G11.4.a、G12.5.l | `hud_window.rs:178-193,640-662,823-824` | 對照 Python 規則；使用已存在的 `clamp_window_rect_to_screens`（`qtrs-platform/src/screen.rs:532`）。**已完成（RC-13，單螢幕 Win32 煙霧測試＋Python oracle）**：**未**使用 `clamp_window_rect_to_screens`，因為它的規則與 Python 不同（見 C11.4），改以 Python 規則寫成 `rust/src/ui/placement.rs`；新缺口 G11.4.e–G11.4.g |
 | RC-14 卡片根 spacing 2 vs 5 | G9.4.b、G12.5.b | `provider_card.rs:159` vs `provider_card.py:27` | **先做逐 widget rect 的 Python/Rust 幾何 diff**：若 2 是用來補 qtrs 的高度差異，則真正的 root cause 在 qtrs，不得直接改成 5 |
 | RC-15 Badge `max-height: 15px` | G12.3.b、G12.5.a | `styles.rs:192,291` | 同 RC-14 的閘門 |
 | RC-16 header 多餘的 `Expanding/Fixed` | G9.3.c | `hud_window.rs:272-275` | 同 RC-14 的閘門 |
