@@ -150,7 +150,7 @@ impl Screens {
         for (i, &full) in self.full.iter().enumerate() {
             let (w, h) = intersection_size(full, geometry);
             let area = w * h;
-            if area > 0 && best.map_or(true, |(a, _)| area > a) {
+            if area > 0 && best.is_none_or(|(a, _)| area > a) {
                 best = Some((area, i));
             }
         }

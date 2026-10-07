@@ -221,7 +221,7 @@ impl Widget for UsageDial {
         let geo = self.base.geometry();
         let w = geo.width as f32;
         let h = geo.height as f32;
-        let side = ((w.min(h) - 2.0) as f32).max(10.0);
+        let side = (w.min(h) - 2.0).max(10.0);
         let outer_x = (w - side) / 2.0;
         let outer_y = (h - side) / 2.0;
         let center = PointF::new(outer_x + side / 2.0, outer_y + side / 2.0);

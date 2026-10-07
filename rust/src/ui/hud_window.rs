@@ -856,7 +856,8 @@ impl HUDWindow {
         }
     }
 
-    /// Number of long-gap refreshes `on_clock_tick` has triggered (diagnostics and tests).
+    /// Number of long-gap refreshes `on_clock_tick` has triggered (tests).
+    #[cfg(test)]
     pub fn wake_refresh_seq(&self) -> u64 {
         self.wake_refresh_seq
     }
