@@ -760,6 +760,15 @@ mod tests {
         assert_eq!(deserialized.claude_profile, "auto");
     }
 
+    /// Waits until the debounced save has run `expected` times (5 s cap). The debounce is tens of
+    /// milliseconds, so a fixed sleep right after it expires fails on a loaded CI runner.
+    fn wait_for_saves(counter: &std::sync::atomic::AtomicUsize, expected: usize) {
+        let limit = Instant::now() + Duration::from_secs(5);
+        while counter.load(Ordering::SeqCst) < expected && Instant::now() < limit {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     #[test]
     fn test_resize_debounce_coalesces_multiple_events() {
         let save_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -785,7 +794,7 @@ mod tests {
         assert_eq!(save_counter.load(Ordering::SeqCst), 0);
 
         // Wait past debounce duration (60ms)
-        std::thread::sleep(Duration::from_millis(100));
+        wait_for_saves(&save_counter, 1);
 
         // Exactly one save must have fired
         assert_eq!(save_counter.load(Ordering::SeqCst), 1);
@@ -825,7 +834,7 @@ mod tests {
         assert_eq!(save_counter.load(Ordering::SeqCst), 0);
 
         // Wait past remaining debounce (now > 120ms since event C)
-        std::thread::sleep(Duration::from_millis(150));
+        wait_for_saves(&save_counter, 1);
 
         assert_eq!(save_counter.load(Ordering::SeqCst), 1);
         assert_eq!(debouncer.save_count(), 1);
@@ -901,7 +910,7 @@ mod tests {
 
         // Normal resize after restore
         debouncer.request_save();
-        std::thread::sleep(Duration::from_millis(100));
+        wait_for_saves(&save_counter, 1);
 
         assert_eq!(save_counter.load(Ordering::SeqCst), 1);
         assert_eq!(debouncer.save_count(), 1);
