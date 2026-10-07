@@ -784,10 +784,15 @@ mod tests {
         let mut tray = HUDTrayIcon::new(Arc::clone(&cfg));
         tray.update_menu_state();
 
-        // Verify the menu used by the tray is the modern styled Menu
-        let menu = build_hud_context_menu(&cfg.lock());
-        assert!(!menu.actions().is_empty());
-        assert!(menu.is_dark_mode());
+        // Verify the menu used by the tray is the modern styled Menu, in the configured
+        // appearance. `auto` follows the operating system, so the test fixes the appearance.
+        for (appearance, dark) in [("dark", true), ("light", false)] {
+            let mut config = cfg.lock().clone();
+            config.appearance = appearance.to_string();
+            let menu = build_hud_context_menu(&config);
+            assert!(!menu.actions().is_empty());
+            assert_eq!(menu.is_dark_mode(), dark, "appearance {appearance}");
+        }
     }
 
     /// Restores the application device pixel ratio the other tests run under.

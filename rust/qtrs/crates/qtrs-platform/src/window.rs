@@ -31,6 +31,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 #[cfg(windows)]
 use windows_sys::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
+#[cfg(windows)]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
@@ -264,6 +265,7 @@ fn set_interactive_resize_flag(hwnd: HWND, active: bool) {
 }
 
 /// Mirrors the native sizing-loop state onto the surfaces before they are resized.
+#[cfg(windows)]
 fn sync_interactive_resize(
     hwnd: HWND,
     presenter: &mut Option<crate::presenter::WindowsPresenter>,
@@ -493,6 +495,7 @@ unsafe extern "system" fn native_window_proc(
     native_window_proc_inner(hwnd, msg, wparam, lparam)
 }
 
+#[cfg(windows)]
 unsafe fn native_window_proc_inner(
     hwnd: HWND,
     msg: u32,

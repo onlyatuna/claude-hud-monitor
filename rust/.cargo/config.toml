@@ -1,0 +1,8 @@
+# The unit tests share process-global state: the application device pixel ratio that text
+# measurement reads (`qtrs_gui::text::font_database::set_application_device_pixel_ratio`, set to
+# 1.25 by two tests), the platform singleton and the Win32 desktop. Run in parallel, a test
+# measuring text at ratio 1 can see another test's 1.25 (the label height becomes 19 instead of 18,
+# the dial below its minimum size). Qt's own test runner is one process per test binary, one test at
+# a time; this keeps that. An explicit `RUST_TEST_THREADS` still wins (`force` is off).
+[env]
+RUST_TEST_THREADS = "1"

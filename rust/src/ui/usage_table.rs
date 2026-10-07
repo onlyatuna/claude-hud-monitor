@@ -1495,6 +1495,9 @@ mod tests {
     /// `HUDWindow` (the offscreen platform has no font database and reports fabricated
     /// metrics): column x/width `68 | 78/109 | 197/110 | 317/109`, row y/height
     /// `31 | 1 | 18 | 18 | 18 | 134 | 1 | 19 | 18 | 18`.
+    // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
+    // Segoe UI, Consolas); Linux and macOS have neither those fonts nor reference numbers.
+    #[cfg(windows)]
     #[test]
     fn test_grid_matches_qt_geometry() {
         let table = table_mode_table();
@@ -1526,6 +1529,9 @@ mod tests {
     /// Every HUD label renders in the `QApplication` default family, as the Python table's
     /// style sheet sets no `font-family`. Picking Segoe UI for ASCII text shifts the layout:
     /// its 14px line box is 19px tall against JhengHei UI's 18px.
+    // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
+    // Segoe UI, Consolas); Linux and macOS have neither those fonts nor reference numbers.
+    #[cfg(windows)]
     #[test]
     fn test_labels_use_the_app_default_family() {
         let table = table_mode_table();
@@ -1555,6 +1561,9 @@ mod tests {
     /// column goes to the left spacer. Measured with PySide6 6.11.2: icon x 1, name x 24, width 86.
     /// Qt's `sizeHint` is 86 whichever way the string is laid out (85.765625 px at 125%, a whole
     /// 86 at 100%), because the width is rounded up.
+    // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
+    // Segoe UI, Consolas); Linux and macOS have neither those fonts nor reference numbers.
+    #[cfg(windows)]
     #[test]
     fn test_header_row_advances_match_qt() {
         let table = table_mode_table();
@@ -1585,6 +1594,9 @@ mod tests {
     /// Reference measured with PySide6 6.11.2 at a device pixel ratio of 1.25 (DirectWrite
     /// advances) with the same cell texts in a 426x312 table: header x/width
     /// `77/109 | 196/121 | 327/99`, pill size hints `71x20 | 121x20 | 89x20`.
+    // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
+    // Segoe UI, Consolas); Linux and macOS have neither those fonts nor reference numbers.
+    #[cfg(windows)]
     #[test]
     fn test_columns_follow_widest_cell_hint() {
         let _guard = DevicePixelRatioGuard;

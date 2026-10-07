@@ -606,6 +606,9 @@ mod tests {
             "STALE"
         );
     }
+    // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
+    // Segoe UI, Consolas); Linux and macOS have neither those fonts nor reference numbers.
+    #[cfg(windows)]
     #[test]
     fn test_hud_layout_proportions() {
         let config =
@@ -674,6 +677,9 @@ mod tests {
             "Dials must have uniform height"
         );
     }
+    // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
+    // Segoe UI, Consolas); Linux and macOS have neither those fonts nor reference numbers.
+    #[cfg(windows)]
     #[test]
     fn test_horizontal_cards_fit_the_window_with_populated_badges() {
         let mut cfg = crate::config::Config { layout_mode: "horizontal".to_string(), ..Default::default() };

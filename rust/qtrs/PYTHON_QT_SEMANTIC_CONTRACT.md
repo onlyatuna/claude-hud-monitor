@@ -1133,6 +1133,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **效能／記憶體**：`py_mem.py`、`exe_mem.py`、`hud_mem.py`、`hud_startup.py`、`hud_paint_steady.py`、`lto_*`。
 - **完全沒有 harness 涵蓋**：信號、計時器、事件迴圈語意、跨執行緒遞送；托盤、選單、action（`aboutToShow`、勾選狀態、Exit 路徑）；設定持久化時序、熱鍵註冊失敗 UX、click-through；**樣式表字串**；喚醒刷新、雙擊刷新、tooltip、多螢幕位置；`python/tests/test_ui.py` 與 `test_refresh.py` 的行為在 Rust 端沒有以**同一個情境**驅動的對應測試（`rust/src` 內的單元測試只檢查 Rust 內部）。
 - **CI**：`.github/workflows/ci.yml` 只在 `rust` 目錄跑 `cargo test --all-targets`，只測應用 package；`rust/qtrs` 是獨立 workspace（`rust/Cargo.toml` 無 `[workspace]`），**qtrs 各 crate 的測試、任何 harness、任何 Python 差分都不在 CI 中**。
+- **CI 失敗紀錄（commit `9dc62db` 之後，最後一次全綠；修復見後）**：`17a6e31` 起 Linux／macOS 的 `cargo check` 失敗，原因是 `qtrs-platform/src/window.rs` 有三處沒有 `#[cfg(windows)]`（`KeyboardAndMouse` import、`sync_interactive_resize`、`native_window_proc_inner`）；`1705cad` 起 Windows 的 `cargo test` 失敗：(1) `test_tray_and_hud_menu_unified_parity` 預設 `appearance=auto`，在淺色主題的 runner 上得到淺色選單；(2)(3) `test_labels_use_the_app_default_family`、`test_hud_layout_proportions` 受另兩個測試把**行程全域**的 application DPR 設成 1.25 的影響（CI 以多執行緒跑；本機一向 `--test-threads=1`，所以看不到；本機以預設執行緒數重現 4／4 失敗）。修復：補三處 `#[cfg(windows)]`；tray 測試固定 `appearance`；`rust/.cargo/config.toml` 設 `RUST_TEST_THREADS=1`（根因是全域 DPR，序列化是對症的隔離，不是消除全域狀態）。在 WSL（Ubuntu，與 CI 的 `cargo check --all-features` 及 `cargo test --all-targets` 同命令）驗證：check 通過；測試只剩本機已安裝版本不同的 `agy` CLI 造成的 `test_fetch_usage_live_benchmark`（CI 上 `cli_not_found` 會略過）。**macOS 沒有驗證**：本機無法交叉編譯 `ring`，只能依 CI 的錯誤清單（與 Linux 相同的 `windows_sys` 未閘控）判斷。
+- **Known gap**：**G12.6.a [P1, RAN]** 6 項以 Windows 字型（Microsoft JhengHei UI／Segoe UI／Consolas）的 PySide6 實測值為期望的 HUD 版面測試（`usage_table.rs` 4 項、`provider_card.rs` 2 項）現在只在 `#[cfg(windows)]` 執行；Linux／macOS 上字型不存在、也沒有參考數值，所以這些平台的 CI 不驗證 HUD 版面。**G12.6.b [P2, RAN]** qtrs workspace 的測試在非 Windows 無法編譯（`GenericWindow` 沒有 `expect`、`LayeredSurface` 找不到），且不在 CI。**G12.6.c [P2]** 測試序列化依賴 `.cargo/config.toml` 的環境變數；全域 application DPR 本身仍是行程全域（Qt 的 `devicePixelRatio` 也是 application 層級，但 Qt 的測試是每個 binary 一個行程）。
 
 ### C12.7 驗收閘門：什麼時候可以說「一致」
 
@@ -1149,7 +1151,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 319 項：D 12、P0 34、P1 137、P2 131、test gap 5（計數含已修復項；標籤含「已修復」者共 32 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 322 項：D 12、P0 34、P1 138、P2 133、test gap 5（計數含已修復項；標籤含「已修復」者共 32 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1469,6 +1471,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.r | P1 | 版面切換：`StackedWidget` vs 重建 |
 | G12.5.s | P0, READ；= G8.5.d；已修復：RC-10 | `Window::set_style_sheet` 為 app 全域 |
 | G12.5.t | P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending | DComp 路徑 opacity 無效（待實測） |
+| G12.6.a | P1, RAN | 6 項 Windows 字型版面測試只在 Windows 執行 |
+| G12.6.b | P2, RAN | qtrs workspace 測試在非 Windows 無法編譯，不在 CI |
+| G12.6.c | P2 | 測試序列化靠環境變數；全域 DPR 仍是行程全域 |
 | G12.5.u | P2 | 色彩／字型解析細節 |
 | G12.5.v | P1 | 發佈 profile `panic = "abort"` vs Python excepthook |
 | G12.5.w | P2 | `rust/README.md` 仍描述 egui/eframe/reqwest |
