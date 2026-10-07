@@ -175,14 +175,6 @@ fn apply_python_structure(hud: &mut HUDWindow, horizontal: bool) {
 }
 
 fn dump(mode: &str, w: i32, h: i32, variant: u32) -> Value {
-    // `HUDWindow::new` launches a real provider fetch per provider. Point the home directory at an
-    // empty folder first so the Claude provider finds no credentials and sends no request (an
-    // earlier version of this audit did not, and its repeated runs drew HTTP 429).
-    let empty_home = std::env::temp_dir().join("hud_geometry_audit_home");
-    let _ = std::fs::create_dir_all(&empty_home);
-    std::env::set_var("USERPROFILE", &empty_home);
-    std::env::set_var("HOME", &empty_home);
-    std::env::remove_var("CLAUDE_CONFIG_DIR");
     // `Application::new` does this from the primary screen (1.25 on this machine, as in the Python
     // oracle); without it the GDI text engine would be modelled instead of DirectWrite.
     qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
@@ -198,7 +190,7 @@ fn dump(mode: &str, w: i32, h: i32, variant: u32) -> Value {
     cfg.vertical_height = h as u32;
     let cfg = Arc::new(Mutex::new(cfg));
     let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-    let mut hud = HUDWindow::new(cfg, ctrl).expect("HUDWindow::new");
+    let mut hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new");
     hud.show();
     hud.window.root_widget().borrow().update_layout();
     apply_variant(&mut hud, variant, mode == "horizontal");

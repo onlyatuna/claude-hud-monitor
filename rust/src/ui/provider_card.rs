@@ -658,7 +658,7 @@ mod tests {
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
             crate::refresh_controller::RefreshController::new(60),
         ));
-        let mut hud = crate::ui::hud_window::HUDWindow::new(config, refresh_ctrl).unwrap();
+        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(config, refresh_ctrl, crate::providers::stub::stub_providers()).unwrap();
 
         // 1. Horizontal mode
         hud.window
@@ -730,7 +730,7 @@ mod tests {
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
             crate::refresh_controller::RefreshController::new(60),
         ));
-        let mut hud = crate::ui::hud_window::HUDWindow::new(config, refresh_ctrl).unwrap();
+        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(config, refresh_ctrl, crate::providers::stub::stub_providers()).unwrap();
         hud.apply_cards_layout_mode("horizontal");
         for (pid, name, b1, b2) in [
             ("claude", "Claude Code", "Code: 100%", "Chat: 0%"),
@@ -783,7 +783,7 @@ mod tests {
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
             crate::refresh_controller::RefreshController::new(60),
         ));
-        let mut hud = crate::ui::hud_window::HUDWindow::new(config, refresh_ctrl).unwrap();
+        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(config, refresh_ctrl, crate::providers::stub::stub_providers()).unwrap();
 
         // 1. Initial state is vertical
         assert_eq!(hud.config.lock().layout_mode, "vertical");
@@ -854,7 +854,7 @@ mod tests {
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
             crate::refresh_controller::RefreshController::new(60),
         ));
-        let mut hud = crate::ui::hud_window::HUDWindow::new(config, refresh_ctrl).unwrap();
+        let mut hud = crate::ui::hud_window::HUDWindow::with_providers(config, refresh_ctrl, crate::providers::stub::stub_providers()).unwrap();
         hud.window
             .set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 883, 574));
         hud.apply_cards_layout_mode("vertical");

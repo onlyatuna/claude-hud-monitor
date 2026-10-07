@@ -29,7 +29,7 @@ use crate::config::{
     MIN_VERTICAL_HEIGHT, MIN_VERTICAL_WIDTH,
 };
 use crate::providers::base::UsageMetrics;
-use crate::providers::{AgyProvider, ClaudeProvider, CodexProvider, Provider};
+use crate::providers::Provider;
 use crate::refresh_controller::RefreshController;
 
 fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
@@ -148,10 +148,40 @@ pub struct HUDWindow {
     pub debouncer: Arc<ResizeDebouncer>,
 }
 
+/// The real providers. Test builds must not reach them: building a window launches a live fetch per
+/// provider, so tests construct windows with `HUDWindow::with_providers` and stubs.
+#[cfg(not(test))]
+fn default_providers(config: &Arc<Mutex<Config>>) -> HashMap<String, Arc<dyn Provider + Send + Sync>> {
+    use crate::providers::{agy::AgyProvider, claude::ClaudeProvider, codex::CodexProvider};
+    HashMap::from([
+        (
+            "claude".to_string(),
+            Arc::new(ClaudeProvider::with_config(Some(Arc::clone(config)))) as Arc<dyn Provider + Send + Sync>,
+        ),
+        ("agy".to_string(), Arc::new(AgyProvider::new()) as Arc<dyn Provider + Send + Sync>),
+        ("codex".to_string(), Arc::new(CodexProvider::new()) as Arc<dyn Provider + Send + Sync>),
+    ])
+}
+
+#[cfg(test)]
+fn default_providers(_config: &Arc<Mutex<Config>>) -> HashMap<String, Arc<dyn Provider + Send + Sync>> {
+    panic!("HUDWindow::new would launch live provider fetches; tests must use HUDWindow::with_providers with providers::stub")
+}
+
 impl HUDWindow {
     pub fn new(
         config: Arc<Mutex<Config>>,
         refresh_ctrl: Arc<Mutex<RefreshController>>,
+    ) -> Result<Self, &'static str> {
+        let providers = default_providers(&config);
+        Self::with_providers(config, refresh_ctrl, providers)
+    }
+
+    /// Same as `new`, with the providers supplied by the caller (one background fetch is launched per entry).
+    pub fn with_providers(
+        config: Arc<Mutex<Config>>,
+        refresh_ctrl: Arc<Mutex<RefreshController>>,
+        providers: HashMap<String, Arc<dyn Provider + Send + Sync>>,
     ) -> Result<Self, &'static str> {
         let (init_x, init_y, init_w, init_h, opacity, aot, ct, ui_mode, dark) = {
             let cfg = config.lock();
@@ -375,23 +405,6 @@ impl HUDWindow {
             }
             debouncer_resize.request_save();
         });
-        // Initialize providers
-        let providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::from([
-            (
-                "claude".to_string(),
-                Arc::new(ClaudeProvider::with_config(Some(Arc::clone(&config))))
-                    as Arc<dyn Provider + Send + Sync>,
-            ),
-            (
-                "agy".to_string(),
-                Arc::new(AgyProvider::new()) as Arc<dyn Provider + Send + Sync>,
-            ),
-            (
-                "codex".to_string(),
-                Arc::new(CodexProvider::new()) as Arc<dyn Provider + Send + Sync>,
-            ),
-        ]);
-
         {
             let mut ctrl = refresh_ctrl.lock();
             for (id, provider) in &providers {
@@ -847,12 +860,32 @@ mod tests {
         assert_eq!(widths, [211, 210, 211]);
     }
 
+    /// TI-01: a window built with injected providers fetches from exactly those providers — one
+    /// background fetch each — so tests never reach the live endpoints.
+    #[test]
+    fn test_hud_window_launches_only_the_injected_providers() {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let (providers, fetched) = crate::providers::stub::stub_providers_with_receiver();
+
+        let hud = HUDWindow::with_providers(cfg, refresh_ctrl, providers).expect("with_providers failed");
+
+        let mut ids: Vec<String> = (0..crate::providers::PROVIDER_IDS.len())
+            .map(|_| fetched.recv_timeout(std::time::Duration::from_secs(10)).expect("stub was not fetched"))
+            .collect();
+        ids.sort();
+        assert_eq!(ids, ["agy", "claude", "codex"]);
+        let mut held: Vec<&String> = hud.providers.keys().collect();
+        held.sort();
+        assert_eq!(held, ["agy", "claude", "codex"]);
+    }
+
     #[test]
     fn test_hud_window_init_does_not_trigger_save() {
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
 
-        let hud = HUDWindow::new(Arc::clone(&cfg), refresh_ctrl).expect("HUDWindow::new failed");
+        let hud = HUDWindow::with_providers(Arc::clone(&cfg), refresh_ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new failed");
 
         // Debouncer was in restoring mode during HUDWindow::new
         // It must have prevented any saves during init
@@ -865,7 +898,7 @@ mod tests {
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
         let mut hud =
-            HUDWindow::new(Arc::clone(&cfg), refresh_ctrl).expect("HUDWindow::new failed");
+            HUDWindow::with_providers(Arc::clone(&cfg), refresh_ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new failed");
 
         // Simulate resize request
         hud.debouncer.request_save();
@@ -880,7 +913,7 @@ mod tests {
     fn test_hud_window_drop_triggers_shutdown_and_worker_join() {
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let hud = HUDWindow::new(Arc::clone(&cfg), refresh_ctrl).expect("HUDWindow::new failed");
+        let hud = HUDWindow::with_providers(Arc::clone(&cfg), refresh_ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new failed");
         let debouncer = Arc::clone(&hud.debouncer);
 
         assert!(!debouncer.is_worker_joined());
@@ -900,7 +933,7 @@ mod tests {
 
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let mut hud = HUDWindow::new(Arc::clone(&cfg), refresh_ctrl).expect("HUDWindow::new failed");
+        let mut hud = HUDWindow::with_providers(Arc::clone(&cfg), refresh_ctrl, crate::providers::stub::stub_providers()).expect("HUDWindow::new failed");
 
         let ctx = WidgetStyleContext {
             type_name: "QLabel",
