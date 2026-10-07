@@ -267,11 +267,13 @@ impl HUDWindow {
         let title_label = make_widget(title);
 
         let ghost_label = make_widget(Label::new("👻"));
+        ghost_label.borrow().set_tool_tip("滑鼠穿透中 (Alt+Shift+C 解除)");
         ghost_label.borrow_mut().set_visible(ct);
 
         let mut btn = Button::new("⇄");
         btn.set_object_name("LayoutToggleBtn");
         let layout_toggle_btn = make_widget(btn);
+        layout_toggle_btn.borrow().set_tool_tip("切換 橫向並排 / 直式堆疊 佈局");
         layout_toggle_btn.borrow().set_visible(ui_mode != "table");
 
         let mut time_lbl = Label::new("--:--:--");

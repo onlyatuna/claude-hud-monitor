@@ -658,7 +658,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`setToolTip` 在 hover 一段時間後顯示。
 - **qtrs required**：MUST widget 層級 tooltip（Python HUD 以 tooltip 顯示錯誤與過期資料）。
 - **Current implementation**：`IMPLEMENTED`（RC-11c；Win32 真實視窗驗證）。`Widget::tool_tip/set_tool_tip/tool_tip_duration/always_show_tool_tips`、`EventKind::ToolTip{x,y,global_x,global_y}`（`QHelpEvent` 形狀，無 `text`）、`qtrs-widgets/src/tooltip.rs`（`ToolTip::show_text/hide_text/is_visible/text/geometry`、純函式 `place_tip`／`expire_time_ms`）、`EventTreeDispatcher::dispatch_mouse_move`。
-- **Known gap**：**G8.8.a [P0, READ；qtrs 層 RC-11c 已完成，HUD 接線待 Phase 4]** Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` 設定 tooltip；qtrs 現在提供 widget tooltip，但 HUD 一個也沒設定，所以此 gap 在 HUD 端仍開著（不計入已修復）；**G8.8.b [P2, READ]** 無 `QToolTip::showText` 的 `rect` 參數（`setTipRect`，游標離開該矩形即隱藏）與 `QToolTip::font/palette/setFont/setPalette`；**G8.8.c [P2, READ]** 游標大小固定為 `QPlatformCursor` 預設的 16×16 邏輯像素（偏移 `(2,16)`）。Qt 的 `placeTip` 取 `cursor->size()`（Windows 為 `QWindowsCursor::size()`，由登錄檔 `CursorBaseSize` 與 DPI 算出，`qwindowscursor.cpp:675-692`），再經 `QHighDpi::fromNativePixels` 除以 DPR（`qtooltip.cpp:325-328`）；qtrs 兩步都沒做。因此 tip 相對游標的偏移只有在「預設 100% DPI 且登錄值剛好得 16」時才可能與 Qt 一致 `[INFERENCE]`；DPR≠1 或自訂游標大小時偏移必然不同，須手動驗證。**位置幾何與 Qt 的一致性只由 `place_tip` 純函式測試（手算自 `qtooltip.cpp:349-361`）支持，不涵蓋游標大小；真實視窗測試只證明接線，不是 Qt 幾何 parity 證明**；**G8.8.d [P1, READ]** tip 內容是單行 `Label`：沒有自動換行（Qt 在比螢幕寬時換行，`qtooltip.cpp:152-157`）、沒有 rich text（`Qt::mightBeRichText`）、字串中的換行未驗證。Python 的 tooltip 是否含換行／HTML 待 Phase 4 核對；**G8.8.e [P2, READ]** `set_tool_tip` 不送 `ToolTipChange`（無 `EventKind`、無 `changeEvent`）；`StatusTip`、`WhatsThis` 未實作；`Action::tool_tip` 未接到 menu／toolbar；**G8.8.f [P2, READ]** tip 視窗只重用一個實例（Qt 每次新建並 `deleteLater`）；無淡入淡出；`WindowActivate/Deactivate/ActivationChange` 不存在（G11.1.d），tip 因 `FocusIn/FocusOut` 而隱藏，不因啟用狀態改變；**G8.8.g [P2, `[INFERENCE]`]** 混合 DPI：tip 視窗以主螢幕 DPR 建立，再移到游標所在螢幕；未在異質 DPI 實機驗證。
+- **Known gap**：**G8.8.a [P0, READ；已修復：RC-11c + HUD 接線]** Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` 設定 tooltip；Rust HUD 已在 `provider_card.rs`（卡片 `container`）、`usage_table.rs`（5 個 value cell + header + dial + m2_val 的 run-out 備註）、`hud_window.rs`（`ghost_label`、`layout_toggle_btn`）設定相同文字（測試 `ui/tool_tip_tests.rs` 7 項，修前全部失敗；真實 `ClaudeHUD.exe` Windows smoke：停留約 1.3 s 後出現 `WS_EX_NOACTIVATE|TOPMOST` 的 tip 視窗、未搶前景、移開與點擊後消失、子 widget 退回父層 tooltip；tip 外觀未取得像素，仍須 MANUAL WINDOWS VERIFICATION）；**G8.8.b [P2, READ]** 無 `QToolTip::showText` 的 `rect` 參數（`setTipRect`，游標離開該矩形即隱藏）與 `QToolTip::font/palette/setFont/setPalette`；**G8.8.c [P2, READ]** 游標大小固定為 `QPlatformCursor` 預設的 16×16 邏輯像素（偏移 `(2,16)`）。Qt 的 `placeTip` 取 `cursor->size()`（Windows 為 `QWindowsCursor::size()`，由登錄檔 `CursorBaseSize` 與 DPI 算出，`qwindowscursor.cpp:675-692`），再經 `QHighDpi::fromNativePixels` 除以 DPR（`qtooltip.cpp:325-328`）；qtrs 兩步都沒做。因此 tip 相對游標的偏移只有在「預設 100% DPI 且登錄值剛好得 16」時才可能與 Qt 一致 `[INFERENCE]`；DPR≠1 或自訂游標大小時偏移必然不同，須手動驗證。**位置幾何與 Qt 的一致性只由 `place_tip` 純函式測試（手算自 `qtooltip.cpp:349-361`）支持，不涵蓋游標大小；真實視窗測試只證明接線，不是 Qt 幾何 parity 證明**；**G8.8.d [P1, READ]** tip 內容是單行 `Label`：沒有自動換行（Qt 在比螢幕寬時換行，`qtooltip.cpp:152-157`）、沒有 rich text（`Qt::mightBeRichText`）、字串中的換行未驗證。Python 的 tooltip 是否含換行／HTML 待 Phase 4 核對；**G8.8.e [P2, READ]** `set_tool_tip` 不送 `ToolTipChange`（無 `EventKind`、無 `changeEvent`）；`StatusTip`、`WhatsThis` 未實作；`Action::tool_tip` 未接到 menu／toolbar；**G8.8.f [P2, READ]** tip 視窗只重用一個實例（Qt 每次新建並 `deleteLater`）；無淡入淡出；`WindowActivate/Deactivate/ActivationChange` 不存在（G11.1.d），tip 因 `FocusIn/FocusOut` 而隱藏，不因啟用狀態改變；**G8.8.g [P2, `[INFERENCE]`]** 混合 DPI：tip 視窗以主螢幕 DPR 建立，再移到游標所在螢幕；未在異質 DPI 實機驗證。
 - **Test**：`qtrs-widgets/tests/test_tooltip.rs`（26 項：純函式 `place_tip`／`expire_time_ms`；喚醒延遲、取消、fall-asleep、冒泡與座標、`showText` 更換／位置／存活；真實視窗：按鈕狀態、非活動視窗與 `WA_AlwaysShowToolTips`、不搶前景）。tip 外觀（顏色、字型、圓角）不自動斷言，須手動驗證。
 - **HUD usage**：見上；HUD 尚未設定 tooltip（Phase 4）。
 
@@ -1029,7 +1029,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | `QSizePolicy`（Minimum/Preferred/Expanding） | `provider_card.py:39`、`usage_table.py:139` | OK（Label 的 `set_size_policy` 被丟棄） | G8.3.b |
 | `QLabel`（setText/Alignment/ObjectName/Visible/Font） | 多處 | OK；`Alignment` 只有 Left/Center/Right | — |
 | `QLabel.setPixmap` | `usage_table.py:118,280,323` | ABSENT（以自訂繪製 widget 取代） | — |
-| `setToolTip` | `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` | **ABSENT**（widget） | G8.8.a |
+| `setToolTip` | `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` | **已接線**（7 處；外觀 MANUAL） | G8.8.a |
 | `QPushButton.clicked` | `hud_window.py:158-161` | OK | — |
 | `QFrame` VLine/HLine | `hud_window.py:341-343,359-361` | OK | — |
 | `QProgressBar` + `::chunk` | `provider_card.py:70-74,97-101,163,171` | OK | — |
@@ -1109,7 +1109,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.f [P0, READ；已修復：RC-06] | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 | `window.rs:1025`（platform 有發 release）；`window.rs:771-815` | 修復 |
 | G12.5.g [P0, READ；= G11.2.b；已修復：RC-06] | Alt+F4 / `CloseRequest` 被吞 | G11.2.b | 修復 |
 | G12.5.h [P1] | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms（啟動後 trim）；Rust 在 `hide()` 立即 trim，且只有 2500 ms | `hud_window.py:108,114,215,459,613,617` vs `hud_window.rs:484`、`main.rs:594` | 修復或核准 |
-| G12.5.i [P0, READ；= G8.8.a] | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） | G8.8.a | 修復 |
+| G12.5.i [P0, READ；= G8.8.a；已修復：HUD tooltip 接線] | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） | G8.8.a | 修復 |
 | G12.5.j [P0, READ；= G11.9.a；已修復：RC-12] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
 | G12.5.k [P1] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 修復 |
 | G12.5.l [P0, READ；= G11.4.a；已修復：RC-13] | 螢幕選擇／脫離螢幕還原規則 | G11.4.a | 修復 |
@@ -1194,7 +1194,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 339 項：D 12、P0 34、P1 147、P2 141、test gap 5（計數含已修復項；標籤含「已修復」者共 45 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.g、G12.8.h、G12.8.i、G12.8.o）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 339 項：D 12、P0 34、P1 147、P2 141、test gap 5（計數含已修復項；標籤含「已修復」者共 47 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.g、G12.8.h、G12.8.i、G12.8.o）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1374,7 +1374,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.6.c | P1 | 無 layout 導出的頂層最小尺寸 |
 | G8.7.a | P1, READ | 無 child 裁剪 |
 | G8.7.b | P2 | 髒區只有整個 widget |
-| G8.8.a | P0, READ；qtrs 層 RC-11c 已完成、HUD 接線待 Phase 4 | Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,16 |
+| G8.8.a | P0, READ；已修復：RC-11c + HUD 接線 | Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,16 |
 | G8.8.b | P2, READ | 無 `showText` 的 `rect` 參數、`QToolTip::font/palette` |
 | G8.8.c | P2, READ | 游標大小固定 16×16 邏輯像素；`QWindowsCursor::size()` 與 `fromNativePixels`（DPR）未建模 |
 | G8.8.d | P1, READ | tip 無自動換行、無 rich text |
@@ -1502,7 +1502,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.f | P0, READ；已修復：RC-06 | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 |
 | G12.5.g | P0, READ；= G11.2.b；已修復：RC-06 | Alt+F4 / `CloseRequest` 被吞 |
 | G12.5.h | P1 | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms |
-| G12.5.i | P0, READ；= G8.8.a | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） |
+| G12.5.i | P0, READ；= G8.8.a；已修復：HUD tooltip 接線 | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） |
 | G12.5.j | P0, READ；= G11.9.a；已修復：RC-12 | 熱鍵註冊失敗不被回報；鎖定防護失效 |
 | G12.5.k | P1 | `--smoke-test` 不檢查設定持久化 |
 | G12.5.l | P0, READ；= G11.4.a；已修復：RC-13 | 螢幕選擇／脫離螢幕還原規則 |

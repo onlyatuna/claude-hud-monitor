@@ -27,7 +27,7 @@ use qtrs_widgets::{
 use super::styles::{duo_colors, scale_colors, Theme};
 use crate::pace::{
     elapsed_fraction, format_countdown_dhm, format_countdown_hm, format_reset_time, pace_mark,
-    window_caption, window_seconds, FIVE_HOURS, ONE_WEEK,
+    runout_text, window_caption, window_seconds, FIVE_HOURS, ONE_WEEK,
 };
 use crate::providers::base::UsageMetrics;
 
@@ -35,6 +35,11 @@ pub const PROVIDER_ORDER: [&str; 3] = ["claude", "codex", "agy"];
 
 fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
     Rc::new(RefCell::new(Box::new(w)))
+}
+
+/// Python `setToolTip`: `"\n".join(s for s in parts if s)`.
+fn join_tip(parts: &[&str]) -> String {
+    parts.iter().copied().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n")
 }
 
 fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
@@ -1006,6 +1011,19 @@ impl ProviderColumn {
         self.current_metrics = data.clone();
         let is_offline = data.error.is_some() && !data.stale;
 
+        // `for w in self.value_cells + [self.header]: w.setToolTip(data.error or "")`
+        let error_tip = data.error.as_deref().unwrap_or("");
+        for w in [
+            &self.m1_reset,
+            &self.m1_countdown,
+            &self.m2_val,
+            &self.m2_reset,
+            &self.m2_countdown,
+            &self.header,
+        ] {
+            w.borrow().set_tool_tip(error_tip);
+        }
+
         // Python `_set_state`: offline columns dim their value cells and name.
         let state = if is_offline { "muted" } else { "" };
         for w in [
@@ -1038,6 +1056,7 @@ impl ProviderColumn {
                     true,
                 );
             }
+            self.dial.borrow().set_tool_tip(error_tip);
             set_label_text(&self.m2_val, "--");
             // Python `self.m2_val.setStyleSheet("")`: back to the sheet's colour.
             self.m2_val.borrow().set_style_sheet("");
@@ -1063,6 +1082,15 @@ impl ProviderColumn {
         };
         set_label_text(&self.badge, badge_text);
 
+        if data.stale {
+            let stamp = match data.last_success {
+                Some(t) => t.with_timezone(&chrono::Local).format("%m/%d %H:%M:%S").to_string(),
+                None => "--".to_string(),
+            };
+            self.header
+                .borrow()
+                .set_tool_tip(&join_tip(&[&format!("舊資料 {stamp}"), error_tip]));
+        }
         self.update_countdown();
     }
 
@@ -1124,6 +1152,17 @@ impl ProviderColumn {
         }
         set_label_text(&self.m2_val, pct_text);
         set_label_color(&self.m2_val, text2);
+
+        let tip1 = runout_text(data.metric1_val, e1, w1);
+        let tip2 = runout_text(data.metric2_val, e2, w2);
+        let stale_tip = match (&data.error, data.stale) {
+            (Some(e), true) => e.as_str(),
+            _ => "",
+        };
+        self.m2_val.borrow().set_tool_tip(&join_tip(&[&tip2, stale_tip]));
+        let dial1 = if tip1.is_empty() { String::new() } else { format!("5 小時：{tip1}") };
+        let dial2 = if tip2.is_empty() { String::new() } else { format!("1 週：{tip2}") };
+        self.dial.borrow().set_tool_tip(&join_tip(&[&dial1, &dial2, stale_tip]));
     }
 }
 
