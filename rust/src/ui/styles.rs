@@ -189,7 +189,6 @@ pub fn get_cards_stylesheet(dark: bool) -> &'static str {
             border-radius: 3px;
             padding: 1px 4px;
             font-size: 9px;
-            max-height: 15px;
             color: #cbd5e1;
             font-family: 'Consolas', monospace;
         }
@@ -288,7 +287,6 @@ pub fn get_cards_stylesheet(dark: bool) -> &'static str {
             border-radius: 3px;
             padding: 1px 4px;
             font-size: 9px;
-            max-height: 15px;
             color: #334155;
             font-family: 'Consolas', monospace;
         }

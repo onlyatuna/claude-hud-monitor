@@ -648,6 +648,20 @@ mod tests {
         assert_eq!(card_height, 109, "card height (PySide6: 109)");
     }
 
+    /// RC-15. PySide6's `QLabel#Badge` has no `max-height`; its `sizeHint` height is 14 at DPR 1.0
+    /// and 15 at DPR 1.25 (`py_*_dpr1.json`, `py_*.json`). A `max-height: 15px` in the sheet forces 15
+    /// at both ratios.
+    #[cfg(windows)]
+    #[test]
+    fn test_badge_size_hint_matches_pyside6_at_both_ratios() {
+        for (dpr, expected) in [(1.0, 14), (1.25, 15)] {
+            let _setup = crate::ui::test_support::CardsOracleSetup::at_dpr(dpr);
+            let card = ProviderCardWidget::new("claude");
+            let hint = card.badge.borrow().size_hint();
+            assert_eq!(hint.height, expected, "badge height at DPR {dpr} (PySide6: {expected}); hint {hint:?}");
+        }
+    }
+
     // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
     // Segoe UI, Consolas); Linux and macOS have neither those fonts nor reference numbers.
     #[cfg(windows)]
