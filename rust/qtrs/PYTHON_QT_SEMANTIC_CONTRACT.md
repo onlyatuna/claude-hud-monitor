@@ -1071,7 +1071,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **G12.3.b [P0, READ]** Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px`（`styles.rs:192,291`），Python 沒有此屬性（`styles.py:116-124`）。
 - **G12.3.c [P1, READ]** 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_solid`；Rust 不接受 `vibrant`，一律以 `panel_bg_vibrant` 自繪（`styles.rs:371`、`hud_window.rs:88-92`）。
 - **G12.3.d [P1]** 型別比對無繼承；Label 的 `pseudo_states` 為空（`:hover/:disabled` 對 label 不成立）。
-- **G12.3.e [P2]** `font-family` 清單以一個原始字串存、查找時才拆；generic（`sans-serif`/`monospace`）被跳過而非映射到系統字型，`'Consolas', monospace` 在沒有 Consolas 時沒有等寬退路。
+- **G12.3.e [P2]** `font-family` 清單以一個原始字串存、查找時才拆；generic（`sans-serif`/`monospace`）被跳過而非映射到系統字型，`'Consolas', monospace` 在沒有 Consolas 時沒有等寬退路。**Qt 依據**：Linux 的 `QFontconfigDatabase::resolveFontFamilyAlias` 把家族字串交給 `FcConfigSubstitute`（`qfontconfigdatabase.cpp:970-995`），`fallbacksForFamily` 另把 style hint 轉成 fontconfig 的 `sans-serif`／`monospace` 等（`getFcFamilyForStyleHint`，`:347-367`）；macOS 無此家族時依 style hint 取 Menlo 等（`qcoretextfontdatabase.mm:625-640`）；Windows 取 Courier New 等（`qwindowsfontdatabasebase.cpp:939-961`）。與 G12.6.d 同一根因（字型來源與缺字型規則），一起處理，不單獨修。CSS 的 generic 名稱在 Qt 內經哪一條路徑變成 style hint，尚未追到 `qcssparser.cpp`／`qstylesheetstyle.cpp`，`[INFERENCE]`。
 - **G12.3.f [P2, INFERENCE]** `font-weight: 800` 映射到 `FontWeight::Black`；列舉無 ExtraBold，字型選擇只分 regular／bold（`font_database.rs`）；Qt 的數值映射未驗證。
 - **G12.3.g [P2]** `font-size` px 取整（`test_label_box_model.rs::qss_pixel_sizes_are_rounded_like_qt`）；`letter-spacing` 於 `label.rs`。
 - **G12.3.h [P2, INFERENCE]** 色彩：8 位數十六進位被當 `#RRGGBBAA`（`qcssparser.rs`），Qt 的 `QColor` 形式是 `#AARRGGBB`，HUD 不用；具名顏色只有 black/white/red/green/blue；`rgba` 的 alpha ≤ 1 當分數、否則 0–255。
