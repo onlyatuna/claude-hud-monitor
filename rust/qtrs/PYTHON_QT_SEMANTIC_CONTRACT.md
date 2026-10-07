@@ -1101,8 +1101,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 | ID | 差異 | 證據 | 處置 |
 |---|---|---|---|
-| G12.5.a [P0, READ；= G12.3.b] | Badge `max-height: 15px` 只在 Rust | `styles.rs:192,291` vs `styles.py:116-124` | 修復＋樣式表比對測試 |
-| G12.5.b [P0, READ；= G9.4.b] | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 | `provider_card.rs:159` vs `provider_card.py:27`（已讀確認） | 修復或寫理由 |
+| G12.5.a [P0, READ；= G12.3.b] | Badge `max-height: 15px` 只在 Rust | `styles.rs:192,291` vs `styles.py:116-124` | 修復＋樣式表比對測試（幾何稽核：案例 A，見 C12.8） |
+| G12.5.b [P0, READ；= G9.4.b] | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 | `provider_card.rs:159` vs `provider_card.py:27`（已讀確認） | 修復或寫理由（幾何稽核：案例 A，須與 G12.8.a 同做，見 C12.8） |
 | G12.5.c [P1] | 面板底色不依 Acrylic 是否成功而改變 | `hud_window.rs:88-92,229` vs `hud_window.py:240-250` | 修復 |
 | G12.5.d [P0, READ] | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 只有 resize 的 `ResizeDebouncer` + 3 s 輪詢抓移動，且無 release handler | `hud_window.py:595-609,624-649` vs `config.rs:396`、`main.rs:575-591` | 修復 |
 | G12.5.e [P0, READ] | 喚醒偵測（倒數 tick 間隔 >15 s 就刷新）在 Rust 不存在 | `hud_window.py:461-467`；grep `gap|WM_POWERBROADCAST|resume` 於 `rust/src` 為空 | 修復 |
@@ -1147,11 +1147,48 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | 「行為一致」 | C12.5 每一項關閉，或在 §1.3 登記為刻意差異 |
 | 任何涉及像素的回報 | 結尾 **MANUAL WINDOWS VERIFICATION REQUIRED**，除非逐像素差分實際為零 |
 
+### C12.8 幾何差分稽核（RC-14／15／16；只量測，未改 production code）
+
+完整報告：`rust/qtrs/GEOMETRY_DIFF_RC14_16.md`；工具與原始資料：`rust/tools/geometry_audit/`（`py_geom.py` 以真實 Python `HUDWindow` 為 oracle，`compare.py`，`results/*.json`）；Rust 端 `rust/src/ui/geometry_audit.rs`（`#[ignore]`，且會把 home 指到空資料夾以避免 provider 送出網路請求）。
+
+- **方法**：逐 widget 比 rect／sizeHint／min／max／spacing／margins／字型度量；以 8 個「what-if」變體（只用公開 widget API 從外部改 Rust 的值）判斷 Rust 的某個值是否在補 qtrs 差異。**必須先設 `set_application_device_pixel_ratio(1.25)`**，否則 qtrs 走 GDI 路徑而得到錯誤結論（第一輪就量錯過）。
+- **結果**：三個 RC 全為**案例 A（應用層）**；沒有發現 RC-14／15／16 的 Rust 值在補 qtrs 差異。橫向 y/h 不吻合 18 → 0（字級 14＋spacing 5）；直向 49 → 1（再加 Python 容器結構與 Preferred policy），剩下的 1 個與橫向殘餘 x/w 全部來自下列 qtrs 項（g、j）。
+- **限制**：只量 DPR 1.25、Windows 字型、預設佔位文字；無即時資料、無 CJK badge、**無像素**；V5／V6 內各設定的貢獻未逐項隔離。
+
+| ID | 嚴重度／驗證 | 層級 | 內容 |
+|---|---|---|---|
+| G12.8.a | P1, RAN | 應用 | 指標值字級：Python widget-local `font-size: 14px`；Rust 只有 `set_font(14)`，被 app sheet `QLabel#MetricValue { font-size: 16px }` 蓋過（符合 Qt：樣式表字級勝過 `setFont`），有效字級 16，`sizeHint` 高度 19 vs 17。RC-14 的第一個分歧 |
+| G12.8.b | P1, RAN | 應用 | 橫向 body spacing：Python 8（`hud_window.py:337`），Rust 預設 6；卡片寬 213 vs 211 |
+| G12.8.c | P1, RAN | 應用 | 直向容器 policy／stretch：Python 不設；Rust `stack`／`cards_container` `Expanding`、根 stretch 1、卡片 stretch。RC-16 的延伸 |
+| G12.8.d | P2, RAN | 應用 | `title` size policy：Python `Minimum/Preferred`（`provider_card.py:34`），Rust 預設 |
+| G12.8.e | P2, RAN | 應用 | badge 字重：Python 400；Rust Bold（`set_font(...Bold)`，QSS 沒有字重） |
+| G12.8.f | P1, RAN | 應用 | 視窗大小常數：橫向最小／預設高 Python 125／145，Rust 130／152；直向最小 Python 320、預設 410，Rust 463（由 layout 推導）／490 |
+| G12.8.g | P1, RAN | **qtrs** | QSS `min/max-width/height` 盒模型：Qt 作用於 content＋padding＋border（`qstylesheetstyle.cpp:2603-2611`）；qtrs 當總尺寸。`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18 |
+| G12.8.h | P1, READ | **qtrs** | `Label::size_hint` 以 `max-height`（否則 `min-height`）當高度 hint（`label.rs`），Qt 沒有此規則 |
+| G12.8.i | P1, RAN | **qtrs** | `QProgressBar`：Python `sizeHint` 91×5、`minimumSizeHint` 91×17；qtrs 160×5、0×5 |
+| G12.8.j | P1, RAN | **qtrs** | 文字寬度 1 px：`WEEKLY 7D` Python 59，qtrs 59.589 → `ceil` 60；`AI AGENT HUD (3-IN-1)` 144 vs 144.107 → 145 |
+
+- **修復歸屬**：a–f 屬 HUD（`rust/src`）；g–j 是 qtrs 層，各自是獨立 root cause，不併入 RC-14／15／16，也不得用 HUD 端的數值補償（Contract 規則 7）。
+- **本節不代表任何項目已修復。**
+
+- **Triage（只讀原始碼；沒有改任何程式、沒有新增測試）**：
+
+| 項目 | 分類 | 理由／證據 |
+|---|---|---|
+| a、b、c、d、e | **純 `rust/src` 遷移**，不需要 qtrs RC | Python 的值在 qtrs 上已重現 Python 幾何（V6：橫向 45/45、直向 44/45 widget 吻合）；差異全在 HUD 設的值 |
+| RC-15（badge `max-height`） | **純 `rust/src` 遷移**，但有未驗證前提 | 移除後 badge hint 與 Python 相同；DPR 1.0 未量。若保留該屬性，才會碰到 G12.8.g／h |
+| f（視窗大小常數） | `rust/src`，**需使用者決定** | 130／152、490 可能是刻意值，沒有找到理由紀錄；改動會影響已存設定的視窗尺寸 |
+| g + h → **新 qtrs RC-19** | qtrs | 同一根因：`min/max-width/height` 被 `Label`／`Button`／`Frame`／`ProgressBar` 的 `minimum_size`／`maximum_size`／`size_hint` 當原始長度使用（`label.rs:229-230,236-237,248-249`、`button.rs:332-340`、`frame.rs:565-573`、`progress_bar.rs:399,416-417,430-431`），而 Qt 對 box 模型的規則是 `rule.boxSize()`。`Button::size_hint` 已經用 content box 處理 `min-width`（`test_stylesheet_style.rs:227-232`），所以只有 `size_hint` 一處是對的，其餘不一致 |
+| i → **新 qtrs RC-20** | qtrs | `QProgressBar::sizeHint` 是字型度量演算法（`qprogressbar.cpp:396-407`：`max(9,chunk)*7 + advance('0')*4`、`fm.height()+8`，再經 `sizeFromContents(CT_ProgressBar)`）；qtrs 用固定 160 與 QSS 高度。與 RC-19 不同根因（演算法 vs box 模型），但在 `CT_ProgressBar` 分支（`qstylesheetstyle.cpp:5485-5490`）與 RC-19 相鄰；不併入 |
+| j → **候選 qtrs RC-21，根因未確認** | qtrs，**需先調查** | Python 59 vs qtrs `59.589.ceil()`＝60。這不是單純的取整規則（Qt 整數 `horizontalAdvance` 若四捨五入應得 60，但實測 59），所以差異可能在 Qt 字形 advance 的 hinting／逐字取整，也可能在量測路徑。**不能直接寫成「`ceil` 改 `round`」**；先查 `qt_advance_compare.py` 與 `test_qt_text_advances.rs` 是否涵蓋 `QFontMetrics` 整數版本 |
+
+- **對 RC-14／15／16 的影響**：g、j 只造成 V7 的殘差（直向 y/h 1 個、x/w 5 個），不阻擋 RC-14／15／16 的 HUD 遷移；HUD 遷移後這些殘差仍會在，且不得用 HUD 端數值補償。
+
 ---
 
 ## 附錄 A：Gap 總表
 
-共 323 項：D 12、P0 34、P1 139、P2 133、test gap 5（計數含已修復項；標籤含「已修復」者共 32 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 333 項：D 12、P0 34、P1 147、P2 135、test gap 5（計數含已修復項；標籤含「已修復」者共 32 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1478,6 +1515,16 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.u | P2 | 色彩／字型解析細節 |
 | G12.5.v | P1 | 發佈 profile `panic = "abort"` vs Python excepthook |
 | G12.5.w | P2 | `rust/README.md` 仍描述 egui/eframe/reqwest |
+| G12.8.a | P1, RAN | 指標值字級：Python widget-local `font-size: 14px`；Rust 只有 `set_font(14)`，被 app sheet `QLabel#MetricValue { font-size: 16px }` 蓋過（符合 Qt：樣式表字級勝過 `setFont`），有效字級 16，`sizeHint` 高度 19 vs 17。RC-14 的第一個分歧 |
+| G12.8.b | P1, RAN | 橫向 body spacing：Python 8（`hud_window.py:337`），Rust 預設 6；卡片寬 213 vs 211 |
+| G12.8.c | P1, RAN | 直向容器 policy／stretch：Python 不設；Rust `stack`／`cards_container` `Expanding`、根 stretch 1、卡片 stretch。RC-16 的延伸 |
+| G12.8.d | P2, RAN | `title` size policy：Python `Minimum/Preferred`（`provider_card.py:34`），Rust 預設 |
+| G12.8.e | P2, RAN | badge 字重：Python 400；Rust Bold（`set_font(...Bold)`，QSS 沒有字重） |
+| G12.8.f | P1, RAN | 視窗大小常數：橫向最小／預設高 Python 125／145，Rust 130／152；直向最小 Python 320、預設 410，Rust 463（由 layout 推導）／490 |
+| G12.8.g | P1, RAN | QSS `min/max-width/height` 盒模型：Qt 作用於 content＋padding＋border（`qstylesheetstyle.cpp:2603-2611`）；qtrs 當總尺寸。`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18 |
+| G12.8.h | P1, READ | `Label::size_hint` 以 `max-height`（否則 `min-height`）當高度 hint（`label.rs`），Qt 沒有此規則 |
+| G12.8.i | P1, RAN | `QProgressBar`：Python `sizeHint` 91×5、`minimumSizeHint` 91×17；qtrs 160×5、0×5 |
+| G12.8.j | P1, RAN | 文字寬度 1 px：`WEEKLY 7D` Python 59，qtrs 59.589 → `ceil` 60；`AI AGENT HUD (3-IN-1)` 144 vs 144.107 → 145 |
 
 ---
 
@@ -1776,15 +1823,38 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **計時器規則**：700 ms／2 s 是 Qt tooltip 協定，明確豁免「不新增 timer／debounce」規則，不是 application debounce。
   - **外觀**（圓角、深色底、字型）留手動驗證；自動化契約只鎖：觸發、取消、冒泡、位置、存活、不搶焦點。
 
+#### RC-19 QSS `min/max-width/height` 的 box 模型（候選，未核定）
+- **Contract gaps**：G12.8.g、G12.8.h。
+- **Qt behavior** `[QT-SRC qstylesheetstyle.cpp:2568-2611]`：`min/max-*` 作用於 `rule.boxSize(...)`（content＋padding＋border），`Label`／`Button` 等的 `minimumSize`／`maximumSize` 經此換算；`QLabel::sizeHint` 不使用 `max-height`。
+- **qtrs root**：各 widget 各自讀 `style.min_*/max_*` 當原始長度；沒有共用的 box-size 換算。
+- **Evidence**：`RAN`（`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18）＋`READ`（`Label::size_hint` 用 `max-height` 當 hint）。
+- **Required observable**：同一個樣式表下，各 widget 的 `minimumSize`／`maximumSize`／`sizeHint` 與 Python 實測一致（至少 `layout_toggle_btn`、badge 類 label、5 px 進度條）。
+- **Can remove app workaround**：n/a（HUD 沒有為此補償；RC-15 的 `max-height` 與此項互動，見 C12.8）。
+- **Status**：**未修復，未核定**。**Phase**：4（qtrs 側）。
+
+#### RC-20 `QProgressBar::sizeHint`／`minimumSizeHint` 演算法（候選，未核定）
+- **Contract gaps**：G12.8.i。
+- **Qt behavior** `[QT-SRC qprogressbar.cpp:396-418; qstylesheetstyle.cpp:5485-5490]`：hint 由字型度量與 chunk 寬度算出，再經 `sizeFromContents(CT_ProgressBar)`；有 contents size 時用 `rule.size()`，否則 `rule.boxSize(base)`。
+- **qtrs root**：`progress_bar.rs:398-436` 固定 160 或 QSS 高度，`minimumSizeHint` 只看 QSS。
+- **Evidence**：`RAN`（Python 91×5／91×17；qtrs 160×5／0×5）。
+- **Required observable**：預設與樣式表下的 hint 與 Python 相同。
+- **Status**：**未修復，未核定**。**Phase**：4（qtrs 側）。
+
+#### RC-21 文字寬度 1 px 差（候選，根因未確認）
+- **Contract gaps**：G12.8.j。
+- **Evidence**：`RAN`（`WEEKLY 7D` 59 vs 59.589→60；`AI AGENT HUD (3-IN-1)` 144 vs 144.107→145）。
+- **Open question**：是 Qt 整數 `horizontalAdvance` 的取整／hinting，還是 qtrs 量測路徑（`horizontal_advance_exact().ceil()`，`label.rs:226`）；未調查，不得先動 `ceil`。
+- **Status**：**未調查**。**Phase**：4（qtrs 側），須先有根因才成為 RC。
+
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
 | RC | 對應 gap | 位置 | 閘門（動手前必須先做） |
 |---|---|---|---|
 | RC-12 熱鍵註冊失敗不回報 | G11.9.a、G11.8.c、G12.5.j | `hotkey.rs:235-261`、`main.rs:496` | 無。`start` 必須回報 `RegisterHotKey` 失敗；測試：衝突的熱鍵使 `start` 回 `Err`，且 `click_through` 啟動時被關閉。**已完成（RC-12，Win32 真實 `RegisterHotKey` 衝突驗證）**：失敗改由 `HotkeyManager::registration()` 回報，而非 `start` 的 `Err`（理由見 G11.9.a）；新缺口 G11.9.e–G11.9.h |
 | RC-13 螢幕選擇／還原 | G11.4.a、G12.5.l | `hud_window.rs:178-193,640-662,823-824` | 對照 Python 規則；使用已存在的 `clamp_window_rect_to_screens`（`qtrs-platform/src/screen.rs:532`）。**已完成（RC-13，單螢幕 Win32 煙霧測試＋Python oracle）**：**未**使用 `clamp_window_rect_to_screens`，因為它的規則與 Python 不同（見 C11.4），改以 Python 規則寫成 `rust/src/ui/placement.rs`；新缺口 G11.4.e–G11.4.g |
-| RC-14 卡片根 spacing 2 vs 5 | G9.4.b、G12.5.b | `provider_card.rs:159` vs `provider_card.py:27` | **先做逐 widget rect 的 Python/Rust 幾何 diff**：若 2 是用來補 qtrs 的高度差異，則真正的 root cause 在 qtrs，不得直接改成 5 |
-| RC-15 Badge `max-height: 15px` | G12.3.b、G12.5.a | `styles.rs:192,291` | 同 RC-14 的閘門 |
-| RC-16 header 多餘的 `Expanding/Fixed` | G9.3.c | `hud_window.rs:272-275` | 同 RC-14 的閘門 |
+| RC-14 卡片根 spacing 2 vs 5 | G9.4.b、G12.5.b、G12.8.a | `provider_card.rs:159` vs `provider_card.py:27` | 閘門已完成（幾何 diff，`GEOMETRY_DIFF_RC14_16.md`）：**案例 A（應用層搬運錯誤）**，2 沒有在補 qtrs 差異。**修復必須與 G12.8.a（指標值字級 16 vs 14）同做**，不得單改 spacing。DPR 1.25／Windows 字型量測 |
+| RC-15 Badge `max-height: 15px` | G12.3.b、G12.5.a、G12.8.e | `styles.rs:192,291` | 閘門已完成：**案例 A（多餘屬性）**，移除後 badge `sizeHint` 與 Python 相同（25×15）。**只在 DPR 1.25 量過**；移除前必須在 DPR 1.0 重跑 oracle。badge 字重（G12.8.e）另計 |
+| RC-16 header 多餘的 `Expanding/Fixed` | G9.3.c、G12.8.c | `hud_window.rs:272-275` | 閘門已完成：**案例 A，範圍比原描述大**：直向還需改 `stack`／`cards_container` policy、根 stretch、直向卡片 stretch（G12.8.c）。**待決策**：照搬後直向視窗變高時 header 列會變高（實測 68 px），這是 Python 的實際行為 |
 | RC-17 幾何持久化 | G12.5.d | `main.rs:575-591`、`config.rs`（`ResizeDebouncer`） | 依賴 RC-06。**待決策**：Python 的 250 ms 單發重啟是否照搬（目前專案規則：不新增 timer／debounce） |
 | RC-18 喚醒偵測 | G12.5.e | `main.rs` 的 `clock_timer` | 依賴 RC-06（`Power::Resume` 已存在）；先確認 Python 的「tick 間隔 >15 s」是否可由 `Power::Resume` 取代 |
 
@@ -1792,11 +1862,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 | Phase | 內容 | 前提 |
 |---|---|---|
-| 0 | Contract 清理（本次已完成）；實測 G11.5.a（已測：本機為 Layered）、G10.7.a、RC-14/15/16 的幾何 diff | 無 |
+| 0 | Contract 清理（本次已完成）；實測 G11.5.a（已測：本機為 Layered）、G10.7.a、RC-14/15/16 的幾何 diff（已完成，見 C12.8） | 無 |
 | 1 | RC-01、RC-02、RC-03、RC-04；**每個 RC 一個提交**，各自附「修改前 FAIL、修改後 PASS」的測試 | RC-03 在 RC-02 之後（同一檔案）；RC-01、RC-04 與其他獨立 |
 | 2 | RC-05、RC-06 | Phase 1 完成 |
 | 3 | RC-07、RC-08、RC-09、RC-10、RC-11 | RC-08、RC-09 先實測；RC-10 依賴 RC-05；RC-11 依賴 RC-06 與 RC-11a（G5.1.f；不依賴 G5.4.a） |
-| 4 | RC-12 ～ RC-18；移除 RC-05/RC-06 已取代的 workaround | RC-14/15/16 先做幾何 diff；RC-17/18 依賴 RC-06 |
+| 4 | RC-12 ～ RC-18；移除 RC-05/RC-06 已取代的 workaround | RC-14/15/16 的幾何 diff 已完成（皆案例 A）；RC-17/18 依賴 RC-06 |
 
 ### D.4 未列入執行佇列的項目
 
