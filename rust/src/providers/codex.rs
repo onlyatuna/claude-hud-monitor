@@ -21,6 +21,7 @@ pub struct CodexProvider {
 }
 
 impl CodexProvider {
+    #[cfg_attr(test, allow(dead_code))] // only reached by the non-test `default_providers`
     pub fn new() -> Self {
         let timeout = Duration::from_secs(8);
         let client = ureq::AgentBuilder::new().timeout(timeout).build();

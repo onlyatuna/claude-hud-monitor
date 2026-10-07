@@ -172,6 +172,7 @@ pub struct ConfigManager;
 
 impl ConfigManager {
     /// Return the platform-appropriate config directory path.
+    #[cfg_attr(test, allow(dead_code))] // only reached by the non-test `config_path`
     pub fn config_dir() -> PathBuf {
         #[cfg(target_os = "windows")]
         {
@@ -628,6 +629,7 @@ impl Drop for ResizeDebouncer {
     }
 }
 
+#[cfg_attr(test, allow(dead_code))] // only reached by the non-test config paths
 fn dirs_home() -> PathBuf {
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
