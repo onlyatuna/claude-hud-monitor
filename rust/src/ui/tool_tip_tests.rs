@@ -13,7 +13,7 @@ use qtrs_core::event_loop::EventLoop;
 use qtrs_core::event::MouseButtons;
 use qtrs_gui::geometry::primitives::Point;
 use qtrs_widgets::tooltip::ToolTip;
-use qtrs_widgets::{EventTreeDispatcher, Widget, WidgetRef};
+use qtrs_widgets::{EventTreeDispatcher, WidgetRef};
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;

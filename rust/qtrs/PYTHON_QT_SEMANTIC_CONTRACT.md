@@ -316,7 +316,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G5.1.e [P2, READ]** `timeout` 是公開 `Signal<()>` 欄位，不在 meta-object 上。
   - **G5.1.f [P1, RAN；已修復：RC-11a]** 對已啟動（或 `stop` 後再 `start`）的計時器重啟，`timeout` **永遠不再觸發**。根因不在 `Timer`：`register_object_metadata` 重新註冊同一物件時，把被取代的舊 record 的 `liveness` 設為 false，但新舊 record 共用同一個 `Arc<AtomicBool>`，等於把活著的物件標為死亡（所有 `QPointer` 變 null，`with_object_mut` 拒絕遞送 `timer_event`）。修復：只有舊 record 與新物件不共用 liveness（id 被別的物件重用）時才標死。測試 `qtrs-core/tests/test_timer_restart.rs`（5 項，修復前 5/5 FAIL）。同一缺陷也影響任何重複 `register_qobject` 的物件。
 - **Test**：既有如上。必要：`set_interval_while_active_restarts`（本次 RAN 重現失敗）；`set_single_shot_while_active_fires_once`；`start_inside_own_slot_restarts_single_shot`。
-- **HUD usage**：Python `QTimer(self)` 25 ms／1000 ms（`refresh_controller.py:35-44`）、250 ms 單發重啟（`hud_window.py:73-76,626,631`）、倒數 1000 ms（`:440-442`）；**從不在啟動中改 interval**。Rust：`Timer::new` + `set_interval`（啟動前）+ `start`（`main.rs:540-591`）。**差異**：Python 的 250 ms 單發、移動／縮放時重啟（debounce 儲存幾何）；Rust 用 `std::thread` 的 `ResizeDebouncer`（`config.rs:396`，只吃 resize）加 3000 ms 輪詢抓移動（`main.rs:575-591`）——行為不同，見 G12.5.d。
+- **HUD usage**：Python `QTimer(self)` 25 ms／1000 ms（`refresh_controller.py:35-44`）、250 ms 單發重啟（`hud_window.py:73-76,626,631`）、倒數 1000 ms（`:440-442`）；**從不在啟動中改 interval**。Rust：`Timer::new` + `set_interval`（啟動前）+ `start`（`main.rs:540-591`）。**差異**：Python 的 250 ms 單發、移動／縮放時重啟（debounce 儲存幾何）；Rust 用 `std::thread` 的 `ResizeDebouncer`（`config.rs:396`，只吃 resize）加 3000 ms 輪詢抓移動（`main.rs:575-591`）——行為不同，見 G12.5.d。**（RC-17 之後：輪詢已移除，移動改由 window event 觸發同一個 `ResizeDebouncer`。）**
 
 
 ### C5.2 計時器事件遞送路徑
@@ -1003,7 +1003,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | `@Slot` | `refresh_controller.py:98` | ABSENT（Python 中亦無可觀察效果） | — |
 | 非 Qt 執行緒發射信號（Auto→queued） | `hotkey.py:76-104` | PART | C6.2、C7.9 |
 | `QTimer(parent)`：interval／timeout／start／stop | `refresh_controller.py:35-44`、`hud_window.py:440-442` | OK（`unsafe start`） | C5.1 |
-| `QTimer.setSingleShot` debounce 250 ms | `hud_window.py:73-76,626,631` | PART：用 `ResizeDebouncer` | G12.5.d |
+| `QTimer.setSingleShot` debounce 250 ms | `hud_window.py:73-76,626,631` | 以 `ResizeDebouncer` 實作（RC-17：move／resize 皆經由它） | G12.5.d |
 | `QTimer.singleShot(ms, fn)` | `hud_window.py:108,114,215,459,613,617` | OK | C5.5、G12.5.h |
 | `QApplication`、`exec`、`quit`、`processEvents` | `main.py:47,100` | OK | C4.1–4.2 |
 | `styleHints().colorScheme()` | `hud_window.py:104,231-233` | OK | C11.10 |
@@ -1104,7 +1104,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.a [P0, READ；= G12.3.b] | Badge `max-height: 15px` 只在 Rust | `styles.rs:192,291` vs `styles.py:116-124` | 修復＋樣式表比對測試（幾何稽核：案例 A，見 C12.8） |
 | G12.5.b [P0, READ；= G9.4.b] | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 | `provider_card.rs:159` vs `provider_card.py:27`（已讀確認） | 修復或寫理由（幾何稽核：案例 A，須與 G12.8.a 同做，見 C12.8） |
 | G12.5.c [P1] | 面板底色不依 Acrylic 是否成功而改變 | `hud_window.rs:88-92,229` vs `hud_window.py:240-250` | 修復 |
-| G12.5.d [P0, READ] | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 只有 resize 的 `ResizeDebouncer` + 3 s 輪詢抓移動，且無 release handler | `hud_window.py:595-609,624-649` vs `config.rs:396`、`main.rs:575-591` | 修復 |
+| G12.5.d [P0, READ；已修復：RC-17] | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 原本只有 resize 的 `ResizeDebouncer` + 3 s 輪詢抓移動，且無 release handler。已修復：3000 ms geometry poll removed because RC-06 window event lifecycle now supplies Move/Release/Close/Hide hooks；HUD 以 `Window::set_window_event_handler` 處理 Move（更新 config x/y＋`request_save`）、MouseButtonRelease 與 Close（立即 `persist_rect`，取消待存）；resize 寫入改為 clamp 至 `MIN_*`（以前寫未 clamp 的尺寸）；250 ms 仍是 HUD 的 `ResizeDebouncer`，不是 qtrs `Timer` 需求；測試 `ui/geometry_persist_tests.rs` 6 項（修前 6/6 失敗；真實 Win32 訊息）；殘餘：Hide 事件本身不另存（`HUDWindow::hide` 已存；Python 也只在 closeEvent 存）、高層 burst 重啟語意只由 `config.rs` 的 debouncer 測試涵蓋（debug build 每次 resize 渲染 180–300 ms，超過 250 ms）| `hud_window.py:595-609,624-649` vs `config.rs:396`、`main.rs:575-591` | 修復 |
 | G12.5.e [P0, READ] | 喚醒偵測（倒數 tick 間隔 >15 s 就刷新）在 Rust 不存在 | `hud_window.py:461-467`；grep `gap|WM_POWERBROADCAST|resume` 於 `rust/src` 為空 | 修復 |
 | G12.5.f [P0, READ；已修復：RC-06] | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 | `window.rs:1025`（platform 有發 release）；`window.rs:771-815` | 修復 |
 | G12.5.g [P0, READ；= G11.2.b；已修復：RC-06] | Alt+F4 / `CloseRequest` 被吞 | G11.2.b | 修復 |
@@ -1194,7 +1194,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 339 項：D 12、P0 34、P1 147、P2 141、test gap 5（計數含已修復項；標籤含「已修復」者共 47 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.g、G12.8.h、G12.8.i、G12.8.o）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 339 項：D 12、P0 34、P1 147、P2 141、test gap 5（計數含已修復項；標籤含「已修復」者共 48 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.g、G12.8.h、G12.8.i、G12.8.o）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1497,7 +1497,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.a | P0, READ；= G12.3.b；已修復：RC-15 | Badge `max-height: 15px` 只在 Rust |
 | G12.5.b | P0, READ；= G9.4.b；已修復：RC-14 | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 |
 | G12.5.c | P1 | 面板底色不依 Acrylic 是否成功而改變 |
-| G12.5.d | P0, READ | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 只有 resize 的 `ResizeDebouncer` |
+| G12.5.d | P0, READ；已修復：RC-17（3000 ms geometry poll removed because RC-06 window event lifecycle now supplies Move/Release/Close/Hide hooks） | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 原本只有 resize 的 `ResizeDebouncer` |
 | G12.5.e | P0, READ | 喚醒偵測（倒數 tick 間隔 >15 s 就刷新）在 Rust 不存在 |
 | G12.5.f | P0, READ；已修復：RC-06 | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 |
 | G12.5.g | P0, READ；= G11.2.b；已修復：RC-06 | Alt+F4 / `CloseRequest` 被吞 |
@@ -1875,7 +1875,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | RC-14 卡片根 spacing 2 vs 5 | G9.4.b、G12.5.b、G12.8.a | `provider_card.rs:159` vs `provider_card.py:27` | 閘門已完成（幾何 diff，`GEOMETRY_DIFF_RC14_16.md`）：**案例 A（應用層搬運錯誤）**，2 沒有在補 qtrs 差異。**修復必須與 G12.8.a（指標值字級 16 vs 14）同做**，不得單改 spacing。DPR 1.25／Windows 字型量測。**已完成（RC-14，含 G12.8.a／b）**：`provider_card.rs` 根 spacing 5、`m*_val` 改為 widget-local `font-size`（14px，錯誤時 13px，與 Python 相同）、`hud_window.rs` 橫向 body spacing 8。測試：`test_card_size_hint_matches_pyside6`（label 17、card 109）、`test_horizontal_cards_body_matches_pyside6_widths`（211／210／211），期望值取自 PySide6 oracle；修改前 FAIL（19 vs 17；213／214／213）、修改後 PASS。**僅 DPR 1.25、Windows 字型**。**未驗證**：8 個會建立 `HUDWindow` 的既有測試（`hud_window.rs` 4、`provider_card.rs` 4）因網路隔離（TI-01）未完成而**未執行**，其中版面斷言可能受 spacing／字級影響 |
 | RC-15 Badge `max-height: 15px` | G12.3.b、G12.5.a、G12.8.e | `styles.rs:192,291` | 閘門已完成：**案例 A（多餘屬性）**。**已完成（RC-15）**：移除 `styles.rs` 兩處 `max-height: 15px`。DPR 1.0 的 PySide6 oracle 已量（`py_horizontal_dpr1.json`／`py_vertical_dpr1.json`，`QT_ENABLE_HIGHDPI_SCALING=0`、停用 fetch）：badge `sizeHint` = 25×**14**（DPR 1.25 為 25×15），所以 `max-height: 15px` 在 100 % 縮放下是**錯的**而非多餘（Rust 恆為 15）。測試：`test_badge_size_hint_matches_pyside6_at_both_ratios`（DPR 1.0→14、1.25→15）；修改前 FAIL（DPR 1.0：15 vs 14），修改後 PASS。**只涵蓋預設佔位文字 `--`、Windows 字型**；badge 寬度未納入斷言；字重（G12.8.e）另計、未修 |
 | RC-16 header 多餘的 `Expanding/Fixed` | G9.3.c、G12.8.c | `hud_window.rs:272-275` | 閘門已完成：**案例 A，範圍比原描述大**：直向還需改 `stack`／`cards_container` policy、根 stretch、直向卡片 stretch（G12.8.c）。**已完成（RC-16，含 G12.8.c／d；使用者已核准照搬 Python 的直向行為）**：header_widget 不再設 policy；`cards_container` 不設 policy；根 layout 不對 stack 設 stretch；直向卡片不設 stretch（橫向維持 stretch 1）；卡片 `title` 設 `Minimum/Preferred`；`stack` 的 policy 隨頁面切換（卡片頁 Preferred、表格頁 Expanding，因 PySide6 表格頁實測由表格吃掉全部多餘高度 462／500，單純把 stack 改 Preferred 會讓 header 變 213 高，已由測試抓到）。測試：`test_vertical_extra_height_goes_to_header_like_pyside6`（header／title 86、卡片 109、y 0/122/244；修改前 FAIL：header 18 vs 86）、`test_table_mode_table_takes_extra_height_like_pyside6`、`test_ui_mode_switch_keeps_pyside6_extra_height_owner`（卡片↔表格切換）。既有 `test_hud_layout_proportions` 兩項斷言（stack.y ≤ 35、卡片高 ≥ 120）編碼的是舊行為（與 PySide6 相反），已改為 PySide6 行為。**僅 DPR 1.25、Windows 字型、佔位文字；DPR 1.0 的 vertical oracle 已量（`py_vertical_dpr1.json`）但未對 Rust 逐項比對；`layout_toggle_btn` 的 y 殘差屬 G12.8.g（RC-19），未修**。 |
-| RC-17 幾何持久化 | G12.5.d | `main.rs:575-591`、`config.rs`（`ResizeDebouncer`） | 依賴 RC-06。**待決策**：Python 的 250 ms 單發重啟是否照搬（目前專案規則：不新增 timer／debounce） |
+| RC-17 幾何持久化 | G12.5.d | `hud_window.rs`（`set_window_event_handler`、`apply_size`、`persist_rect`）、`config.rs`（`ResizeDebouncer`） | 依賴 RC-06。**已完成（RC-17，Win32 真實訊息測試＋真實 `ClaudeHUD.exe` 拖曳 smoke）**：3000 ms geometry poll removed because RC-06 window event lifecycle now supplies Move/Release/Close/Hide hooks；沒有新增 timer，沒有改 qtrs `Timer`；250 ms 是 HUD 的 persistence policy（既有 `ResizeDebouncer`），不是 qtrs 需求。RC-18 未動 |
 | RC-18 喚醒偵測 | G12.5.e | `main.rs` 的 `clock_timer` | 依賴 RC-06（`Power::Resume` 已存在）；先確認 Python 的「tick 間隔 >15 s」是否可由 `Power::Resume` 取代 |
 
 ### D.3 執行階段
@@ -1894,4 +1894,4 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 |---|---|---|
 | G7.9.a | 降為 **P2，待驗證**（非 `D`） | 讀碼推翻 P0 主張：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於第一個 worker／熱鍵執行緒（`hud_window.rs:408`、`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`）在註冊前啟動，但只寫 atomic。**不等於所有 interleaving 皆安全**；它是 RC-04 的一個假設性表現，RC-04 修復後自然消除 |
 | G9.6.a | 降為 **P1**（非 `D`） | Python HUD 不使用 `QStackedLayout`（重建 layout）；Qt 的 `sizeHint`／`minimumSize` 取**所有頁面**的最大值 `[QT-SRC qstackedlayout.cpp:417-448]`，qtrs 只看當前頁（`stacked.rs:123-147`）。與 Qt 不同是事實，但目前 HUD 不依賴；**P0 階段不修**，待 qtrs 的 API 範圍擴大再處理 |
-| G12.5.d 的 timer 部分 | 見 RC-17 | 不得為了 parity 而新增 timer／debounce，除非先證明它不是在補 qtrs 缺陷 |
+| G12.5.d 的 timer 部分（已結案：沿用既有 `ResizeDebouncer`，未新增 timer） | 見 RC-17 | 不得為了 parity 而新增 timer／debounce，除非先證明它不是在補 qtrs 缺陷 |

@@ -14,6 +14,8 @@ pub mod tray_icon;
 pub mod usage_table;
 #[cfg(all(test, windows))]
 mod tool_tip_tests;
+#[cfg(all(test, windows))]
+mod geometry_persist_tests;
 
 #[cfg(target_os = "windows")]
 pub fn enable_win32_dark_mode(hwnd: isize) {

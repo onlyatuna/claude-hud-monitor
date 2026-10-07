@@ -3,13 +3,14 @@
 //! Hosts the header bar, StackedWidget (Cards vs Table mode),
 //! frameless window management, Acrylic backdrop blur, and click-through ghost mode.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use chrono::Local;
 use parking_lot::Mutex;
+use qtrs_core::event::EventKind;
 use qtrs_core::QObject;
 use qtrs_gui::geometry::primitives::{Margins, Rect, RectF};
 use qtrs_gui::paint::{Brush, Pen};
@@ -31,6 +32,32 @@ use crate::config::{
 use crate::providers::base::UsageMetrics;
 use crate::providers::Provider;
 use crate::refresh_controller::RefreshController;
+
+/// Python `_persist_geometry`'s size part: the active mode's width and height, never below the
+/// mode's minimum.
+fn apply_size(cfg: &mut Config, width: i32, height: i32) {
+    let (w, h) = (width as u32, height as u32);
+    if cfg.ui_mode == "table" {
+        cfg.table_width = w.max(MIN_TABLE_WIDTH);
+        cfg.table_height = h.max(MIN_TABLE_HEIGHT);
+    } else if cfg.layout_mode == "horizontal" {
+        cfg.horizontal_width = w.max(MIN_HORIZONTAL_WIDTH);
+        cfg.horizontal_height = h.max(MIN_HORIZONTAL_HEIGHT);
+    } else {
+        cfg.vertical_width = w.max(MIN_VERTICAL_WIDTH);
+        cfg.vertical_height = h.max(MIN_VERTICAL_HEIGHT);
+    }
+}
+
+/// Python `_persist_geometry`: position and size now, superseding any pending debounced save.
+/// SAVE_LOCK -> Config lock; the Config lock is released before the file write.
+fn persist_rect(debouncer: &ResizeDebouncer, geom: Rect) {
+    debouncer.update_and_save_now(|cfg| {
+        cfg.window_x = Some(geom.x);
+        cfg.window_y = Some(geom.y);
+        apply_size(cfg, geom.width, geom.height);
+    });
+}
 
 fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
     Rc::new(RefCell::new(Box::new(w)))
@@ -380,24 +407,44 @@ impl HUDWindow {
         });
         let cfg_resize = Arc::clone(&config);
         let debouncer_resize = Arc::clone(&debouncer);
+        // The window's current geometry as the events report it: the window event handler below
+        // cannot reach `window.geometry()`, and Python reads `self.pos()`/`self.size()` instead.
+        let geom_now = Rc::new(Cell::new(window.geometry()));
+        let geom_resize = Rc::clone(&geom_now);
         window.set_resize_handler(move |size| {
+            let mut g = geom_resize.get();
+            g.width = size.width;
+            g.height = size.height;
+            geom_resize.set(g);
             if debouncer_resize.is_restoring() {
                 return;
             }
-            {
-                let mut cfg = cfg_resize.lock();
-                if cfg.ui_mode == "table" {
-                    cfg.table_width = size.width as u32;
-                    cfg.table_height = size.height as u32;
-                } else if cfg.layout_mode == "horizontal" {
-                    cfg.horizontal_width = size.width as u32;
-                    cfg.horizontal_height = size.height as u32;
-                } else {
-                    cfg.vertical_width = size.width as u32;
-                    cfg.vertical_height = size.height as u32;
-                }
-            }
+            apply_size(&mut cfg_resize.lock(), size.width, size.height);
             debouncer_resize.request_save();
+        });
+        // Python `moveEvent` / `mouseReleaseEvent` / `closeEvent` (`hud_window.py:595-609`).
+        let cfg_events = Arc::clone(&config);
+        let debouncer_events = Arc::clone(&debouncer);
+        window.set_window_event_handler(move |event| match event.kind {
+            EventKind::Move { x, y, .. } => {
+                let mut g = geom_now.get();
+                g.x = x;
+                g.y = y;
+                geom_now.set(g);
+                if debouncer_events.is_restoring() {
+                    return;
+                }
+                {
+                    let mut cfg = cfg_events.lock();
+                    cfg.window_x = Some(x);
+                    cfg.window_y = Some(y);
+                }
+                debouncer_events.request_save();
+            }
+            EventKind::MouseButtonRelease { .. } | EventKind::Close => {
+                persist_rect(&debouncer_events, geom_now.get());
+            }
+            _ => {}
         });
         {
             let mut ctrl = refresh_ctrl.lock();
@@ -509,22 +556,7 @@ impl HUDWindow {
         if self.debouncer.is_restoring() {
             return;
         }
-        let geom = self.window.geometry();
-        // SAVE_LOCK -> Config lock; Config lock is released before the file write.
-        self.debouncer.update_and_save_now(|cfg| {
-            cfg.window_x = Some(geom.x);
-            cfg.window_y = Some(geom.y);
-            if cfg.ui_mode == "table" {
-                cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
-                cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
-            } else if cfg.layout_mode == "horizontal" {
-                cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
-                cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
-            } else {
-                cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
-                cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
-            }
-        });
+        persist_rect(&self.debouncer, self.window.geometry());
     }
 
     pub fn toggle_visibility(&mut self) {

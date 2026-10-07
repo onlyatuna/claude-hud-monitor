@@ -588,24 +588,6 @@ fn main() -> std::process::ExitCode {
     });
     unsafe { poll_timer.start() };
 
-    let mut geom_timer = Timer::new();
-    geom_timer.set_interval(3000);
-    let last_geom = Arc::new(Mutex::new(hud.borrow().window.geometry()));
-    let last_geom_clone = Arc::clone(&last_geom);
-    geom_timer.timeout.connect(move |()| {
-        MAIN_HUD.with(|cell| {
-            if let Some(hud) = cell.borrow().as_ref() {
-                let cur_geom = hud.borrow().window.geometry();
-                let mut lg = last_geom_clone.lock();
-                if cur_geom != *lg {
-                    hud.borrow().persist_geometry();
-                    *lg = cur_geom;
-                }
-            }
-        });
-    });
-    unsafe { geom_timer.start() };
-
     // Initial memory trim after 2.5s (mirrors Python QTimer.singleShot(2500, trim_memory))
     Timer::single_shot(2500, || {
         crate::memory::trim_memory();
@@ -615,7 +597,6 @@ fn main() -> std::process::ExitCode {
     let exit_code = _app.exec();
     clock_timer.stop();
     poll_timer.stop();
-    geom_timer.stop();
     let _ = MAIN_HUD.try_with(|cell| {
         if let Ok(mut borrow) = cell.try_borrow_mut() {
             *borrow = None;
