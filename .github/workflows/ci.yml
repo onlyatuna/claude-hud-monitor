@@ -58,6 +58,78 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python -B -m unittest discover -s tests -v
 
+  # Not a gate: reports what each runner lacks (fonts, shared libraries), so that a failure in
+  # `test-rust` on an OS that cannot be reproduced locally can be read from this job's log, summary
+  # and annotations instead of guessed at.
+  diagnostics:
+    name: Missing dependencies (${{ matrix.os }})
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> target, rust/qtrs -> target"
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libx11-dev libxrandr-dev \
+            libxcursor-dev libxi-dev libxinerama-dev \
+            libgl1-mesa-dev libgles2-mesa-dev pkg-config
+
+      - name: Fonts (requested vs installed)
+        shell: bash
+        working-directory: rust/qtrs
+        run: |
+          cargo run -q -p qtrs-gui --example font_probe | tee "$RUNNER_TEMP/font-probe.txt"
+          {
+            echo "### Fonts on ${{ matrix.os }}"
+            echo '```'
+            sed -n '/--- font directories/,/--- numbers/p;/--- summary/,$p' "$RUNNER_TEMP/font-probe.txt" | grep -v '^::warning'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Shared libraries of the HUD binary (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        working-directory: rust
+        run: |
+          cargo build -q
+          bin=target/debug/ClaudeHUD
+          {
+            echo "### Shared libraries of ClaudeHUD on ${{ matrix.os }}"
+            echo '```'
+            if [ "$RUNNER_OS" = "Linux" ]; then
+              ldd "$bin"
+              echo "--- not found ---"
+              ldd "$bin" | grep 'not found' || echo "(none)"
+            else
+              otool -L "$bin"
+              echo "--- not under /usr/lib or /System ---"
+              otool -L "$bin" | tail -n +2 | awk '{print $1}' | grep -v '^/usr/lib/' | grep -v '^/System/' || echo "(none)"
+            fi
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Host
+        shell: bash
+        run: |
+          { echo "### Host"; echo '```'; uname -a; [ "$RUNNER_OS" = "macOS" ] && sw_vers; [ "$RUNNER_OS" = "Linux" ] && lsb_release -a 2>/dev/null; rustc -V; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY" || true
+
   test-rust:
     name: Rust Test (${{ matrix.os }})
     needs: changes
