@@ -346,6 +346,18 @@ impl ProgressBar {
             Vec::new()
         }
     }
+    fn styled_font(&self, style: &crate::style::stylesheet::ResolvedStyle) -> Font {
+        let mut font = self.font.clone();
+        if let Some(sz) = style.font_size {
+            // `QCss` applies `font-size: Npx` with `QFont::setPixelSize(int)`.
+            font.size = sz.round();
+        }
+        if let Some(fam) = &style.font_family {
+            font.family = fam.clone();
+        }
+        font
+    }
+
     pub fn resolved_groove_style(&self) -> crate::style::stylesheet::ResolvedStyle {
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QProgressBar",
@@ -394,21 +406,34 @@ impl QObject for ProgressBar {
 impl Widget for ProgressBar {
     leaf_widget_common!();
 
+    /// `QProgressBar::sizeHint` through `QStyleSheetStyle::sizeFromContents(CT_ProgressBar)`
+    /// (`qprogressbar.cpp:396-406`, `qstylesheetstyle.cpp:5311-5320,5485-5490`): the content size is
+    /// transposed for a vertical bar, clamped to `max-*` and expanded to `min-*` (both content-box,
+    /// `QRenderRule::adjustSize`), then the border and padding are added.
     fn size_hint(&self) -> Size {
         let style = self.resolved_groove_style();
-        if let Some(h) = style.max_height.or(style.min_height) {
-            match self.orientation {
-                Orientation::Horizontal => Size::new(160, h),
-                Orientation::Vertical => Size::new(h, 160),
-            }
-        } else {
-            let metrics = FontMetrics::from_font(&self.font);
-            let thick = (metrics.height.ceil() as i32 + 6).max(18);
-            match self.orientation {
-                Orientation::Horizontal => Size::new(160, thick),
-                Orientation::Vertical => Size::new(thick, 160),
-            }
+        let font = self.styled_font(&style);
+        let metrics = FontMetrics::from_font(&font);
+        let chunk = self.resolved_chunk_style().width.unwrap_or(0).max(9);
+        let zero = metrics.horizontal_advance_exact("0", &font).round() as i32;
+        let (mut w, mut h) = (chunk * 7 + zero * 4, FontMetrics::layout_height(&font).ceil() as i32 + 8);
+        if self.orientation == Orientation::Vertical {
+            std::mem::swap(&mut w, &mut h);
         }
+        if let Some(max) = style.max_width {
+            w = w.min(max);
+        }
+        if let Some(min) = style.min_width {
+            w = w.max(min);
+        }
+        if let Some(max) = style.max_height {
+            h = h.min(max);
+        }
+        if let Some(min) = style.min_height {
+            h = h.max(min);
+        }
+        let (ex, ey) = style.box_extra();
+        Size::new(w + ex, h + ey)
     }
 
     fn minimum_size(&self) -> Size {
@@ -420,8 +445,16 @@ impl Widget for ProgressBar {
         }
     }
 
+    /// `QProgressBar::minimumSizeHint` (`qprogressbar.cpp:411-418`): the styled `sizeHint` along the
+    /// bar, `fontMetrics().height() + 2` across it.
     fn minimum_size_hint(&self) -> Size {
-        self.minimum_size()
+        let hint = self.size_hint();
+        let font = self.styled_font(&self.resolved_groove_style());
+        let across = FontMetrics::layout_height(&font).ceil() as i32 + 2;
+        match self.orientation {
+            Orientation::Horizontal => Size::new(hint.width, across),
+            Orientation::Vertical => Size::new(across, hint.height),
+        }
     }
 
     fn maximum_size(&self) -> Size {

@@ -23,6 +23,10 @@ pub struct ResolvedStyle {
     pub max_height: Option<i32>,
     pub min_width: Option<i32>,
     pub max_width: Option<i32>,
+    /// QSS `width`/`height`: the contents size (`QRenderRule::contentsSize`). Until G12.8.p is
+    /// fixed they are also written to `min_*`/`max_*`.
+    pub width: Option<i32>,
+    pub height: Option<i32>,
     pub font_size: Option<f32>,
     pub font_weight: Option<u16>,
     pub font_family: Option<String>,
@@ -249,6 +253,7 @@ fn apply_declaration(style: &mut ResolvedStyle, decl: &QCssDeclaration) {
         QCssProperty::Height => {
             if let QCssValue::Length(h) = decl.value {
                 let px = h.round() as i32;
+                style.height = Some(px);
                 style.min_height = Some(px);
                 style.max_height = Some(px);
             }
@@ -266,6 +271,7 @@ fn apply_declaration(style: &mut ResolvedStyle, decl: &QCssDeclaration) {
         QCssProperty::Width => {
             if let QCssValue::Length(w) = decl.value {
                 let px = w.round() as i32;
+                style.width = Some(px);
                 style.min_width = Some(px);
                 style.max_width = Some(px);
             }
