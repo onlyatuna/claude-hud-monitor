@@ -264,6 +264,97 @@ fn set_interactive_resize_flag(hwnd: HWND, active: bool) {
     });
 }
 
+thread_local! {
+    /// `QGuiApplicationPrivate::mouse_buttons`: the buttons the application has seen pressed and
+    /// not yet released (UI thread only).
+    static APP_MOUSE_BUTTONS: std::cell::Cell<qtrs_core::event::MouseButtons> =
+        const { std::cell::Cell::new(qtrs_core::event::MouseButtons::NO_BUTTON) };
+}
+
+/// The button a `WM_{L,R,M}BUTTON{DOWN,UP,DBLCLK}` message is about (already the logical button:
+/// Windows swaps for `SM_SWAPBUTTON` before sending).
+#[cfg(windows)]
+fn button_of_message(msg: u32) -> qtrs_core::event::MouseButtons {
+    use qtrs_core::event::MouseButtons;
+    match msg {
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK => MouseButtons::LEFT,
+        WM_RBUTTONDOWN | WM_RBUTTONUP | WM_RBUTTONDBLCLK => MouseButtons::RIGHT,
+        WM_MBUTTONDOWN | WM_MBUTTONUP | WM_MBUTTONDBLCLK => MouseButtons::MIDDLE,
+        _ => MouseButtons::NO_BUTTON,
+    }
+}
+
+#[cfg(windows)]
+fn track_button_press(msg: u32) {
+    let _ = APP_MOUSE_BUTTONS.try_with(|b| b.set(b.get().union(button_of_message(msg))));
+}
+
+#[cfg(windows)]
+fn track_button_release(msg: u32) {
+    let bit = button_of_message(msg);
+    let _ = APP_MOUSE_BUTTONS.try_with(|b| b.set(qtrs_core::event::MouseButtons(b.get().0 & !bit.0)));
+}
+
+/// `QWindowsPointerHandler::queryMouseButtons`: the physical buttons, as logical buttons.
+#[cfg(windows)]
+fn query_mouse_buttons() -> qtrs_core::event::MouseButtons {
+    use qtrs_core::event::MouseButtons;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
+    // SAFETY: plain Win32 queries without pointers.
+    unsafe {
+        let swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
+        let down = |vk| GetAsyncKeyState(vk as i32) < 0;
+        let mut result = MouseButtons::NO_BUTTON;
+        if down(VK_LBUTTON) {
+            result = result.union(if swapped { MouseButtons::RIGHT } else { MouseButtons::LEFT });
+        }
+        if down(VK_RBUTTON) {
+            result = result.union(if swapped { MouseButtons::LEFT } else { MouseButtons::RIGHT });
+        }
+        if down(VK_MBUTTON) {
+            result = result.union(MouseButtons::MIDDLE);
+        }
+        result
+    }
+}
+
+/// `QWindowsContext::handleExitSizeMove` (`qwindowscontext.cpp:1261-1290`). The native move/size
+/// loop swallows the button release that ends a drag, so the application still believes the
+/// button is down. Every button the application has pressed but that is physically up gets its
+/// release now: through the normal `WM_*BUTTONUP` path when the cursor is inside the window, and
+/// silently (Qt: `NonClientAreaMouseButtonRelease`, which widgets never see) when it is outside.
+#[cfg(windows)]
+unsafe fn sync_mouse_buttons_after_move_loop(hwnd: HWND) {
+    use qtrs_core::event::MouseButtons;
+    let app = APP_MOUSE_BUTTONS.try_with(|b| b.get()).unwrap_or(MouseButtons::NO_BUTTON);
+    let stale = MouseButtons(app.0 & !query_mouse_buttons().0);
+    if stale.is_empty() {
+        return;
+    }
+    let _ = APP_MOUSE_BUTTONS.try_with(|b| b.set(MouseButtons(app.0 & !stale.0)));
+
+    let mut pt = windows_sys::Win32::Foundation::POINT { x: 0, y: 0 };
+    GetCursorPos(&mut pt);
+    let mut rect: windows_sys::Win32::Foundation::RECT = std::mem::zeroed();
+    GetWindowRect(hwnd, &mut rect);
+    let inside = pt.x >= rect.left && pt.x < rect.right && pt.y >= rect.top && pt.y < rect.bottom;
+    if !inside {
+        return;
+    }
+    windows_sys::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+    let lparam = ((pt.x & 0xffff) | ((pt.y & 0xffff) << 16)) as LPARAM;
+    for (flag, up) in [
+        (MouseButtons::LEFT, WM_LBUTTONUP),
+        (MouseButtons::RIGHT, WM_RBUTTONUP),
+        (MouseButtons::MIDDLE, WM_MBUTTONUP),
+    ] {
+        if stale.contains(flag) {
+            native_window_proc(hwnd, up, 0, lparam);
+        }
+    }
+}
+
 /// Mirrors the native sizing-loop state onto the surfaces before they are resized.
 #[cfg(windows)]
 fn sync_interactive_resize(
@@ -605,6 +696,7 @@ unsafe fn native_window_proc_inner(
         }
         windows_sys::Win32::UI::WindowsAndMessaging::WM_EXITSIZEMOVE => {
             set_interactive_resize_flag(hwnd, false);
+            sync_mouse_buttons_after_move_loop(hwnd);
             dispatch_window_system_event(
                 Delivery::Default,
                 hwnd,
@@ -786,6 +878,7 @@ unsafe fn native_window_proc_inner(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
+            track_button_press(msg);
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);
@@ -833,6 +926,7 @@ unsafe fn native_window_proc_inner(
             0
         }
         WM_LBUTTONDBLCLK | WM_RBUTTONDBLCLK | WM_MBUTTONDBLCLK => {
+            track_button_press(msg);
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);
@@ -880,6 +974,7 @@ unsafe fn native_window_proc_inner(
             0
         }
         WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP => {
+            track_button_release(msg);
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);
