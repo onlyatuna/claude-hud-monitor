@@ -187,6 +187,8 @@ pub struct HUDWindow {
     pub debouncer: Arc<ResizeDebouncer>,
     /// Wall-clock time of the previous clock tick (Python `_last_countdown_ts`); `None` before the first.
     last_tick: Option<SystemTime>,
+    /// Diagnostic counter of long-gap refreshes; never read by any decision.
+    wake_refresh_seq: u64,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -473,6 +475,7 @@ impl HUDWindow {
             refresh_ctrl,
             providers,
             last_tick: None,
+            wake_refresh_seq: 0,
             window,
             is_click_through: ct,
             is_dark: dark,
@@ -830,12 +833,32 @@ impl HUDWindow {
     /// wall clock moved more than `WAKE_GAP_SECS` since the previous tick (system sleep, a stalled
     /// process, a clock jump) refreshes every provider once. `now` comes from the caller.
     pub fn on_clock_tick(&mut self, now: SystemTime) {
-        let gap = tick_gap_exceeded(self.last_tick, now);
+        let previous = self.last_tick;
+        let gap = tick_gap_exceeded(previous, now);
         self.last_tick = Some(now);
         self.update_clock();
         if gap {
+            // Diagnostic only: nothing reads the sequence to decide anything.
+            self.wake_refresh_seq += 1;
+            #[cfg(debug_assertions)]
+            {
+                let ms = |t: SystemTime| t.duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis());
+                let gap_ms = previous.and_then(|p| now.duration_since(p).ok()).map_or(0, |d| d.as_millis());
+                eprintln!(
+                    "[rc18] wake refresh #{} previous_ms={} now_ms={} gap_ms={}",
+                    self.wake_refresh_seq,
+                    previous.map_or(0, ms),
+                    ms(now),
+                    gap_ms
+                );
+            }
             self.trigger_refresh();
         }
+    }
+
+    /// Number of long-gap refreshes `on_clock_tick` has triggered (diagnostics and tests).
+    pub fn wake_refresh_seq(&self) -> u64 {
+        self.wake_refresh_seq
     }
 
     pub fn trigger_refresh(&mut self) {
@@ -1116,6 +1139,29 @@ mod tests {
         hud.refresh_ctrl.lock().drain_results(&hud.providers);
         hud.on_clock_tick(after(t0, 18.0));
         assert_eq!(fetches_within(&fetched, 400), 0, "the gap is measured from the previous tick, not from t0");
+    }
+
+    #[test]
+    fn wake_refresh_sequence_advances_once_per_long_gap_only() {
+        let (mut hud, _fetched) = hud_with_stubs();
+        let t0 = SystemTime::now();
+        assert_eq!(hud.wake_refresh_seq(), 0);
+
+        hud.on_clock_tick(t0);
+        hud.on_clock_tick(after(t0, 1.0));
+        hud.on_clock_tick(after(t0, 2.0));
+        assert_eq!(hud.wake_refresh_seq(), 0, "normal ticks leave the sequence alone");
+
+        hud.on_clock_tick(after(t0, 19.0));
+        assert_eq!(hud.wake_refresh_seq(), 1, "a 17 s gap is exactly one refresh");
+
+        hud.on_clock_tick(after(t0, 20.0));
+        assert_eq!(hud.wake_refresh_seq(), 1, "the next 1 s tick is not a second wake-up");
+
+        hud.on_clock_tick(after(t0, 20.0 + 15.0));
+        assert_eq!(hud.wake_refresh_seq(), 1, "exactly 15 s is not a wake-up");
+        hud.on_clock_tick(after(t0, 20.0 + 15.0 + 16.0));
+        assert_eq!(hud.wake_refresh_seq(), 2);
     }
 
     #[test]
