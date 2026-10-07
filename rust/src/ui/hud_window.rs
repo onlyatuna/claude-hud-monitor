@@ -432,7 +432,10 @@ impl HUDWindow {
     ) {
         let is_horizontal = layout_mode == "horizontal";
         let mut layout: Box<dyn Layout> = if is_horizontal {
-            Box::new(BoxLayout::horizontal())
+            // `body_layout.setSpacing(8)` (`hud_window.py:337`); the vertical layout keeps Qt's default.
+            let mut body = BoxLayout::horizontal();
+            body.set_spacing(8);
+            Box::new(body)
         } else {
             Box::new(BoxLayout::vertical())
         };
@@ -821,6 +824,28 @@ impl Drop for HUDWindow {
 mod tests {
     use super::*;
     use crate::refresh_controller::RefreshController;
+
+    /// G12.8.b. PySide6 (`py_horizontal.json`, DPR 1.25): in a 666 px wide body the three cards are
+    /// 211, 210 and 211 px wide, because the body `QHBoxLayout` has spacing 8 (`hud_window.py:337`).
+    #[cfg(windows)]
+    #[test]
+    fn test_horizontal_cards_body_matches_pyside6_widths() {
+        let _setup = crate::ui::test_support::CardsOracleSetup::new();
+        let cards: HashMap<String, ProviderCardWidget> = ["claude", "agy", "codex"]
+            .iter()
+            .map(|id| (id.to_string(), ProviderCardWidget::new(id)))
+            .collect();
+        let container = make_widget(qtrs_widgets::EmptyWidget::new());
+        HUDWindow::apply_cards_layout_inner(&container, &cards, "horizontal");
+        container.borrow_mut().set_geometry(qtrs_gui::geometry::primitives::Rect::new(12, 32, 666, 103));
+        container.borrow().update_layout();
+
+        let widths: Vec<i32> = ["claude", "agy", "codex"]
+            .iter()
+            .map(|id| cards[*id].widget().borrow().geometry().width)
+            .collect();
+        assert_eq!(widths, [211, 210, 211]);
+    }
 
     #[test]
     fn test_hud_window_init_does_not_trigger_save() {

@@ -1157,8 +1157,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 | ID | 嚴重度／驗證 | 層級 | 內容 |
 |---|---|---|---|
-| G12.8.a | P1, RAN | 應用 | 指標值字級：Python widget-local `font-size: 14px`；Rust 只有 `set_font(14)`，被 app sheet `QLabel#MetricValue { font-size: 16px }` 蓋過（符合 Qt：樣式表字級勝過 `setFont`），有效字級 16，`sizeHint` 高度 19 vs 17。RC-14 的第一個分歧 |
-| G12.8.b | P1, RAN | 應用 | 橫向 body spacing：Python 8（`hud_window.py:337`），Rust 預設 6；卡片寬 213 vs 211 |
+| G12.8.a | P1, RAN；已修復：RC-14 | 應用 | 指標值字級：Python widget-local `font-size: 14px`；Rust 只有 `set_font(14)`，被 app sheet `QLabel#MetricValue { font-size: 16px }` 蓋過（符合 Qt：樣式表字級勝過 `setFont`），有效字級 16，`sizeHint` 高度 19 vs 17。RC-14 的第一個分歧 |
+| G12.8.b | P1, RAN；已修復：RC-14 | 應用 | 橫向 body spacing：Python 8（`hud_window.py:337`），Rust 預設 6；卡片寬 213 vs 211 |
 | G12.8.c | P1, RAN | 應用 | 直向容器 policy／stretch：Python 不設；Rust `stack`／`cards_container` `Expanding`、根 stretch 1、卡片 stretch。RC-16 的延伸 |
 | G12.8.d | P2, RAN | 應用 | `title` size policy：Python `Minimum/Preferred`（`provider_card.py:34`），Rust 預設 |
 | G12.8.e | P2, RAN | 應用 | badge 字重：Python 400；Rust Bold（`set_font(...Bold)`，QSS 沒有字重） |
@@ -1188,7 +1188,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 333 項：D 12、P0 34、P1 147、P2 135、test gap 5（計數含已修復項；標籤含「已修復」者共 32 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 333 項：D 12、P0 34、P1 147、P2 135、test gap 5（計數含已修復項；標籤含「已修復」者共 36 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.5.b、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1388,7 +1388,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.3.b | P2 | wrapper 多一個 child widget 進入 hit-test／paint 樹 |
 | G9.3.c | P0, READ | HUD 的 `header_widget` 額外被設為 `Expanding/Fixed` |
 | G9.4.a | P1, READ | 依賴 Qt 預設的 layout |
-| G9.4.b | P0, 已讀兩側原始碼確認 | **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)` |
+| G9.4.b | P0, 已讀兩側原始碼確認；已修復：RC-14 | **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)` |
 | G9.5.a | P1, READ | 無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout |
 | G9.5.b | P1, READ | `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_propert |
 | G9.5.c | P2 | setter 立即重排與 Qt 壓縮不同 |
@@ -1489,7 +1489,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.3.g | P2 | `font-size` px 取整 |
 | G12.3.h | P2, INFERENCE | 色彩：8 位數十六進位被當 `#RRGGBBAA` |
 | G12.5.a | P0, READ；= G12.3.b | Badge `max-height: 15px` 只在 Rust |
-| G12.5.b | P0, READ；= G9.4.b | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 |
+| G12.5.b | P0, READ；= G9.4.b；已修復：RC-14 | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 |
 | G12.5.c | P1 | 面板底色不依 Acrylic 是否成功而改變 |
 | G12.5.d | P0, READ | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 只有 resize 的 `ResizeDebouncer` |
 | G12.5.e | P0, READ | 喚醒偵測（倒數 tick 間隔 >15 s 就刷新）在 Rust 不存在 |
@@ -1515,8 +1515,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.u | P2 | 色彩／字型解析細節 |
 | G12.5.v | P1 | 發佈 profile `panic = "abort"` vs Python excepthook |
 | G12.5.w | P2 | `rust/README.md` 仍描述 egui/eframe/reqwest |
-| G12.8.a | P1, RAN | 指標值字級：Python widget-local `font-size: 14px`；Rust 只有 `set_font(14)`，被 app sheet `QLabel#MetricValue { font-size: 16px }` 蓋過（符合 Qt：樣式表字級勝過 `setFont`），有效字級 16，`sizeHint` 高度 19 vs 17。RC-14 的第一個分歧 |
-| G12.8.b | P1, RAN | 橫向 body spacing：Python 8（`hud_window.py:337`），Rust 預設 6；卡片寬 213 vs 211 |
+| G12.8.a | P1, RAN；已修復：RC-14 | 指標值字級：Python widget-local `font-size: 14px`；Rust 只有 `set_font(14)`，被 app sheet `QLabel#MetricValue { font-size: 16px }` 蓋過（符合 Qt：樣式表字級勝過 `setFont`），有效字級 16，`sizeHint` 高度 19 vs 17。RC-14 的第一個分歧 |
+| G12.8.b | P1, RAN；已修復：RC-14 | 橫向 body spacing：Python 8（`hud_window.py:337`），Rust 預設 6；卡片寬 213 vs 211 |
 | G12.8.c | P1, RAN | 直向容器 policy／stretch：Python 不設；Rust `stack`／`cards_container` `Expanding`、根 stretch 1、卡片 stretch。RC-16 的延伸 |
 | G12.8.d | P2, RAN | `title` size policy：Python `Minimum/Preferred`（`provider_card.py:34`），Rust 預設 |
 | G12.8.e | P2, RAN | badge 字重：Python 400；Rust Bold（`set_font(...Bold)`，QSS 沒有字重） |
@@ -1852,7 +1852,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 |---|---|---|---|
 | RC-12 熱鍵註冊失敗不回報 | G11.9.a、G11.8.c、G12.5.j | `hotkey.rs:235-261`、`main.rs:496` | 無。`start` 必須回報 `RegisterHotKey` 失敗；測試：衝突的熱鍵使 `start` 回 `Err`，且 `click_through` 啟動時被關閉。**已完成（RC-12，Win32 真實 `RegisterHotKey` 衝突驗證）**：失敗改由 `HotkeyManager::registration()` 回報，而非 `start` 的 `Err`（理由見 G11.9.a）；新缺口 G11.9.e–G11.9.h |
 | RC-13 螢幕選擇／還原 | G11.4.a、G12.5.l | `hud_window.rs:178-193,640-662,823-824` | 對照 Python 規則；使用已存在的 `clamp_window_rect_to_screens`（`qtrs-platform/src/screen.rs:532`）。**已完成（RC-13，單螢幕 Win32 煙霧測試＋Python oracle）**：**未**使用 `clamp_window_rect_to_screens`，因為它的規則與 Python 不同（見 C11.4），改以 Python 規則寫成 `rust/src/ui/placement.rs`；新缺口 G11.4.e–G11.4.g |
-| RC-14 卡片根 spacing 2 vs 5 | G9.4.b、G12.5.b、G12.8.a | `provider_card.rs:159` vs `provider_card.py:27` | 閘門已完成（幾何 diff，`GEOMETRY_DIFF_RC14_16.md`）：**案例 A（應用層搬運錯誤）**，2 沒有在補 qtrs 差異。**修復必須與 G12.8.a（指標值字級 16 vs 14）同做**，不得單改 spacing。DPR 1.25／Windows 字型量測 |
+| RC-14 卡片根 spacing 2 vs 5 | G9.4.b、G12.5.b、G12.8.a | `provider_card.rs:159` vs `provider_card.py:27` | 閘門已完成（幾何 diff，`GEOMETRY_DIFF_RC14_16.md`）：**案例 A（應用層搬運錯誤）**，2 沒有在補 qtrs 差異。**修復必須與 G12.8.a（指標值字級 16 vs 14）同做**，不得單改 spacing。DPR 1.25／Windows 字型量測。**已完成（RC-14，含 G12.8.a／b）**：`provider_card.rs` 根 spacing 5、`m*_val` 改為 widget-local `font-size`（14px，錯誤時 13px，與 Python 相同）、`hud_window.rs` 橫向 body spacing 8。測試：`test_card_size_hint_matches_pyside6`（label 17、card 109）、`test_horizontal_cards_body_matches_pyside6_widths`（211／210／211），期望值取自 PySide6 oracle；修改前 FAIL（19 vs 17；213／214／213）、修改後 PASS。**僅 DPR 1.25、Windows 字型**。**未驗證**：8 個會建立 `HUDWindow` 的既有測試（`hud_window.rs` 4、`provider_card.rs` 4）因網路隔離（TI-01）未完成而**未執行**，其中版面斷言可能受 spacing／字級影響 |
 | RC-15 Badge `max-height: 15px` | G12.3.b、G12.5.a、G12.8.e | `styles.rs:192,291` | 閘門已完成：**案例 A（多餘屬性）**，移除後 badge `sizeHint` 與 Python 相同（25×15）。**只在 DPR 1.25 量過**；移除前必須在 DPR 1.0 重跑 oracle。badge 字重（G12.8.e）另計 |
 | RC-16 header 多餘的 `Expanding/Fixed` | G9.3.c、G12.8.c | `hud_window.rs:272-275` | 閘門已完成：**案例 A，範圍比原描述大**：直向還需改 `stack`／`cards_container` policy、根 stretch、直向卡片 stretch（G12.8.c）。**待決策**：照搬後直向視窗變高時 header 列會變高（實測 68 px），這是 Python 的實際行為 |
 | RC-17 幾何持久化 | G12.5.d | `main.rs:575-591`、`config.rs`（`ResizeDebouncer`） | 依賴 RC-06。**待決策**：Python 的 250 ms 單發重啟是否照搬（目前專案規則：不新增 timer／debounce） |

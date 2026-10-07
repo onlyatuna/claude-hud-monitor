@@ -107,6 +107,30 @@ fn set_title_style(w: &WidgetRef, color: Color) {
     }
 }
 
+/// Metric value style, as the Python card sets it on `m*_val`: a widget-local
+/// `[color: <c>; ]font-size: <px>px;` (14px normally, 13px for the error text). It must be
+/// widget-local: the application sheet's `QLabel#MetricValue { font-size: 16px }` would otherwise win
+/// over `set_font`.
+fn set_metric_value_style(w: &WidgetRef, color: Option<Color>, font_px: u32) {
+    if let Some(lbl) = w.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+        match color {
+            Some(color) => {
+                let c = color.to_color_u8();
+                lbl.set_color(color);
+                lbl.set_style_sheet(&format!(
+                    "color: rgba({}, {}, {}, {}); font-size: {}px;",
+                    c.red(),
+                    c.green(),
+                    c.blue(),
+                    c.alpha(),
+                    font_px
+                ));
+            }
+            None => lbl.set_style_sheet(&format!("font-size: {}px;", font_px)),
+        }
+    }
+}
+
 fn set_progress_val(w: &WidgetRef, val: i32, color: Color) {
     if let Some(bar) = w.borrow_mut().as_any_mut().downcast_mut::<ProgressBar>() {
         bar.set_value(val);
@@ -156,7 +180,7 @@ impl ProviderCardWidget {
         let container = make_widget(EmptyWidget::new());
         let mut root_layout = BoxLayout::vertical();
         root_layout.set_margins(Margins::new(6, 4, 6, 4));
-        root_layout.set_spacing(2);
+        root_layout.set_spacing(5);
 
         // 1. Header (dot + title + stretch + badge + badge2)
         let mut header_layout = BoxLayout::horizontal();
@@ -212,6 +236,7 @@ impl ProviderCardWidget {
         m1_val_lbl.set_font(Font::new("Consolas", 14.0).with_weight(FontWeight::Bold));
         let m1_val = make_widget(m1_val_lbl);
         m1_val.borrow_mut().set_object_name("MetricValue");
+        set_metric_value_style(&m1_val, None, 14);
         m1_hdr.add_widget(m1_val.clone());
 
         let m1_hdr_widget = make_widget(EmptyWidget::new());
@@ -250,6 +275,7 @@ impl ProviderCardWidget {
         m2_val_lbl.set_font(Font::new("Consolas", 14.0).with_weight(FontWeight::Bold));
         let m2_val = make_widget(m2_val_lbl);
         m2_val.borrow_mut().set_object_name("MetricValue");
+        set_metric_value_style(&m2_val, None, 14);
         m2_hdr.add_widget(m2_val.clone());
 
         let m2_hdr_widget = make_widget(EmptyWidget::new());
@@ -328,7 +354,7 @@ impl ProviderCardWidget {
         if data.error.is_some() && !data.stale {
             set_label_color(&self.dot, error_color);
             set_label_text(&self.m1_val, "ERR");
-            set_label_color(&self.m1_val, error_color);
+            set_metric_value_style(&self.m1_val, Some(error_color), 13);
             set_progress_val(&self.m1_bar, 0, error_color);
 
             let first_line = data
@@ -373,7 +399,7 @@ impl ProviderCardWidget {
         } else {
             sub_default_color
         };
-        set_label_color(&self.m1_val, c1);
+        set_metric_value_style(&self.m1_val, Some(c1), 14);
         let v1 = data.metric1_val.unwrap_or(0.0).clamp(0.0, 100.0) as i32;
         set_progress_val(&self.m1_bar, v1, c1);
 
@@ -387,7 +413,7 @@ impl ProviderCardWidget {
         } else {
             sub_default_color
         };
-        set_label_color(&self.m2_val, c2);
+        set_metric_value_style(&self.m2_val, Some(c2), 14);
         let v2 = data.metric2_val.unwrap_or(0.0).clamp(0.0, 100.0) as i32;
         set_progress_val(&self.m2_bar, v2, c2);
 
@@ -606,6 +632,22 @@ mod tests {
             "STALE"
         );
     }
+    /// RC-14 / G12.8.a. Expected values are PySide6 measurements (`rust/tools/geometry_audit/results/
+    /// py_horizontal.json`, DPR 1.25, Windows fonts): the card's `sizeHint` height is 109 and the metric
+    /// value label's is 17, because the Python label sets a widget-local `font-size: 14px` that wins
+    /// over the application sheet's 16px.
+    #[cfg(windows)]
+    #[test]
+    fn test_card_size_hint_matches_pyside6() {
+        let _setup = crate::ui::test_support::CardsOracleSetup::new();
+        let card = ProviderCardWidget::new("claude");
+
+        let value_height = card.m1_val.borrow().size_hint().height;
+        assert_eq!(value_height, 17, "metric value label height (PySide6: 17)");
+        let card_height = card.widget().borrow().size_hint().height;
+        assert_eq!(card_height, 109, "card height (PySide6: 109)");
+    }
+
     // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
     // Segoe UI, Consolas); Linux and macOS have neither those fonts nor reference numbers.
     #[cfg(windows)]
