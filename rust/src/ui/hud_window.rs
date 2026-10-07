@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use chrono::Local;
 use parking_lot::Mutex;
@@ -150,6 +151,17 @@ fn install_panel_painter(root: &WidgetRef, theme: &Theme, config: Arc<Mutex<Conf
     }
 }
 
+/// Python `gap > 15.0` in `_update_all_countdowns`: the tick gap that counts as a wake-up.
+const WAKE_GAP_SECS: u64 = 15;
+
+/// True when `now` is strictly more than 15 s after `previous` (wall clock, like `time.time()`).
+/// No previous tick (the first one), exactly 15 s, or a backward clock jump give false.
+pub fn tick_gap_exceeded(previous: Option<SystemTime>, now: SystemTime) -> bool {
+    previous
+        .and_then(|prev| now.duration_since(prev).ok())
+        .is_some_and(|gap| gap > Duration::from_secs(WAKE_GAP_SECS))
+}
+
 pub struct HUDWindow {
     pub config: Arc<Mutex<Config>>,
     pub refresh_ctrl: Arc<Mutex<RefreshController>>,
@@ -173,6 +185,8 @@ pub struct HUDWindow {
     pub cards: HashMap<String, ProviderCardWidget>,
     pub table: UsageTable,
     pub debouncer: Arc<ResizeDebouncer>,
+    /// Wall-clock time of the previous clock tick (Python `_last_countdown_ts`); `None` before the first.
+    last_tick: Option<SystemTime>,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -458,6 +472,7 @@ impl HUDWindow {
             config,
             refresh_ctrl,
             providers,
+            last_tick: None,
             window,
             is_click_through: ct,
             is_dark: dark,
@@ -811,6 +826,18 @@ impl HUDWindow {
         self.window.render_and_present();
     }
 
+    /// One 1000 ms clock tick (Python `_update_all_countdowns`): refreshes the countdowns, and when the
+    /// wall clock moved more than `WAKE_GAP_SECS` since the previous tick (system sleep, a stalled
+    /// process, a clock jump) refreshes every provider once. `now` comes from the caller.
+    pub fn on_clock_tick(&mut self, now: SystemTime) {
+        let gap = tick_gap_exceeded(self.last_tick, now);
+        self.last_tick = Some(now);
+        self.update_clock();
+        if gap {
+            self.trigger_refresh();
+        }
+    }
+
     pub fn trigger_refresh(&mut self) {
         let mut ctrl = self.refresh_ctrl.lock();
         ctrl.refresh(&self.providers);
@@ -1014,6 +1041,81 @@ mod tests {
         let mut held: Vec<&String> = hud.providers.keys().collect();
         held.sort();
         assert_eq!(held, ["agy", "claude", "codex"]);
+    }
+
+    fn after(t: SystemTime, secs: f64) -> SystemTime {
+        t + Duration::from_secs_f64(secs)
+    }
+
+    #[test]
+    fn tick_gap_is_false_for_the_first_tick_and_up_to_exactly_15_seconds() {
+        let t0 = SystemTime::now();
+        assert!(!tick_gap_exceeded(None, t0), "first tick only records a timestamp");
+        assert!(!tick_gap_exceeded(Some(t0), after(t0, 1.0)));
+        assert!(!tick_gap_exceeded(Some(t0), after(t0, 10.0)));
+        assert!(!tick_gap_exceeded(Some(t0), after(t0, 14.999)));
+        assert!(!tick_gap_exceeded(Some(t0), after(t0, 15.0)), "Python: gap > 15.0, so exactly 15 s is no wake-up");
+    }
+
+    #[test]
+    fn tick_gap_is_true_just_above_15_seconds() {
+        let t0 = SystemTime::now();
+        assert!(tick_gap_exceeded(Some(t0), after(t0, 15.001)));
+        assert!(tick_gap_exceeded(Some(t0), after(t0, 3600.0)));
+    }
+
+    #[test]
+    fn tick_gap_is_false_when_the_clock_moved_backwards() {
+        let t0 = SystemTime::now();
+        assert!(!tick_gap_exceeded(Some(t0), t0 - Duration::from_secs(60)));
+    }
+
+    fn hud_with_stubs() -> (HUDWindow, std::sync::mpsc::Receiver<String>) {
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let (providers, fetched) = crate::providers::stub::stub_providers_with_receiver();
+        let hud = HUDWindow::with_providers(cfg, ctrl, providers).expect("with_providers failed");
+        // Let the initial fetches finish and be collected, so later fetches are only refresh() ones.
+        for _ in 0..crate::providers::PROVIDER_IDS.len() {
+            fetched.recv_timeout(Duration::from_secs(10)).expect("initial fetch");
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while hud.refresh_ctrl.lock().is_busy() {
+            hud.refresh_ctrl.lock().drain_results(&hud.providers);
+            assert!(std::time::Instant::now() < deadline, "initial fetches never completed");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        (hud, fetched)
+    }
+
+    fn fetches_within(rx: &std::sync::mpsc::Receiver<String>, ms: u64) -> usize {
+        let deadline = std::time::Instant::now() + Duration::from_millis(ms);
+        let mut n = 0;
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            if rx.recv_timeout(left).is_ok() {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn clock_tick_refreshes_every_provider_exactly_once_after_a_long_gap() {
+        let (mut hud, fetched) = hud_with_stubs();
+        let t0 = SystemTime::now();
+        let providers = crate::providers::PROVIDER_IDS.len();
+
+        hud.on_clock_tick(t0);
+        hud.on_clock_tick(after(t0, 1.0));
+        assert_eq!(fetches_within(&fetched, 400), 0, "normal ticks must not refresh");
+
+        hud.on_clock_tick(after(t0, 17.0));
+        assert_eq!(fetches_within(&fetched, 800), providers, "one long gap = one refresh() = one fetch per provider");
+
+        // previous timestamp was updated to t0+17: the next ordinary tick is not another wake-up
+        hud.refresh_ctrl.lock().drain_results(&hud.providers);
+        hud.on_clock_tick(after(t0, 18.0));
+        assert_eq!(fetches_within(&fetched, 400), 0, "the gap is measured from the previous tick, not from t0");
     }
 
     #[test]

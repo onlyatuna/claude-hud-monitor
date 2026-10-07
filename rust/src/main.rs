@@ -558,7 +558,7 @@ fn main() -> std::process::ExitCode {
     clock_timer.timeout.connect(move |()| {
         MAIN_HUD.with(|cell| {
             if let Some(hud) = cell.borrow().as_ref() {
-                hud.borrow_mut().update_clock();
+                hud.borrow_mut().on_clock_tick(std::time::SystemTime::now());
                 if WAKE_REQUESTED.swap(false, Ordering::Relaxed) {
                     hud.borrow_mut().show();
                 }

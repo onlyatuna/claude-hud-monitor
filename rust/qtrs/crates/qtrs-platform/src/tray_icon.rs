@@ -299,7 +299,8 @@ unsafe extern "system" fn tray_window_proc(
                 _ => {}
             }
         } else if msg == 0x0218 {
-            // WM_POWERBROADCAST (aligned with QWindowsContext / sleep-resume detection)
+            // WM_POWERBROADCAST. Qt has no suspend/resume event (it only handles PBT_POWERSETTINGCHANGE
+            // in qwindowscontext.cpp); this is a qtrs extension.
             let power_event = match wparam as u32 {
                 0x0012 | 0x0007 => Some(crate::window_system_interface::PowerEvent::Resume),
                 0x0004 => Some(crate::window_system_interface::PowerEvent::Suspend),

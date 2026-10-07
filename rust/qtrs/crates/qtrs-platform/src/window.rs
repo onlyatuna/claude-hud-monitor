@@ -1124,7 +1124,8 @@ unsafe fn native_window_proc_inner(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         0x0218 => {
-            // WM_POWERBROADCAST (aligned with QWindowsContext sleep-resume)
+            // WM_POWERBROADCAST. Qt itself only handles PBT_POWERSETTINGCHANGE (qwindowscontext.cpp,
+            // qWindowsPowerWindowProc); it has no suspend/resume event, so this is a qtrs extension.
             let power_event = match wparam as u32 {
                 0x0012 | 0x0007 => Some(crate::window_system_interface::PowerEvent::Resume),
                 0x0004 => Some(crate::window_system_interface::PowerEvent::Suspend),
