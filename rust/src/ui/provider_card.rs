@@ -197,6 +197,10 @@ impl ProviderCardWidget {
         title_lbl.set_font(Font::new("Segoe UI", 9.5).with_weight(FontWeight::Bold));
         let title = make_widget(title_lbl);
         title.borrow_mut().set_object_name("CardTitle");
+        // `self.title.setSizePolicy(Minimum, Preferred)` (`provider_card.py:39`)
+        title
+            .borrow_mut()
+            .set_size_policy(qtrs_widgets::QSizePolicy::new(qtrs_widgets::Policy::Minimum, qtrs_widgets::Policy::Preferred));
         set_title_style(&title, theme_color);
         set_label_color(&dot, theme_color);
         header_layout.add_widget(title.clone());
@@ -701,16 +705,21 @@ mod tests {
             .set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 280, 490));
         hud.apply_cards_layout_mode("vertical");
         let stack_geom_v = hud.stack.borrow().geometry();
-        assert!(
-            stack_geom_v.y <= 35,
-            "Stack must start below header in vertical mode (got {})",
-            stack_geom_v.y
+        // PySide6: the extra height of a taller vertical window belongs to the header row (RC-16),
+        // so the stack starts right under it (root spacing 6) instead of at a fixed y.
+        let header_geom = hud.window.root_widget().borrow().children()[0].borrow().geometry();
+        assert_eq!(
+            stack_geom_v.y,
+            header_geom.y + header_geom.height + 6,
+            "Stack must start right below the header in vertical mode"
         );
         let c_claude = hud.cards["claude"].container.borrow().geometry();
         let c_agy = hud.cards["agy"].container.borrow().geometry();
-        assert!(
-            c_claude.height >= 120,
-            "Vertical card must have reasonable height (got {})",
+        // PySide6 keeps each vertical card at its size hint (109 at DPR 1.25, 108 at 1.0).
+        assert_eq!(
+            c_claude.height,
+            hud.cards["claude"].container.borrow().size_hint().height,
+            "Vertical card keeps its size hint (got {})",
             c_claude.height
         );
         assert!(

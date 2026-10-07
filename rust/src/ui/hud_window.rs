@@ -287,25 +287,16 @@ impl HUDWindow {
         header_layout.add_stretch(1);
         header_layout.add_widget(time_label.clone());
 
+        // Python's header is a bare `QHBoxLayout` with no size policy; the default (Preferred) lets
+        // the root layout hand any extra height to it, as `qGeomCalc` does for the Python layout.
         let header_widget = make_widget(EmptyWidget::new());
-        header_widget
-            .borrow_mut()
-            .set_size_policy(qtrs_widgets::QSizePolicy::new(
-                qtrs_widgets::Policy::Expanding,
-                qtrs_widgets::Policy::Fixed,
-            ));
         header_widget
             .borrow_mut()
             .set_layout(Box::new(header_layout));
 
         // Page 0: Cards mode
+        // Python sets no size policy and no stretch on the cards container (`hud_window.py:141-145`).
         let cards_container = make_widget(EmptyWidget::new());
-        cards_container
-            .borrow_mut()
-            .set_size_policy(qtrs_widgets::QSizePolicy::new(
-                qtrs_widgets::Policy::Expanding,
-                qtrs_widgets::Policy::Expanding,
-            ));
         let mut cards = HashMap::new();
         cards.insert("claude".to_string(), ProviderCardWidget::new("claude"));
         cards.insert("agy".to_string(), ProviderCardWidget::new("agy"));
@@ -320,6 +311,7 @@ impl HUDWindow {
 
         // Stacked container
         let stack: WidgetRef = make_widget(StackedWidget::new());
+        stack.borrow_mut().set_size_policy(Self::stack_policy(ui_mode == "table"));
         if let Some(s) = stack
             .borrow_mut()
             .as_any_mut()
@@ -336,7 +328,7 @@ impl HUDWindow {
         root_layout.set_margins(Margins::new(12, 8, 12, 10));
         root_layout.set_spacing(6);
         root_layout.add_widget(header_widget);
-        root_layout.add_widget_with_stretch(stack.clone(), 1);
+        root_layout.add_widget(stack.clone());
         let root = window.root_widget();
         install_panel_painter(&root, &theme, Arc::clone(&config));
         root.borrow_mut().set_layout(Box::new(root_layout));
@@ -438,6 +430,15 @@ impl HUDWindow {
         Ok(hud)
     }
 
+    /// Python puts the table or the cards container straight into the root layout, so the layout
+    /// item behaves like that page: the cards container is `Preferred` (extra height goes to the
+    /// header, `hud_window.py:141-145,308`), while the table's grid makes its item expand and take
+    /// all the extra height (measured: 462 px of a 500 px window). The stack stands in for both.
+    fn stack_policy(table: bool) -> qtrs_widgets::QSizePolicy {
+        let p = if table { qtrs_widgets::Policy::Expanding } else { qtrs_widgets::Policy::Preferred };
+        qtrs_widgets::QSizePolicy::new(p, p)
+    }
+
     fn apply_cards_layout_inner(
         container: &WidgetRef,
         cards: &HashMap<String, ProviderCardWidget>,
@@ -471,7 +472,13 @@ impl HUDWindow {
                         layout.add_widget(make_widget(h_div));
                     }
                 }
-                layout.add_widget_with_stretch(card.widget(), 1);
+                // `body_layout.addWidget(card, 1)` in the horizontal body only; the vertical column
+                // adds the cards without a stretch (`hud_window.py:336-363`).
+                if is_horizontal {
+                    layout.add_widget_with_stretch(card.widget(), 1);
+                } else {
+                    layout.add_widget(card.widget());
+                }
             }
         }
         container.borrow_mut().set_layout(layout);
@@ -593,6 +600,7 @@ impl HUDWindow {
             {
                 s.set_current_index(1);
             }
+            self.stack.borrow_mut().set_size_policy(Self::stack_policy(true));
             set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
             self.layout_toggle_btn.borrow().set_visible(false);
             self.window
@@ -611,6 +619,7 @@ impl HUDWindow {
             {
                 s.set_current_index(0);
             }
+            self.stack.borrow_mut().set_size_policy(Self::stack_policy(false));
             set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
             self.layout_toggle_btn.borrow().set_visible(true);
             let cfg = self.config.lock();
@@ -858,6 +867,95 @@ mod tests {
             .map(|id| cards[*id].widget().borrow().geometry().width)
             .collect();
         assert_eq!(widths, [211, 210, 211]);
+    }
+
+    /// RC-16, G12.8.c. PySide6 (`py_vertical.json`, DPR 1.25, 280x463): the card column keeps each
+    /// card at its size hint (109) and the extra height goes to the header row, which becomes 86
+    /// high with the title label filling it, because the header is a plain layout and the card
+    /// container has no stretch and no `Expanding` policy.
+    #[cfg(windows)]
+    #[test]
+    fn test_vertical_extra_height_goes_to_header_like_pyside6() {
+        let _setup = crate::ui::test_support::CardsOracleSetup::new();
+        let mut cfg = Config::default();
+        cfg.ui_mode = "cards".into();
+        cfg.layout_mode = "vertical".into();
+        cfg.appearance = "dark".into();
+        cfg.window_x = Some(0);
+        cfg.window_y = Some(0);
+        cfg.vertical_width = 280;
+        cfg.vertical_height = 463;
+        let cfg = Arc::new(Mutex::new(cfg));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        hud.window.root_widget().borrow().update_layout();
+
+        let root = hud.window.root_widget();
+        let header = root.borrow().children()[0].clone();
+        assert_eq!(header.borrow().geometry().height, 86, "header row height (PySide6: 86)");
+        assert_eq!(hud.title_label.borrow().geometry().height, 86, "title label height (PySide6: 86)");
+        let heights: Vec<i32> = ["claude", "agy", "codex"]
+            .iter()
+            .map(|id| hud.cards[*id].widget().borrow().geometry().height)
+            .collect();
+        assert_eq!(heights, [109, 109, 109], "card heights (PySide6: 109 each)");
+        let ys: Vec<i32> = ["claude", "agy", "codex"]
+            .iter()
+            .map(|id| hud.cards[*id].widget().borrow().geometry().y)
+            .collect();
+        assert_eq!(ys, [0, 122, 244], "card y inside the container (PySide6: 100/222/344 in the window)");
+    }
+
+    /// RC-16 side check. PySide6 (DPR 1.25, table mode 400x500): the title label stays 14 high and
+    /// the table takes all the extra height (462), although the table's own policy is Preferred.
+    #[cfg(windows)]
+    #[test]
+    fn test_table_mode_table_takes_extra_height_like_pyside6() {
+        let _setup = crate::ui::test_support::CardsOracleSetup::new();
+        let mut cfg = Config::default();
+        cfg.ui_mode = "table".into();
+        cfg.appearance = "dark".into();
+        cfg.window_x = Some(0);
+        cfg.window_y = Some(0);
+        cfg.table_width = 400;
+        cfg.table_height = 500;
+        let cfg = Arc::new(Mutex::new(cfg));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        hud.window.root_widget().borrow().update_layout();
+
+        assert_eq!(hud.title_label.borrow().geometry().height, 14, "title label height (PySide6: 14)");
+        assert_eq!(hud.stack.borrow().geometry().height, 462, "table height (PySide6: 462)");
+    }
+
+    /// RC-16: the stack policy follows the page, so switching cards -> table -> cards keeps both
+    /// PySide6 geometries (table takes the height; the vertical header takes it in cards mode).
+    #[cfg(windows)]
+    #[test]
+    fn test_ui_mode_switch_keeps_pyside6_extra_height_owner() {
+        let _setup = crate::ui::test_support::CardsOracleSetup::new();
+        let mut cfg = Config::default();
+        cfg.ui_mode = "cards".into();
+        cfg.layout_mode = "vertical".into();
+        cfg.appearance = "dark".into();
+        cfg.window_x = Some(0);
+        cfg.window_y = Some(0);
+        cfg.vertical_width = 280;
+        cfg.vertical_height = 463;
+        cfg.table_width = 400;
+        cfg.table_height = 500;
+        let cfg = Arc::new(Mutex::new(cfg));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let mut hud = HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+
+        hud.apply_ui_mode("table");
+        hud.window.root_widget().borrow().update_layout();
+        assert_eq!(hud.title_label.borrow().geometry().height, 14, "table mode title height (PySide6: 14)");
+        assert_eq!(hud.stack.borrow().geometry().height, 462, "table mode table height (PySide6: 462)");
+
+        hud.apply_ui_mode("cards");
+        hud.window.root_widget().borrow().update_layout();
+        assert_eq!(hud.title_label.borrow().geometry().height, 86, "cards mode title height (PySide6: 86)");
     }
 
     /// TI-01: a window built with injected providers fetches from exactly those providers — one
