@@ -1,6 +1,8 @@
 // src/ui/mod.rs — Qt HUD UI module
 
 pub mod hud_window;
+#[cfg(test)]
+mod geometry_audit;
 pub mod placement;
 pub mod provider_card;
 pub mod styles;
