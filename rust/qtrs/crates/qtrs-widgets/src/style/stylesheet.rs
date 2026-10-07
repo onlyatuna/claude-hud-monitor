@@ -23,8 +23,8 @@ pub struct ResolvedStyle {
     pub max_height: Option<i32>,
     pub min_width: Option<i32>,
     pub max_width: Option<i32>,
-    /// QSS `width`/`height`: the contents size (`QRenderRule::contentsSize`). Until G12.8.p is
-    /// fixed they are also written to `min_*`/`max_*`.
+    /// QSS `width`/`height`: the contents size (`QRenderRule::contentsSize`); independent of
+    /// `min_*`/`max_*`.
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub font_size: Option<f32>,
@@ -61,7 +61,11 @@ impl ResolvedStyle {
     /// An axis without a `min-*` declaration is 0.
     pub fn min_box_size(&self) -> (i32, i32) {
         let (ex, ey) = self.box_extra();
-        (self.min_width.map_or(0, |w| w + ex), self.min_height.map_or(0, |h| h + ey))
+        // `width`/`height` only raise the minimum of an axis that also has a `min-*` declaration.
+        (
+            self.min_width.map_or(0, |m| m.max(self.width.unwrap_or(-1)) + ex),
+            self.min_height.map_or(0, |m| m.max(self.height.unwrap_or(-1)) + ey),
+        )
     }
 
     /// `QWidget::maximumSize()` set by `QStyleSheetStyle::setGeometry`, likewise for
@@ -69,10 +73,25 @@ impl ResolvedStyle {
     /// declaration is `QWIDGETSIZE_MAX`.
     pub fn max_box_size(&self) -> (i32, i32) {
         let (ex, ey) = self.box_extra();
+        // `width`/`height` only lower the maximum of an axis that also has a `max-*` declaration.
         (
-            self.max_width.map_or(16777215, |w| w + ex),
-            self.max_height.map_or(16777215, |h| h + ey),
+            self.max_width.map_or(16777215, |m| m.min(self.width.unwrap_or(16777215)) + ex),
+            self.max_height.map_or(16777215, |m| m.min(self.height.unwrap_or(16777215)) + ey),
         )
+    }
+
+    /// `QRenderRule::adjustSize` (`qstylesheetstyle.cpp:561-574`): a content size with `width`/
+    /// `height` taking the place of the given axis, clamped to `max-*`, then expanded to `min-*`.
+    pub fn adjust_size(&self, (w, h): (i32, i32)) -> (i32, i32) {
+        let mut w = self.width.unwrap_or(w);
+        let mut h = self.height.unwrap_or(h);
+        if let Some(max) = self.max_width {
+            w = w.min(max);
+        }
+        if let Some(max) = self.max_height {
+            h = h.min(max);
+        }
+        (w.max(self.min_width.unwrap_or(-1)), h.max(self.min_height.unwrap_or(-1)))
     }
 }
 
@@ -265,8 +284,6 @@ fn apply_declaration(style: &mut ResolvedStyle, decl: &QCssDeclaration) {
             if let QCssValue::Length(h) = decl.value {
                 let px = h.round() as i32;
                 style.height = Some(px);
-                style.min_height = Some(px);
-                style.max_height = Some(px);
             }
         }
         QCssProperty::MinWidth => {
@@ -283,8 +300,6 @@ fn apply_declaration(style: &mut ResolvedStyle, decl: &QCssDeclaration) {
             if let QCssValue::Length(w) = decl.value {
                 let px = w.round() as i32;
                 style.width = Some(px);
-                style.min_width = Some(px);
-                style.max_width = Some(px);
             }
         }
         QCssProperty::FontSize => {

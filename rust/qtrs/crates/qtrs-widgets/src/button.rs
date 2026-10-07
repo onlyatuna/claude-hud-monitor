@@ -286,7 +286,7 @@ impl Widget for Button {
         let border_h = (border * 2.0).round() as i32;
         let border_v = (border * 2.0).round() as i32;
 
-        if style.padding.is_none() && style.border_width.is_none() && style.min_width.is_none() && style.max_height.is_none() {
+        if style.padding.is_none() && style.border_width.is_none() && style.min_width.is_none() && style.max_height.is_none() && style.width.is_none() && style.height.is_none() {
             let style_metrics = self.style.metrics();
             let styled = self.style.size_from_contents(
                 Size::new(text_w, text_h),
@@ -307,6 +307,9 @@ impl Widget for Button {
         } else {
             // Qt's `QStyleSheetStyle::sizeFromContents(CT_PushButton)` + `rule.boxSize(sz)`:
             // `min-width` applies to the content box, and padding + border are added around it.
+            // `rule.adjustSize(csz)`: `width`/`height` replace the text size as the content size.
+            let text_w = style.width.unwrap_or(text_w);
+            let text_h = style.height.unwrap_or(text_h);
             let min_w = style.min_width.unwrap_or(0);
             let content_w = text_w.max(min_w);
             let mut w = content_w + pad_h + border_h;

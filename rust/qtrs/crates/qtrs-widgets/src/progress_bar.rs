@@ -420,18 +420,11 @@ impl Widget for ProgressBar {
         if self.orientation == Orientation::Vertical {
             std::mem::swap(&mut w, &mut h);
         }
-        if let Some(max) = style.max_width {
-            w = w.min(max);
-        }
-        if let Some(min) = style.min_width {
-            w = w.max(min);
-        }
-        if let Some(max) = style.max_height {
-            h = h.min(max);
-        }
-        if let Some(min) = style.min_height {
-            h = h.max(min);
-        }
+        (w, h) = style.adjust_size((w, h));
+        // `CT_ProgressBar` with a contents size: `rule.size(sz)` takes `width`/`height` back
+        // over the adjusted size (`qstylesheetstyle.cpp:5487-5489`).
+        w = style.width.unwrap_or(w);
+        h = style.height.unwrap_or(h);
         let (ex, ey) = style.box_extra();
         Size::new(w + ex, h + ey)
     }
