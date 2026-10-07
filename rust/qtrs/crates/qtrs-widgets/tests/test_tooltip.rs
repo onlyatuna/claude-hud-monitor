@@ -67,7 +67,7 @@ fn tip_flips_above_the_cursor_at_the_bottom_edge() {
 
 #[test]
 fn tip_is_clamped_into_the_screen() {
-    // Flipped left of a cursor at x = 10 it would start at 10 + 2 - 124 < 0.
+    // Flipped left (x -= 4 + 1100) the tip would start at 10 + 2 - 1104 < 0.
     let p = place_tip(Point::new(10, 790), Size::new(1100, 30), CURSOR_SIZE, SCREEN);
     assert_eq!(p.x, 0, "wider than the screen: left edge");
     // Taller than the screen: flipped above, raised to the top, then pushed back up by the
@@ -77,8 +77,9 @@ fn tip_is_clamped_into_the_screen() {
     // A secondary screen offset from the origin.
     let second = Rect::new(1000, 0, 500, 400);
     let p = place_tip(Point::new(1495, 395), TIP, CURSOR_SIZE, second);
-    assert!(p.x >= 1000 && p.x + 120 <= 1500, "inside the second screen horizontally: {p:?}");
-    assert!(p.y >= 0 && p.y + 30 <= 400, "inside the second screen vertically: {p:?}");
+    // Hand-derived from qtooltip.cpp:349-361: x = 1495+2 = 1497, 1497+120 > 1500 so x -= 4+120 -> 1373;
+    // y = 395+16 = 411, 411+30 > 400 so y -= 24+30 -> 357; no clamp applies.
+    assert_eq!(p, Point::new(1373, 357));
 }
 
 #[test]
@@ -696,17 +697,24 @@ mod real_windows {
         assert!(pump_until(&mut el, Duration::from_millis(3000), visible));
 
         assert_eq!(foreground(), f.hwnd, "showing the tool tip took the foreground from its window");
-        // The help event carries the platform's global cursor position.
+        // Wiring only: the native cursor position reaches the help event and `showText`. The
+        // expected value is spelled out here, not recomputed with `place_tip`; Qt-geometry parity
+        // is established by the hand-derived pure `place_tip` tests above, not by this test.
         let dpr = f.win.device_pixel_ratio();
         let mut pt = POINT { x: 0, y: 0 };
         unsafe { GetCursorPos(&mut pt) };
         let cursor = qtrs_platform::high_dpi::from_native_point(Point::new(pt.x, pt.y), dpr);
         let tip = ToolTip::geometry().expect("visible");
         let screen = qtrs_platform::integration::platform().primary_screen().geometry();
+        assert!(
+            cursor.x + 2 + tip.width <= screen.x + screen.width
+                && cursor.y + 16 + tip.height <= screen.y + screen.height,
+            "precondition: the cursor is far enough from the screen edge that the tip is not flipped"
+        );
         assert_eq!(
             Point::new(tip.x, tip.y),
-            place_tip(cursor, Size::new(tip.width, tip.height), CURSOR_SIZE, screen),
-            "the tip is placed relative to the cursor position of the move"
+            Point::new(cursor.x + 2, cursor.y + 16),
+            "the tip sits at the cursor + (2, 16)"
         );
     }
 
