@@ -894,6 +894,10 @@ mod tests {
         let header = root.borrow().children()[0].clone();
         assert_eq!(header.borrow().geometry().height, 86, "header row height (PySide6: 86)");
         assert_eq!(hud.title_label.borrow().geometry().height, 86, "title label height (PySide6: 86)");
+        // RC-19 / G12.8.g: `max-height: 18px` is the content box, so the button is 22 high (PySide6:
+        // `layout_toggle_btn` [175, 40, 28, 22] in the window, i.e. y 32 inside the header at y 8).
+        let toggle = hud.layout_toggle_btn.borrow().geometry();
+        assert_eq!((toggle.y, toggle.width, toggle.height), (32, 28, 22), "layout toggle button (PySide6: y 32, 28x22)");
         let heights: Vec<i32> = ["claude", "agy", "codex"]
             .iter()
             .map(|id| hud.cards[*id].widget().borrow().geometry().height)

@@ -1163,10 +1163,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.8.d | P2, RAN；已修復：RC-16 | 應用 | `title` size policy：Python `Minimum/Preferred`（`provider_card.py:34`），Rust 預設 |
 | G12.8.e | P2, RAN | 應用 | badge 字重：Python 400；Rust Bold（`set_font(...Bold)`，QSS 沒有字重） |
 | G12.8.f | P1, RAN | 應用 | 視窗大小常數：橫向最小／預設高 Python 125／145，Rust 130／152；直向最小 Python 320、預設 410，Rust 463（由 layout 推導）／490 |
-| G12.8.g | P1, RAN | **qtrs** | QSS `min/max-width/height` 盒模型：Qt 作用於 content＋padding＋border（`qstylesheetstyle.cpp:2603-2611`）；qtrs 當總尺寸。`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18 |
-| G12.8.h | P1, READ | **qtrs** | `Label::size_hint` 以 `max-height`（否則 `min-height`）當高度 hint（`label.rs`），Qt 沒有此規則 |
+| G12.8.g | P1, RAN；已修復：RC-19 | **qtrs** | QSS `min/max-width/height` 盒模型：Qt 作用於 content＋padding＋border（`qstylesheetstyle.cpp:2603-2611`）；qtrs 當總尺寸。`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18 |
+| G12.8.h | P1, READ；已修復：RC-19 | **qtrs** | `Label::size_hint` 以 `max-height`（否則 `min-height`）當高度 hint（`label.rs`），Qt 沒有此規則 |
 | G12.8.i | P1, RAN | **qtrs** | `QProgressBar`：Python `sizeHint` 91×5、`minimumSizeHint` 91×17；qtrs 160×5、0×5 |
 | G12.8.j | P1, RAN | **qtrs** | 文字寬度 1 px：`WEEKLY 7D` Python 59，qtrs 59.589 → `ceil` 60；`AI AGENT HUD (3-IN-1)` 144 vs 144.107 → 145 |
+| G12.8.k | P2, RAN | **qtrs** | Button 的原生路徑判準與原生邊框：QSS 只有 `min-width`（無 padding／border）時 Python `QPushButton` 走原生 hint（81×24 @1.25、98×28 @1.0）、`minimumSize` 含原生邊框（22 vs 18）；qtrs 判準 `padding/border/min_width/max_height` 皆無才走原生，且原生路徑的 hint 是 18×15。HUD 沒有這種按鈕（`LayoutToggleBtn` 有 padding 與 border） |
+| G12.8.l | P2, RAN | **qtrs** | `Frame` 無內容時 `size_hint`：Python `QFrame.sizeHint()` 為 (-1,-1)，qtrs 為 100×30（`frame.rs`，`None => Size::new(100, 30)`），`minimumSizeHint` 0×0。HUD 的分隔線 `min == max` 所以不受影響 |
+| G12.8.m | P2, RAN | **qtrs** | `Button::minimum_size_hint`：Qt `QPushButton::minimumSizeHint() = sizeHint()`（B1 28×18）；qtrs 回傳 `minimum_size()`（28×0 或 18×0），layout 的最小值判斷（`qSmartMinSize`）會少 18 px |
+| G12.8.n | P2, RAN | **qtrs** | `Button::size_hint` 以**原始** `max-*`／`min-*` 夾 hint（`button.rs`，`h.min(max_h)`）：Qt 的 hint 不夾（夾的是 `QWidgetItem`，用 box 後的 min/max）。這個夾制目前遮住文字高度 1 px 的差（B1：qtrs 文字高 15、Python 14，hint 19 vs 18；與 G12.8.j 同族）；移除夾制會讓 HUD 標頭多 1 px，所以未動 |
 
 - **修復歸屬**：a–f 屬 HUD（`rust/src`）；g–j 是 qtrs 層，各自是獨立 root cause，不併入 RC-14／15／16，也不得用 HUD 端的數值補償（Contract 規則 7）。
 - **本節不代表任何項目已修復。**
@@ -1188,7 +1192,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 333 項：D 12、P0 34、P1 147、P2 135、test gap 5（計數含已修復項；標籤含「已修復」者共 41 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 337 項：D 12、P0 34、P1 147、P2 139、test gap 5（計數含已修復項；標籤含「已修復」者共 43 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.f、G12.5.g、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.g、G12.8.h）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1521,10 +1525,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.8.d | P2, RAN；已修復：RC-16 | `title` size policy：Python `Minimum/Preferred`（`provider_card.py:34`），Rust 預設 |
 | G12.8.e | P2, RAN | badge 字重：Python 400；Rust Bold（`set_font(...Bold)`，QSS 沒有字重） |
 | G12.8.f | P1, RAN | 視窗大小常數：橫向最小／預設高 Python 125／145，Rust 130／152；直向最小 Python 320、預設 410，Rust 463（由 layout 推導）／490 |
-| G12.8.g | P1, RAN | QSS `min/max-width/height` 盒模型：Qt 作用於 content＋padding＋border（`qstylesheetstyle.cpp:2603-2611`）；qtrs 當總尺寸。`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18 |
-| G12.8.h | P1, READ | `Label::size_hint` 以 `max-height`（否則 `min-height`）當高度 hint（`label.rs`），Qt 沒有此規則 |
+| G12.8.g | P1, RAN；已修復：RC-19 | QSS `min/max-width/height` 盒模型：Qt 作用於 content＋padding＋border（`qstylesheetstyle.cpp:2603-2611`）；qtrs 當總尺寸。`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18 |
+| G12.8.h | P1, READ；已修復：RC-19 | `Label::size_hint` 以 `max-height`（否則 `min-height`）當高度 hint（`label.rs`），Qt 沒有此規則 |
 | G12.8.i | P1, RAN | `QProgressBar`：Python `sizeHint` 91×5、`minimumSizeHint` 91×17；qtrs 160×5、0×5 |
 | G12.8.j | P1, RAN | 文字寬度 1 px：`WEEKLY 7D` Python 59，qtrs 59.589 → `ceil` 60；`AI AGENT HUD (3-IN-1)` 144 vs 144.107 → 145 |
+| G12.8.k | P2, RAN | Button 的原生路徑判準與原生邊框：QSS 只有 `min-width`（無 padding／border）時 Python `QPushButton` 走原生 hint（81×24 @1.25、98×28 @1.0）、`minimumSize` 含原生邊框（22 vs 18）；qtrs 判準 `padding/border/min_width/max_height` 皆無才走原生，且原生路徑的 hint 是 18×15。HUD 沒有這種按鈕（`LayoutToggleBtn` 有 padding 與 border） |
+| G12.8.l | P2, RAN | `Frame` 無內容時 `size_hint`：Python `QFrame.sizeHint()` 為 (-1,-1)，qtrs 為 100×30（`frame.rs`，`None => Size::new(100, 30)`），`minimumSizeHint` 0×0。HUD 的分隔線 `min == max` 所以不受影響 |
+| G12.8.m | P2, RAN | `Button::minimum_size_hint`：Qt `QPushButton::minimumSizeHint() = sizeHint()`（B1 28×18）；qtrs 回傳 `minimum_size()`（28×0 或 18×0），layout 的最小值判斷（`qSmartMinSize`）會少 18 px |
+| G12.8.n | P2, RAN | `Button::size_hint` 以**原始** `max-*`／`min-*` 夾 hint（`button.rs`，`h.min(max_h)`）：Qt 的 hint 不夾（夾的是 `QWidgetItem`，用 box 後的 min/max）。這個夾制目前遮住文字高度 1 px 的差（B1：qtrs 文字高 15、Python 14，hint 19 vs 18；與 G12.8.j 同族）；移除夾制會讓 HUD 標頭多 1 px，所以未動 |
 
 ---
 
@@ -1830,7 +1838,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18）＋`READ`（`Label::size_hint` 用 `max-height` 當 hint）。
 - **Required observable**：同一個樣式表下，各 widget 的 `minimumSize`／`maximumSize`／`sizeHint` 與 Python 實測一致（至少 `layout_toggle_btn`、badge 類 label、5 px 進度條）。
 - **Can remove app workaround**：n/a（HUD 沒有為此補償；RC-15 的 `max-height` 與此項互動，見 C12.8）。
-- **Status**：**未修復，未核定**。**Phase**：4（qtrs 側）。
+- **Status**：**已修復（RC-19，使用者核准進入實作）**。`ResolvedStyle::min_box_size`／`max_box_size`（`style/stylesheet.rs`）依 `QRenderRule::boxSize` 加上 border 與 padding，`Label`／`Button`／`Frame`／`ProgressBar` 的 `minimum_size`／`maximum_size` 改走這兩個函式；`Label::size_hint` 改為「文字＋box 再 expand 到 minimum（`qlabel.cpp:620`）」，不再用 `max-height`；`Label` 繪製背景／邊框改用整個 widget rect（原本以 `max-height` 當繪製高度）。稽核：`rust/tools/qss_box_audit/`（`py_box.py`＋`cases.json`＋`results/py_box*.json`＋`compare.py`，Rust 端為 `src/ui/qss_box_audit.rs`，`#[ignore]`）以 14 種 widget／QSS 組合在 DPR 1.25 與 1.0 比對；min／max 全部相符，唯一剩餘的 `min` 差異是 B2（G12.8.k）。測試：`qtrs-widgets/tests/test_qss_min_max_box.rs`（5 項，修改前全部 FAIL，例如 B1 `[18,0]/[∞,18]` vs `[28,0]/[∞,22]`）＋`test_vertical_extra_height_goes_to_header_like_pyside6` 新增 toggle 按鈕斷言（修改前 FAIL：y 34、高 18 vs y 32、高 22）。**未涵蓋**：`ProgressBar` 的 hint（RC-20，P1／P2 仍差）、文字度量殘差（RC-21）、G12.8.k–n（新登記，未修）。**僅 DPR 1.25／1.0、Windows 字型**。**Phase**：4（qtrs 側）。
 
 #### RC-20 `QProgressBar::sizeHint`／`minimumSizeHint` 演算法（候選，未核定）
 - **Contract gaps**：G12.8.i。

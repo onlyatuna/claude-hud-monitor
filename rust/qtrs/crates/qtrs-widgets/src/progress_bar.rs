@@ -413,8 +413,7 @@ impl Widget for ProgressBar {
 
     fn minimum_size(&self) -> Size {
         let style = self.resolved_groove_style();
-        let h = style.min_height.unwrap_or(0);
-        let w = style.min_width.unwrap_or(0);
+        let (w, h) = style.min_box_size();
         match self.orientation {
             Orientation::Horizontal => Size::new(w, h),
             Orientation::Vertical => Size::new(h, w),
@@ -427,8 +426,7 @@ impl Widget for ProgressBar {
 
     fn maximum_size(&self) -> Size {
         let style = self.resolved_groove_style();
-        let h = style.max_height.unwrap_or(16777215);
-        let w = style.max_width.unwrap_or(16777215);
+        let (w, h) = style.max_box_size();
         match self.orientation {
             Orientation::Horizontal => Size::new(w, h),
             Orientation::Vertical => Size::new(h, w),

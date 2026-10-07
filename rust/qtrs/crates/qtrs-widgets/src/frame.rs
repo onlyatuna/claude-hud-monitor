@@ -562,15 +562,13 @@ impl Widget for Frame {
     }
     fn minimum_size(&self) -> Size {
         let style = self.resolved_style();
-        let w = style.min_width.unwrap_or(0);
-        let h = style.min_height.unwrap_or(0);
+        let (w, h) = style.min_box_size();
         Size::new(w, h)
     }
 
     fn maximum_size(&self) -> Size {
         let style = self.resolved_style();
-        let w = style.max_width.unwrap_or(16777215);
-        let h = style.max_height.unwrap_or(16777215);
+        let (w, h) = style.max_box_size();
         Size::new(w, h)
     }
 

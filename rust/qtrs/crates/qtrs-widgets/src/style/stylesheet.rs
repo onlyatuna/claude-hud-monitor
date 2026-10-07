@@ -32,6 +32,35 @@ pub struct ResolvedStyle {
     pub text_align: Option<String>,
 }
 
+impl ResolvedStyle {
+    /// Horizontal and vertical extent that `QRenderRule::boxSize` adds around a content size:
+    /// border plus padding on both sides of each axis (`qstylesheetstyle.cpp:1116-1121`).
+    pub fn box_extra(&self) -> (i32, i32) {
+        let border = self.border_width.unwrap_or(0.0).max(0.0);
+        let [pt, pr, pb, pl] = self.padding.unwrap_or([0.0; 4]);
+        (((2.0 * border) + pl + pr).round() as i32, ((2.0 * border) + pt + pb).round() as i32)
+    }
+
+    /// `QWidget::minimumSize()` set by `QStyleSheetStyle::setGeometry`: `min-width`/`min-height`
+    /// name the content box, so the box extent is added (`qstylesheetstyle.cpp:2595-2602`).
+    /// An axis without a `min-*` declaration is 0.
+    pub fn min_box_size(&self) -> (i32, i32) {
+        let (ex, ey) = self.box_extra();
+        (self.min_width.map_or(0, |w| w + ex), self.min_height.map_or(0, |h| h + ey))
+    }
+
+    /// `QWidget::maximumSize()` set by `QStyleSheetStyle::setGeometry`, likewise for
+    /// `max-width`/`max-height` (`qstylesheetstyle.cpp:2603-2612`). An axis without a `max-*`
+    /// declaration is `QWIDGETSIZE_MAX`.
+    pub fn max_box_size(&self) -> (i32, i32) {
+        let (ex, ey) = self.box_extra();
+        (
+            self.max_width.map_or(16777215, |w| w + ex),
+            self.max_height.map_or(16777215, |h| h + ey),
+        )
+    }
+}
+
 
 /// Context information for querying matching stylesheet rules.
 #[derive(Debug, Clone, Default)]

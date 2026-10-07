@@ -226,15 +226,15 @@ impl Widget for Label {
         let text_w = metrics.horizontal_advance_exact(&self.text, &font).ceil() as i32
             + (box_l + box_r + indent).round() as i32;
         let text_h = FontMetrics::layout_height(&font).ceil() as i32 + (box_t + box_b).round() as i32;
-        let w = style.min_width.unwrap_or(text_w);
-        let h = style.max_height.or(style.min_height).unwrap_or(text_h);
-        Size::new(w, h)
+        // `QLabelPrivate::sizeForWidth`: the text size plus the box, expanded to `minimumSize()`
+        // (`qlabel.cpp:620`). `max-height` is not a hint.
+        let (min_w, min_h) = style.min_box_size();
+        Size::new(text_w.max(min_w), text_h.max(min_h))
     }
 
     fn minimum_size(&self) -> Size {
         let style = self.resolved_style();
-        let w = style.min_width.unwrap_or(0);
-        let h = style.min_height.unwrap_or(0);
+        let (w, h) = style.min_box_size();
         Size::new(w, h)
     }
 
@@ -245,8 +245,7 @@ impl Widget for Label {
 
     fn maximum_size(&self) -> Size {
         let style = self.resolved_style();
-        let w = style.max_width.unwrap_or(16777215);
-        let h = style.max_height.unwrap_or(16777215);
+        let (w, h) = style.max_box_size();
         Size::new(w, h)
     }
 
@@ -337,17 +336,13 @@ impl Widget for Label {
                 painter.set_brush(qtrs_gui::paint::Brush::Color(Color::TRANSPARENT));
             }
             painter.set_pen(border_pen);
-            let h = if let Some(mh) = style.max_height {
-                mh as f32
-            } else {
-                geom.height as f32
-            };
-            let y = (geom.height as f32 - h) / 2.0;
+            // Qt paints the rule's background and border over the whole widget rect; `max-height`
+            // already limited the geometry (as a box size), it is not a paint height.
             let rect_f = qtrs_gui::geometry::primitives::RectF::new(
                 0.0,
-                y,
+                0.0,
                 geom.width as f32,
-                h,
+                geom.height as f32,
             );
             if border_r > 0.0 {
                 painter.draw_rounded_rect(rect_f, border_r, border_r);

@@ -4,6 +4,8 @@ pub mod hud_window;
 #[cfg(test)]
 mod geometry_audit;
 #[cfg(test)]
+mod qss_box_audit;
+#[cfg(test)]
 pub(crate) mod test_support;
 pub mod placement;
 pub mod provider_card;
