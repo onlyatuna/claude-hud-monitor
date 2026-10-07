@@ -103,6 +103,17 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Platform font database vs qtrs scan (Linux fontconfig, macOS CoreText)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          {
+            echo "### Platform font database on ${{ matrix.os }}"
+            echo '```'
+            python3 rust/tools/ci_platform_fonts.py "$RUNNER_TEMP/font-probe.txt"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Shared libraries of the HUD binary (Linux, macOS)
         if: runner.os != 'Windows'
         shell: bash
