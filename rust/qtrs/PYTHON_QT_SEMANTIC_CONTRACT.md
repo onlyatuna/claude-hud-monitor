@@ -620,7 +620,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 符合 HUD 用到的 QSS 規則（型別、`#id`、`[prop]`、`:hover`、`::chunk`、串接順序 app < 祖先 < 自己）；屬性／樣式變更 MUST 重新解析；影響尺寸時 MUST 重排。
 - **Current implementation**：HUD 子集 `IMPLEMENTED`，整體 `PARTIAL`。串接 app→祖先→自己、依 specificity（`widget.rs` `resolve_style`、`style/stylesheet.rs`）；樣式於每次 `size_hint`／paint **lazily 解析**（無快取，故無 stale polish）。`selector_matches` 只比對 exact `type_name`、`*`、`QWidget`。只有 `QLabel`、`QPushButton`、`QFrame`、`QProgressBar` 會解析樣式。`attributes`（供 `[state=…]`）只有 Label 提供。
 - **Known gap**
-  - **G8.5.a [P1, READ]** 無繼承比對（`QFrame{}` 命不中 `QLabel`）；無 descendant/child 組合子（HUD 不用）。
+  - **G8.5.a [P1, READ；繼承比對已修復：RC-32]** （修復前：） 無繼承比對（`QFrame{}` 命不中 `QLabel`）；無 descendant/child 組合子（HUD 不用）。 RC-32：`selector_matches` 的型別選擇器改為比對類別及其基底類別（`QLabel`→`QFrame`、`QPushButton`→`QAbstractButton`，其餘皆繼承 `QWidget`）；descendant/child 組合子與 `.ClassName` 仍未支援。
   - **G8.5.b [P1, READ]** `attributes` 只有 Label；同一條規則對 Button／Frame／ProgressBar 無效。
   - **G8.5.c [P0, READ；已修復：RC-05]** **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty；`Label::set_text` 會 `request_layout`，但 `set_font`/`set_alignment`/style/property 不會，`Button::set_text/set_font` 也不會——需要手動 `update_layout`。
   - **G8.5.d [P0, READ；已修復：RC-10]** `Window::set_style_sheet` 是**整個 Application 的**（呼叫 `Application::set_style_sheet`），Python `HUDWindow.setStyleSheet` 只作用於該子樹（`hud_window.py:246,250`）；Rust HUD 兩者都呼叫（`hud_window.rs:231-232`）→ 影響其他頂層視窗與 popup。
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 62 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 63 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1360,7 +1360,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.4.g | P1；已修復：RC-06 | `Window` 沒有 release／double-click／move handler |
 | G8.4.h | P1, READ | RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTr |
 | G8.4.i | P2 | `Window::set_mouse_press_handler`／`set_mouse_move_handler`／`set_context_menu_handler` 與新的  |
-| G8.5.a | P1, READ | 無繼承比對 |
+| G8.5.a | P1, READ；繼承比對已修復：RC-32 | 無繼承比對 |
 | G8.5.b | P1, READ | `attributes` 只有 Label |
 | G8.5.c | P0, READ；已修復：RC-05 | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
 | G8.5.d | P0, READ；已修復：RC-10 | `Window::set_style_sheet` 是**整個 Application 的** |
@@ -1921,6 +1921,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`BoxLayout` 只有 `add_stretch`；spacer 在 `setup_geom` 寫死為 `(0, 0, Expanding, Minimum)`，無法表示固定大小的 spacing。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（margins 0、spacing 6、item hint 50×20、min hint 0×0）：`[w, spacing 20, w]` 在 300 寬為 137/20/137、hint 126×20、min 26×0；擠到 60 寬為 17/20/17；垂直相同；`SpacerItem(40,10,Minimum,Minimum)` 為 127/40/127、min 46×10；`insert_stretch(1,1)`＋`insert_spacing(0,10)` 為 10/50/184/50；`set_stretch_factor` 回 true/false、`stretch` 2/None、`set_stretch(0,1)` 後 98/196。修改前測試無法編譯（API 不存在，12 個 error），修改後 8 項通過；RC-30 的 4 項仍通過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
 - **Status**：**已修復**。`add_stretch` 改為走 `insert_stretch`，結果不變。HUD 不受影響：Python 版未使用這些 API（只有 `addStretch()` 與 `addWidget(w, 1)`）。`stretch(i)` 以 `Option<u32>` 表示 Qt 的 -1。**僅 Windows 驗證。**
+
+#### RC-32 QSS 型別選擇器不比對繼承
+- **Contract gaps**：G8.5.a（繼承比對部分）。
+- **Qt behavior** `[QT-SRC qstylesheetstyle.cpp:1547-1551, 1579-1601; qcssparser.cpp:1973-1974, 2769-2773]`：`nodeNameEquals` 沿 `metaObject()->superClass()` 比對，故 `QFrame {}` 命中 `QLabel`；反向不成立。型別選擇器的 specificity 與類別深度無關（皆 +1），同權重時後出現的規則勝。`.QFrame` 只比對 `className()` 本身。
+- **qtrs root**：`stylesheet.rs` `selector_matches` 只做 `elem == ctx.type_name`（外加 `*`、`QWidget`）。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle：`QFrame{color}`→`QLabel` 紅；`QAbstractButton`→`QPushButton` 紅；`QFrame#T`→`QLabel#T` 紅；`QLabel`→`QFrame`、`QFrame`→`QProgressBar` 不命中；`QLabel{綠} QFrame{紅}` 得紅、反序得綠。新測試 `test_stylesheet_type_inheritance.rs` 3 項：修改前 2 項失敗（`None` 與綠），對照組通過；修改後全過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
+- **Status**：**已修復（繼承比對）**。新增 `inherits(type_name, class)`。HUD 不受影響：HUD 的 `QFrame#Divider`／`#HorizontalDivider`／`#Separator` 只設在 `Frame` 上，沒有 label 或 button 用這些 object name；HUD 沒有不帶 id 的 `QFrame`／`QAbstractButton` 規則。未做：`.ClassName`（目前被當成不會命中的型別名稱）、descendant/child 組合子。**僅 Windows 驗證。**
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

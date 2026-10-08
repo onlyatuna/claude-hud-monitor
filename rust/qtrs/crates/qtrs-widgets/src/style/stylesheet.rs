@@ -193,9 +193,9 @@ fn selector_matches(selector: &QCssBasicSelector, ctx: &WidgetStyleContext) -> b
         }
     }
 
-    // 3. Type name match (e.g. `QLabel`, `QProgressBar`)
+    // 3. Type name match (e.g. `QLabel`, `QProgressBar`): the class or any class it inherits.
     if let Some(elem) = &selector.element_name {
-        if elem != "*" && elem != ctx.type_name && elem != "QWidget" {
+        if elem != "*" && elem != "QWidget" && !inherits(ctx.type_name, elem) {
             return false;
         }
     }
@@ -222,6 +222,18 @@ fn selector_matches(selector: &QCssBasicSelector, ctx: &WidgetStyleContext) -> b
     }
 
     true
+}
+
+/// Whether the Qt class `type_name` is `class` or inherits it, as walked by
+/// `QStyleSheetStyleSelector::nodeNameEquals` (`metaObject()->superClass()`,
+/// qstylesheetstyle.cpp:1579-1601). Every class inherits `QWidget`, checked by the caller. A class
+/// qtrs does not know matches its own name only.
+fn inherits(type_name: &str, class: &str) -> bool {
+    type_name == class
+        || matches!(
+            (type_name, class),
+            ("QLabel", "QFrame") | ("QPushButton", "QAbstractButton")
+        )
 }
 
 /// Applies an individual declaration to a `ResolvedStyle`.
