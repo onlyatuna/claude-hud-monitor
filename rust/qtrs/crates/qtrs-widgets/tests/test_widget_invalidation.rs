@@ -93,6 +93,30 @@ fn changing_the_size_policy_requests_a_parent_layout_and_an_unchanged_one_does_n
     WidgetCommandQueue::clear();
 }
 
+#[test]
+fn set_visible_on_every_widget_type_requests_a_parent_layout_only_when_it_changes() {
+    use qtrs_widgets::command::WidgetCommandQueue;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let parent: qtrs_widgets::WidgetRef = Rc::new(RefCell::new(Box::new(Frame::new())));
+    for (name, widget) in every_widget_type() {
+        if name == "Menu" {
+            continue; // a popup window: it has no parent layout, and starts hidden
+        }
+        widget.set_parent_widget(Some(Rc::downgrade(&parent)));
+        WidgetCommandQueue::clear();
+        widget.set_visible(true);
+        assert_eq!(WidgetCommandQueue::pending_count(), 0, "{name}: setVisible(true) on a visible widget");
+        widget.set_visible(false);
+        assert!(WidgetCommandQueue::pending_count() > 0, "{name}: hide did not request a layout");
+        WidgetCommandQueue::clear();
+        widget.set_visible(true);
+        assert!(WidgetCommandQueue::pending_count() > 0, "{name}: show did not request a layout");
+        WidgetCommandQueue::clear();
+    }
+}
+
 #[cfg(windows)]
 mod pumped {
     //! Real `Window`, real event loop, one pump per observation.
@@ -277,6 +301,23 @@ mod pumped {
         assert!(hint > before);
         assert_eq!(fx.first.borrow().geometry().width, hint, "button kept its old width");
         assert_eq!(left_of_second(&fx), hint + fx.spacing);
+    }
+
+    /// G8.1.a: `QWidget::setVisible` on a child runs `QLayout::invalidate` on the parent
+    /// (qwidget.cpp:8465-8468), and a hidden `QWidgetItem` is empty (qlayoutitem.cpp:691-693).
+    #[test]
+    fn hide_and_show_relayout_the_parent_after_one_pump_without_a_manual_call() {
+        let mut fx = label_pair();
+        let shown_x = left_of_second(&fx);
+        assert!(shown_x > 0);
+
+        fx.first.borrow().set_visible(false);
+        pump_idle(&mut fx);
+        assert_eq!(left_of_second(&fx), 0, "the sibling did not move into the freed space");
+
+        fx.first.borrow().set_visible(true);
+        pump_idle(&mut fx);
+        assert_eq!(left_of_second(&fx), shown_x, "showing did not restore the layout");
     }
 
     #[test]

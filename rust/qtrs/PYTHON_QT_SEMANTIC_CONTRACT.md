@@ -571,7 +571,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：隱藏 widget MUST 不佔空間也不佔 spacing；show／hide MUST **不需 app 手動呼叫 `update_layout`** 就重排 parent；隱藏 parent 的 child MUST 不繪製、不 hit-test；SHOULD 送 Show/Hide 事件、隱藏 widget 的 geometry 不被改動。
 - **Current implementation**：`PARTIAL`。`set_visible` 只翻 `Cell<bool>` 並 `update()`；`item_is_empty = !is_visible()`（對應 `isHidden` 語意）；隱藏 child 被繪製與 hit-test 跳過。`ABSENT`：Show/Hide 事件（grep `EventKind::Show|EventKind::Hide` 於 `qtrs-widgets/src` 為空，雖然 core 有這兩個 kind）；`retain_size_when_hidden`。
 - **Known gap**
-  - **G8.1.a [P1, READ]** **show／hide 不自動重排**；HUD 以手動 `update_layout()` 補（`provider_card.rs:347-348,406-420,435`、`hud_window.rs:254,590,608,636`）。
+  - **G8.1.a [P1, READ]** **show／hide 不自動重排**（**已修復：RC-26**：`WidgetBase::set_visible` 改呼叫 `update_geometry`，與 Qt 一樣只在可見性真的改變時請求 parent 重排；`Menu` 為彈出視窗不在此列）；HUD 以手動 `update_layout()` 補（`provider_card.rs:347-348,406-420,435`、`hud_window.rs:254,590,608,636`）。
   - **G8.1.b [P2, READ]** 隱藏 item 的 geometry 被設為 (0,0,0,0)（Qt 不動它）。
   - **G8.1.c [P1, READ]** 無 Show/Hide 事件；依賴 `showEvent` 的子類別無法實作；`Window::show/hide` 不通知 widget 樹。
 - **Test**：既有無（probe 只涵蓋建構時 hidden）。必要：`hide_child_relayouts_parent_without_manual_call`；`show_hide_events_delivered`。
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 55 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.6.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 56 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.6.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1342,7 +1342,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.7.b | P2, READ | 無擁有者檢查 |
 | G7.9.a | P2, READ；P0 主張已被讀碼推翻，待驗證 | 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new` |
 | G7.9.b | P1 | 發佈設定 `panic = "abort"` |
-| G8.1.a | P1, READ | **show／hide 不自動重排** |
+| G8.1.a | P1, READ | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
 | G8.2.a | P1, READ | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
@@ -1886,6 +1886,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：qtrs 沒有 `QColor::darker`／`lighter`，HUD 的 pie 圖例（`usage_table.py:88`：`QColor(*theme["disc"]).darker(110)`）因此直接用原色。
 - **Evidence**：`RAN`（PySide6 6.11.2：255 列 `darker`／`lighter` 輸入輸出，含原色、灰階、disc 色、factor 50／110／150／200／300、40 個種子固定的隨機色；圖例 12×12 像素）。`[DIFF]` 修復後逐位元相等；before-FAIL：HUD 圖例像素 (14,14,14,14) vs PySide6 (13,13,13,14)。第一版以 `>> 8` 取 8 位元，有 1 級差，改為 `qt_div_257` 後 255 列全部相等。
 - **Status**：**已修復**。新增 `qtrs-gui/src/color/qcolor_ops.rs`（`darker`、`lighter`，回傳 8 位元色）與 `tests/test_qcolor_ops.rs`；HUD 加 `test_legend_pie_disc_is_darker_than_the_theme_disc`。HUD 唯一用到 `darker` 的地方（`usage_table.py:88`）已改。淺色主題 disc 的 alpha 只有 14，變暗後預乘像素與原色相同 (2,2,3,14)，因此淺色主題畫面不變、只有深色主題差 1 級。**僅 Windows 驗證；`lighter` 沒有 HUD 呼叫端，只由 PySide6 表驗證。**
+
+#### RC-26 show／hide 不重排 parent
+- **Contract gaps**：G8.1.a。
+- **Qt behavior** `[QT-SRC qwidget.cpp:8465-8468; qlayoutitem.cpp:691-693]`：見 C8.1。`setVisible` 於 child 使 parent layout 失效；隱藏的 `QWidgetItem` 為空。
+- **qtrs root**：`WidgetBase::set_visible`、`Widget for EmptyWidget::set_visible` 與 `input_common` 巨集只 `update()`，沒有 `update_geometry()`；排版器本來就把隱藏項當空，只是沒人叫它再跑一次。
+- **Evidence**：`RAN`（qtrs 真實 `Window` + event loop，一次 pump）。before-FAIL：隱藏第一個 label 後第二個 label 仍在 x=203，期望 0；`Button` 隱藏不送出 layout request。
+- **Status**：**已修復**。三處 `set_visible` 改呼叫 `update_geometry`；新增 2 項測試。HUD 的手動 `update_layout()` 未移除（行為相同，另案）。G8.1.b／G8.1.c 未動。**僅 Windows 驗證。**
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

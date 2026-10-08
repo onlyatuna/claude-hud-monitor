@@ -34,7 +34,7 @@ macro_rules! leaf_widget_common {
         fn set_visible(&self, visible: bool) {
             if self.base.visible.get() != visible {
                 self.base.visible.set(visible);
-                self.update();
+                self.base.update_geometry();
             }
         }
 

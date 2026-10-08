@@ -365,7 +365,8 @@ impl WidgetBase {
     pub fn set_visible(&self, visible: bool) {
         if self.visible.get() != visible {
             self.visible.set(visible);
-            self.update();
+            // `QWidget::setVisible` invalidates the parent layout (qwidget.cpp:8465-8468).
+            self.update_geometry();
         }
     }
 
@@ -790,7 +791,7 @@ impl Widget for EmptyWidget {
     fn set_visible(&self, visible: bool) {
         if self.base.visible.get() != visible {
             self.base.visible.set(visible);
-            self.update();
+            self.base.update_geometry();
         }
     }
 
