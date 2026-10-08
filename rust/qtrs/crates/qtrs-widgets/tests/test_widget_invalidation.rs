@@ -303,6 +303,36 @@ mod pumped {
         assert_eq!(left_of_second(&fx), hint + fx.spacing);
     }
 
+    /// G9.5.a: a size-hint change two levels down reaches the root layout. Qt's
+    /// `QLayout::activate` ends with `mw->updateGeometry()` (qlayout.cpp:1131), so after the
+    /// wrapper's layout runs, the wrapper's own parent layout is invalidated in turn.
+    #[test]
+    fn a_label_text_change_inside_a_fixed_wrapper_resizes_the_wrapper_and_moves_the_sibling() {
+        let mut inner = Label::new("Alpha");
+        inner.set_font(Font::new("Segoe UI", 12.0));
+        let inner: WidgetRef = Rc::new(RefCell::new(Box::new(inner)));
+        let mut wrapper_layout = BoxLayout::horizontal();
+        wrapper_layout.add_widget(Rc::clone(&inner));
+        let mut wrapper = EmptyWidget::new();
+        wrapper.set_layout(Box::new(wrapper_layout));
+        wrapper.set_size_policy(QSizePolicy::new(Policy::Fixed, Policy::Preferred));
+        let mut fx = fixture(Box::new(wrapper), Box::new(Label::new("Beta")));
+        let before = fx.first.borrow().geometry().width;
+        assert_eq!(before, fx.first.borrow().size_hint().width);
+
+        {
+            let mut w = inner.borrow_mut();
+            let label = w.as_any_mut().downcast_mut::<Label>().unwrap();
+            label.set_text("A considerably longer caption than before");
+        }
+        pump_idle(&mut fx);
+
+        let hint = fx.first.borrow().size_hint().width;
+        assert!(hint > before);
+        assert_eq!(fx.first.borrow().geometry().width, hint, "the wrapper kept its old width");
+        assert_eq!(left_of_second(&fx), hint + fx.spacing, "the sibling did not move");
+    }
+
     /// G8.1.a: `QWidget::setVisible` on a child runs `QLayout::invalidate` on the parent
     /// (qwidget.cpp:8465-8468), and a hidden `QWidgetItem` is empty (qlayoutitem.cpp:691-693).
     #[test]

@@ -717,7 +717,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：任何改變 hint 的操作之後，MUST 在每個 event-loop 輪次內**一次**重排整個受影響的樹；頂層最小尺寸 MUST 跟隨 layout 最小值，除非明確設定。
 - **Current implementation**：`PARTIAL`，機制刻意不同。`Widget::request_layout` 只 post 給**直接 parent**（thread-local `WidgetCommandQueue`），每次 dispatch 後與繪製前 flush，**不是** `EventKind::LayoutRequest`（widgets 從不 post 它）。box／grid／stacked 的 `activate` 在 child 大小改變時重新使子 wrapper layout 失效：傳遞**只向下**。setter（`set_margins/set_spacing/add_widget…`）**立即**重排，不像 Qt 壓縮到 `LayoutRequest`。
 - **Known gap**
-  - **G9.5.a [P1, READ]** 無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout（Fixed/Maximum wrapper 底下的文字變更不會調整 wrapper）；HUD 以明確 `update_layout()` 補（`hud_window.rs:636,737`、`provider_card.rs:435,707`）。
+  - **G9.5.a [P1, READ；已修復：RC-28]** （修復前：）無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout（Fixed/Maximum wrapper 底下的文字變更不會調整 wrapper）；HUD 以明確 `update_layout()` 補（現行位置 `hud_window.rs:741,822`、`provider_card.rs:472`；`provider_card.rs:807` 為測試）。RC-28：`LayoutScheduler::activate_pending` 在 layout 真的重跑後呼叫擁有者的 `update_geometry()`（= `qlayout.cpp:1131` 的 `mw->updateGeometry()`），每次 flush 往上一層，到視窗 root（無 parent）為止。HUD 的手動 `update_layout()` 未移除（另案）。
   - **G9.5.b [P1, READ]** `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_property`、`set_visible` 不請求 layout（→ G8.1.a、G8.5.c）。
   - **G9.5.c [P2]** setter 立即重排與 Qt 壓縮不同（只有在 mutation 中讀取 geometry 的程式碼觀察得到）。
   - **G9.5.d [P1]** 頂層最小尺寸不從 layout 導出（Python HUD 明確設定 `hud_window.py:296,327,347`，所以不受影響）。
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 57 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 58 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1398,7 +1398,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.3.c | P0, READ；已修復：RC-16 | HUD 的 `header_widget` 額外被設為 `Expanding/Fixed` |
 | G9.4.a | P1, READ | 依賴 Qt 預設的 layout |
 | G9.4.b | P0, 已讀兩側原始碼確認；已修復：RC-14 | **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)` |
-| G9.5.a | P1, READ | 無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout |
+| G9.5.a | P1, READ | 無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout。**已修復：RC-28** |
 | G9.5.b | P1, READ | `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_propert |
 | G9.5.c | P2 | setter 立即重排與 Qt 壓縮不同 |
 | G9.5.d | P1 | 頂層最小尺寸不從 layout 導出 |
@@ -1900,6 +1900,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：平台層 `PlatformWindow::is_active`（RC-11b）與 `FocusIn`／`FocusOut` 已存在，但 toolkit 的 `Window` 處理器只把它們轉成 `FocusIn`／`FocusOut` 事件，沒有人呼叫 `Application::set_active_window`，也沒有 `WindowActivate`／`WindowDeactivate` 與 `isActiveWindow`。
 - **Evidence**：`RAN`（Windows，真實 `Window`，以 `dispatch_window_system_event` 送 `FocusIn`／`FocusOut`）。突變檢查：移除 `FocusIn` 的接線，3 項中 2 項 FAIL。修復前 `is_active_window` 不存在，無法編譯。
 - **Status**：**已修復**（範圍見 G11.1.d 的「仍缺」）。新增 `qtrs-widgets/tests/test_window_activation_events.rs`（3 項）。HUD 沒有使用 `isActiveWindow`／`changeEvent`，無 HUD 行為變化。**僅 Windows 驗證；X11／Wayland／Cocoa 後端未驗證。**
+
+#### RC-28 layout 失效不往祖先傳遞
+- **Contract gaps**：G9.5.a。
+- **Qt behavior** `[QT-SRC qwidget.cpp:10571-10587; qlayout.cpp:471-476, 956-969, 980-1131; qcoreapplication.cpp:1816-1858]`：`updateGeometry` 使 parent layout 失效並 post `LayoutRequest`；`QLayout::activate` 結尾無條件呼叫 `mw->updateGeometry()`，於是下一輪再往上一層，直到 `isWindow()`。停止條件：隱藏、視窗、min==max 兩軸皆固定；`QSizePolicy::Fixed` 不阻止。深 N 層需約 N 次 posted-event drain。
+- **qtrs root**：`WidgetBase::request_layout` 只 post 直接 parent；`LayoutScheduler::activate_pending` 跑完 layout 只 `update()`，缺 `mw->updateGeometry()` 那一步。`BoxLayout::size_hint` 無快取（每次重算），不是快取過期問題。
+- **Evidence**：`RAN`（Windows，真實 `Window` + event loop）。before-FAIL：Fixed wrapper 內 label 變長後 wrapper 寬度仍為 31，期望 222（新 size hint）。修復後通過，`pump_idle` 未觸發 16 輪上限。分析由 4 個只讀 agent（Claude Haiku 5.5）平行完成，再由主 agent 比對整合。
+- **Status**：**已修復**。只改 `layout_scheduler.rs`（layout 真的重跑才往上傳）；新增 `test_widget_invalidation.rs` 1 項。未做：min==max 固定尺寸的停止條件（qtrs 無 `extra->minw/maxw` 對應判斷，仍會往上傳；結果相同、只多一次重排）、HUD 手動 `update_layout()` 的移除。**僅 Windows 驗證。**
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

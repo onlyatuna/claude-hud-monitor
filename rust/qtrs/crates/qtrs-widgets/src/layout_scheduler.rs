@@ -84,11 +84,19 @@ impl LayoutScheduler {
                         continue;
                     };
                     let g = widget.geometry();
+                    let mut activated = false;
                     if let Some(mut layout) = widget.layout_ref_mut() {
                         if layout.is_dirty() || layout.geometry().size() != Size::new(g.width, g.height) {
                             layout.set_geometry(Rect::new(0, 0, g.width, g.height));
                             layout.activate();
+                            activated = true;
                         }
+                    }
+                    if activated {
+                        // `QLayout::activate` ends with `mw->updateGeometry()` (qlayout.cpp:1131):
+                        // the owner's size hint may have changed, so its parent's layout runs
+                        // next, one level per pass, until the window's root (no parent).
+                        widget.update_geometry();
                     }
                     widget.update();
                 }
