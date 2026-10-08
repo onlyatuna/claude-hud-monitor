@@ -128,26 +128,32 @@ impl Layout for StackedLayout {
         0
     }
 
+    /// `QStackedLayout::sizeHint` (qstackedlayout.cpp:406-421): the component-wise maximum over
+    /// every page, current or not; an `Ignored` axis counts as 0.
     fn size_hint(&self) -> Size {
-        if let Some(curr) = self.current_widget() {
-            let h = curr.borrow().size_hint();
-            Size::new(
-                h.width + self.margins.left + self.margins.right,
-                h.height + self.margins.top + self.margins.bottom,
-            )
-        } else {
-            Size::new(
-                self.margins.left + self.margins.right,
-                self.margins.top + self.margins.bottom,
-            )
+        let mut page = Size::new(0, 0);
+        for widget in &self.widgets {
+            let w = widget.borrow();
+            let hint = w.size_hint();
+            let policy = w.size_policy();
+            let width = if policy.horizontal == crate::size_policy::Policy::Ignored { 0 } else { hint.width };
+            let height = if policy.vertical == crate::size_policy::Policy::Ignored { 0 } else { hint.height };
+            page = Size::new(page.width.max(width), page.height.max(height));
         }
+        Size::new(
+            page.width + self.margins.left + self.margins.right,
+            page.height + self.margins.top + self.margins.bottom,
+        )
     }
 
+    /// `QStackedLayout::minimumSize` (qstackedlayout.cpp:427-438): the maximum of `qSmartMinSize`
+    /// over every page.
     fn minimum_size(&self) -> Size {
-        let page = self
-            .current_widget()
-            .map(|curr| crate::layout_engine::smart_min_size(&**curr.borrow()))
-            .unwrap_or_else(|| Size::new(0, 0));
+        let mut page = Size::new(0, 0);
+        for widget in &self.widgets {
+            let min = crate::layout_engine::smart_min_size(&**widget.borrow());
+            page = Size::new(page.width.max(min.width), page.height.max(min.height));
+        }
         Size::new(
             page.width + self.margins.left + self.margins.right,
             page.height + self.margins.top + self.margins.bottom,

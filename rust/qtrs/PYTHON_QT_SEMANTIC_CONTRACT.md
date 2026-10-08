@@ -728,7 +728,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qstackedlayout.cpp:417-448]`：`sizeHint` = **所有**頁面 hint 的最大值（`Ignored` policy 算 0），`minimumSize` = 所有頁面 `qSmartMinSize` 的最大值；非當前頁被隱藏；`currentChanged` 信號。
 - **qtrs required**：MUST 與 Qt 相同。
 - **Current implementation**：`IMPLEMENTED-UNTESTED`（幾何）。`StackedLayout::size_hint`／`minimum_size`／`expanding_directions` **只用當前頁**；`activate` 把每頁都設成同一矩形並切換可見性；`set_current_index` 只在索引改變且在範圍內時發 `current_changed`。
-- **Known gap**：**G9.6.a [P1, READ；決議：不在 P0 階段修，不標 D]** `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值（`Ignored` 策略的軸取 0），`minimumSize` 取所有頁 `qSmartMinSize` 的最大值；qtrs（`stacked.rs:123-147`）只看當前頁。目前 HUD 不依賴。 頁面大小不同時，視窗 hint／最小值在切換卡片↔表格時會跳動，與 Qt 不同。**注意：Python HUD 不用 `QStackedWidget`**（grep 為空）；它重建 `inner_layout`（`hud_window.py:272-347`）。所以這是 Rust HUD 的設計偏離（`hud_window.rs:301-309,585-606`），不是移植錯誤；須決定「改成與 Python 相同的重建」或「讓 StackedLayout 符合 Qt 並證明結果等價」。**G9.6.b [P2]** `set_spacing` 為 no-op。
+- **Known gap**：**G9.6.a [P1, READ；決議：不在 P0 階段修，不標 D]** `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值（`Ignored` 策略的軸取 0），`minimumSize` 取所有頁 `qSmartMinSize` 的最大值；qtrs（`stacked.rs:123-147`）只看當前頁。目前 HUD 不依賴。 頁面大小不同時，視窗 hint／最小值在切換卡片↔表格時會跳動，與 Qt 不同。**注意：Python HUD 不用 `QStackedWidget`**（grep 為空）；它重建 `inner_layout`（`hud_window.py:272-347`）。所以這是 Rust HUD 的設計偏離（`hud_window.rs:301-309,585-606`），不是移植錯誤；須決定「改成與 Python 相同的重建」或「讓 StackedLayout 符合 Qt 並證明結果等價」。**G9.6.b [P2]** `set_spacing` 為 no-op。 **已修復：RC-24**。`[QT-SRC qstackedlayout.cpp:417-436,438-448]` `sizeHint`＝所有頁 `widget->sizeHint()` 的逐分量最大值（某軸 policy 為 `Ignored` 則該軸以 0 計），`minimumSize`＝所有頁 `qSmartMinSize` 的最大值，與目前頁無關。PySide6 實測（`QStackedLayout`，頁面覆寫 `sizeHint`／`minimumSizeHint`）：頁 100×50＋60×80 → hint (100,80)，目前頁 0 或 1 皆同；明確 min (30,10)＋(20,40) → min (30,40)；Fixed 頁（hint 100×50、minHint 70×30）即使非目前頁 → min (100,50)；Ignored 水平的頁 → hint (60,50)；兩軸 Ignored → 該頁對 hint 與 min 皆為 0；空 → (0,0)。修復：`stacked.rs` 的 `size_hint`／`minimum_size` 改為遍歷所有頁（沿用 qtrs 既有「layout 的 size_hint 含 margins」慣例，與 Qt 的 `QLayout::totalSizeHint` 一致）。測試 `tests/test_stacked_layout_hint.rs` 5 項，其中 3 項修復前 FAIL（hint (100,50) vs (100,80)；min (30,10) vs (30,40)；Ignored (100,50) vs (60,50)）。**HUD 影響**：HUD 的 `StackedWidget` 同時裝著卡片頁與表格頁，stack 的 hint 現在含兩者；HUD 測試（含 RC-16 的 header／卡片幾何）全數仍過，並新增 `test_default_vertical_window_layout_matches_pyside6_with_the_table_page_in_the_stack`（預設 280×410：header 33、卡片 109、間距 122，取自 PySide6）。**未修**：`expanding_directions` 仍只看目前頁（Qt `QStackedLayout` 沒有覆寫，用 `QLayout` 的預設）；`activate` 仍給每一頁 geometry（Qt `StackOne` 只給目前頁，`qstackedlayout.cpp:453-467`）；Qt `sizeHint` 不含 margins 而 qtrs 含（margins 預設 0，HUD 為 0）。
 - **Test**：既有 `test_stacked_widget_page_switching`（索引／信號）。必要：`stacked_size_hint_is_max_over_all_pages`；`stacked_hides_non_current_page_and_hit_test_skips_it`；切換 layout 後的視窗大小與 Python 逐項比對。
 - **HUD usage**：Rust `hud_window.rs:301-309,585-606`。
 
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 53 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 54 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.6.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1402,7 +1402,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.5.b | P1, READ | `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_propert |
 | G9.5.c | P2 | setter 立即重排與 Qt 壓縮不同 |
 | G9.5.d | P1 | 頂層最小尺寸不從 layout 導出 |
-| G9.6.a | P1, READ；決議：不在 P0 階段修，不標 D | `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值 |
+| G9.6.a | P1, READ；決議：不在 P0 階段修，不標 D；已修復：RC-24 | `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值 **已修復：RC-24**（見 C9.6） |
 | G9.6.b | P2 | `set_spacing` 為 no-op |
 | G9.7.a | P1 | harness 不在 CI、不是 `cargo test` |
 | G9.7.b | P1 | 涵蓋範圍如上 |
@@ -1873,6 +1873,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（P8、P9：PySide6 min [0,0]、max [∞,∞]；修復前 qtrs min／max 為 120×9／0×15）。`[DIFF]` 修復後相等。
 - **Status**：**已修復**（使用者核准進入實作）。細節與測試見 G12.8.p。HUD 的樣式表只有 `QMenu::separator { height: 1px }` 使用 `height`，不經上述路徑。**Phase**：4（qtrs 側）。
 
+#### RC-24 `StackedLayout` 的 `sizeHint`／`minimumSize` 只看目前頁
+- **Contract gaps**：G9.6.a。
+- **Qt behavior** `[QT-SRC qstackedlayout.cpp:417-436, 438-448]`：見 C9.6 與 G9.6.a。
+- **qtrs root**：`stacked.rs` 的 `StackedLayout::size_hint`／`minimum_size` 只取 `current_widget()`。
+- **Evidence**：`RAN`（PySide6 六個案例，見 G9.6.a）。`[DIFF]` 修復後相等；before-FAIL 3／5。
+- **Status**：**已修復**。只改 `stacked.rs` 兩個方法；`expanding_directions`、`activate`、margins 的差異未動（見 G9.6.a）。**僅 Windows 驗證；未做像素驗證。**
+
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
 | RC | 對應 gap | 位置 | 閘門（動手前必須先做） |
@@ -1901,5 +1908,5 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | Gap | 處置 | 理由 |
 |---|---|---|
 | G7.9.a | 降為 **P2，待驗證**（非 `D`） | 讀碼推翻 P0 主張：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於第一個 worker／熱鍵執行緒（`hud_window.rs:408`、`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`）在註冊前啟動，但只寫 atomic。**不等於所有 interleaving 皆安全**；它是 RC-04 的一個假設性表現，RC-04 修復後自然消除 |
-| G9.6.a | 降為 **P1**（非 `D`） | Python HUD 不使用 `QStackedLayout`（重建 layout）；Qt 的 `sizeHint`／`minimumSize` 取**所有頁面**的最大值 `[QT-SRC qstackedlayout.cpp:417-448]`，qtrs 只看當前頁（`stacked.rs:123-147`）。與 Qt 不同是事實，但目前 HUD 不依賴；**P0 階段不修**，待 qtrs 的 API 範圍擴大再處理 |
+| G9.6.a | 降為 **P1**（非 `D`） | Python HUD 不使用 `QStackedLayout`（重建 layout）；Qt 的 `sizeHint`／`minimumSize` 取**所有頁面**的最大值 `[QT-SRC qstackedlayout.cpp:417-448]`，qtrs 只看當前頁（`stacked.rs:123-147`）。與 Qt 不同是事實，但目前 HUD 不依賴；**P0 階段不修**，待 qtrs 的 API 範圍擴大再處理。**已修復：RC-24** |
 | G12.5.d 的 timer 部分（已結案：沿用既有 `ResizeDebouncer`，未新增 timer） | 見 RC-17 | 不得為了 parity 而新增 timer／debounce，除非先證明它不是在補 qtrs 缺陷 |

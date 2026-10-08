@@ -1008,6 +1008,51 @@ mod tests {
         }
     }
 
+    /// RC-24 guard. The HUD keeps the table page in its `StackedWidget` while the cards page is
+    /// shown, and `QStackedLayout::sizeHint`/`minimumSize` cover every page, so the stack's hint
+    /// now includes the table. PySide6 (no stack, `py_geom.py vertical`, `VH=410`, DPR 1.25) at the
+    /// default 280x410: header [12, 8, 256, 33], cards at y 47/169/291, each 256x109.
+    #[cfg(windows)]
+    #[test]
+    fn test_default_vertical_window_layout_matches_pyside6_with_the_table_page_in_the_stack() {
+        let _setup = crate::ui::test_support::CardsOracleSetup::new();
+        let mut cfg = Config::default();
+        cfg.ui_mode = "cards".into();
+        cfg.layout_mode = "vertical".into();
+        cfg.appearance = "dark".into();
+        cfg.window_x = Some(0);
+        cfg.window_y = Some(0);
+        let cfg = Arc::new(Mutex::new(cfg));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        hud.window.root_widget().borrow().update_layout();
+        let header = hud.window.root_widget().borrow().children()[0]
+            .borrow()
+            .geometry();
+        assert_eq!(
+            (header.x, header.y, header.width, header.height),
+            (12, 8, 256, 33),
+            "header (PySide6 [12, 8, 256, 33])"
+        );
+        let cards: Vec<(i32, i32, i32, i32)> = ["claude", "agy", "codex"]
+            .iter()
+            .map(|id| {
+                let g = hud.cards[*id].container.borrow().geometry();
+                (g.x, g.y, g.width, g.height)
+            })
+            .collect();
+        // Card geometry is relative to the cards container, so compare sizes and the 122 px pitch.
+        assert!(
+            cards.iter().all(|c| c.3 == 109 && c.2 == 256),
+            "cards {cards:?} (PySide6 256x109)"
+        );
+        assert_eq!(
+            (cards[1].1 - cards[0].1, cards[2].1 - cards[1].1),
+            (122, 122)
+        );
+    }
+
     /// G12.8.b. PySide6 (`py_horizontal.json`, DPR 1.25): in a 666 px wide body the three cards are
     /// 211, 210 and 211 px wide, because the body `QHBoxLayout` has spacing 8 (`hud_window.py:337`).
     #[cfg(windows)]
