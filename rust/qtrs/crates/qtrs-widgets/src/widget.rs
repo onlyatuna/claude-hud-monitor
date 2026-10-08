@@ -329,6 +329,8 @@ pub struct WidgetBase {
     pub layout: RefCell<Option<Box<dyn Layout>>>,
     pub focus_policy: Cell<FocusPolicy>,
     pub has_focus: Cell<bool>,
+    /// The focus slot of the window that last gave this widget focus (`FocusManager`).
+    pub(crate) focus_state: RefCell<Weak<crate::focus::FocusState>>,
     pub size_policy: Cell<QSizePolicy>,
     pub style_sheet: RefCell<Option<QStyleSheetStyle>>,
     pub properties: RefCell<Vec<(String, String)>>,
@@ -353,6 +355,7 @@ impl WidgetBase {
             layout: RefCell::new(None),
             focus_policy: Cell::new(FocusPolicy::NoFocus),
             has_focus: Cell::new(false),
+            focus_state: RefCell::new(Weak::new()),
             size_policy: Cell::new(QSizePolicy::default()),
             style_sheet: RefCell::new(None),
             properties: RefCell::new(Vec::new()),
@@ -439,6 +442,14 @@ impl WidgetBase {
             return;
         }
         self.enabled.set(enable);
+        // Disabling the focus widget takes the focus away (qwidget.cpp:3442-3446). The flag and the
+        // window's focus id change now; the events follow in `FocusManager::process_pending`.
+        if !enable {
+            let focus = self.focus_state.borrow().upgrade();
+            if focus.is_some_and(|f| f.lose(self.object_data.id, !parent_disabled)) {
+                self.has_focus.set(false);
+            }
+        }
         // The children are this widget's own and those of its layout, as `EmptyWidget::children`.
         let mut children = self.children.borrow().clone();
         if let Some(layout) = self.layout.borrow().as_ref() {

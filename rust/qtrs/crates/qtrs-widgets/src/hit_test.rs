@@ -48,7 +48,9 @@ impl EventTreeDispatcher {
 
     pub fn dispatch_event(&mut self, root: &WidgetRef, event: &mut Event) -> bool {
         crate::tooltip::user_input(&event.kind);
+        self.focus_manager.process_pending(root);
         let result = self.dispatch_event_internal(root, event, None);
+        self.focus_manager.process_pending(root);
         crate::command::WidgetCommandQueue::flush();
         result
     }
@@ -69,7 +71,9 @@ impl EventTreeDispatcher {
             y: win_pos.y,
         });
         let tool_tip_pos = buttons.is_empty().then_some(global_pos);
+        self.focus_manager.process_pending(root);
         let result = self.dispatch_event_internal(root, &mut event, tool_tip_pos);
+        self.focus_manager.process_pending(root);
         crate::command::WidgetCommandQueue::flush();
         result
     }
