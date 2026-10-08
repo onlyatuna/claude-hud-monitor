@@ -3,6 +3,7 @@ use crate::layout_engine::{
     item_maximum_size, item_minimum_size, item_set_geometry, item_size_hint, q_geom_calc,
     q_max_exp_calc, setup_spacings, LayoutStruct, LAYOUT_SIZE_MAX,
 };
+use crate::size_policy::Policy;
 use crate::widget::{Widget, WidgetRef};
 use qtrs_gui::geometry::primitives::{Margins, Rect, Size};
 
@@ -70,13 +71,53 @@ impl std::ops::BitOr for ItemAlignment {
     }
 }
 
+/// `QSpacerItem`: a blank box with a size hint and a size policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpacerItem {
+    pub width: i32,
+    pub height: i32,
+    pub horizontal: Policy,
+    pub vertical: Policy,
+}
+
+impl SpacerItem {
+    pub const fn new(width: i32, height: i32, horizontal: Policy, vertical: Policy) -> Self {
+        Self { width, height, horizontal, vertical }
+    }
+
+    /// `QSpacerItem::sizeHint`: the given size, whatever the policy (qlayoutitem.cpp:651-653).
+    pub fn size_hint(&self) -> Size {
+        Size::new(self.width, self.height)
+    }
+
+    /// `QSpacerItem::minimumSize`: 0 where the policy may shrink (qlayoutitem.cpp:607-610).
+    pub fn minimum_size(&self) -> Size {
+        let min = |len: i32, p: Policy| if p.can_shrink() { 0 } else { len };
+        Size::new(min(self.width, self.horizontal), min(self.height, self.vertical))
+    }
+
+    /// `QSpacerItem::maximumSize`: unbounded where the policy may grow (qlayoutitem.cpp:628-631).
+    pub fn maximum_size(&self) -> Size {
+        let max = |len: i32, p: Policy| if p.can_grow() { LAYOUT_SIZE_MAX } else { len };
+        Size::new(max(self.width, self.horizontal), max(self.height, self.vertical))
+    }
+
+    /// `QSpacerItem::expandingDirections`: the policies carrying `ExpandFlag`
+    /// (qlayoutitem.cpp:570-572; `Ignored` has none, qsizepolicy.h).
+    pub fn expanding_directions(&self) -> (bool, bool) {
+        let exp = |p: Policy| matches!(p, Policy::Expanding | Policy::MinimumExpanding);
+        (exp(self.horizontal), exp(self.vertical))
+    }
+}
+
 pub struct LayoutItem {
     pub widget: WidgetRef,
     pub stretch: u32,
     /// `QLayoutItem::alignment`.
     pub alignment: ItemAlignment,
-    /// A `QSpacerItem`: it has no content of its own, so it takes no spacing.
-    pub spacer: bool,
+    /// A `QSpacerItem`: it has no content of its own, so it takes no spacing. `widget` is then a
+    /// placeholder that only records the spacer's rectangle.
+    pub spacer: Option<SpacerItem>,
 }
 
 pub trait Layout: 'static {
@@ -188,19 +229,20 @@ impl BoxLayout {
         self.items.len()
     }
 
-    pub fn insert_widget(&mut self, index: usize, widget: WidgetRef, stretch: u32) {
+    /// `QBoxLayoutPrivate::validateIndex`: an index past the end appends.
+    fn insert_item(&mut self, index: usize, item: LayoutItem) {
         let clamped = index.min(self.items.len());
-        self.items.insert(
-            clamped,
-            LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: false },
-        );
+        self.items.insert(clamped, item);
         self.update_layout();
+    }
+
+    pub fn insert_widget(&mut self, index: usize, widget: WidgetRef, stretch: u32) {
+        self.insert_item(index, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: None });
     }
 
     /// `QBoxLayout::addWidget(widget, stretch, alignment)`.
     pub fn add_widget_aligned(&mut self, widget: WidgetRef, stretch: u32, alignment: ItemAlignment) {
-        self.items.push(LayoutItem { widget, stretch, alignment, spacer: false });
-        self.update_layout();
+        self.insert_item(usize::MAX, LayoutItem { widget, stretch, alignment, spacer: None });
     }
 
     pub fn remove_widget(&mut self, index: usize) -> Option<WidgetRef> {
@@ -212,10 +254,84 @@ impl BoxLayout {
             None
         }
     }
+
     pub fn add_stretch(&mut self, stretch: u32) {
         <Self as Layout>::add_stretch(self, stretch);
     }
 
+    /// `QBoxLayout::insertSpacerItem`: the spacer goes in with stretch 0 (qboxlayout.cpp:894-902).
+    pub fn insert_spacer_item(&mut self, index: usize, spacer: SpacerItem) {
+        self.insert_spacer(index, spacer, 0);
+    }
+
+    /// `QBoxLayout::addSpacerItem`.
+    pub fn add_spacer_item(&mut self, spacer: SpacerItem) {
+        self.insert_spacer_item(usize::MAX, spacer);
+    }
+
+    /// `QBoxLayout::insertSpacing`: a `Fixed` spacer of `size` along the layout, `Minimum` across
+    /// it (qboxlayout.cpp:844-858).
+    pub fn insert_spacing(&mut self, index: usize, size: i32) {
+        let spacer = if self.direction == Direction::LeftToRight {
+            SpacerItem::new(size, 0, Policy::Fixed, Policy::Minimum)
+        } else {
+            SpacerItem::new(0, size, Policy::Minimum, Policy::Fixed)
+        };
+        self.insert_spacer(index, spacer, 0);
+    }
+
+    /// `QBoxLayout::addSpacing`.
+    pub fn add_spacing(&mut self, size: i32) {
+        self.insert_spacing(usize::MAX, size);
+    }
+
+    /// `QBoxLayout::insertStretch`: a 0x0 spacer, `Expanding` along the layout and `Minimum`
+    /// across it, that keeps `stretch` as given (qboxlayout.cpp:867-881).
+    pub fn insert_stretch(&mut self, index: usize, stretch: u32) {
+        let spacer = if self.direction == Direction::LeftToRight {
+            SpacerItem::new(0, 0, Policy::Expanding, Policy::Minimum)
+        } else {
+            SpacerItem::new(0, 0, Policy::Minimum, Policy::Expanding)
+        };
+        self.insert_spacer(index, spacer, stretch);
+    }
+
+    fn insert_spacer(&mut self, index: usize, spacer: SpacerItem, stretch: u32) {
+        let widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
+        let widget: WidgetRef = std::rc::Rc::new(std::cell::RefCell::new(Box::new(widget)));
+        self.insert_item(index, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: Some(spacer) });
+    }
+
+    /// `QBoxLayout::setStretchFactor(QWidget*, int)`: sets the stretch of the item holding
+    /// `widget` (a direct item only); false when there is none (qboxlayout.cpp:1069-1083).
+    pub fn set_stretch_factor(&mut self, widget: &WidgetRef, stretch: u32) -> bool {
+        let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| item.spacer.is_none() && std::rc::Rc::ptr_eq(&item.widget, widget))
+        else {
+            return false;
+        };
+        item.stretch = stretch;
+        self.update_layout();
+        true
+    }
+
+    /// `QBoxLayout::setStretch`: out-of-range indexes are ignored (qboxlayout.cpp:1114-1124).
+    pub fn set_stretch(&mut self, index: usize, stretch: u32) {
+        if let Some(item) = self.items.get_mut(index) {
+            if item.stretch != stretch {
+                item.stretch = stretch;
+                self.update_layout();
+            }
+        }
+    }
+
+    /// `QBoxLayout::stretch`: the stored factor, not the size policy's; `None` out of range
+    /// (Qt returns -1, qboxlayout.cpp:1132-1138).
+    pub fn stretch(&self, index: usize) -> Option<u32> {
+        self.items.get(index).map(|item| item.stretch)
+    }
 }
 
 impl Layout for BoxLayout {
@@ -241,7 +357,7 @@ impl Layout for BoxLayout {
         let Some(item) = self
             .items
             .iter_mut()
-            .find(|item| !item.spacer && std::rc::Rc::ptr_eq(&item.widget, widget))
+            .find(|item| item.spacer.is_none() && std::rc::Rc::ptr_eq(&item.widget, widget))
         else {
             return false;
         };
@@ -252,21 +368,7 @@ impl Layout for BoxLayout {
 
     /// `QBoxLayout::addStretch`: an empty, expanding spacer that takes no spacing.
     fn add_stretch(&mut self, stretch: u32) {
-        let widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
-        widget.set_size_policy(crate::size_policy::QSizePolicy::new(
-            crate::size_policy::Policy::Expanding,
-            crate::size_policy::Policy::Expanding,
-        ));
-        let spacer = std::rc::Rc::new(std::cell::RefCell::new(
-            Box::new(widget) as Box<dyn crate::widget::Widget>,
-        ));
-        self.items.push(LayoutItem {
-            widget: spacer,
-            stretch,
-            alignment: ItemAlignment::NONE,
-            spacer: true,
-        });
-        self.update_layout();
+        self.insert_stretch(usize::MAX, stretch);
     }
 
     fn widgets(&self) -> Vec<WidgetRef> {
@@ -345,7 +447,7 @@ impl Layout for BoxLayout {
                 let g = w.geometry();
                 Size::new(g.width, g.height)
             };
-            if item.spacer {
+            if item.spacer.is_some() {
                 // A `QSpacerItem` just remembers its rectangle.
                 item.widget.borrow().set_geometry(rect);
             } else {
@@ -385,9 +487,19 @@ impl BoxLayout {
 
         for (i, item) in self.items.iter().enumerate() {
             // Everything below is (main axis, cross axis).
-            let (max, min, hint, exp, empty, is_widget, policy_stretch) = if item.spacer {
-                // `QSpacerItem(0, 0, Expanding, Minimum)`, transposed for a vertical layout.
-                ((LAYOUT_SIZE_MAX, LAYOUT_SIZE_MAX), (0, 0), (0, 0), (true, false), true, false, 0)
+            let (max, min, hint, exp, empty, is_widget, policy_stretch) = if let Some(spacer) = item.spacer {
+                // Everything a `QSpacerItem` reports, transposed for a vertical layout.
+                let swap = |s: Size| if horz { (s.width, s.height) } else { (s.height, s.width) };
+                let exp = spacer.expanding_directions();
+                (
+                    swap(spacer.maximum_size()),
+                    swap(spacer.minimum_size()),
+                    swap(spacer.size_hint()),
+                    if horz { exp } else { (exp.1, exp.0) },
+                    true,
+                    false,
+                    0,
+                )
             } else {
                 let w = item.widget.borrow();
                 let policy = w.size_policy();

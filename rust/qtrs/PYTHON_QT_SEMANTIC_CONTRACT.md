@@ -672,11 +672,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`IMPLEMENTED` + `DIFF`：`BoxLayout::setup_geom`（`layout.rs`）移植 `setupGeom`；`activate` = `QBoxLayout::setGeometry`；`q_geom_calc`／`smart_min_size`／`smart_max_size`／`item_*`（`layout_engine.rs`）移植 `QWidgetItem`。
 - **Known gap**
   - **G9.1.a [P1, READ；已修復：RC-30]** （修復前：） `add_stretch(0)` 被強制成 1（`layout.rs` `stretch.max(1)`）；Qt 的 `addStretch(0)` stretch 為 0。 RC-30：兩處 `stretch.max(1)`（`Layout::add_stretch` 預設實作與 `BoxLayout::add_stretch`）改為原值傳入；`test_box_layout_add_stretch_zero.rs` 4 項以 PySide6 參考值比對。
-  - **G9.1.b [P1]** 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor`（grep 為空）。
+  - **G9.1.b [P1；已修復：RC-31]** （修復前：） 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor`（grep 為空）。 RC-31：`BoxLayout` 新增 `add_spacing`／`insert_spacing`／`add_spacer_item`／`insert_spacer_item`／`insert_stretch`／`set_stretch_factor`／`set_stretch`／`stretch`，以及公開的 `SpacerItem`（`QSpacerItem` 的 min／max／hint／expanding）；`LayoutItem::spacer` 由 `bool` 改為 `Option<SpacerItem>`。`set_stretch_factor(QLayout*)` 不適用（qtrs 子 layout 掛在 widget 上，以 widget 版本處理）。
   - **G9.1.c [P1；= G9.2.a；已修復：RC-07]** 無 item 對齊（見 C9.3）。
   - **G9.1.d [P1]** 無 `heightForWidth`（grep `height_for_width|has_height` 為空）——換行 label 無法如 Qt 排版。
   - **G9.1.e [P1]** 無 `retainSizeWhenHidden`、無 RTL（`Direction` 只有 TopToBottom／LeftToRight）、無 `SizeConstraint`。
-- **Test**：既有 `test_vbox_and_hbox_layout_calculation`、`test_box_layout_add_stretch`、`test_layout_stretch_minimum.rs`（6 項，用 `spacer=0`，而 layout 實際用 `-1`）、`qt_layout_compare.py`（手動，見 C9.7）。`add_stretch_zero_matches_qt` 已由 RC-30 的 `test_box_layout_add_stretch_zero.rs` 補上。
+- **Test**：既有 `test_vbox_and_hbox_layout_calculation`、`test_box_layout_add_stretch`、`test_layout_stretch_minimum.rs`（6 項，用 `spacer=0`，而 layout 實際用 `-1`）、`qt_layout_compare.py`（手動，見 C9.7）。`add_stretch_zero_matches_qt` 已由 RC-30 的 `test_box_layout_add_stretch_zero.rs` 補上。 G9.1.b API 由 RC-31 的 `test_box_layout_spacing.rs`（8 項）以 PySide6 參考值比對。
 - **HUD usage**：Python `QVBoxLayout/QHBoxLayout`（`hud_window.py:135,143,168,280,336`；`provider_card.py:25-90`；`usage_table.py:114,273-276,411`）、`addStretch`（`hud_window.py:286`、`provider_card.py:42,63,90`、`usage_table.py:123,278,285`）。Rust：對應檔案的 `BoxLayout::` 與 `add_stretch(1)`。
 
 ### C9.2 Grid layout（QGridLayout）
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 61 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 62 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1385,7 +1385,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.8.f | P2, READ | tip 視窗重用、無淡入淡出、不因啟用狀態改變而隱藏（G11.1.d） |
 | G8.8.g | P2, `[INFERENCE]` | 混合 DPI 的 tip 視窗未實測 |
 | G9.1.a | P1, READ；已修復：RC-30 | `add_stretch(0)` 被強制成 1 |
-| G9.1.b | P1 | 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor` |
+| G9.1.b | P1；已修復：RC-31 | 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor` |
 | G9.1.c | P1；= G9.2.a；已修復：RC-07 | 無 item 對齊 |
 | G9.1.d | P1 | 無 `heightForWidth` |
 | G9.1.e | P1 | 無 `retainSizeWhenHidden`、無 RTL |
@@ -1914,6 +1914,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`layout.rs` 的 `Layout::add_stretch` 預設實作與 `BoxLayout::add_stretch` 都寫 `stretch.max(1)`（`93ec2c0` 引入、`eec7ead` 沿用，無說明）。排版引擎本身（`setup_geom`、`q_geom_calc`）已與 Qt 相同。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle：300×20 `QHBoxLayout`、margins 0、spacing 6、item `sizeHint` 50×20／`minimumSizeHint` 0×0。before-FAIL 3 項，結果恰為 stretch 1 的 Qt 結果：`[stretch0, w(stretch1)]` 得 150/150（Qt 0/300）；`[stretch0, w, stretch2]` 得 83/50/167（Qt 0/50/250）；`[Expanding w, stretch0]` 得 50/250（Qt 150/150）。對照組 `[stretch0, w, stretch0]`（125/50/125）修改前後皆通過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
 - **Status**：**已修復**。只改 `layout.rs` 兩行，新增 `test_box_layout_add_stretch_zero.rs`（4 項）。HUD 不受影響：所有呼叫端都明確傳 `add_stretch(1)`（`hud_window.rs`、`provider_card.rs`、`usage_table.rs`），Python 對應的是 `addStretch()`（= 0）；改成 0 屬 HUD 搬運清理，未做（在無 stretch>0 兄弟項時結果相同，見上）。**僅 Windows 驗證。**
+
+#### RC-31 Box layout 缺 spacing／spacer／stretch API
+- **Contract gaps**：G9.1.b。
+- **Qt behavior** `[QT-SRC qboxlayout.cpp:412-420, 844-902, 970-998, 1069-1138; qlayoutitem.cpp:570-572, 607-653, 681-683]`：`insertSpacing` 建 `QSpacerItem(size, 0, Fixed, Minimum)`（垂直時轉置），`insertStretch` 建 `(0, 0, Expanding, Minimum)` 並保留 stretch，`insertSpacerItem` 照用呼叫端的 spacer、stretch 0；負的或超出範圍的 index 都附加到尾端（`validateIndex`）。`QSpacerItem`：hint 為給定大小；policy 可縮時 min 為 0，否則為給定大小；可長時 max 無上限，否則為給定大小；`isEmpty` 恆真，故不佔 layout spacing。`setStretchFactor(QWidget*)` 只找直接項，找不到回 false；`setStretch` 超出範圍忽略；`stretch(i)` 回存放值，超出範圍回 -1。
+- **qtrs root**：`BoxLayout` 只有 `add_stretch`；spacer 在 `setup_geom` 寫死為 `(0, 0, Expanding, Minimum)`，無法表示固定大小的 spacing。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（margins 0、spacing 6、item hint 50×20、min hint 0×0）：`[w, spacing 20, w]` 在 300 寬為 137/20/137、hint 126×20、min 26×0；擠到 60 寬為 17/20/17；垂直相同；`SpacerItem(40,10,Minimum,Minimum)` 為 127/40/127、min 46×10；`insert_stretch(1,1)`＋`insert_spacing(0,10)` 為 10/50/184/50；`set_stretch_factor` 回 true/false、`stretch` 2/None、`set_stretch(0,1)` 後 98/196。修改前測試無法編譯（API 不存在，12 個 error），修改後 8 項通過；RC-30 的 4 項仍通過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
+- **Status**：**已修復**。`add_stretch` 改為走 `insert_stretch`，結果不變。HUD 不受影響：Python 版未使用這些 API（只有 `addStretch()` 與 `addWidget(w, 1)`）。`stretch(i)` 以 `Option<u32>` 表示 Qt 的 -1。**僅 Windows 驗證。**
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
