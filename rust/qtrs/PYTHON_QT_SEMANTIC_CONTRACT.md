@@ -1047,7 +1047,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | `QPainterPath` arc／cubic／addText、`QPainterPathStroker` | `usage_table.py:72-74,181-228` | PART：Stroker `ABSENT`，以 `create_donut_arc_path` 取代 | — |
 | `QFont`、`QFontMetricsF.horizontalAdvance/capHeight` | `usage_table.py:214-242` | OK（`DIFF`） | — |
 | `QFont.setFeature('tnum')` | `usage_table.py:299` | PART：只有 `tabular_numbers` bool | — |
-| `QColor.darker(110)` | `usage_table.py:88` | **ABSENT**；Rust 用原色（`usage_table.rs:690`） | G12.5.p |
+| `QColor.darker(110)` | `usage_table.py:88` | **已修復：RC-25**（`qtrs_gui::color::darker`，`usage_table.rs` 的 pie 圖例） | G12.5.p |
 | `QPixmap.setDevicePixelRatio(2)` | `usage_table.py:45-49` | OK（`with_dpr`） | — |
 | `setStyleSheet`（widget 與 app 串接） | 見 C12.3 | OK（子集） | C8.5 |
 | ctypes `SetWindowCompositionAttribute` | `vibrancy.py:75-144` | OK | C11.7 |
@@ -1118,7 +1118,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.m [P1] | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu | `tray_icon.py:54-122` vs `rust/src/ui/tray_icon.rs:73-240` | 需決定 |
 | G12.5.n [P1] | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 | `main.rs:503`、`main.rs:486-488`、`hud_window.rs:526-532`、`tray_icon.rs:686-690` | 修復 |
 | G12.5.o [P1] | QMenu 外觀為寫死數值，非 QSS | G8.5.f | 修復或核准 |
-| G12.5.p [P1] | `QColor.darker(110)` 缺失：Rust 用原色 | `usage_table.rs:690` vs `usage_table.py:88` | 修復（需逐像素比對） |
+| G12.5.p [P1] | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** | `usage_table.rs` vs `usage_table.py:88` | 已修復（`qtrs_gui::color::darker`，PySide6 逐位元比對；圖例像素與 PySide6 相同） |
 | G12.5.q [P1] | `UsageDial` 最小尺寸 0 vs 84 | G8.3.e | 修復 |
 | G12.5.r [P1] | 版面切換：`StackedWidget` vs 重建 | C9.6 | 決定 |
 | G12.5.s [P0, READ；= G8.5.d；已修復：RC-10] | `Window::set_style_sheet` 為 app 全域 | G8.5.d | 修復 |
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 54 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.6.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 55 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.6.a、G10.7.a、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1514,7 +1514,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.m | P1 | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu |
 | G12.5.n | P1 | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 |
 | G12.5.o | P1 | QMenu 外觀為寫死數值，非 QSS |
-| G12.5.p | P1 | `QColor.darker(110)` 缺失：Rust 用原色 |
+| G12.5.p | P1 | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** |
 | G12.5.q | P1 | `UsageDial` 最小尺寸 0 vs 84 |
 | G12.5.r | P1 | 版面切換：`StackedWidget` vs 重建 |
 | G12.5.s | P0, READ；= G8.5.d；已修復：RC-10 | `Window::set_style_sheet` 為 app 全域 |
@@ -1879,6 +1879,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`stacked.rs` 的 `StackedLayout::size_hint`／`minimum_size` 只取 `current_widget()`。
 - **Evidence**：`RAN`（PySide6 六個案例，見 G9.6.a）。`[DIFF]` 修復後相等；before-FAIL 3／5。
 - **Status**：**已修復**。只改 `stacked.rs` 兩個方法；`expanding_directions`、`activate`、margins 的差異未動（見 G9.6.a）。**僅 Windows 驗證；未做像素驗證。**
+
+#### RC-25 缺 `QColor::darker`／`lighter`
+- **Contract gaps**：G12.5.p。
+- **Qt behavior** `[QT-SRC qcolor.cpp:2941-2997, 2363-2402, 2215-2290; qdrawhelper_p.h:886-887]`：`darker(f)` 轉 HSV（16 位元元件），`value = value * 100 / f`（整數除法），轉回 RGB，再以 `qt_div_257` 取 8 位元。`lighter(f)` 對 value 乘 `f/100`，溢位時由 saturation 扣掉溢出量。`f <= 0` 原樣回傳；`f < 100` 時兩者互相委派（`10000 / f`）。
+- **qtrs root**：qtrs 沒有 `QColor::darker`／`lighter`，HUD 的 pie 圖例（`usage_table.py:88`：`QColor(*theme["disc"]).darker(110)`）因此直接用原色。
+- **Evidence**：`RAN`（PySide6 6.11.2：255 列 `darker`／`lighter` 輸入輸出，含原色、灰階、disc 色、factor 50／110／150／200／300、40 個種子固定的隨機色；圖例 12×12 像素）。`[DIFF]` 修復後逐位元相等；before-FAIL：HUD 圖例像素 (14,14,14,14) vs PySide6 (13,13,13,14)。第一版以 `>> 8` 取 8 位元，有 1 級差，改為 `qt_div_257` 後 255 列全部相等。
+- **Status**：**已修復**。新增 `qtrs-gui/src/color/qcolor_ops.rs`（`darker`、`lighter`，回傳 8 位元色）與 `tests/test_qcolor_ops.rs`；HUD 加 `test_legend_pie_disc_is_darker_than_the_theme_disc`。HUD 唯一用到 `darker` 的地方（`usage_table.py:88`）已改。淺色主題 disc 的 alpha 只有 14，變暗後預乘像素與原色相同 (2,2,3,14)，因此淺色主題畫面不變、只有深色主題差 1 級。**僅 Windows 驗證；`lighter` 沒有 HUD 呼叫端，只由 PySide6 表驗證。**
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

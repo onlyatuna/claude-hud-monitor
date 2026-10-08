@@ -712,7 +712,8 @@ impl Widget for GlyphWidget {
         match self.kind.as_str() {
             "pie" => {
                 painter.set_pen(None);
-                painter.set_brush(Brush::Color(self.theme.disc));
+                // `QColor(*theme["disc"]).darker(110)`, usage_table.py:88
+                painter.set_brush(Brush::Color(qtrs_gui::color::darker(self.theme.disc, 110)));
                 painter.draw_ellipse(r);
                 painter.set_brush(Brush::Color(self.color));
                 painter.draw_pie(r, 90.0, -250.0);
@@ -1567,6 +1568,27 @@ mod tests {
             .unwrap()
             .text()
             .contains("30D"));
+    }
+
+    /// The legend's pie swatch paints its disc with `QColor(*theme["disc"]).darker(110)`
+    /// (`usage_table.py:88`). Pixel (4,3) lies in the part of the disc the 250-degree pie leaves
+    /// uncovered. Reference measured with PySide6 6.11.2 (`QPixmap` 12x12, antialiasing, disc then a
+    /// transparent pie, read back as premultiplied ARGB32): dark `(13,13,13,14)` -- the plain disc
+    /// colour gives 14 -- and light `(2,2,3,14)`, which the darkening does not change at this alpha.
+    #[test]
+    fn test_legend_pie_disc_is_darker_than_the_theme_disc() {
+        fn pixel(theme: Theme) -> (u8, u8, u8, u8) {
+            let mut glyph = GlyphWidget::new("pie", Color::from_rgba8(0, 0, 0, 0), theme, 12.0);
+            let mut pixmap = Pixmap::new(12, 12).unwrap();
+            {
+                let mut painter = Painter::begin(&mut pixmap);
+                glyph.paint_event(&mut painter);
+            }
+            let p = pixmap.pixel(4, 3).unwrap();
+            (p.red(), p.green(), p.blue(), p.alpha())
+        }
+        assert_eq!(pixel(Theme::dark()), (13, 13, 13, 14));
+        assert_eq!(pixel(Theme::light()), (2, 2, 3, 14));
     }
 
     #[test]
