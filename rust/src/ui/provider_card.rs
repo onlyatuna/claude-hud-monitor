@@ -715,9 +715,13 @@ mod tests {
             "Progress bar height must be 5px"
         );
 
-        // 2. Vertical mode
-        hud.window
-            .set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 280, 490));
+        // 2. Vertical mode. The step above stored the 690x152 window as the vertical size, which no
+        // user has; use the default vertical size (PySide6 280x410: cards keep their hint there).
+        {
+            let mut cfg = hud.config.lock();
+            cfg.vertical_width = crate::config::DEFAULT_VERTICAL_WIDTH;
+            cfg.vertical_height = crate::config::DEFAULT_VERTICAL_HEIGHT;
+        }
         hud.apply_cards_layout_mode("vertical");
         let stack_geom_v = hud.stack.borrow().geometry();
         // PySide6: the extra height of a taller vertical window belongs to the header row (RC-16),

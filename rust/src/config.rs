@@ -62,32 +62,17 @@ pub struct Config {
     pub claude_profile: String,
 }
 
+// Window size constants, `hud_window.py:31-35`. The minimum is the explicit `setMinimumSize`; it wins
+// over the layout's own minimum, so it is not derived from the content (G12.8.f / RC-23).
 pub const MIN_HORIZONTAL_WIDTH: u32 = 540;
-pub const MIN_HORIZONTAL_HEIGHT: u32 = 130;
+pub const MIN_HORIZONTAL_HEIGHT: u32 = 125;
 pub const MIN_VERTICAL_WIDTH: u32 = 250;
-
-pub const HUD_HEADER_HEIGHT: u32 = 16;
-pub const HUD_BODY_SPACING: u32 = 3;
-pub const HUD_FRAME_VERTICAL_MARGIN: u32 = 10;
-pub const VERTICAL_CARD_MIN_HEIGHT: u32 = 140;
-pub const VERTICAL_DIVIDER_SPACING: u32 = 3;
-pub const VERTICAL_DIVIDER_LINE_HEIGHT: u32 = 1;
-
-pub const fn vertical_layout_min_height() -> u32 {
-    HUD_FRAME_VERTICAL_MARGIN
-        + HUD_HEADER_HEIGHT
-        + HUD_BODY_SPACING
-        + VERTICAL_CARD_MIN_HEIGHT * 3
-        + VERTICAL_DIVIDER_SPACING * 4
-        + VERTICAL_DIVIDER_LINE_HEIGHT * 2
-}
-
-pub const MIN_VERTICAL_HEIGHT: u32 = vertical_layout_min_height();
+pub const MIN_VERTICAL_HEIGHT: u32 = 320;
 
 pub const DEFAULT_HORIZONTAL_WIDTH: u32 = 690;
-pub const DEFAULT_HORIZONTAL_HEIGHT: u32 = 152;
+pub const DEFAULT_HORIZONTAL_HEIGHT: u32 = 145;
 pub const DEFAULT_VERTICAL_WIDTH: u32 = 280;
-pub const DEFAULT_VERTICAL_HEIGHT: u32 = 490;
+pub const DEFAULT_VERTICAL_HEIGHT: u32 = 410;
 pub const MIN_TABLE_WIDTH: u32 = 380;
 pub const MIN_TABLE_HEIGHT: u32 = 280;
 pub const DEFAULT_TABLE_WIDTH: u32 = 450;
@@ -645,14 +630,53 @@ mod tests {
     fn test_config_defaults() {
         let cfg = Config::default();
         assert_eq!(cfg.layout_mode, "vertical");
+        // PySide6 `DEFAULT_CONFIG` (`config_manager.py:15-17`).
         assert_eq!(cfg.vertical_width, 280);
-        assert_eq!(cfg.vertical_height, DEFAULT_VERTICAL_HEIGHT);
+        assert_eq!(cfg.vertical_height, 410);
         assert_eq!(cfg.horizontal_width, 690);
-        assert_eq!(cfg.horizontal_height, 152);
+        assert_eq!(cfg.horizontal_height, 145);
         assert!(cfg.always_on_top);
         assert!(!cfg.click_through);
         assert_eq!(cfg.refresh_interval_sec, 60);
         assert_eq!(cfg.hotkey, "Alt+C");
+    }
+
+    /// G12.8.f / RC-23. Python (`hud_window.py:31-35`, `config_manager.py:15-17`) keeps any stored
+    /// size at or above its minimum (125 high horizontal, 320 high vertical) and only below that
+    /// falls back to the default (145 / 410). Rust's higher minimums used to reset stored sizes
+    /// Python keeps.
+    #[test]
+    fn test_sanitize_keeps_stored_sizes_pyside6_keeps() {
+        let mut cfg = Config {
+            horizontal_height: 125,
+            vertical_height: 320,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg);
+        assert_eq!((cfg.horizontal_height, cfg.vertical_height), (125, 320));
+
+        let mut cfg = Config {
+            horizontal_height: 124,
+            vertical_height: 319,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg);
+        assert_eq!((cfg.horizontal_height, cfg.vertical_height), (145, 410));
+
+        // Stored by an earlier Rust build (its old defaults / minimum): still valid in Python.
+        let mut cfg = Config {
+            horizontal_height: 152,
+            vertical_height: 490,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg);
+        assert_eq!((cfg.horizontal_height, cfg.vertical_height), (152, 490));
+        let mut cfg = Config {
+            vertical_height: 463,
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg);
+        assert_eq!(cfg.vertical_height, 463);
     }
 
     #[test]

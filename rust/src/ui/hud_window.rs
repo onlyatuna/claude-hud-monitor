@@ -971,6 +971,43 @@ mod tests {
     use super::*;
     use crate::refresh_controller::RefreshController;
 
+    /// G12.8.f / RC-23. PySide6 oracle (`hud_window.py:31-35`, run with a fresh config at DPR 1.25,
+    /// `size()` / `minimumSize()` after `show()`): horizontal 690x145, minimum 540x125; vertical
+    /// 280x410, minimum 250x320. The minimum is the explicit `setMinimumSize` and wins over the
+    /// layout's own minimum (151 / 395), so the window may be smaller than its content needs.
+    #[cfg(windows)]
+    #[test]
+    fn test_window_default_and_minimum_sizes_match_pyside6() {
+        let _setup = crate::ui::test_support::CardsOracleSetup::new();
+        for (mode, size, min) in [
+            ("horizontal", (690, 145), (540, 125)),
+            ("vertical", (280, 410), (250, 320)),
+        ] {
+            let mut cfg = Config::default();
+            cfg.ui_mode = "cards".into();
+            cfg.layout_mode = mode.into();
+            cfg.window_x = Some(0);
+            cfg.window_y = Some(0);
+            let cfg = Arc::new(Mutex::new(cfg));
+            let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+            let mut hud =
+                HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers())
+                    .unwrap();
+            let g = hud.window.geometry();
+            assert_eq!((g.width, g.height), size, "{mode} default size (PySide6)");
+            // The minimum is applied by the layout-mode path (`_apply_cards_layout`); applying it at
+            // construction is a separate gap (G12.8.q), so it is exercised through that path.
+            hud.apply_cards_layout_mode(mode);
+            assert_eq!(hud.window.minimum_size(), min, "{mode} minimum (PySide6)");
+            let g = hud.window.geometry();
+            assert_eq!(
+                (g.width, g.height),
+                size,
+                "{mode} size after the mode is applied"
+            );
+        }
+    }
+
     /// G12.8.b. PySide6 (`py_horizontal.json`, DPR 1.25): in a 666 px wide body the three cards are
     /// 211, 210 and 211 px wide, because the body `QHBoxLayout` has spacing 8 (`hud_window.py:337`).
     #[cfg(windows)]
