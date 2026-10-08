@@ -644,13 +644,15 @@ mod tests {
             .with_tabular_numbers(true)
             .with_font_data(data);
 
-        let layout_1111 = GlyphLayout::shape("1111", &font_tnum, font_face.clone());
-        let layout_8888 = GlyphLayout::shape("8888", &font_tnum, font_face);
+        // Single glyphs: Arial kerns the pair `11` (HarfBuzz applies it whatever `tnum` says), so a
+        // run of ones is narrower than a run of eights in fonts that carry that pair.
+        let layout_1 = GlyphLayout::shape("1", &font_tnum, font_face.clone());
+        let layout_8 = GlyphLayout::shape("8", &font_tnum, font_face);
 
-        assert_eq!(layout_1111.glyphs.len(), 4);
-        assert_eq!(layout_8888.glyphs.len(), 4);
+        assert_eq!(layout_1.glyphs.len(), 1);
+        assert_eq!(layout_8.glyphs.len(), 1);
 
-        assert!((layout_1111.width - layout_8888.width).abs() < 1.0);
+        assert!((layout_1.width - layout_8.width).abs() < 1.0);
     }
     #[test]
     fn test_glyph_layout_emoji_fallback() {
