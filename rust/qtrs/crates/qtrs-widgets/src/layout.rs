@@ -102,7 +102,7 @@ pub trait Layout: 'static {
         let spacer = std::rc::Rc::new(std::cell::RefCell::new(
             Box::new(widget) as Box<dyn crate::widget::Widget>,
         ));
-        self.add_widget_with_stretch(spacer, stretch.max(1));
+        self.add_widget_with_stretch(spacer, stretch);
     }
 
     fn widgets(&self) -> Vec<WidgetRef> {
@@ -262,7 +262,7 @@ impl Layout for BoxLayout {
         ));
         self.items.push(LayoutItem {
             widget: spacer,
-            stretch: stretch.max(1),
+            stretch,
             alignment: ItemAlignment::NONE,
             spacer: true,
         });
