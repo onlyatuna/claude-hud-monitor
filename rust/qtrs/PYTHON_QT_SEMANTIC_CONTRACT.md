@@ -594,7 +594,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.3.b [P0, READ；已修復：RC-05]** **`Label.set_size_policy` 被丟棄**。Python `title.setSizePolicy(Minimum, Preferred)`（`provider_card.py:39`）在 Rust 無對應呼叫（grep `set_size_policy` 於 `provider_card.rs` 為空）→ 卡片模式標題寬度行為可能不同。
   - **G8.3.c [P2, READ]** `WidgetBase::set_geometry` 不夾 min/max（只有 `item_set_geometry` 夾）。
   - **G8.3.d [P2]** 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值。
-  - **G8.3.e [P1, READ]** `UsageDial`：Python `setMinimumSize(84,84)`（`usage_table.py:138`）；Rust `minimum_size()` 為 0×0，並註解稱最小值「會限制 dial」（`usage_table.rs:160-163`）——最小值不會限制上限，`[INFERENCE]` 非刻意，視窗很窄時 dial 可縮到 84 以下。
+  - **G8.3.e [P1, READ；已修復：RC-29]** （修復前：） `UsageDial`：Python `setMinimumSize(84,84)`（`usage_table.py:138`）；Rust `minimum_size()` 為 0×0，並註解稱最小值「會限制 dial」（`usage_table.rs:160-163`）——最小值不會限制上限，`[INFERENCE]` 非刻意，視窗很窄時 dial 可縮到 84 以下。 RC-29：`UsageDial::minimum_size()` 改為 84×84（Python 同值），policy 維持 Expanding/Expanding、`size_hint` 維持 84×84；註解改正為「最小值只是下限，上限由最大值決定」。
 - **Test**：既有 `test_button_layout_toggle_btn_size_hint_matches_qt`、`test_label_box_model.rs::*`。必要：`label_set_size_policy_is_honoured`；`set_minimum_size_clamps_geometry_and_layout`。
 - **HUD usage**：Python `setSizePolicy`（`provider_card.py:39`、`usage_table.py:139`）、`setMinimumSize`（`hud_window.py:296,327,347`、`usage_table.py:138`）；`setFixedSize/Width/Height` 無使用。Rust `set_size_policy`（`hud_window.rs:272,284`、`usage_table.rs:62,404,589,740`）。
 
@@ -1119,7 +1119,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.n [P1] | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 | `main.rs:503`、`main.rs:486-488`、`hud_window.rs:526-532`、`tray_icon.rs:686-690` | 修復 |
 | G12.5.o [P1] | QMenu 外觀為寫死數值，非 QSS | G8.5.f | 修復或核准 |
 | G12.5.p [P1] | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** | `usage_table.rs` vs `usage_table.py:88` | 已修復（`qtrs_gui::color::darker`，PySide6 逐位元比對；圖例像素與 PySide6 相同） |
-| G12.5.q [P1] | `UsageDial` 最小尺寸 0 vs 84 | G8.3.e | 修復 |
+| G12.5.q [P1] | `UsageDial` 最小尺寸 0 vs 84。**已修復：RC-29** | G8.3.e | 已修復（`minimum_size()` 84×84；PySide6 oracle 比對擠壓後的 dial 尺寸） |
 | G12.5.r [P1] | 版面切換：`StackedWidget` vs 重建 | C9.6 | 決定 |
 | G12.5.s [P0, READ；= G8.5.d；已修復：RC-10] | `Window::set_style_sheet` 為 app 全域 | G8.5.d | 修復 |
 | G12.5.t [P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending] | DComp 路徑 opacity 無效（待實測） | G11.5.a | 實測後修復 |
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 58 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 60 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.c、G8.5.d、G8.8.a、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1350,7 +1350,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
 | G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
 | G8.3.d | P2 | 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值 |
-| G8.3.e | P1, READ | `UsageDial`：Python `setMinimumSize(84,84)` |
+| G8.3.e | P1, READ；已修復：RC-29 | `UsageDial`：Python `setMinimumSize(84,84)` |
 | G8.4.a | P0, READ；已修復：RC-06 | 無 parent 傳遞 |
 | G8.4.b | P1 | 無 tracking 語意 |
 | G8.4.c | P1 | 無隱式 grab |
@@ -1515,7 +1515,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.n | P1 | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 |
 | G12.5.o | P1 | QMenu 外觀為寫死數值，非 QSS |
 | G12.5.p | P1 | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** |
-| G12.5.q | P1 | `UsageDial` 最小尺寸 0 vs 84 |
+| G12.5.q | P1；已修復：RC-29 | `UsageDial` 最小尺寸 0 vs 84 |
 | G12.5.r | P1 | 版面切換：`StackedWidget` vs 重建 |
 | G12.5.s | P0, READ；= G8.5.d；已修復：RC-10 | `Window::set_style_sheet` 為 app 全域 |
 | G12.5.t | P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending | DComp 路徑 opacity 無效（待實測） |
@@ -1920,6 +1920,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | RC-17 幾何持久化 | G12.5.d | `hud_window.rs`（`set_window_event_handler`、`apply_size`、`persist_rect`）、`config.rs`（`ResizeDebouncer`） | 依賴 RC-06。**已完成（RC-17，Win32 真實訊息測試＋真實 `ClaudeHUD.exe` 拖曳 smoke）**：3000 ms geometry poll removed because RC-06 window event lifecycle now supplies Move/Release/Close/Hide hooks；沒有新增 timer，沒有改 qtrs `Timer`；250 ms 是 HUD 的 persistence policy（既有 `ResizeDebouncer`），不是 qtrs 需求。RC-18 未動。**後續 RC-17b（G11.2.i）**：真實拖曳中 release 原本到不了 HUD（原生 move loop 吞掉）；框架層補上 `handleExitSizeMove` 按鍵同步後，HUD 既有的 `MouseButtonRelease` → `persist_rect` 路徑不改即生效；`ClaudeHUD.exe` 真實拖曳放開後 11 ms 存檔。RC-17 fixed 狀態不變 |
 | RC-18 喚醒偵測 | G12.5.e | `hud_window.rs`（`tick_gap_exceeded`、`on_clock_tick`）、`main.rs` 的 `clock_timer` | **已完成（RC-18）**：Implemented as application-level timestamp-gap detection. Power::Resume is intentionally not part of RC-18（Power::Resume currently has no toolkit consumer；獨立於 RC-18，見 G12.5.x）。audit 結論 C（不等價）。未改 qtrs Timer／Power dispatch／RefreshController。測試：4 項（T1–T6 純函式＋HUD 長間隔恰一次 refresh，TI-01 stub）；before-FAIL unavailable（新函式／app-private path，未建 16 秒 real-time 測試）；真實 suspend/resume 為 MANUAL WINDOWS VERIFICATION REQUIRED。 診斷（僅供驗證，不影響決策）：`HUDWindow::wake_refresh_seq`（長間隔 refresh 序號）；debug build 於長間隔分支 `eprintln!("[rc18] wake refresh #N previous_ms=… now_ms=… gap_ms=…")`；測試 `wake_refresh_sequence_advances_once_per_long_gap_only`（正常 tick 序號不變、17 s 間隔 +1、其後 1 s tick 不變、剛好 15 s 不變、16 s +1；TI-01 stub，無 real-time sleep）。真實 suspend/resume、lock/unlock、debugger pause 仍為 MANUAL WINDOWS VERIFICATION REQUIRED（可用 stderr `[rc18]` 行判讀）。 |
 | RC-23 視窗大小常數 | G12.8.f | `config.rs`（常數、`sanitize`）、`hud_window.rs`（`reset_geometry`、`apply_ui_mode_internal`） | 閘門已完成（Python `hud_window.py:31-35,325-354` 與 PySide6 實測，見 G12.8.f）。**已完成（RC-23）**：只改 app 常數，未改 qtrs、`ResizeDebouncer`、RC-17 的 move／resize 持久化。測試 3 項（見 G12.8.f），修改前 FAIL、修改後 PASS。新缺口 G12.8.q（啟動時未套用最小尺寸）未修。**僅 Windows、DPR 1.25；未做像素驗證** |
+| RC-29 `UsageDial` 最小尺寸 | G8.3.e、G12.5.q | `usage_table.rs`（`impl Widget for UsageDial::minimum_size`） | 閘門已完成：`[QT-SRC qwidget.cpp:3966-3971, 4005; qlayoutitem.cpp:616-623; qlayoutengine.cpp:309-336, 354-375]`：`setMinimumSize` 存入 `extra->minw/minh`，`QWidgetItem::minimumSize` 經 `qSmartMinSize`，明確最小值覆蓋 policy 推得的值；`qSmartMaxSize` 只在沒有 GrowFlag 時把最大值夾到 hint，所以 Expanding 仍可長大。`QWidget::minimumSize()` 與 item 的 `minimumSize()` 不同（後者含 layout-item margins、隱藏時為 0），dial 無 margins 故相同。PySide6 6.11.2 oracle（Windows）：`minimumSize` 84×84、policy Expanding/Expanding、`sizeHint`／`minimumSizeHint` 為 −1×−1；`QGridLayout::setGeometry` 擠壓時 dial 不小於 84（426×200→高 84、300×312→寬 84、200×150→84×84，grid 溢出）。**已完成（RC-29）**：app 層搬運漏掉 `setMinimumSize`，未改 qtrs。測試：`test_dial_minimum_size_matches_python`、`test_squeezed_table_keeps_the_dial_at_its_minimum`；修改前 FAIL（0×0；426×200 時 dial 高 26），修改後 PASS；`test_grid_matches_qt_geometry`（450×350）不變。未改：`size_hint` 84×84 與 Python 的 −1×−1 不同（未列入本次）；視窗最小尺寸（RC-23／G12.8.q）。**僅 Windows**。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成 |
 
 ### D.3 執行階段
 

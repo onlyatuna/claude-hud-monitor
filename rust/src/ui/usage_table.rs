@@ -172,9 +172,9 @@ impl Widget for UsageDial {
         qtrs_gui::geometry::primitives::Size::new(84, 84)
     }
     fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
-        // `UsageDial` is a plain `QWidget` with no size constraint, so the grid row stretches
-        // it to fill; a hard minimum here would cap the dial at a fixed square.
-        qtrs_gui::geometry::primitives::Size::new(0, 0)
+        // Python `setMinimumSize(84, 84)`: a floor only. The Expanding policy still lets the grid
+        // row and column stretch the dial past it; only a maximum size would cap it.
+        qtrs_gui::geometry::primitives::Size::new(84, 84)
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -1665,6 +1665,53 @@ mod tests {
         assert_eq!(claude.header.borrow().geometry().height, 31);
         assert_eq!(claude.dial.borrow().geometry().y, 106);
         assert_eq!(claude.dial.borrow().geometry().height, 134);
+    }
+
+    /// Python `UsageDial` calls `setMinimumSize(84, 84)` (`usage_table.py:138`). In Qt an explicit
+    /// minimum overrides the policy-derived one in `qSmartMinSize` (qlayoutengine.cpp:331-334);
+    /// it is a floor only, so the Expanding policy still grows the dial past it.
+    #[test]
+    fn test_dial_minimum_size_matches_python() {
+        let dial = UsageDial::new(Theme::dark());
+        assert_eq!(
+            dial.minimum_size(),
+            qtrs_gui::geometry::primitives::Size::new(84, 84)
+        );
+        assert_eq!(
+            dial.size_hint(),
+            qtrs_gui::geometry::primitives::Size::new(84, 84)
+        );
+    }
+
+    /// A table squeezed below its minimum keeps every dial at 84x84. PySide6 6.11.2 oracle with
+    /// `QGridLayout::setGeometry`: 426x200 gives the dial a height of 84, 300x312 a width of 84,
+    /// 200x150 a size of 84x84 (the grid overflows rather than shrinking the dial).
+    #[cfg(windows)]
+    #[test]
+    fn test_squeezed_table_keeps_the_dial_at_its_minimum() {
+        for (w, h, expected) in [
+            (426, 200, (None, Some(84))),
+            (300, 312, (Some(84), None)),
+            (200, 150, (Some(84), Some(84))),
+        ] {
+            let table = table_mode_table();
+            let container = table.widget();
+            container.borrow_mut().set_geometry(Rect::new(0, 0, w, h));
+            container.borrow().update_layout();
+            for pid in PROVIDER_ORDER {
+                let g = table.columns.get(pid).unwrap().dial.borrow().geometry();
+                assert!(
+                    g.width >= 84 && g.height >= 84,
+                    "{pid} dial in {w}x{h}: {g:?}"
+                );
+                if let Some(ew) = expected.0 {
+                    assert_eq!(g.width, ew, "{pid} dial width in {w}x{h}");
+                }
+                if let Some(eh) = expected.1 {
+                    assert_eq!(g.height, eh, "{pid} dial height in {w}x{h}");
+                }
+            }
+        }
     }
 
     /// Every HUD label renders in the `QApplication` default family, as the Python table's
