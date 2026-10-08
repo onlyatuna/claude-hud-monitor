@@ -43,7 +43,7 @@ macro_rules! leaf_widget_common {
         }
 
         fn set_enabled(&self, enabled: bool) {
-            self.base.enabled.set(enabled);
+            self.base.set_enabled(enabled);
         }
 
         fn dirty_rect(&self) -> Option<qtrs_gui::geometry::primitives::Rect> {

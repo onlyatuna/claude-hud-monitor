@@ -581,7 +581,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qwidget.cpp:3405-3476]`：`setEnabled` 傳遞到所有後代、清除被停用的焦點 widget、送 `EnabledChange`、重繪；QSS `:disabled` 生效。
 - **qtrs required**：MUST 傳遞到後代、MUST 重繪、停用 widget MUST 不收滑鼠／鍵盤／焦點；`:disabled` SHOULD 一致。
 - **Current implementation**：`PARTIAL`。`set_enabled` 只 `Cell.set`：不傳遞、不重繪、無事件、不處理焦點；`Button` 在 handler 內自己檢查；`:disabled` 從未提供給樣式解析（`pseudo_states` 是 `&[]` 或只有 hover/pressed）。
-- **Known gap**：**G8.2.a [P1, READ]** 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺。
+- **Known gap**：**G8.2.a [P1, READ；傳遞與重繪已修復：RC-33]** （修復前：） 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺。 RC-33：`WidgetBase::set_enabled` 依 `setEnabled_helper` 傳遞到後代（自己的 children 與 layout 內 widget）、記錄明確停用（`force_disabled` = `WA_ForceDisabled`）、在停用的 parent 下無法啟用、狀態改變時 `update()`。仍缺：`EnabledChange` 事件、焦點清除、QSS `:disabled`。
 - **Test**：必要：`disable_parent_disables_children_and_repaints`；`disabled_button_ignores_press`；`qss_disabled_color`。
 - **HUD usage**：Python `self.icon.setEnabled(not muted)`（`usage_table.py:323`）；Rust 自訂 icon widget 把 `set_enabled` 轉給 base（重繪視 widget 而定）。
 
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 63 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 64 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1345,7 +1345,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.a | P1, READ | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
-| G8.2.a | P1, READ | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
+| G8.2.a | P1, READ；傳遞與重繪已修復：RC-33 | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
 | G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
@@ -1928,6 +1928,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`stylesheet.rs` `selector_matches` 只做 `elem == ctx.type_name`（外加 `*`、`QWidget`）。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle：`QFrame{color}`→`QLabel` 紅；`QAbstractButton`→`QPushButton` 紅；`QFrame#T`→`QLabel#T` 紅；`QLabel`→`QFrame`、`QFrame`→`QProgressBar` 不命中；`QLabel{綠} QFrame{紅}` 得紅、反序得綠。新測試 `test_stylesheet_type_inheritance.rs` 3 項：修改前 2 項失敗（`None` 與綠），對照組通過；修改後全過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
 - **Status**：**已修復（繼承比對）**。新增 `inherits(type_name, class)`。HUD 不受影響：HUD 的 `QFrame#Divider`／`#HorizontalDivider`／`#Separator` 只設在 `Frame` 上，沒有 label 或 button 用這些 object name；HUD 沒有不帶 id 的 `QFrame`／`QAbstractButton` 規則。未做：`.ClassName`（目前被當成不會命中的型別名稱）、descendant/child 組合子。**僅 Windows 驗證。**
+
+#### RC-33 `setEnabled` 不傳遞、不重繪
+- **Contract gaps**：G8.2.a（傳遞與重繪部分）。
+- **Qt behavior** `[QT-SRC qwidget.cpp:3405-3476, 9491-9492, 8977-9001]`：`setEnabled` 設 `WA_ForceDisabled = !enable`，`setEnabled_helper`：在停用的非視窗 parent 下啟用直接返回；狀態未變返回；否則改 `WA_Disabled` 並遞迴子 widget（啟用時跳過 `WA_ForceDisabled` 的子項，停用時跳過已停用者）；送 `EnabledChange`，`QWidget::changeEvent` 因此 `update()`。停用 widget 的 `QWidget::event` 丟棄滑鼠／鍵盤／滾輪。
+- **qtrs root**：`WidgetBase::set_enabled` 只 `Cell::set`；`EmptyWidget` 與 `input_common.rs` 的覆寫甚至繞過 base 直接寫 `base.enabled`。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`QWidget`＋兩個 `QLabel` 於 `QVBoxLayout`）：停用 parent → (F,F,F)；在停用 parent 下啟用 b → 仍 (F,F,F)；b 明確停用後啟用 parent → (T,T,F)；a 明確停用、parent 關再開 → (T,F,T)。新測試 `test_widget_enabled.rs` 3 項：修改前 2 項失敗（子項未被停用 `(false,true,true)`、未重繪），第 3 項因修改前不傳遞而湊巧通過；修改後全過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
+- **Status**：**已修復（傳遞、明確停用、重繪）**。`WidgetBase` 新增 `force_disabled`、`set_enabled_helper`；`EmptyWidget`、`input_common.rs` 改為走 `base.set_enabled`。滑鼠輸入已由 `hit_test.rs` 沿路徑 AND enabled 處理。未做：`EnabledChange` 事件種類、焦點清除、QSS `:disabled`、鍵盤事件的 enabled 閘門。parent 連結要到 `adopt_tree`（layout 啟用／paint）後才存在，之前對子項啟用不會被停用的 parent 擋下。HUD 不受影響：HUD 沒有任何 widget `set_enabled` 呼叫。**僅 Windows 驗證。**
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

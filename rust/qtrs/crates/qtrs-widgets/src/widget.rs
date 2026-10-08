@@ -318,7 +318,10 @@ pub struct WidgetBase {
     pub object_data: ObjectData,
     pub geometry: Cell<Rect>,
     pub visible: Cell<bool>,
+    /// Effective state (`!WA_Disabled`): false when this widget or an ancestor is disabled.
     pub enabled: Cell<bool>,
+    /// Disabled explicitly with `set_enabled(false)` (`WA_ForceDisabled`).
+    pub force_disabled: Cell<bool>,
     pub dirty: Cell<Option<Rect>>,
     pub parent: RefCell<Option<WidgetWeak>>,
     pub window_id: Cell<Option<ObjectId>>,
@@ -342,6 +345,7 @@ impl WidgetBase {
             geometry: Cell::new(Rect::new(0, 0, 100, 30)),
             visible: Cell::new(true),
             enabled: Cell::new(true),
+            force_disabled: Cell::new(false),
             dirty: Cell::new(Some(Rect::new(0, 0, 100, 30))),
             parent: RefCell::new(None),
             window_id: Cell::new(None),
@@ -392,8 +396,40 @@ impl WidgetBase {
         self.enabled.get()
     }
 
+    /// `QWidget::setEnabled`: records the explicit state and passes the effective one down the
+    /// tree (qwidget.cpp:3405-3476). A widget is not enabled under a disabled parent, and a child
+    /// disabled explicitly stays disabled when its parent is enabled again.
     pub fn set_enabled(&self, enabled: bool) {
-        self.enabled.set(enabled);
+        self.force_disabled.set(!enabled);
+        self.set_enabled_helper(enabled);
+    }
+
+    /// `QWidgetPrivate::setEnabled_helper`.
+    fn set_enabled_helper(&self, enable: bool) {
+        let parent_disabled = self
+            .parent_widget()
+            .and_then(|p| p.upgrade())
+            .is_some_and(|p| p.try_borrow().is_ok_and(|p| !p.is_enabled()));
+        if (enable && parent_disabled) || enable == self.enabled.get() {
+            return;
+        }
+        self.enabled.set(enable);
+        // The children are this widget's own and those of its layout, as `EmptyWidget::children`.
+        let mut children = self.children.borrow().clone();
+        if let Some(layout) = self.layout.borrow().as_ref() {
+            children.extend(layout.widgets());
+        }
+        for child in children {
+            let Ok(child) = child.try_borrow() else { continue };
+            let base = child.widget_base();
+            // Enabling skips explicitly disabled children; disabling skips disabled ones.
+            let skip = if enable { base.force_disabled.get() } else { !base.enabled.get() };
+            if !skip {
+                base.set_enabled_helper(enable);
+            }
+        }
+        // `QWidget::changeEvent(EnabledChange)` repaints (qwidget.cpp:9491-9492).
+        self.update();
     }
 
     pub fn update(&self) {
@@ -818,7 +854,7 @@ impl Widget for EmptyWidget {
     }
 
     fn set_enabled(&self, enabled: bool) {
-        self.base.enabled.set(enabled);
+        self.base.set_enabled(enabled);
     }
 
     fn update(&self) {
