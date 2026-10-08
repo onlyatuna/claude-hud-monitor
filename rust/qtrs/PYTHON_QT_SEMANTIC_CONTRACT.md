@@ -624,7 +624,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.5.b [P1, READ]** `attributes` 只有 Label；同一條規則對 Button／Frame／ProgressBar 無效。
   - **G8.5.c [P0, READ；已修復：RC-05]** **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty；`Label::set_text` 會 `request_layout`，但 `set_font`/`set_alignment`/style/property 不會，`Button::set_text/set_font` 也不會——需要手動 `update_layout`。
   - **G8.5.d [P0, READ；已修復：RC-10]** `Window::set_style_sheet` 是**整個 Application 的**（呼叫 `Application::set_style_sheet`），Python `HUDWindow.setStyleSheet` 只作用於該子樹（`hud_window.py:246,250`）；Rust HUD 兩者都呼叫（`hud_window.rs:231-232`）→ 影響其他頂層視窗與 popup。
-  - **G8.5.e [P1, READ；`:disabled` 已修復：RC-34]** （修復前：） `:disabled`/`:focus` 不支援。 RC-34：Label、Frame、ProgressBar（groove／chunk）、Button 在停用時帶 `disabled` pseudo-state；Button 停用時不再帶 `hover`。仍缺：`:focus`、`:enabled`。
+  - **G8.5.e [P1, READ；`:disabled` 已修復：RC-34；`:focus` 已修復：RC-35]** （修復前：） `:disabled`/`:focus` 不支援。 RC-34：Label、Frame、ProgressBar（groove／chunk）、Button 在停用時帶 `disabled` pseudo-state；Button 停用時不再帶 `hover`。RC-35：同四類 widget 在 `has_focus` 時帶 `focus` pseudo-state（由 `FocusManager` 設定）。仍缺：`:enabled`；Label／ProgressBar 未覆寫 `set_has_focus`（trait 預設 no-op），`FocusManager` 對它們設焦點不會生效。
   - **G8.5.f [P1, READ]** **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在；選單外觀來自寫死的 `MenuStyle`（`rust/src/ui/tray_icon.rs`），手動複製了 Python QSS 的數值；`QMenu::item:selected/:disabled` 不驅動 hover／停用色。
   - **G8.5.g [P2, READ]** `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄；`margin` 只有選單消費。
   - **G8.5.h [P2, READ]** 父 widget 的 `font` 繼承未實作（`[INFERENCE]`，未對照 `qstylesheetstyle.cpp`）。
@@ -1364,7 +1364,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.5.b | P1, READ | `attributes` 只有 Label |
 | G8.5.c | P0, READ；已修復：RC-05 | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
 | G8.5.d | P0, READ；已修復：RC-10 | `Window::set_style_sheet` 是**整個 Application 的** |
-| G8.5.e | P1, READ；`:disabled` 已修復：RC-34 | `:disabled`/`:focus` 不支援 |
+| G8.5.e | P1, READ；`:disabled` 已修復：RC-34；`:focus` 已修復：RC-35 | `:disabled`/`:focus` 不支援 |
 | G8.5.f | P1, READ | **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在 |
 | G8.5.g | P2, READ | `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄 |
 | G8.5.h | P2, READ | 父 widget 的 `font` 繼承未實作 |
@@ -1942,6 +1942,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：Label、Frame、ProgressBar 的 `WidgetStyleContext.pseudo_states` 固定為空；Button 只依 hover／pressed，不看 enabled。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle：parent 停用後 `QLabel:disabled`、`QFrame#F:disabled`、`QPushButton:disabled`、`QProgressBar:disabled` 皆生效（#ff0000／#0000ff），啟用時不生效。新測試 `test_stylesheet_disabled.rs` 3 項：修改前 3 項全失敗；修改後全過。停用時丟棄 `:hover` 的測試依據 Qt 原始碼，未做 PySide6 滑鼠懸停 oracle。
 - **Status**：**已修復（`:disabled`）**。`WidgetBase::enabled_pseudo_states()` 供 Label／Frame／ProgressBar 使用；Button 依 (state, enabled) 決定 pseudo-states。未做：`:focus`（另立 RC）、`:enabled`。HUD 不受影響：HUD QSS 唯一的 `:disabled` 是 `QMenu::item:disabled`（menu item 路徑，非本修改），且 HUD 沒有呼叫 widget `set_enabled`。**僅 Windows 驗證。**
+
+#### RC-35 QSS `:focus` 不比對
+- **Contract gaps**：G8.5.e（`:focus` 部分）。計數不變（G8.5.e 已於 RC-34 計入）。
+- **Qt behavior** `[QT-SRC qstylesheetstyle.cpp:1772-1773, qcssparser.cpp:309]`：`pseudoClass` 在 `State_HasFocus` 時給 `PseudoClass_Focus`。
+- **qtrs root**：widget focus 已由 `FocusManager::set_focus` 寫入 `WidgetBase::has_focus`，但各 widget 的 `WidgetStyleContext.pseudo_states` 從不帶 `focus`。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（實際 grab 像素）：焦點 a→b→StrongFocus `QFrame#F`→`clearFocus()`，只有持有焦點者畫 `:focus` 背景，清除後皆無。新測試 `test_stylesheet_focus.rs` 1 項（以 `FocusManager` 轉移焦點）：修改前失敗（a 取得焦點仍為一般色）；修改後通過。
+- **Status**：**已修復（`:focus`）**。`WidgetBase::enabled_pseudo_states` 改為 `style_pseudo_states(hover, pressed, buf)`，依 `pseudoClass` 次序產生 hover／disabled／pressed／focus，無配置；Label／Frame／ProgressBar／Button 共用。未做：停用時清除焦點（RC-33 遺留，另立 RC-36）、`:enabled`、Label／ProgressBar 的 `set_has_focus`。HUD 不受影響：HUD QSS 沒有 `:focus` 規則。**僅 Windows 驗證。**
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

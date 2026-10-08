@@ -167,10 +167,11 @@ impl Label {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
+        let mut buf = [""; 3];
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QLabel",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),
-            pseudo_states: self.base.enabled_pseudo_states(),
+            pseudo_states: self.base.style_pseudo_states(false, false, &mut buf),
             sub_control: None,
             attributes: &attrs,
         };

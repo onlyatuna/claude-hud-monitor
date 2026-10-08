@@ -359,10 +359,11 @@ impl ProgressBar {
     }
 
     pub fn resolved_groove_style(&self) -> crate::style::stylesheet::ResolvedStyle {
+        let mut buf = [""; 3];
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QProgressBar",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),
-            pseudo_states: self.base.enabled_pseudo_states(),
+            pseudo_states: self.base.style_pseudo_states(false, false, &mut buf),
             sub_control: None,
             attributes: &[],
         };
@@ -370,10 +371,11 @@ impl ProgressBar {
     }
 
     pub fn resolved_chunk_style(&self) -> crate::style::stylesheet::ResolvedStyle {
+        let mut buf = [""; 3];
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QProgressBar",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),
-            pseudo_states: self.base.enabled_pseudo_states(),
+            pseudo_states: self.base.style_pseudo_states(false, false, &mut buf),
             sub_control: Some("chunk"),
             attributes: &[],
         };

@@ -126,14 +126,12 @@ impl Button {
         self.update();
     }
     pub fn resolved_style(&self) -> crate::style::stylesheet::ResolvedStyle {
-        // qstylesheetstyle.cpp:1756-1765: `:hover` only while enabled, `:disabled` otherwise.
-        let pseudo: &[&str] = match (self.state, self.base.is_enabled()) {
-            (ButtonState::Hovered, true) => &["hover"],
-            (ButtonState::Pressed, true) => &["pressed"],
-            (ButtonState::Normal, true) => &[],
-            (ButtonState::Pressed, false) => &["pressed", "disabled"],
-            (_, false) => &["disabled"],
-        };
+        let mut buf = [""; 3];
+        let pseudo = self.base.style_pseudo_states(
+            self.state == ButtonState::Hovered,
+            self.state == ButtonState::Pressed,
+            &mut buf,
+        );
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QPushButton",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),

@@ -396,14 +396,29 @@ impl WidgetBase {
         self.enabled.get()
     }
 
-    /// QSS pseudo-states derived from the enabled state: a widget without `State_Enabled`
-    /// matches `:disabled` (qstylesheetstyle.cpp:1756-1765).
-    pub fn enabled_pseudo_states(&self) -> &'static [&'static str] {
-        if self.is_enabled() {
-            &[]
-        } else {
-            &["disabled"]
+    /// QSS pseudo-states of the widget's state, as `pseudoClass(QStyle::State)` derives them
+    /// (qstylesheetstyle.cpp:1756-1773): `:hover` only while enabled, `:disabled` otherwise,
+    /// `:pressed` for a sunken widget and `:focus` while it has keyboard focus.
+    pub fn style_pseudo_states<'a>(
+        &self,
+        hover: bool,
+        pressed: bool,
+        buf: &'a mut [&'static str; 3],
+    ) -> &'a [&'static str] {
+        let enabled = self.is_enabled();
+        let mut n = 0;
+        for (on, name) in [
+            (enabled && hover, "hover"),
+            (!enabled, "disabled"),
+            (pressed, "pressed"),
+            (self.has_focus(), "focus"),
+        ] {
+            if on {
+                buf[n] = name;
+                n += 1;
+            }
         }
+        &buf[..n]
     }
 
     /// `QWidget::setEnabled`: records the explicit state and passes the effective one down the
