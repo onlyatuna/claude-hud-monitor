@@ -128,6 +128,24 @@ pub trait Widget: QObject + 'static {
 
     fn set_layout(&mut self, _layout: Box<dyn Layout>) {}
 
+    /// `QWidget::isActiveWindow` (qwidget.cpp:6967): the window this widget belongs to is
+    /// `QApplication::activeWindow()`. A widget tree that belongs to no `Window` is not.
+    fn is_active_window(&self) -> bool {
+        let mut id = self.window_id();
+        let mut parent = self.parent_widget();
+        while id.is_none() {
+            let Some(p) = parent.and_then(|p| p.upgrade()) else {
+                return false;
+            };
+            let Ok(p) = p.try_borrow() else {
+                return false;
+            };
+            id = p.window_id();
+            parent = p.parent_widget();
+        }
+        id.is_some() && id == crate::application::Application::active_window()
+    }
+
     fn update_layout(&self) {
         let g = self.geometry();
         if let Some(mut layout) = self.layout_ref_mut() {

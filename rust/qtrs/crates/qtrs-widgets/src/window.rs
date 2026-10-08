@@ -28,6 +28,50 @@ struct WindowCore {
 }
 
 impl WindowCore {
+    /// `QApplicationPrivate::setActiveWindow` (qapplication.cpp:1816-1880) for this window: it
+    /// becomes (or stops being) `QApplication::activeWindow()`, and `WindowActivate` /
+    /// `WindowDeactivate` is sent to it and, like `QWidget::event` does (qwidget.cpp:9317-9327),
+    /// on to every visible child that is not a window.
+    fn set_active(&self, active: bool) {
+        use crate::application::Application;
+        let root = self.root();
+        let Some(id) = root.borrow().window_id() else {
+            return;
+        };
+        if active {
+            if Application::active_window() == Some(id) {
+                return;
+            }
+            Application::set_active_window(Some(id));
+        } else {
+            if Application::active_window() != Some(id) {
+                return;
+            }
+            Application::set_active_window(None);
+        }
+        fn send_to_children(widget: &WidgetRef, active: bool) {
+            let children = widget.borrow().children();
+            for child in children {
+                if child.borrow().is_visible() {
+                    let kind = if active {
+                        EventKind::WindowActivate
+                    } else {
+                        EventKind::WindowDeactivate
+                    };
+                    child.borrow_mut().event(&mut Event::new_spontaneous(kind));
+                    send_to_children(&child, active);
+                }
+            }
+        }
+        let kind = if active {
+            EventKind::WindowActivate
+        } else {
+            EventKind::WindowDeactivate
+        };
+        self.send_to_window(&mut Event::new_spontaneous(kind));
+        send_to_children(&root, active);
+    }
+
     fn root(&self) -> WidgetRef {
         self.render.root.borrow().clone()
     }
@@ -699,6 +743,8 @@ impl Window {
     /// The handler a `QWidget` subclass would express by overriding the window-level event
     /// handlers. It receives, with the window's coordinates and `accept`/`ignore`:
     /// - `Close` (ignore it to refuse the close), `Show`, `Hide` and `Move`, after the root widget;
+    /// - `WindowActivate` / `WindowDeactivate`, after the root widget, when the window becomes or
+    ///   stops being `Application::active_window()`;
     /// - `MouseButtonRelease` and `MouseButtonDblClick` that no widget handled. A double click the
     ///   handler ignores falls back to the press handler, as `QWidget::mouseDoubleClickEvent` does.
     pub fn set_window_event_handler<F: Fn(&mut Event) + 'static>(&mut self, handler: F) {
@@ -1412,12 +1458,14 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
             WindowSystemEvent::FocusIn => {
+                self.core.set_active(true);
                 let mut ev = Event::new_spontaneous(EventKind::FocusIn {
                     reason: qtrs_core::event::FocusReason::ActiveWindow,
                 });
                 self.dispatcher.dispatch_event(&root, &mut ev);
             }
             WindowSystemEvent::FocusOut => {
+                self.core.set_active(false);
                 let mut ev = Event::new_spontaneous(EventKind::FocusOut {
                     reason: qtrs_core::event::FocusReason::ActiveWindow,
                 });
