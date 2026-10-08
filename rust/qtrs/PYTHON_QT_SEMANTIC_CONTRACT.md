@@ -624,7 +624,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.5.b [P1, READ]** `attributes` 只有 Label；同一條規則對 Button／Frame／ProgressBar 無效。
   - **G8.5.c [P0, READ；已修復：RC-05]** **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty；`Label::set_text` 會 `request_layout`，但 `set_font`/`set_alignment`/style/property 不會，`Button::set_text/set_font` 也不會——需要手動 `update_layout`。
   - **G8.5.d [P0, READ；已修復：RC-10]** `Window::set_style_sheet` 是**整個 Application 的**（呼叫 `Application::set_style_sheet`），Python `HUDWindow.setStyleSheet` 只作用於該子樹（`hud_window.py:246,250`）；Rust HUD 兩者都呼叫（`hud_window.rs:231-232`）→ 影響其他頂層視窗與 popup。
-  - **G8.5.e [P1, READ]** `:disabled`/`:focus` 不支援。
+  - **G8.5.e [P1, READ；`:disabled` 已修復：RC-34]** （修復前：） `:disabled`/`:focus` 不支援。 RC-34：Label、Frame、ProgressBar（groove／chunk）、Button 在停用時帶 `disabled` pseudo-state；Button 停用時不再帶 `hover`。仍缺：`:focus`、`:enabled`。
   - **G8.5.f [P1, READ]** **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在；選單外觀來自寫死的 `MenuStyle`（`rust/src/ui/tray_icon.rs`），手動複製了 Python QSS 的數值；`QMenu::item:selected/:disabled` 不驅動 hover／停用色。
   - **G8.5.g [P2, READ]** `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄；`margin` 只有選單消費。
   - **G8.5.h [P2, READ]** 父 widget 的 `font` 繼承未實作（`[INFERENCE]`，未對照 `qstylesheetstyle.cpp`）。
@@ -1197,7 +1197,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 64 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 65 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1364,7 +1364,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.5.b | P1, READ | `attributes` 只有 Label |
 | G8.5.c | P0, READ；已修復：RC-05 | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
 | G8.5.d | P0, READ；已修復：RC-10 | `Window::set_style_sheet` 是**整個 Application 的** |
-| G8.5.e | P1, READ | `:disabled`/`:focus` 不支援 |
+| G8.5.e | P1, READ；`:disabled` 已修復：RC-34 | `:disabled`/`:focus` 不支援 |
 | G8.5.f | P1, READ | **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在 |
 | G8.5.g | P2, READ | `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄 |
 | G8.5.h | P2, READ | 父 widget 的 `font` 繼承未實作 |
@@ -1935,6 +1935,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`WidgetBase::set_enabled` 只 `Cell::set`；`EmptyWidget` 與 `input_common.rs` 的覆寫甚至繞過 base 直接寫 `base.enabled`。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`QWidget`＋兩個 `QLabel` 於 `QVBoxLayout`）：停用 parent → (F,F,F)；在停用 parent 下啟用 b → 仍 (F,F,F)；b 明確停用後啟用 parent → (T,T,F)；a 明確停用、parent 關再開 → (T,F,T)。新測試 `test_widget_enabled.rs` 3 項：修改前 2 項失敗（子項未被停用 `(false,true,true)`、未重繪），第 3 項因修改前不傳遞而湊巧通過；修改後全過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
 - **Status**：**已修復（傳遞、明確停用、重繪）**。`WidgetBase` 新增 `force_disabled`、`set_enabled_helper`；`EmptyWidget`、`input_common.rs` 改為走 `base.set_enabled`。滑鼠輸入已由 `hit_test.rs` 沿路徑 AND enabled 處理。未做：`EnabledChange` 事件種類、焦點清除、QSS `:disabled`、鍵盤事件的 enabled 閘門。parent 連結要到 `adopt_tree`（layout 啟用／paint）後才存在，之前對子項啟用不會被停用的 parent 擋下。HUD 不受影響：HUD 沒有任何 widget `set_enabled` 呼叫。**僅 Windows 驗證。**
+
+#### RC-34 QSS `:disabled` 不比對
+- **Contract gaps**：G8.5.e（`:disabled` 部分）。
+- **Qt behavior** `[QT-SRC qstylesheetstyle.cpp:1756-1765, qcssparser.cpp:301]`：`pseudoClass(QStyle::State)` 在有 `State_Enabled` 時給 `PseudoClass_Enabled`（且只在此分支給 `PseudoClass_Hover`），否則給 `PseudoClass_Disabled`。
+- **qtrs root**：Label、Frame、ProgressBar 的 `WidgetStyleContext.pseudo_states` 固定為空；Button 只依 hover／pressed，不看 enabled。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle：parent 停用後 `QLabel:disabled`、`QFrame#F:disabled`、`QPushButton:disabled`、`QProgressBar:disabled` 皆生效（#ff0000／#0000ff），啟用時不生效。新測試 `test_stylesheet_disabled.rs` 3 項：修改前 3 項全失敗；修改後全過。停用時丟棄 `:hover` 的測試依據 Qt 原始碼，未做 PySide6 滑鼠懸停 oracle。
+- **Status**：**已修復（`:disabled`）**。`WidgetBase::enabled_pseudo_states()` 供 Label／Frame／ProgressBar 使用；Button 依 (state, enabled) 決定 pseudo-states。未做：`:focus`（另立 RC）、`:enabled`。HUD 不受影響：HUD QSS 唯一的 `:disabled` 是 `QMenu::item:disabled`（menu item 路徑，非本修改），且 HUD 沒有呼叫 widget `set_enabled`。**僅 Windows 驗證。**
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

@@ -472,7 +472,7 @@ impl Frame {
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QFrame",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),
-            pseudo_states: &[],
+            pseudo_states: self.base.enabled_pseudo_states(),
             sub_control: None,
             attributes: &[],
         };

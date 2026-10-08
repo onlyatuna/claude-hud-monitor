@@ -396,6 +396,16 @@ impl WidgetBase {
         self.enabled.get()
     }
 
+    /// QSS pseudo-states derived from the enabled state: a widget without `State_Enabled`
+    /// matches `:disabled` (qstylesheetstyle.cpp:1756-1765).
+    pub fn enabled_pseudo_states(&self) -> &'static [&'static str] {
+        if self.is_enabled() {
+            &[]
+        } else {
+            &["disabled"]
+        }
+    }
+
     /// `QWidget::setEnabled`: records the explicit state and passes the effective one down the
     /// tree (qwidget.cpp:3405-3476). A widget is not enabled under a disabled parent, and a child
     /// disabled explicitly stays disabled when its parent is enabled again.
