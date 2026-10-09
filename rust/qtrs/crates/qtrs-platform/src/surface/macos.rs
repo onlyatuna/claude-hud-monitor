@@ -11,8 +11,8 @@ mod core_graphics {
     pub type CGImageRef = *mut c_void;
     pub type CGColorSpaceRef = *mut c_void;
 
-    pub const K_CG_IMAGE_ALPHA_PREMULTIPLIED_FIRST: u32 = 4;
-    pub const K_CG_BITMAP_BYTE_ORDER_32_HOST: u32 = 8192;
+    pub const K_CG_IMAGE_ALPHA_PREMULTIPLIED_LAST: u32 = 1;
+    pub const K_CG_BITMAP_BYTE_ORDER_32_BIG: u32 = 4 << 12;
     pub const K_CG_RENDERING_INTENT_DEFAULT: u32 = 0;
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -106,7 +106,10 @@ impl CocoaLayerSurface {
                 CFRelease(data);
             }
 
-            let bitmap_info = K_CG_IMAGE_ALPHA_PREMULTIPLIED_FIRST | K_CG_BITMAP_BYTE_ORDER_32_HOST;
+            // The pixmap is premultiplied RGBA8 in memory (tiny-skia), which Qt describes as
+            // QImage::Format_RGBA8888_Premultiplied (qimage.cpp:6235) ->
+            // kCGImageAlphaPremultipliedLast | kCGImageByteOrder32Big (qcoregraphics.mm:46-64).
+            let bitmap_info = K_CG_IMAGE_ALPHA_PREMULTIPLIED_LAST | K_CG_BITMAP_BYTE_ORDER_32_BIG;
             let cg_image = CGImageCreate(
                 self.width as usize,
                 self.height as usize,

@@ -925,40 +925,63 @@ mod checks {
     }
 
     fn window_present_pixels(t: &mut Recorder) {
-        let (_win, layer) = presented_window(1.0);
-        let contents: Id = send(layer, "contents");
-        let image = contents.as_ptr() as cg::CGImageRef;
-        if contents.is_nil() || unsafe { cg::CFGetTypeID(image) != cg::CGImageGetTypeID() } {
+        // The pixmap is premultiplied RGBA8 in memory (tiny-skia). Qt describes that layout
+        // (QImage::Format_RGBA8888_Premultiplied, qimage.cpp:6235) to CoreGraphics as
+        // kCGImageAlphaPremultipliedLast | kCGImageByteOrder32Big (qcoregraphics.mm:46-64), so
+        // CoreGraphics must read back the colour that was painted, premultiplication included.
+        let cases: [([u8; 4], [u8; 4]); 4] = [
+            ([255, 0, 0, 255], [255, 0, 0, 255]),
+            ([0, 255, 0, 255], [0, 255, 0, 255]),
+            ([0, 0, 255, 255], [0, 0, 255, 255]),
+            ([255, 0, 0, 128], [128, 0, 0, 128]),
+        ];
+        for ([r, g, b, a], expected) in cases {
+            let mut win = window(
+                "present",
+                Rect::new(100, 100, 100, 100),
+                WindowFlags::FRAMELESS,
+            );
+            win.show();
+            let mut frame = pixmap(100, Color::from_rgba8(r, g, b, a));
+            println!("  INFO present() -> {:?}", win.present(&mut frame, 1.0));
+            let content: Id = send(win.ns_window(), "contentView");
+            let layer: Id = send(content, "layer");
+            let contents: Id = send(layer, "contents");
+            let image = contents.as_ptr() as cg::CGImageRef;
+            if contents.is_nil() || unsafe { cg::CFGetTypeID(image) != cg::CGImageGetTypeID() } {
+                t.expect(
+                    false,
+                    "[[contentView layer] contents] is a CGImage after present",
+                );
+                return;
+            }
+            // Draw the layer's image into an RGBA (premultiplied last, big endian) bitmap and
+            // read the centre pixel.
+            let mut rgba = vec![0u8; 100 * 100 * 4];
+            unsafe {
+                let space = cg::CGColorSpaceCreateDeviceRGB();
+                let context = cg::CGBitmapContextCreate(
+                    rgba.as_mut_ptr().cast(),
+                    100,
+                    100,
+                    8,
+                    100 * 4,
+                    space,
+                    cg::ALPHA_PREMULTIPLIED_LAST | cg::BYTE_ORDER_32_BIG,
+                );
+                cg::CGContextDrawImage(context, CGRect::new(0.0, 0.0, 100.0, 100.0), image);
+                cg::CGContextRelease(context);
+                cg::CGColorSpaceRelease(space);
+            }
+            let centre = (50 * 100 + 50) * 4;
+            let got = &rgba[centre..centre + 4];
             t.expect(
-                false,
-                "[[contentView layer] contents] is a CGImage after present",
+                got.iter().zip(expected).all(|(&g, e)| g.abs_diff(e) <= 1),
+                &format!(
+                    "premultiplied RGBA of the layer image's centre pixel for rgba({r},{g},{b},{a}): {got:?}, expected {expected:?} (+-1)"
+                ),
             );
-            return;
         }
-        // Draw the layer's image into an RGBA (premultiplied last, big endian) bitmap and read
-        // the centre pixel: the colour AppKit composites for the opaque red pixmap.
-        let mut rgba = vec![0u8; 100 * 100 * 4];
-        unsafe {
-            let space = cg::CGColorSpaceCreateDeviceRGB();
-            let context = cg::CGBitmapContextCreate(
-                rgba.as_mut_ptr().cast(),
-                100,
-                100,
-                8,
-                100 * 4,
-                space,
-                cg::ALPHA_PREMULTIPLIED_LAST | cg::BYTE_ORDER_32_BIG,
-            );
-            cg::CGContextDrawImage(context, CGRect::new(0.0, 0.0, 100.0, 100.0), image);
-            cg::CGContextRelease(context);
-            cg::CGColorSpaceRelease(space);
-        }
-        let centre = (50 * 100 + 50) * 4;
-        t.eq(
-            "RGBA of the layer image's centre pixel (red pixmap)",
-            &rgba[centre..centre + 4],
-            &[255, 0, 0, 255][..],
-        );
     }
 
     /// The bytes behind a CGImage, copied (`CGDataProviderCopyData`).
