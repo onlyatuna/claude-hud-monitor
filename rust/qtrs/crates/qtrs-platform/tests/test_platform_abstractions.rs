@@ -170,6 +170,9 @@ fn test_platform_hotkey_manager() {
         assert!(!manager.registered_ids().contains(&999));
     }
 }
+// macOS: `platform()` is the Cocoa integration, whose AppKit objects belong to the main thread;
+// examples/appkit_main_thread.rs runs this there (`integration_factory`).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn test_platform_integration_factory() {
     let p = platform();
@@ -343,7 +346,7 @@ fn test_window_system_events_dispatch_pipeline() {
 #[test]
 fn test_cross_platform_tray_icon_implementations() {
     qtrs_core::object::ThreadContext::init_current(true, None);
-    use qtrs_platform::tray::{CocoaStatusItem, DbusStatusNotifierItem, PlatformTrayIcon};
+    use qtrs_platform::tray::{DbusStatusNotifierItem, PlatformTrayIcon};
     let mut pixmap = Pixmap::new(24, 24).expect("failed to create pixmap");
     // Cyan RGBA: [0, 200, 255, 255]
     pixmap.fill(Color::from_rgba8(0, 200, 255, 255));
@@ -369,17 +372,22 @@ fn test_cross_platform_tray_icon_implementations() {
     assert_eq!(img.data[2], 200); // Green
     assert_eq!(img.data[3], 255); // Blue
 
-    // 2. Verify macOS Cocoa NSStatusBar / NSStatusItem
-    let mut cocoa_tray: Box<dyn PlatformTrayIcon> = Box::new(CocoaStatusItem::new(101));
-    assert!(cocoa_tray.set_icon(&pixmap).is_ok());
-    assert!(cocoa_tray.set_tooltip("Claude HUD").is_ok());
-    assert!(cocoa_tray.show().is_ok());
-    assert!(cocoa_tray.hide().is_ok());
+    // 2. Verify macOS Cocoa NSStatusBar / NSStatusItem against the mock runtime. On macOS the
+    // real AppKit version runs on the main thread: examples/appkit_main_thread.rs
+    // (`status_item_lifecycle`).
+    #[cfg(not(target_os = "macos"))]
+    {
+        use qtrs_platform::tray::CocoaStatusItem;
+        let mut cocoa_tray: Box<dyn PlatformTrayIcon> = Box::new(CocoaStatusItem::new(101));
+        assert!(cocoa_tray.set_icon(&pixmap).is_ok());
+        assert!(cocoa_tray.set_tooltip("Claude HUD").is_ok());
+        assert!(cocoa_tray.show().is_ok());
+        assert!(cocoa_tray.hide().is_ok());
+    }
 }
 #[test]
 fn test_cross_platform_menu_implementations() {
-    use qtrs_gui::geometry::Point;
-    use qtrs_platform::menu::{CocoaMenu, DBusMenu, DBusMenuPropValue, PlatformMenu};
+    use qtrs_platform::menu::{DBusMenu, DBusMenuPropValue, PlatformMenu};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     // 1. Verify Linux D-Bus Menu (com.canonical.dbusmenu)
@@ -442,36 +450,45 @@ fn test_cross_platform_menu_implementations() {
         "clicking checkable item should automatically toggle checked state"
     );
 
-    // 2. Verify macOS Cocoa NSMenu / NSMenuItem
-    let mut cocoa_menu = CocoaMenu::new();
-    let cocoa_action = cocoa_menu.add_action(201, "Preferences");
-    let cocoa_check = cocoa_menu.add_checkable(202, "Always on Top", false);
-    cocoa_menu.add_separator();
+    // 2. Verify macOS Cocoa NSMenu / NSMenuItem against the mock runtime. On macOS the real
+    // AppKit version runs on the main thread: examples/appkit_main_thread.rs (`menu_native`).
+    #[cfg(not(target_os = "macos"))]
+    {
+        use qtrs_gui::geometry::Point;
+        use qtrs_platform::menu::CocoaMenu;
+        let mut cocoa_menu = CocoaMenu::new();
+        let cocoa_action = cocoa_menu.add_action(201, "Preferences");
+        let cocoa_check = cocoa_menu.add_checkable(202, "Always on Top", false);
+        cocoa_menu.add_separator();
 
-    let cocoa_clicked = Arc::new(AtomicBool::new(false));
-    let cocoa_flag = Arc::clone(&cocoa_clicked);
-    cocoa_action.activated().connect(move |()| {
-        cocoa_flag.store(true, Ordering::SeqCst);
-    });
+        let cocoa_clicked = Arc::new(AtomicBool::new(false));
+        let cocoa_flag = Arc::clone(&cocoa_clicked);
+        cocoa_action.activated().connect(move |()| {
+            cocoa_flag.store(true, Ordering::SeqCst);
+        });
 
-    // Verify popup status and coordinates
-    cocoa_menu.show_popup(Point::new(120, 240));
-    assert!(cocoa_menu.is_popped_up());
-    assert_eq!(cocoa_menu.popup_pos(), Some(Point::new(120, 240)));
+        // Verify popup status and coordinates
+        cocoa_menu.show_popup(Point::new(120, 240));
+        assert!(cocoa_menu.is_popped_up());
+        assert_eq!(cocoa_menu.popup_pos(), Some(Point::new(120, 240)));
 
-    // Trigger click
-    assert!(cocoa_menu.trigger_item(201));
-    assert!(cocoa_clicked.load(Ordering::SeqCst));
+        // Trigger click
+        assert!(cocoa_menu.trigger_item(201));
+        assert!(cocoa_clicked.load(Ordering::SeqCst));
 
-    // Trigger checkable toggle
-    assert!(!cocoa_check.is_checked());
-    assert!(cocoa_menu.trigger_item(202));
-    assert!(cocoa_check.is_checked());
+        // Trigger checkable toggle
+        assert!(!cocoa_check.is_checked());
+        assert!(cocoa_menu.trigger_item(202));
+        assert!(cocoa_check.is_checked());
 
-    cocoa_menu.dismiss();
-    assert!(!cocoa_menu.is_popped_up());
+        cocoa_menu.dismiss();
+        assert!(!cocoa_menu.is_popped_up());
+    }
 }
 
+// macOS: real NSScreen/NSCursor/NSApplication through `platform()`; examples/appkit_main_thread.rs
+// runs them on the main thread (`screen_metrics`, `cursor_shape`, `theme_color_scheme`).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn test_platform_singleton_does_not_panic() {
     use qtrs_platform::{platform, CursorShape};
@@ -565,6 +582,9 @@ fn test_unix_platform_integration_dbus_tray_and_window() {
     assert_eq!(primary.device_pixel_ratio(), 1.0);
 }
 
+// Mock-runtime test (the 2.0 ratio is the mock screen's). On macOS: examples/appkit_main_thread.rs
+// (`integration_factory`, `screen_metrics`) on the main thread.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn test_cocoa_platform_integration_status_item_and_retina() {
     qtrs_core::object::ThreadContext::init_current(true, None);
@@ -848,6 +868,9 @@ fn test_linux_dbus_status_notifier_item_with_socket_notifier() {
     assert_eq!(tray.status(), "Passive");
 }
 
+// Mock-runtime test. On macOS: examples/appkit_main_thread.rs (`window_title_and_style`,
+// `window_level`, `window_show_hide`, `window_event_bridge`) on the main thread.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn test_macos_objc_runtime_and_cocoa_window_lifecycle() {
     use qtrs_core::event_loop::CocoaNativeEvent;
@@ -954,6 +977,9 @@ fn test_macos_objc_runtime_and_cocoa_window_lifecycle() {
     assert!(!win.is_visible());
 }
 
+// Mock-runtime test. On macOS: examples/appkit_main_thread.rs (`status_item_lifecycle`,
+// `status_item_menu`) on the main thread.
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn test_macos_cocoa_status_item_and_menu_objc_integration() {
     use qtrs_core::object::ThreadContext;
@@ -1005,11 +1031,10 @@ fn test_macos_cocoa_status_item_and_menu_objc_integration() {
 
 #[test]
 fn test_cross_platform_input_event_bridge_queuing_and_polling() {
-    use qtrs_core::event_loop::CocoaNativeEvent;
     use qtrs_core::object::ThreadContext;
     use qtrs_gui::geometry::primitives::Rect;
     use qtrs_platform::{
-        ClosureWindowEventHandler, CocoaNativeWindow, GenericWindow, PlatformWindow, WaylandEvent,
+        ClosureWindowEventHandler, GenericWindow, PlatformWindow, WaylandEvent,
         WaylandNativeWindow, WindowFlags, WindowSystemEvent, X11Event, X11NativeWindow,
     };
     use std::sync::{Arc, Mutex};
@@ -1091,36 +1116,42 @@ fn test_cross_platform_input_event_bridge_queuing_and_polling() {
         vec!["Wayland:MouseMove(250,350)"]
     );
 
-    // 3. Test macOS Cocoa window input event bridge (queue_cocoa_event -> poll_events)
-    let mut cocoa_win = CocoaNativeWindow::new(
-        "Cocoa Bridge Window",
-        Rect::new(0, 0, 500, 400),
-        WindowFlags::NORMAL,
-    )
-    .unwrap();
+    // 3. Test macOS Cocoa window input event bridge (queue_cocoa_event -> poll_events) against
+    // the mock runtime. On macOS: examples/appkit_main_thread.rs (`window_event_bridge`).
+    #[cfg(not(target_os = "macos"))]
+    {
+        use qtrs_core::event_loop::CocoaNativeEvent;
+        use qtrs_platform::CocoaNativeWindow;
+        let mut cocoa_win = CocoaNativeWindow::new(
+            "Cocoa Bridge Window",
+            Rect::new(0, 0, 500, 400),
+            WindowFlags::NORMAL,
+        )
+        .unwrap();
 
-    let cocoa_received = Arc::new(Mutex::new(Vec::<String>::new()));
-    let cocoa_sink = Arc::clone(&cocoa_received);
-    cocoa_win.set_event_handler(Box::new(ClosureWindowEventHandler::new(move |event| {
-        if let WindowSystemEvent::MouseRelease { button, .. } = event {
-            cocoa_sink
-                .lock()
-                .unwrap()
-                .push(format!("Cocoa:MouseRelease({:?})", button));
-        }
-    })));
+        let cocoa_received = Arc::new(Mutex::new(Vec::<String>::new()));
+        let cocoa_sink = Arc::clone(&cocoa_received);
+        cocoa_win.set_event_handler(Box::new(ClosureWindowEventHandler::new(move |event| {
+            if let WindowSystemEvent::MouseRelease { button, .. } = event {
+                cocoa_sink
+                    .lock()
+                    .unwrap()
+                    .push(format!("Cocoa:MouseRelease({:?})", button));
+            }
+        })));
 
-    cocoa_win.queue_cocoa_event(CocoaNativeEvent::MouseUp {
-        x: 50.0,
-        y: 80.0,
-        button: 0,
-        modifiers: 0,
-    });
-    assert_eq!(cocoa_win.poll_events(), 1);
-    assert_eq!(
-        *cocoa_received.lock().unwrap(),
-        vec!["Cocoa:MouseRelease(Left)"]
-    );
+        cocoa_win.queue_cocoa_event(CocoaNativeEvent::MouseUp {
+            x: 50.0,
+            y: 80.0,
+            button: 0,
+            modifiers: 0,
+        });
+        assert_eq!(cocoa_win.poll_events(), 1);
+        assert_eq!(
+            *cocoa_received.lock().unwrap(),
+            vec!["Cocoa:MouseRelease(Left)"]
+        );
+    }
 
     // 4. Test Generic window input event queue
     let mut generic_win = GenericWindow::new(
@@ -1147,20 +1178,17 @@ fn test_cross_platform_input_event_bridge_queuing_and_polling() {
     );
 }
 
+// Mock-runtime test: Qt's QNSView returns YES from -isFlipped (qnsview_drawing.mm:67-70). On macOS
+// the real view is checked on the main thread: examples/appkit_main_thread.rs (`window_flipped`).
+#[cfg(not(target_os = "macos"))]
 #[test]
-fn test_macos_flipped_coordinates_and_wayland_wheel_scale() {
+fn test_macos_content_view_is_flipped() {
     use qtrs_core::object::ThreadContext;
-    use qtrs_gui::geometry::primitives::{Point, Rect};
-    use qtrs_platform::{
-        qt_mac_flip_point, qt_mac_flip_rect, ClosureWindowEventHandler, CocoaNativeWindow,
-        PlatformWindow, WaylandEvent, WaylandNativeWindow, WheelDelta, WindowFlags,
-        WindowSystemEvent,
-    };
-    use std::sync::{Arc, Mutex};
+    use qtrs_gui::geometry::primitives::Rect;
+    use qtrs_platform::{CocoaNativeWindow, WindowFlags};
 
     ThreadContext::init_current(true, None);
 
-    // 1. Verify macOS QNSView isFlipped coordinate flipping behavior (aligned with Qt QNSView - (BOOL)isFlipped { return YES; })
     let cocoa_win = CocoaNativeWindow::new(
         "Flipped View Test",
         Rect::new(100, 200, 640, 480),
@@ -1172,6 +1200,12 @@ fn test_macos_flipped_coordinates_and_wayland_wheel_scale() {
         cocoa_win.is_flipped(),
         "QNSView must return isFlipped == true, flipping Cocoa coordinates with top-left as origin (Y downward)"
     );
+}
+
+#[test]
+fn test_qt_mac_flip_point_and_rect_are_reversible() {
+    use qtrs_gui::geometry::primitives::{Point, Rect};
+    use qtrs_platform::{qt_mac_flip_point, qt_mac_flip_rect};
 
     // Verify screen geometry transformation functions (aligned with Qt qt_mac_flip / QCocoaScreen::mapToNative / mapFromNative)
     let screen_height = 1080;
@@ -1187,8 +1221,18 @@ fn test_macos_flipped_coordinates_and_wayland_wheel_scale() {
     assert_eq!(cocoa_rect, Rect::new(50, 680, 400, 300));
     // Bidirectional reversibility
     assert_eq!(qt_mac_flip_rect(cocoa_rect, screen_height), qt_rect);
+}
 
-    // 2. Verify Wayland wheel delta conversion (aligned with Qt qwaylandinputdevice.cpp: WheelDelta::vertical(-value * 12))
+#[test]
+fn test_wayland_wheel_delta_scale() {
+    use qtrs_gui::geometry::primitives::Rect;
+    use qtrs_platform::{
+        ClosureWindowEventHandler, PlatformWindow, WaylandEvent, WaylandNativeWindow, WheelDelta,
+        WindowFlags, WindowSystemEvent,
+    };
+    use std::sync::{Arc, Mutex};
+
+    // Verify Wayland wheel delta conversion (aligned with Qt qwaylandinputdevice.cpp: WheelDelta::vertical(-value * 12))
     let mut wayland_win = WaylandNativeWindow::new(
         "Wayland Wheel Test",
         Rect::new(0, 0, 800, 600),
@@ -1226,49 +1270,48 @@ fn test_macos_flipped_coordinates_and_wayland_wheel_scale() {
 #[test]
 fn test_platform_parity_gaps_verification() {
     use qtrs_core::event_loop::{EpollReactor, SocketEvent, SocketNotifier};
-    use qtrs_gui::paint::Pixmap;
-    use qtrs_platform::objc_runtime::{CGRect, Class, MockObjcRuntime, ObjcMsg, Sel};
-    use qtrs_platform::surface::macos::CocoaLayerSurface;
-    use qtrs_platform::surface::PlatformSurface;
     use qtrs_platform::tray::dbus_connection::DbusConnection;
     use qtrs_platform::window::WindowFlags;
     use qtrs_platform::window_wayland::WaylandNativeWindow;
     use qtrs_platform::window_x11::X11NativeWindow;
 
-    // 1. Verify ObjcMsg message dispatch and property configuration
-    let win_cls = Class::get("NSWindow").unwrap_or(Class::NIL);
-    let win_alloc = ObjcMsg::send_class_0(win_cls, Sel::register("alloc"));
-    assert!(!win_alloc.is_nil());
-
-    let cg_rect = CGRect::new(10.0, 20.0, 300.0, 200.0);
-    let win = ObjcMsg::send_window_init(
-        win_alloc,
-        Sel::register("initWithContentRect:styleMask:backing:defer:"),
-        cg_rect,
-        0,
-        2,
-        false,
-    );
-    assert!(!win.is_nil());
-
-    ObjcMsg::send_str(win, Sel::register("setTitle:"), "Parity Window");
-    ObjcMsg::send_int(win, Sel::register("setLevel:"), 3);
-    ObjcMsg::send_bool(win, Sel::register("setIgnoresMouseEvents:"), true);
-
-    let view_cls = Class::get("QNSView").unwrap_or(Class::NIL);
-    let view_alloc = ObjcMsg::send_class_0(view_cls, Sel::register("alloc"));
-    let view = ObjcMsg::send_window_init(
-        view_alloc,
-        Sel::register("initWithFrame:"),
-        cg_rect,
-        0,
-        0,
-        false,
-    );
-    ObjcMsg::send_id(win, Sel::register("setContentView:"), view);
-
+    // 1. Verify ObjcMsg message dispatch and property configuration against the mock runtime.
+    // On macOS a real NSWindow belongs to the main thread: examples/appkit_main_thread.rs
+    // (`window_title_and_style`, `window_level`).
     #[cfg(not(target_os = "macos"))]
     {
+        use qtrs_platform::objc_runtime::{CGRect, Class, MockObjcRuntime, ObjcMsg, Sel};
+        let win_cls = Class::get("NSWindow").unwrap_or(Class::NIL);
+        let win_alloc = ObjcMsg::send_class_0(win_cls, Sel::register("alloc"));
+        assert!(!win_alloc.is_nil());
+
+        let cg_rect = CGRect::new(10.0, 20.0, 300.0, 200.0);
+        let win = ObjcMsg::send_window_init(
+            win_alloc,
+            Sel::register("initWithContentRect:styleMask:backing:defer:"),
+            cg_rect,
+            0,
+            2,
+            false,
+        );
+        assert!(!win.is_nil());
+
+        ObjcMsg::send_str(win, Sel::register("setTitle:"), "Parity Window");
+        ObjcMsg::send_int(win, Sel::register("setLevel:"), 3);
+        ObjcMsg::send_bool(win, Sel::register("setIgnoresMouseEvents:"), true);
+
+        let view_cls = Class::get("QNSView").unwrap_or(Class::NIL);
+        let view_alloc = ObjcMsg::send_class_0(view_cls, Sel::register("alloc"));
+        let view = ObjcMsg::send_window_init(
+            view_alloc,
+            Sel::register("initWithFrame:"),
+            cg_rect,
+            0,
+            0,
+            false,
+        );
+        ObjcMsg::send_id(win, Sel::register("setContentView:"), view);
+
         let data = MockObjcRuntime::instance()
             .get_object_data(win)
             .expect("window data should exist");
@@ -1337,19 +1380,27 @@ fn test_platform_parity_gaps_verification() {
             "Linux Wayland connection state should match socket file existence"
         );
     }
-    // 4. Verify macOS CocoaLayerSurface CALayer double buffer presentation
-    let mut surface =
-        CocoaLayerSurface::new(1234, 100, 100).expect("failed to create CocoaLayerSurface");
-    let mut pixmap = Pixmap::new(100, 100).expect("failed to create pixmap");
-    pixmap.fill(Color::from_rgba8(255, 0, 0, 255));
-    surface
-        .present(&mut pixmap, 0.85)
-        .expect("present should succeed to CALayer");
-    assert_eq!(surface.pixel_buffer().len(), 100 * 100 * 4);
+    // 4. Verify macOS CocoaLayerSurface CALayer double buffer presentation against the mock
+    // runtime (layer id 1234 is not a real object). On macOS: examples/appkit_main_thread.rs
+    // (`window_present`) presents to a real window on the main thread.
+    #[cfg(not(target_os = "macos"))]
+    {
+        use qtrs_gui::paint::Pixmap;
+        use qtrs_platform::surface::macos::CocoaLayerSurface;
+        use qtrs_platform::surface::PlatformSurface;
+        let mut surface =
+            CocoaLayerSurface::new(1234, 100, 100).expect("failed to create CocoaLayerSurface");
+        let mut pixmap = Pixmap::new(100, 100).expect("failed to create pixmap");
+        pixmap.fill(Color::from_rgba8(255, 0, 0, 255));
+        surface
+            .present(&mut pixmap, 0.85)
+            .expect("present should succeed to CALayer");
+        assert_eq!(surface.pixel_buffer().len(), 100 * 100 * 4);
 
-    surface
-        .present_dirty(&mut pixmap, 0.90, Rect::new(10, 10, 50, 50))
-        .expect("present_dirty should succeed");
+        surface
+            .present_dirty(&mut pixmap, 0.90, Rect::new(10, 10, 50, 50))
+            .expect("present_dirty should succeed");
+    }
 
     // 5. Verify Unix EpollReactor core syscalls and reactor operation
     let reactor = EpollReactor::new();

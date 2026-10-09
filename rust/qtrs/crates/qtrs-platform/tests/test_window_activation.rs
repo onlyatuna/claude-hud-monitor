@@ -203,6 +203,9 @@ fn simulated_focus_events_reach_the_handler_as_focus_in_and_out() {
     assert_eq!(*log.lock().unwrap(), vec!["in", "out"]);
 }
 
+// Mock-runtime test. On macOS the real NSWindow key status and level are checked on the main
+// thread: examples/appkit_main_thread.rs (`window_key_status`, `window_level`).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn cocoa_window_is_active_only_when_it_is_the_key_window() {
     use qtrs_core::object::ThreadContext;

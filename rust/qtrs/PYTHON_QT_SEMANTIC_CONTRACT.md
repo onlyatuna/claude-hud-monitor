@@ -881,7 +881,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`Frameless | Tool | StaysOnTop` 對應無邊框、tool、topmost 視窗；`WA_TranslucentBackground` 使其為 per-pixel alpha；`setWindowFlag(WindowStaysOnTopHint, v)` **重建**原生視窗並隱藏，呼叫端要再 `show()`。
 - **qtrs required**：HUD 旗標 MUST 產生 `WS_POPUP | WS_EX_TOOLWINDOW | WS_EX_LAYERED`，on-top 時加 `WS_EX_TOPMOST`；topmost 切換 MUST 保持視窗可見且幾何不變。
 - **Current implementation**：旗標 `IMPLEMENTED`，切換 `PARTIAL`。`NativeWindow::new`（`qtrs-platform/src/window.rs`）；HUD 請求 `FRAMELESS | CUSTOM_FRAMELESS | LAYERED | TOOL [| STAYS_ON_TOP] [| CLICK_THROUGH]`（`hud_window.rs:207-216`）；`LAYERED` 優先於 `CUSTOM_FRAMELESS`，所以不裝 NCHITTEST 設定，resize／move 走 `start_system_move/resize`（與 Python 的 `startSystemMove/Resize` 相同）；`set_stays_on_top` 就地 `SetWindowPos(HWND_TOPMOST/NOTOPMOST)`。
-- **Known gap**：**G11.1.a [P2]** 無 `set_window_flags`；就地 `SetWindowPos` 保持可見，可觀察終態與 Python 的 `setWindowFlag + show()` 一致；**G11.1.b [P1]** 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT`；**G11.1.c [P2, READ]** X11／Wayland／Cocoa 後端是模擬：沒有真實 X server／Wayland compositor／AppKit 連線（Cocoa 走 `MockObjcRuntime`）。RC-11b 之後 `is_active` 與 `WindowFlags::TOOLTIP` 在這些後端上由注入的事件或 mock 狀態驅動（X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Cocoa `isKeyWindow`），未對真實系統驗證；X11 沒有 window type／override-redirect，Wayland 沒有 popup role。`WindowSystemEvent::MouseMove.buttons` 在 Win32 來自 `wParam` 的 `MK_*`（真實）；X11／Wayland／Cocoa 後端由視窗物件記錄自己看到的 press／release（模擬事件沒有按鈕狀態遮罩）。Wayland 以 keyboard focus 為 active，qtwayland 原始碼不在 `qtbase/`，`[INFERENCE]`；**G11.1.d [P1, READ；已修復：RC-27]** （修復前：）`Application::active_window()` 從不被設定（`set_active_window` 只有測試呼叫），沒有 `WindowActivate`／`WindowDeactivate`／`ActivationChange` 遞送給 widget，`QWidget::isActiveWindow` 不存在。平台層 `PlatformWindow::is_active` 已可用（RC-11b），但尚未接到 toolkit 層；RC-11c 的「只在 active window 顯示 tooltip」需要它。RC-27 之後：`FocusIn`／`FocusOut` 設定／清除 `Application::active_window()`，送 `WindowActivate`／`WindowDeactivate`（先到視窗事件處理器，再到可見的非視窗子 widget），並新增 `Widget::is_active_window`。**仍缺**：`ActivationChange` 事件、`SH_Widget_ShareActivation`（Tool 視窗共享啟用）、popup 視窗的 `isActiveWindow`、`QWidget::activateWindow`；tooltip 的「是否 active」仍讀 `PlatformWindow::is_active`，未改接到 toolkit 層。
+- **Known gap**：**G11.1.a [P2]** 無 `set_window_flags`；就地 `SetWindowPos` 保持可見，可觀察終態與 Python 的 `setWindowFlag + show()` 一致；**G11.1.b [P1]** 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT`；**G11.1.c [P2, READ]** X11／Wayland／Cocoa 後端是模擬：沒有真實 X server／Wayland compositor／AppKit 連線（Cocoa 走 `MockObjcRuntime`；macOS 上的真實 AppKit 已在主執行緒入口實測，見 C11.13）。RC-11b 之後 `is_active` 與 `WindowFlags::TOOLTIP` 在這些後端上由注入的事件或 mock 狀態驅動（X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Cocoa `isKeyWindow`），未對真實系統驗證；X11 沒有 window type／override-redirect，Wayland 沒有 popup role。`WindowSystemEvent::MouseMove.buttons` 在 Win32 來自 `wParam` 的 `MK_*`（真實）；X11／Wayland／Cocoa 後端由視窗物件記錄自己看到的 press／release（模擬事件沒有按鈕狀態遮罩）。Wayland 以 keyboard focus 為 active，qtwayland 原始碼不在 `qtbase/`，`[INFERENCE]`；**G11.1.d [P1, READ；已修復：RC-27]** （修復前：）`Application::active_window()` 從不被設定（`set_active_window` 只有測試呼叫），沒有 `WindowActivate`／`WindowDeactivate`／`ActivationChange` 遞送給 widget，`QWidget::isActiveWindow` 不存在。平台層 `PlatformWindow::is_active` 已可用（RC-11b），但尚未接到 toolkit 層；RC-11c 的「只在 active window 顯示 tooltip」需要它。RC-27 之後：`FocusIn`／`FocusOut` 設定／清除 `Application::active_window()`，送 `WindowActivate`／`WindowDeactivate`（先到視窗事件處理器，再到可見的非視窗子 widget），並新增 `Widget::is_active_window`。**仍缺**：`ActivationChange` 事件、`SH_Widget_ShareActivation`（Tool 視窗共享啟用）、popup 視窗的 `isActiveWindow`、`QWidget::activateWindow`；tooltip 的「是否 active」仍讀 `PlatformWindow::is_active`，未改接到 toolkit 層。
 - **Test**：既有 `window.rs::test_window_flags_to_win32_styles`（建立時樣式）、`test_native_window_lifecycle_and_methods`（只查 `flags` 欄位）。必要：`set_stays_on_top(false)` 後 `GetWindowLongPtrW(GWL_EXSTYLE) & WS_EX_TOPMOST == 0`。
 - **HUD usage**：Python `hud_window.py:123-128,804-812`；Rust `hud_window.rs:538-545`。
 
@@ -954,7 +954,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Python behavior**：`vibrancy.apply` 只在 widget 可見且非 offscreen 平台時執行；呼叫 `SetWindowCompositionAttribute(WCA_ACCENT_POLICY)`，state 4、flags 2、gradient `0x99161a22`（暗）或 `0x99f0f2f8`（亮）；`clear` 設 state 0；樣式表依 apply 是否成功（`vibrant`）而不同（`vibrancy.py:75-159`、`hud_window.py:240-250`）。
 - **qtrs required**：MUST 相同的 accent policy 與相同的失敗退路。
 - **Current implementation**：accent policy `IMPLEMENTED`（`qtrs-platform/src/backdrop.rs`，常數相同），fallback `PARTIAL`。`BackdropType::None` 清除 accent policy，並額外呼叫 `DWMWA_USE_IMMERSIVE_DARK_MODE`、`DWMWA_SYSTEMBACKDROP_TYPE=NONE`、`DwmEnableBlurBehindWindow(false)`。
-- **Known gap**：**G11.7.a [P1, READ]** HUD 在視窗可見之前呼叫 `set_backdrop`（`hud_window.rs:229`）並忽略回傳；Python 以 `isVisible()` 把關，失敗就用實心面板；Rust 一律畫 vibrant 面板色（`:88-92`）（→ G12.5.c）；**G11.7.b [P2]** `None` 比 Python 的 `clear` 多做 DWM 呼叫；**G11.7.c [P2]** macOS 路徑只對 `MockObjcRuntime` 測過。
+- **Known gap**：**G11.7.a [P1, READ]** HUD 在視窗可見之前呼叫 `set_backdrop`（`hud_window.rs:229`）並忽略回傳；Python 以 `isVisible()` 把關，失敗就用實心面板；Rust 一律畫 vibrant 面板色（`:88-92`）（→ G12.5.c）；**G11.7.b [P2]** `None` 比 Python 的 `clear` 多做 DWM 呼叫；**G11.7.c [P2]** macOS 路徑只對 `MockObjcRuntime` 測過（macOS：真實 AppKit 已在主執行緒入口實測，見 C11.13）。
 - **Test**：既有 `test_cross_platform_backdrop_and_click_through`（Mock）、`test_backdrop_type_variants`。必要：Windows 上 `set_backdrop(Acrylic, dark)` 後 `GetWindowCompositionAttribute` 回報 state 4 與 gradient。
 - **HUD usage**：Python `hud_window.py:240-250`；Rust `hud_window.rs:224-229,626-631,712`。
 
@@ -962,7 +962,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`QSystemTrayIcon(icon)`、`setToolTip`、`setContextMenu`、`show`、`showMessage(title, msg, icon, msecs)`、`activated(reason)`；HUD 在 `Trigger` 時切換顯示；Windows 上 Qt 在右鍵時自己顯示 context menu。
 - **qtrs required**：同樣的信號與訊息 API，選單 MUST 在游標處彈出。
 - **Current implementation**：`IMPLEMENTED-UNTESTED`（Windows 執行期）。`TrayIcon::new/show/hide/set_tooltip/show_message` 與 `on_activated/on_context_menu_requested/on_message_clicked`（`qtrs-platform/src/tray_icon.rs`）；`tray_window_proc` 把 `NIN_SELECT | WM_LBUTTONUP` 映射為 Trigger、`WM_LBUTTONDBLCLK` 為 DoubleClick，右鍵為 Context 加選單 exec，`TaskbarCreated` 時重新加入圖示。HUD 用 `on_activated` Trigger（`main.rs:355-357`）與 `on_menu_action`（`:431-449`）。
-- **Known gap**：**G11.8.a [P1]** 選單位置換算用主螢幕 DPR（`tray_icon.rs:281`）；**G11.8.b [P2]** `show_message` 只收 title／text／4 值圖示 enum／時間，不收自訂 `QIcon`（Python 傳 `tray.icon()`，`main.py:75-82`）；**G11.8.c [P0, READ；= G11.9.a 的重複登錄；已修復：RC-12]** Python 的 `hotkey_failed` 訊息 Rust 沒有（→ G11.9.a）；**G11.8.d [P2]** 圖示：Python 依平台選 `.ico/.icns/.png`（`tray_icon.py:17-28`），Rust 內嵌 PNG；**G11.8.e [P2, INFERENCE]** 雙擊在 Windows 先 Trigger 兩次再 DoubleClick（如 Qt）；**G11.8.f [P2]** DBus／macOS 後端存在但未驗證。
+- **Known gap**：**G11.8.a [P1]** 選單位置換算用主螢幕 DPR（`tray_icon.rs:281`）；**G11.8.b [P2]** `show_message` 只收 title／text／4 值圖示 enum／時間，不收自訂 `QIcon`（Python 傳 `tray.icon()`，`main.py:75-82`）；**G11.8.c [P0, READ；= G11.9.a 的重複登錄；已修復：RC-12]** Python 的 `hotkey_failed` 訊息 Rust 沒有（→ G11.9.a）；**G11.8.d [P2]** 圖示：Python 依平台選 `.ico/.icns/.png`（`tray_icon.py:17-28`），Rust 內嵌 PNG；**G11.8.e [P2, INFERENCE]** 雙擊在 Windows 先 Trigger 兩次再 DoubleClick（如 Qt）；**G11.8.f [P2]** DBus／macOS 後端存在但未驗證（macOS：真實 AppKit 已在主執行緒入口實測，見 C11.13）。
 - **Test**：既有 `tray_icon.rs` 內聯測試（`test_menu_item_constructors`、`test_menu_builder_and_hmenu_lifecycle`、`test_create_hicon_from_pixmap`、`test_tray_icon_lifecycle`、`test_tray_signals_and_window_proc_dispatch`）；應用層 `test_context_menu_parity_cards_and_table_modes`、`test_tray_and_hud_menu_unified_parity`（只比選單內容）。必要：對 tray 視窗 post `WM_LBUTTONUP` 與 `WM_LBUTTONDBLCLK`，斷言發射序列。
 - **HUD usage**：Python `tray_icon.py:43-151`、`main.py:63-65,75-82`；Rust `rust/src/ui/tray_icon.rs:547-560`、`main.rs:343-357,431-449`。
 
@@ -1005,6 +1005,28 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**：**G11.12.a [P2]** 無視窗圖示 API（工作列／Alt+Tab 圖示由 exe 資源決定）。
 - **Test**：必要：啟動後 `quit_on_last_window_closed == false`（併入 C11.2 的 `WM_CLOSE` 測試）；視窗圖示若實作，斷言 `WM_GETICON` 回非空。
 - **HUD usage**：Python `main.py:46-51,98`；Rust `main.rs:319-322,599`。
+
+### C11.13 macOS AppKit：主執行緒實測
+- **Qt behavior** `[QT-SRC testlib/qtest.h:233-241,278-297]`：`QTEST_MAIN` 展開為 `main()`，先在主執行緒建立 `QGuiApplication`／`QApplication`，再於同一執行緒執行測試函式；AppKit 物件屬於主執行緒。
+- **qtrs required**：macOS 的 Cocoa 後端 MUST 在作業系統主執行緒上、以 AppKit 回報的實際狀態驗證，對照 Qt 用同一 API 的做法；`is_headless()` 的 Generic 替身與 `MockObjcRuntime` 都不能代表 AppKit 驗證。
+- **Current implementation**：`crates/qtrs-platform/examples/appkit_main_thread.rs`（CI test-qtrs 的 macOS 步驟）。監督程序對每項檢查開一個子程序（逾時 30 s；移除 `CI`、`GITHUB_ACTIONS`、`QT_QPA_PLATFORM`、`QTRS_HEADLESS` 使工廠建立真實 AppKit 物件）；子程序以 `pthread_main_np()` 確認在主執行緒（並確認衍生執行緒回傳 0），比照 `QTEST_MAIN` 先建立 `GuiApplication`，再執行一項檢查。斷言讀回 AppKit 的狀態（`level`、`isVisible`、`subviews`、`contentMinSize`…）；以 `objc_setExceptionPreprocessor` 在例外丟出前記錄 name／reason／call stack（先呼叫原 preprocessor，不吞例外）。結果分類：`ok`、`FAILED`（行為斷言失敗）、`ENV`（環境不具備，註明原因）、`CRASH`（訊號，通常為 ObjC 例外）、`PANIC`、`TIMEOUT`。原本在 libtest worker 執行緒上碰真實 AppKit 的 qtrs-platform 測試段落改為 `#[cfg(not(target_os = "macos"))]`（其他平台仍以 mock 執行），由對應檢查取代；`test_macos_flipped_coordinates_and_wayland_wheel_scale` 拆為 `test_macos_content_view_is_flipped`、`test_qt_mac_flip_point_and_rect_are_reversible`、`test_wayland_wheel_delta_scale`。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，run 37975274292；螢幕 1024x768、backingScaleFactor 1）。20 項：`ok` 9（`window_title_and_style`、`window_show_hide`、`window_click_through`、`window_event_bridge`、`status_item_menu`、`menu_native`、`screen_metrics`、`cursor_shape`、`integration_factory`）、`FAILED` 8、`CRASH` 2、`ENV` 1。qtrs-platform 三個 libtest 目標（`test_platform_abstractions`、`test_platform_modern_features`、`test_window_activation`）在 macOS 由 SIGABRT 轉為通過；Windows 88/88、Ubuntu 失敗目標不變。
+- **Known gap**（皆為此 run 的實測結果，未修）
+  - **G11.13.a [P1, RAN]** 視窗幾何未翻轉座標：`CocoaNativeWindow::new` 與 `set_geometry` 把 Qt 的左上原點 y 直接當 Cocoa y（frame y 120，預期 768−(120+400)=248）；Qt 以 `QCocoaScreen::mapToNative` 轉換（`qcocoawindow.mm:304`）。
+  - **G11.13.b [P1, RAN]** 視窗層級：TOOL 為 0（Qt `NSFloatingWindowLevel` 3）、STAYS_ON_TOP 為 3（Qt `NSModalPanelWindowLevel` 8）、TOOLTIP 為 3（Qt `NSScreenSaverWindowLevel` 1000）、`set_stays_on_top(true)` 為 3（`qcocoawindow.mm:548-563`）。
+  - **G11.13.c [P1, RAN]** 內容視圖 `isFlipped` 為 NO：qtrs 用一般 `NSView`（未註冊 `QNSView`）；Qt 的 `QNSView` 回傳 YES（`qnsview_drawing.mm:67-70`、`qcocoawindow.mm:120`）。
+  - **G11.13.d [P0, RAN]** `present()` 觸發 `NSInvalidArgumentException: -[NSView setContents:]: unrecognized selector`，程序中止：`CocoaLayerSurface::commit_to_layer`（`surface/macos.rs`）把 NSView 當 CALayer；Qt 設定的是視圖 layer 的 `contents`（`qcocoabackingstore.mm:392`）。HUD 每次重繪都 present，macOS 上第一次繪製即中止 `[INFERENCE：未在 macOS 執行 HUD]`。
+  - **G11.13.e [P1, RAN]** `set_backdrop(None)` 觸發 `NSInvalidArgumentException: -[NSView setState:]: unrecognized selector`，程序中止（`backdrop.rs:181-187` 對內容視圖送 `setState:`）；Qt 以 `removeFromSuperview` 移除自己建立的 effect view（`qcocoawindow.mm:2258-2263`）。
+  - **G11.13.f [P2, RAN]** `set_backdrop(Acrylic)` 加入的 `NSVisualEffectView` 的 layer `zPosition` 為 0；Qt 設為 `-FLT_MAX`，疊在內容之下（`qcocoawindow.mm:2269-2270`）。material／blendingMode／state 與 qtrs 的對應值相符。
+  - **G11.13.g [P2, RAN]** 最小尺寸設在 `minSize`（frame）而非 `contentMinSize`：有標題列的視窗 `contentMinSize` 為 200x118，預期 200x150（`qcocoawindow.mm:1185`）。
+  - **G11.13.h [P2, RAN]** `start_system_move()` 在未按下滑鼠鍵時回傳 true（Qt 只在只按左鍵時進行，否則 false：`qcocoawindow.mm:366-370`）；`start_system_resize()` 回傳 true（`QCocoaWindow` 未實作，`QPlatformWindow` 回傳 false：`qplatformwindow.cpp:495-498`）。
+  - **G11.13.i [P2, RAN]** 系統匣項目長度為 `NSVariableStatusItemLength`（−1）；Qt 用 `NSSquareStatusItemLength`（−2，`qcocoasystemtrayicon.mm:37`）。
+  - **G11.13.j [P1, RAN]** `set_tooltip` 設的是按鈕 `title`（文字直接顯示在選單列），`toolTip` 為 nil；Qt 設 `button.toolTip`（`qcocoasystemtrayicon.mm:195-200`）。
+  - **G11.13.k [P1, RAN]** `CocoaTheme` 在外觀為 Aqua 時回報 Dark：`query_color_scheme` 只要外觀名稱非 nil 就回 Dark（`theme.rs`）；Qt 取 `bestMatchFromAppearancesWithNames:@[Aqua, DarkAqua]`（`qcocoatheme.mm:507-509`）。
+  - **G11.13.l [P1, RAN；原因未定]** `show()`（`makeKeyAndOrderFront:`）後視窗不是 key window，`[NSApp isActive]` 為 NO。qtrs 沒有像 Qt 的 Cocoa 整合那樣設定與啟用 `NSApplication`；是否為 CI 環境（無使用者登入的 GUI session）造成，尚未區分 `[INFERENCE]`。
+- **未判定的檢查**：`status_item_lifecycle` 的「drop 之後 `[statusItem statusBar]` 為 nil」失敗；此預期是對 AppKit `removeStatusItem:` 行為的推定 `[INFERENCE]`，修系統匣前須先確認這個 oracle，不列為缺口。`status_item_message` 為 `ENV`：未打包成 app bundle 時 `[NSUserNotificationCenter defaultUserNotificationCenter]` 為 nil，通知遞送無法觀察；qtrs 端 `last_message` 斷言通過。
+- **Test**：`appkit_main_thread`（上述 20 項）；每項檢查註明取代的 libtest 測試。
+- **HUD usage**：macOS 上的 HUD 視窗、背景、系統匣、主題都走這些路徑；未在 macOS 執行 HUD。
 
 ---
 
@@ -1229,7 +1251,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 344 項：D 12、P0 34、P1 151、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 67 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 356 項：D 12、P0 35、P1 158、P2 146、test gap 5（計數含已修復項；標籤含「已修復」者共 67 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1525,6 +1547,18 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.11.a | P2 | 第二次啟動「喚醒」第一個 HUD 後的可觀察結果 |
 | G11.11.b | P2 | 剪貼簿：兩個 HUD 都不用 |
 | G11.12.a | P2 | 無視窗圖示 API |
+| G11.13.a | P1, RAN | Cocoa 視窗幾何未翻轉座標 |
+| G11.13.b | P1, RAN | Cocoa 視窗層級與 Qt `windowLevel` 不同 |
+| G11.13.c | P1, RAN | 內容視圖 `isFlipped` 為 NO（非 `QNSView`） |
+| G11.13.d | P0, RAN | `present()` 對 NSView 送 `setContents:`，ObjC 例外中止 |
+| G11.13.e | P1, RAN | `set_backdrop(None)` 對 NSView 送 `setState:`，ObjC 例外中止 |
+| G11.13.f | P2, RAN | effect view 未疊在內容之下 |
+| G11.13.g | P2, RAN | 最小尺寸設 `minSize` 而非 `contentMinSize` |
+| G11.13.h | P2, RAN | `start_system_move`／`start_system_resize` 回傳值與 Qt 不同 |
+| G11.13.i | P2, RAN | 系統匣項目長度非 `NSSquareStatusItemLength` |
+| G11.13.j | P1, RAN | 系統匣 tooltip 設成按鈕標題 |
+| G11.13.k | P1, RAN | `CocoaTheme` 在 Aqua 外觀回報 Dark |
+| G11.13.l | P1, RAN；原因未定 | `show()` 後視窗不是 key window，NSApp 未啟用 |
 | G12.3.a | P1 | QMenu 規則被解析但不消費 |
 | G12.3.b | P0, READ；已修復：RC-15 | Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px` |
 | G12.3.c | P1, READ | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |

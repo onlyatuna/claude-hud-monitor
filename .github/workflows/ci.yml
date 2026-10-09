@@ -245,6 +245,13 @@ jobs:
         working-directory: rust/qtrs
         run: cargo run -j 1 -q -p qtrs-gui --example main_thread_entry
 
+      # qtrs-platform AppKit checks (windows, status items, menus, screens, cursor, theme) on the
+      # OS main thread, one child process per check, reporting ok/FAILED/ENV/CRASH per check.
+      - name: macOS main-thread AppKit checks (qtrs-platform)
+        if: ${{ runner.os == 'macOS' && !cancelled() }}
+        working-directory: rust/qtrs
+        run: cargo run -j 1 -q -p qtrs-platform --example appkit_main_thread
+
       - name: Run qtrs doc tests
         if: ${{ !cancelled() }}
         working-directory: rust/qtrs

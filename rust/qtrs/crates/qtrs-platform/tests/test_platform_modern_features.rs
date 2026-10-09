@@ -168,21 +168,26 @@ fn test_platform_window_advanced_features_support() {
 
 #[test]
 fn test_cross_platform_screens_parity() {
-    use qtrs_platform::screen::{CocoaScreen, PlatformScreen, X11Screen};
+    use qtrs_platform::screen::{PlatformScreen, X11Screen};
 
-    // Test Cocoa screen
-    let cocoa_primary = CocoaScreen::primary();
-    assert!(cocoa_primary.is_primary());
-    assert_eq!(cocoa_primary.geometry().width, 1920);
-    assert_eq!(cocoa_primary.geometry().height, 1080);
-    assert!(cocoa_primary.available_geometry().height <= cocoa_primary.geometry().height);
-    assert_eq!(cocoa_primary.device_pixel_ratio(), 2.0);
+    // Test Cocoa screen against the mock runtime (its 1920x1080 at 2.0 is the mock's fallback).
+    // On macOS: examples/appkit_main_thread.rs (`screen_metrics`) on the main thread.
+    #[cfg(not(target_os = "macos"))]
+    {
+        use qtrs_platform::screen::CocoaScreen;
+        let cocoa_primary = CocoaScreen::primary();
+        assert!(cocoa_primary.is_primary());
+        assert_eq!(cocoa_primary.geometry().width, 1920);
+        assert_eq!(cocoa_primary.geometry().height, 1080);
+        assert!(cocoa_primary.available_geometry().height <= cocoa_primary.geometry().height);
+        assert_eq!(cocoa_primary.device_pixel_ratio(), 2.0);
 
-    let cocoa_screens = CocoaScreen::screens();
-    assert!(!cocoa_screens.is_empty());
+        let cocoa_screens = CocoaScreen::screens();
+        assert!(!cocoa_screens.is_empty());
 
-    let at_origin = CocoaScreen::screen_at(Point::new(100, 100));
-    assert!(at_origin.is_some());
+        let at_origin = CocoaScreen::screen_at(Point::new(100, 100));
+        assert!(at_origin.is_some());
+    }
 
     // Test X11 screen
     let x11_primary = X11Screen::primary();
@@ -200,19 +205,23 @@ fn test_cross_platform_screens_parity() {
 
 #[test]
 fn test_cross_platform_backdrop_and_click_through() {
-    use qtrs_platform::window_cocoa::CocoaNativeWindow;
     use qtrs_platform::window_wayland::WaylandNativeWindow;
     use qtrs_platform::window_x11::X11NativeWindow;
 
     let rect = Rect::new(50, 50, 600, 400);
 
-    // Cocoa window
-    let mut cocoa_win = CocoaNativeWindow::new("CocoaHUD", rect, WindowFlags::FRAMELESS)
-        .expect("Cocoa window creation should succeed");
-    assert!(cocoa_win.set_backdrop(BackdropType::Acrylic, true));
-    assert!(cocoa_win.set_backdrop(BackdropType::None, false));
-    cocoa_win.set_click_through(true);
-    cocoa_win.set_click_through(false);
+    // Cocoa window against the mock runtime. On macOS: examples/appkit_main_thread.rs
+    // (`backdrop_on`, `backdrop_off`, `window_click_through`) on the main thread.
+    #[cfg(not(target_os = "macos"))]
+    {
+        use qtrs_platform::window_cocoa::CocoaNativeWindow;
+        let mut cocoa_win = CocoaNativeWindow::new("CocoaHUD", rect, WindowFlags::FRAMELESS)
+            .expect("Cocoa window creation should succeed");
+        assert!(cocoa_win.set_backdrop(BackdropType::Acrylic, true));
+        assert!(cocoa_win.set_backdrop(BackdropType::None, false));
+        cocoa_win.set_click_through(true);
+        cocoa_win.set_click_through(false);
+    }
 
     // X11 window
     let mut x11_win = X11NativeWindow::new("X11HUD", rect, WindowFlags::FRAMELESS)
@@ -233,23 +242,28 @@ fn test_cross_platform_backdrop_and_click_through() {
 
 #[test]
 fn test_cross_platform_theme_and_dynamic_detection() {
-    use qtrs_platform::theme::{CocoaTheme, ColorScheme, PlatformTheme, UnixTheme};
+    use qtrs_platform::theme::{ColorScheme, PlatformTheme, UnixTheme};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
-    // CocoaTheme
-    let cocoa_theme = CocoaTheme::new();
-    assert_ne!(cocoa_theme.color_scheme(), ColorScheme::Unknown);
-    let cocoa_count = Arc::new(AtomicUsize::new(0));
-    let c_cnt = cocoa_count.clone();
-    cocoa_theme.theme_changed().connect(move |_| {
-        c_cnt.fetch_add(1, Ordering::SeqCst);
-    });
-    cocoa_theme.set_color_scheme(ColorScheme::Light);
-    assert_eq!(cocoa_theme.color_scheme(), ColorScheme::Light);
-    cocoa_theme.set_color_scheme(ColorScheme::Dark);
-    assert_eq!(cocoa_theme.color_scheme(), ColorScheme::Dark);
-    assert!(cocoa_count.load(Ordering::SeqCst) >= 1);
+    // CocoaTheme against the mock runtime. On macOS (NSApplication's appearance):
+    // examples/appkit_main_thread.rs (`theme_color_scheme`) on the main thread.
+    #[cfg(not(target_os = "macos"))]
+    {
+        use qtrs_platform::theme::CocoaTheme;
+        let cocoa_theme = CocoaTheme::new();
+        assert_ne!(cocoa_theme.color_scheme(), ColorScheme::Unknown);
+        let cocoa_count = Arc::new(AtomicUsize::new(0));
+        let c_cnt = cocoa_count.clone();
+        cocoa_theme.theme_changed().connect(move |_| {
+            c_cnt.fetch_add(1, Ordering::SeqCst);
+        });
+        cocoa_theme.set_color_scheme(ColorScheme::Light);
+        assert_eq!(cocoa_theme.color_scheme(), ColorScheme::Light);
+        cocoa_theme.set_color_scheme(ColorScheme::Dark);
+        assert_eq!(cocoa_theme.color_scheme(), ColorScheme::Dark);
+        assert!(cocoa_count.load(Ordering::SeqCst) >= 1);
+    }
 
     // UnixTheme
     let unix_theme = UnixTheme::new();
@@ -268,16 +282,22 @@ fn test_cross_platform_theme_and_dynamic_detection() {
 
 #[test]
 fn test_cross_platform_cursor_shapes() {
-    use qtrs_platform::cursor::{CocoaCursor, CursorShape, PlatformCursor, UnixCursor};
+    use qtrs_platform::cursor::{CursorShape, PlatformCursor, UnixCursor};
 
-    let mut cocoa_cursor = CocoaCursor::new();
-    assert_eq!(cocoa_cursor.current_shape(), CursorShape::Arrow);
-    cocoa_cursor.change_cursor(CursorShape::SizeHor);
-    assert_eq!(cocoa_cursor.current_shape(), CursorShape::SizeHor);
-    cocoa_cursor.change_cursor(CursorShape::SizeVer);
-    assert_eq!(cocoa_cursor.current_shape(), CursorShape::SizeVer);
-    cocoa_cursor.change_cursor(CursorShape::PointingHand);
-    assert_eq!(cocoa_cursor.current_shape(), CursorShape::PointingHand);
+    // CocoaCursor against the mock runtime. On macOS (NSCursor): examples/appkit_main_thread.rs
+    // (`cursor_shape`) on the main thread.
+    #[cfg(not(target_os = "macos"))]
+    {
+        use qtrs_platform::cursor::CocoaCursor;
+        let mut cocoa_cursor = CocoaCursor::new();
+        assert_eq!(cocoa_cursor.current_shape(), CursorShape::Arrow);
+        cocoa_cursor.change_cursor(CursorShape::SizeHor);
+        assert_eq!(cocoa_cursor.current_shape(), CursorShape::SizeHor);
+        cocoa_cursor.change_cursor(CursorShape::SizeVer);
+        assert_eq!(cocoa_cursor.current_shape(), CursorShape::SizeVer);
+        cocoa_cursor.change_cursor(CursorShape::PointingHand);
+        assert_eq!(cocoa_cursor.current_shape(), CursorShape::PointingHand);
+    }
 
     let mut unix_cursor = UnixCursor::new();
     assert_eq!(unix_cursor.current_shape(), CursorShape::Arrow);
@@ -354,8 +374,7 @@ fn test_cross_platform_hotkeys() {
 fn test_platform_window_move_resize_opacity_minsize() {
     qtrs_core::object::ThreadContext::init_current(true, None);
     use qtrs_platform::{
-        CocoaNativeWindow, GenericWindow, PlatformWindow, WaylandNativeWindow, WindowEdges,
-        X11NativeWindow,
+        GenericWindow, PlatformWindow, WaylandNativeWindow, WindowEdges, X11NativeWindow,
     };
 
     // WindowEdges bitflags tests
@@ -388,8 +407,10 @@ fn test_platform_window_move_resize_opacity_minsize() {
     assert!(gw.start_system_move());
     assert!(gw.start_system_resize(WindowEdges::BOTTOM_RIGHT));
 
-    // CocoaNativeWindow tests
-    if let Ok(mut cocoa_win) = CocoaNativeWindow::new(
+    // CocoaNativeWindow against the mock runtime. On macOS: examples/appkit_main_thread.rs
+    // (`window_opacity_min_size_move`) on the main thread.
+    #[cfg(not(target_os = "macos"))]
+    if let Ok(mut cocoa_win) = qtrs_platform::CocoaNativeWindow::new(
         "Cocoa Test",
         Rect::new(0, 0, 640, 480),
         WindowFlags::empty(),
@@ -451,7 +472,7 @@ fn test_platform_tray_messages() {
     qtrs_core::object::ThreadContext::init_current(true, None);
     use qtrs_gui::paint::Pixmap;
     use qtrs_platform::{
-        CocoaStatusItem, DbusStatusNotifierItem, GenericTrayIcon, PlatformTrayIcon, TrayMessageIcon,
+        DbusStatusNotifierItem, GenericTrayIcon, PlatformTrayIcon, TrayMessageIcon,
     };
 
     // 1. Verify TrayMessageIcon variants
@@ -473,17 +494,21 @@ fn test_platform_tray_messages() {
         Some(("Title", "Body", TrayMessageIcon::Information, 5000))
     );
 
-    // 3. CocoaStatusItem
-    let mut cocoa_tray = CocoaStatusItem::new(101);
-    assert!(cocoa_tray.supports_messages());
-    assert_eq!(cocoa_tray.last_message(), None);
-    assert!(cocoa_tray
-        .show_message("ClaudeHUD", "Quota reached", TrayMessageIcon::Warning, 8000)
-        .is_ok());
-    assert_eq!(
-        cocoa_tray.last_message(),
-        Some(("ClaudeHUD", "Quota reached", TrayMessageIcon::Warning, 8000))
-    );
+    // 3. CocoaStatusItem against the mock runtime. On macOS: examples/appkit_main_thread.rs
+    // (`status_item_message`) on the main thread.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut cocoa_tray = qtrs_platform::CocoaStatusItem::new(101);
+        assert!(cocoa_tray.supports_messages());
+        assert_eq!(cocoa_tray.last_message(), None);
+        assert!(cocoa_tray
+            .show_message("ClaudeHUD", "Quota reached", TrayMessageIcon::Warning, 8000)
+            .is_ok());
+        assert_eq!(
+            cocoa_tray.last_message(),
+            Some(("ClaudeHUD", "Quota reached", TrayMessageIcon::Warning, 8000))
+        );
+    }
 
     // 4. DbusStatusNotifierItem
     let mut dbus_tray = DbusStatusNotifierItem::new("claude-hud", "ClaudeHUD");
