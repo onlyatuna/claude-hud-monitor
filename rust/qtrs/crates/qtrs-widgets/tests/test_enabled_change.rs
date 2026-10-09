@@ -256,3 +256,78 @@ fn the_focus_moves_on_before_the_widget_is_notified() {
         Some(t.b.borrow().id())
     );
 }
+
+/// RC-42: `root` holds `container` (with `child` when `with_child`) and `sibling`, all
+/// `StrongFocus`; `container` has the focus. Returns `(root, container, child, sibling, d, log)`.
+fn container_tree(
+    with_child: bool,
+) -> (
+    WidgetRef,
+    WidgetRef,
+    WidgetRef,
+    WidgetRef,
+    EventTreeDispatcher,
+    Log,
+) {
+    let log = Log::default();
+    let root = probe("root", FocusPolicy::NoFocus, &log);
+    let container = probe("container", FocusPolicy::StrongFocus, &log);
+    let child = probe("child", FocusPolicy::StrongFocus, &log);
+    let sibling = probe("sibling", FocusPolicy::StrongFocus, &log);
+    if with_child {
+        container.borrow_mut().add_child(child.clone());
+    }
+    root.borrow_mut().add_child(container.clone());
+    root.borrow_mut().add_child(sibling.clone());
+    adopt_tree(&root);
+    let mut d = EventTreeDispatcher::new();
+    let id = container.borrow().id();
+    assert!(d
+        .focus_manager_mut()
+        .set_focus(&root, Some(id), FocusReason::Other));
+    log.borrow_mut().clear();
+    (root, container, child, sibling, d, log)
+}
+
+/// RC-42: `setEnabled_helper` picks the next focus widget before it disables the children
+/// (qwidget.cpp:3439-3445), so a focusable child takes the focus, then loses it when it is
+/// disabled under its disabled parent. Reference: PySide6 6.11.2, `container.setEnabled(False)`
+/// -> `container:Out`, `child:In`, `child:Out`, `child:EC:off`, `container:EC:off`; focus widget
+/// `None` afterwards.
+#[test]
+fn disabling_a_focused_container_passes_the_focus_through_its_child_and_drops_it() {
+    let (_root, container, child, sibling, d, log) = container_tree(true);
+
+    set_widget_enabled(&container, false);
+    assert_eq!(
+        std::mem::take(&mut *log.borrow_mut()),
+        [
+            "container:Out",
+            "child:In",
+            "child:Out",
+            "child:EC:off",
+            "container:EC:off"
+        ]
+    );
+    assert_eq!(d.focus_manager().focused_widget_id(), None);
+    for w in [&container, &child, &sibling] {
+        assert!(!w.borrow().has_focus());
+    }
+}
+
+/// Control: with no focusable child the focus moves to the sibling, as in Qt.
+#[test]
+fn disabling_a_focused_container_without_children_moves_the_focus_to_the_sibling() {
+    let (_root, container, _child, sibling, d, log) = container_tree(false);
+
+    set_widget_enabled(&container, false);
+    assert_eq!(
+        std::mem::take(&mut *log.borrow_mut()),
+        ["container:Out", "sibling:In", "container:EC:off"]
+    );
+    assert_eq!(
+        d.focus_manager().focused_widget_id(),
+        Some(sibling.borrow().id())
+    );
+    assert!(sibling.borrow().has_focus());
+}

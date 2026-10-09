@@ -50,15 +50,20 @@ pub fn find_widget_by_id(root: &WidgetRef, id: ObjectId) -> Option<WidgetRef> {
 
 /// Recursively collects all visible, enabled widgets accepting Tab focus in pre-order traversal.
 pub fn collect_tab_focusable(root: &WidgetRef, out: &mut Vec<WidgetRef>) {
-    collect_tab_chain(root, None, out);
+    collect_tab_chain(root, None, out).expect("a widget of the tree is mutably borrowed");
 }
 
 /// `collect_tab_focusable`, also keeping `from` (the focus widget, though disabled) in its place.
-fn collect_tab_chain(root: &WidgetRef, from: Option<ObjectId>, out: &mut Vec<WidgetRef>) {
-    let borrow = root.borrow();
+/// Fails when a widget of the tree is mutably borrowed.
+fn collect_tab_chain(
+    root: &WidgetRef,
+    from: Option<ObjectId>,
+    out: &mut Vec<WidgetRef>,
+) -> Result<(), std::cell::BorrowError> {
+    let borrow = root.try_borrow()?;
     let is_from = from == Some(borrow.id());
     if !is_from && (!borrow.is_visible() || !borrow.is_enabled()) {
-        return;
+        return Ok(());
     }
     if is_from || borrow.focus_policy().accepts_tab() {
         out.push(root.clone());
@@ -66,16 +71,22 @@ fn collect_tab_chain(root: &WidgetRef, from: Option<ObjectId>, out: &mut Vec<Wid
     let children = borrow.children();
     drop(borrow);
     for child in children {
-        collect_tab_chain(&child, from, out);
+        collect_tab_chain(&child, from, out)?;
     }
+    Ok(())
 }
 
 /// `QWidget::focusNextChild` from `from`: the widget after it in the Tab chain, wrapping around.
-fn next_in_tab_chain(root: &WidgetRef, from: ObjectId) -> Option<WidgetRef> {
+fn next_in_tab_chain(
+    root: &WidgetRef,
+    from: ObjectId,
+) -> Result<Option<WidgetRef>, std::cell::BorrowError> {
     let mut chain = Vec::new();
-    collect_tab_chain(root, Some(from), &mut chain);
-    let i = chain.iter().position(|w| w.borrow().id() == from)?;
-    (chain.len() > 1).then(|| chain[(i + 1) % chain.len()].clone())
+    collect_tab_chain(root, Some(from), &mut chain)?;
+    let Some(i) = chain.iter().position(|w| w.borrow().id() == from) else {
+        return Ok(None);
+    };
+    Ok((chain.len() > 1).then(|| chain[(i + 1) % chain.len()].clone()))
 }
 
 fn send_focus_out(root: &WidgetRef, id: ObjectId, reason: FocusReason) {
@@ -94,35 +105,74 @@ fn send_focus_out(root: &WidgetRef, id: ObjectId, reason: FocusReason) {
 #[derive(Debug, Default)]
 pub(crate) struct FocusState {
     focused: Cell<Option<ObjectId>>,
-    lost: Cell<Option<LostFocus>>,
+    /// Focus widgets disabled since the events were last sent, in order.
+    lost: RefCell<Vec<LostFocus>>,
     /// The window the `FocusManager` works on, where a lost focus moves on.
     root: RefCell<WidgetWeak>,
 }
 
-/// A focus widget that was disabled; its `FocusOut` and the focus move are still to come.
+/// A focus widget that was disabled; its `FocusOut` and the next widget's `FocusIn` are still to
+/// come.
 #[derive(Debug, Clone, Copy)]
 struct LostFocus {
     id: ObjectId,
-    parent_enabled: bool,
+    next: NextFocus,
+}
+
+/// Where the focus of a disabled focus widget went.
+#[derive(Debug, Clone, Copy)]
+enum NextFocus {
+    /// `clearFocus()`: no widget is next, or the parent is disabled.
+    Cleared,
+    /// `focusNextChild()` picked this widget.
+    To(ObjectId),
+    /// The window was borrowed, so the next widget is picked when the events are sent.
+    Later,
 }
 
 impl FocusState {
-    /// `id` is being disabled: if it is the focus widget, the window has no focus widget from now
-    /// on, and `move_lost_focus` finishes the job. Returns whether `id` had focus.
-    pub(crate) fn lose(&self, id: ObjectId, parent_enabled: bool) -> bool {
+    /// `id` is being disabled: if it is the focus widget, the focus moves on now, as
+    /// `setEnabled_helper` does before it disables the children (qwidget.cpp:3439-3445):
+    /// `focusNextChild()` (which can pick a child about to be disabled), or `clearFocus()` when the
+    /// parent is disabled. Only the state changes here; `move_lost_focus` sends the events.
+    /// Returns whether `id` had focus.
+    pub(crate) fn lose(self: &Rc<Self>, id: ObjectId, parent_enabled: bool) -> bool {
         if self.focused.get() != Some(id) {
             return false;
         }
-        self.focused.set(None);
-        self.lost.set(Some(LostFocus { id, parent_enabled }));
+        let root = parent_enabled
+            .then(|| self.root.borrow().upgrade())
+            .flatten();
+        let next = match root.map(|root| next_in_tab_chain(&root, id)) {
+            _ if !parent_enabled => NextFocus::Cleared,
+            Some(Ok(Some(widget))) => match widget.try_borrow() {
+                Ok(w) => {
+                    *w.widget_base().focus_state.borrow_mut() = Rc::downgrade(self);
+                    w.set_has_focus(true);
+                    NextFocus::To(w.id())
+                }
+                Err(_) => NextFocus::Later,
+            },
+            Some(Ok(None)) => NextFocus::Cleared,
+            Some(Err(_)) | None => NextFocus::Later,
+        };
+        self.focused.set(match next {
+            NextFocus::To(next) => Some(next),
+            _ => None,
+        });
+        self.lost.borrow_mut().push(LostFocus { id, next });
         true
     }
 }
 
 fn give_focus(state: &Rc<FocusState>, widget: &WidgetRef, reason: FocusReason) {
+    state.focused.set(Some(widget.borrow().id()));
+    *widget.borrow().widget_base().focus_state.borrow_mut() = Rc::downgrade(state);
+    send_focus_in(widget, reason);
+}
+
+fn send_focus_in(widget: &WidgetRef, reason: FocusReason) {
     let mut new = widget.borrow_mut();
-    state.focused.set(Some(new.id()));
-    *new.widget_base().focus_state.borrow_mut() = Rc::downgrade(state);
     new.set_has_focus(true);
     let mut ev = Event::new_spontaneous(EventKind::FocusIn { reason });
     new.event(&mut ev);
@@ -130,26 +180,28 @@ fn give_focus(state: &Rc<FocusState>, widget: &WidgetRef, reason: FocusReason) {
     new.update();
 }
 
-/// Finishes what `QWidgetPrivate::setEnabled_helper` does when it disables the focus widget
-/// (qwidget.cpp:3442-3446): `focusNextChild()`, or `clearFocus()` when the parent is disabled or
-/// no widget is next. The widget dropped the focus itself, but it is borrowed while it is
-/// disabled, so its `FocusOut` and the next widget's `FocusIn` are sent here.
+/// Sends the events of the focus moves `FocusState::lose` made (qwidget.cpp:3442-3446): the
+/// disabled widget's `FocusOut`, then the next widget's `FocusIn`. The widgets are borrowed while
+/// they are disabled, so the events wait until here.
 fn move_lost_focus(state: &Rc<FocusState>, root: &WidgetRef) {
-    let Some(lost) = state.lost.take() else {
-        return;
-    };
-    let next = lost
-        .parent_enabled
-        .then(|| next_in_tab_chain(root, lost.id))
-        .flatten();
-    let reason = if next.is_some() {
-        FocusReason::Tab
-    } else {
-        FocusReason::Other
-    };
-    send_focus_out(root, lost.id, reason);
-    if let Some(next) = next {
-        give_focus(state, &next, reason);
+    let lost = std::mem::take(&mut *state.lost.borrow_mut());
+    for lost in lost {
+        let next = match lost.next {
+            NextFocus::Cleared => None,
+            NextFocus::To(id) => find_widget_by_id(root, id),
+            NextFocus::Later => next_in_tab_chain(root, lost.id).ok().flatten(),
+        };
+        let reason = if next.is_some() {
+            FocusReason::Tab
+        } else {
+            FocusReason::Other
+        };
+        send_focus_out(root, lost.id, reason);
+        match (next, lost.next) {
+            (Some(next), NextFocus::Later) => give_focus(state, &next, reason),
+            (Some(next), _) => send_focus_in(&next, reason),
+            (None, _) => {}
+        }
     }
 }
 
