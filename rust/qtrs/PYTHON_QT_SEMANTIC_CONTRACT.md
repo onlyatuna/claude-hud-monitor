@@ -1028,7 +1028,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.13.n [P1, RAN；已修復：RC-49]** `present(_, 0.85)` 後 `[layer opacity]` 讀回 2（`[window alphaValue]` 為 1），有效不透明度不是 0.85。`commit_to_layer` 以 `send_length`（`CGFloat`＝double）送 `setOpacity:`，而 `CALayer.opacity` 是 `float`；是否就是這個 ABI 不符造成，尚未證實 `[INFERENCE]`。Qt 把視窗不透明度放在 `[NSWindow alphaValue]`（`QCocoaWindow::setOpacity`，`qcocoawindow.mm:1206-1213`），不設 layer opacity。
   - **G11.13.o [P1, RAN；已修復：RC-48]** `commit_to_layer` 以 `CGDataProviderCreateWithData` 直接引用 `pixel_buffer`（不複製、無 release callback），layer 持有這個 CGImage；下一次 `present` 會覆寫同一塊記憶體，`resize` 會重新配置（舊指標懸空）。Qt 在 Core Animation 仍使用某個 IOSurface 時不重用它（`qcocoabackingstore.mm:141,163,347`）。未觀察到實際損毀 `[INFERENCE]`；RC-46 之前這條路徑在 macOS 上會先中止，無法到達。
   - **G11.13.p [P2, RAN；已修復：RC-55]** backdrop 開啟路徑每次都建立並加入新的 `NSVisualEffectView`，不看是否已有：`set_backdrop(Acrylic)` 後 `set_backdrop(Mica)`，內容視圖有 2 個 effect view（`backdrop_on_twice`，run 37979484145 與 37983110238）。RC-47 之後 slot 只記住最後一個，`set_backdrop(None)` 只移除最後一個。Qt 每個區域只有一個 effect view，已存在時就地更新 material／blendingMode／state（`qcocoawindow.mm:2258-2259,2278-2281`）。HUD 在主題切換時重新呼叫 `set_backdrop`（`rust/src/ui/hud_window.rs:793-794`）。
-  - **G11.13.q [P2, READ]** `set_cocoa_window_backdrop` 以 `alloc`／`init` 取得 effect view（+1），加入父視圖後未 release；`set_backdrop(None)` 只 `removeFromSuperview`，該 +1 永不釋放（`set_vibrancy` 同樣如此）。`CocoaNativeWindow` 也沒有 `Drop`。未以 instance count 實測 `[INFERENCE]`。
+  - **G11.13.q [P2, RAN；與 Qt 相同，不修]** `set_cocoa_window_backdrop` 以 `alloc`／`init` 取得 effect view（+1），加入父視圖後未 release；`set_backdrop(None)` 只 `removeFromSuperview`，該 +1 永不釋放（`set_vibrancy` 同樣如此）。`CocoaNativeWindow` 也沒有 `Drop`。實測（run 38003919416，以 zeroing weak reference 在 autorelease pool 外觀察）：`set_backdrop(None)` 與 `set_vibrancy(None)` 移除的 effect view 都沒有被釋放。Qt 相同：cocoa 外掛為手動參照計數（例如 `qcocoasystemtrayicon.mm:95` 的 `autorelease`），`[NSVisualEffectView new]`（`qcocoawindow.mm:2266`）的 +1 在移除時（`:2260-2262`，只 `removeFromSuperview` 並自 `m_effectViews` 移除）也未 release。依 Qt 為 oracle，此項不構成與 Qt 的差異，不修；每次移除留下一個 effect view 的記憶體。
 - **未判定的檢查**：`status_item_lifecycle` 原有的「drop 之後 `[statusItem statusBar]` 為 nil」預期不成立：對未經 qtrs 的 `NSStatusItem` 直接 `removeStatusItem:` 後 `statusBar` 仍非 nil（run 38001604009，RAN）；`isVisible` 在兩次執行中分別為 NO（run 38001604009）與 YES（run 38002053367），也不能當 oracle。目前沒有可靠的 AppKit 狀態能觀察移除，該斷言改為 INFO 紀錄，drop 的移除行為未驗證，不列為缺口。`status_item_message` 為 `ENV`：未打包成 app bundle 時 `[NSUserNotificationCenter defaultUserNotificationCenter]` 為 nil，通知遞送無法觀察；qtrs 端 `last_message` 斷言通過。
 - **Test**：`appkit_main_thread`（上述 20 項）；每項檢查註明取代的 libtest 測試。
 - **HUD usage**：macOS 上的 HUD 視窗、背景、系統匣、主題都走這些路徑；未在 macOS 執行 HUD。
@@ -1568,7 +1568,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.n | P1, RAN；已修復：RC-49 | `present(_, 0.85)` 後 layer `opacity` 讀回 2 |
 | G11.13.o | P1, RAN；已修復：RC-48 | CGImage 直接引用 `pixel_buffer`，之後覆寫或重新配置時 layer 仍持有該影像 |
 | G11.13.p | P2, RAN；已修復：RC-55 | 連續兩次開啟 backdrop 會疊加兩個 effect view |
-| G11.13.q | P2, READ | effect view 的 alloc/init 參照從未 release |
+| G11.13.q | P2, RAN；與 Qt 相同，不修 | effect view 的 alloc/init 參照從未 release（Qt 亦同） |
 | G12.3.a | P1 | QMenu 規則被解析但不消費 |
 | G12.3.b | P0, READ；已修復：RC-15 | Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px` |
 | G12.3.c | P1, READ | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |
