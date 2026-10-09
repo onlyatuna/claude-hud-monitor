@@ -438,6 +438,11 @@ mod checks {
             run: window_flipped,
         },
         CheckDef {
+            name: "window_present_orientation",
+            origin: "test_platform_abstractions::test_platform_parity_gaps_verification (CocoaLayerSurface present)",
+            run: window_present_orientation,
+        },
+        CheckDef {
             name: "window_event_bridge",
             origin: "test_platform_abstractions::test_macos_objc_runtime_and_cocoa_window_lifecycle, ::test_cross_platform_input_event_bridge_queuing_and_polling",
             run: window_event_bridge,
@@ -803,6 +808,59 @@ mod checks {
             "qtrs is_flipped() matches AppKit",
             win.is_flipped(),
             yes(content, "isFlipped"),
+        );
+    }
+
+    fn window_present_orientation(t: &mut Recorder) {
+        // Qt's QNSView is flipped and its layer shows the backing store's first row at the top
+        // (qnsview_drawing.mm:67-70; qcocoabackingstore.mm:392). Render the content layer the way
+        // Core Animation composites it and check which half of the frame comes out on top.
+        let mut win = window(
+            "orientation",
+            Rect::new(100, 100, 100, 100),
+            WindowFlags::FRAMELESS,
+        );
+        win.show();
+        let mut frame = pixmap(100, Color::from_rgba8(0, 0, 255, 255));
+        for px in frame.data_mut()[..100 * 50 * 4].as_chunks_mut::<4>().0 {
+            *px = [255, 0, 0, 255];
+        }
+        println!("  INFO present() -> {:?}", win.present(&mut frame, 1.0));
+        let content: Id = send(win.ns_window(), "contentView");
+        let layer: Id = send(content, "layer");
+        t.info(&format!(
+            "[contentView isFlipped] {}, [layer contentsAreFlipped] {}, [layer isGeometryFlipped] {}",
+            yes(content, "isFlipped"),
+            yes(layer, "contentsAreFlipped"),
+            yes(layer, "isGeometryFlipped")
+        ));
+        // A bitmap context's first memory row is its top edge.
+        let mut rgba = vec![0u8; 100 * 100 * 4];
+        unsafe {
+            let space = cg::CGColorSpaceCreateDeviceRGB();
+            let context = cg::CGBitmapContextCreate(
+                rgba.as_mut_ptr().cast(),
+                100,
+                100,
+                8,
+                100 * 4,
+                space,
+                cg::ALPHA_PREMULTIPLIED_LAST | cg::BYTE_ORDER_32_BIG,
+            );
+            let _: () = send1(layer, "renderInContext:", context);
+            cg::CGContextRelease(context);
+            cg::CGColorSpaceRelease(space);
+        }
+        let row = |y: usize| rgba[(y * 100 + 50) * 4..(y * 100 + 50) * 4 + 4].to_vec();
+        t.eq(
+            "RGBA near the top of the rendered layer",
+            row(10),
+            vec![255, 0, 0, 255],
+        );
+        t.eq(
+            "RGBA near the bottom of the rendered layer",
+            row(90),
+            vec![0, 0, 255, 255],
         );
     }
 
@@ -1282,16 +1340,27 @@ mod checks {
         );
 
         // Qt: the destructor removes the item from the status bar (qcocoasystemtrayicon.mm:54).
+        // No AppKit state found so far reports the removal reliably: `statusBar` stays set after
+        // removeStatusItem: and `isVisible` differs between runs, on an item qtrs never touched
+        // too. Report both for the record; drop's removal is not asserted.
+        let bar: Id = send(class("NSStatusBar"), "systemStatusBar");
+        let raw: Id = send1(bar, "statusItemWithLength:", -2.0f64);
+        let _: Id = send(raw, "retain");
+        let _: () = send1(bar, "removeStatusItem:", raw);
+        t.info(&format!(
+            "AppKit only, after removeStatusItem: statusBar nil {}, isVisible {}",
+            send::<Id>(raw, "statusBar").is_nil(),
+            yes(raw, "isVisible")
+        ));
+        let _: () = send(raw, "release");
+
         let _: Id = send(native, "retain");
-        t.expect(
-            !send::<Id>(native, "statusBar").is_nil(),
-            "[statusItem statusBar] while the item exists",
-        );
         drop(item);
-        t.expect(
+        t.info(&format!(
+            "qtrs item after drop: statusBar nil {}, isVisible {}",
             send::<Id>(native, "statusBar").is_nil(),
-            "[statusItem statusBar] is nil after drop (removeStatusItem:)",
-        );
+            yes(native, "isVisible")
+        ));
         let _: () = send(native, "release");
     }
 
