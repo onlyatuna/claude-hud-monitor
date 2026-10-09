@@ -581,7 +581,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qwidget.cpp:3405-3476]`：`setEnabled` 傳遞到所有後代、清除被停用的焦點 widget、送 `EnabledChange`、重繪；QSS `:disabled` 生效。
 - **qtrs required**：MUST 傳遞到後代、MUST 重繪、停用 widget MUST 不收滑鼠／鍵盤／焦點；`:disabled` SHOULD 一致。
 - **Current implementation**：`PARTIAL`。`set_enabled` 只 `Cell.set`：不傳遞、不重繪、無事件、不處理焦點；`Button` 在 handler 內自己檢查；`:disabled` 從未提供給樣式解析（`pseudo_states` 是 `&[]` 或只有 hover/pressed）。
-- **Known gap**：**G8.2.a [P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36（部分）]** （修復前：） 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺。 RC-33：`WidgetBase::set_enabled` 依 `setEnabled_helper` 傳遞到後代（自己的 children 與 layout 內 widget）、記錄明確停用（`force_disabled` = `WA_ForceDisabled`）、在停用的 parent 下無法啟用、狀態改變時 `update()`。RC-36：停用焦點 widget 時同步清掉 `has_focus` 與視窗焦點 id。仍缺：`FocusOut`、`focusNextChild`／`clearFocus`、`FocusIn` 在 `setEnabled` 回傳前同步完成（RC-36 延到 dispatcher 的下一個事件，與 PySide6 oracle 時序不同；待 RC-37）；`EnabledChange` 事件（QSS `:disabled` 見 G8.5.e／RC-34）。
+- **Known gap**：**G8.2.a [P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）]** （修復前：） 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺。 RC-33：`WidgetBase::set_enabled` 依 `setEnabled_helper` 傳遞到後代（自己的 children 與 layout 內 widget）、記錄明確停用（`force_disabled` = `WA_ForceDisabled`）、在停用的 parent 下無法啟用、狀態改變時 `update()`。RC-36：停用焦點 widget 時同步清掉 `has_focus` 與視窗焦點 id。RC-37：`set_widget_enabled` 在回傳前送出 `FocusOut`、`focusNextChild`／`clearFocus`、`FocusIn`；視窗內仍有 widget 被 borrow 時（含 `Widget::set_enabled` 這個 borrow 中的入口）退回 RC-36 的延後處理。仍缺：`EnabledChange` 事件（QSS `:disabled` 見 G8.5.e／RC-34）。
 - **Test**：必要：`disable_parent_disables_children_and_repaints`；`disabled_button_ignores_press`；`qss_disabled_color`。
 - **HUD usage**：Python `self.icon.setEnabled(not muted)`（`usage_table.py:323`）；Rust 自訂 icon widget 把 `set_enabled` 轉給 base（重繪視 widget 而定）。
 
@@ -1345,7 +1345,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.a | P1, READ | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
-| G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36（部分） | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
+| G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後） | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
 | G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
@@ -1955,7 +1955,16 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qwidget.cpp:3442-3446]`：`setEnabled_helper` 停用的 widget 若是 `window()->focusWidget()`，parent 啟用時 `focusNextChild()`（Tab reason），失敗或 parent 停用則 `clearFocus()`（Other reason）；事件在 `setEnabled` 回傳前同步送出。
 - **qtrs root**：焦點 id 只存在 `EventTreeDispatcher` 私有的 `FocusManager.focused`，`WidgetBase::set_enabled(&self)` 碰不到；呼叫端又持有該 widget 的 `borrow()`，無法同步送它 `FocusOut`（`borrow_mut()` 會 panic）。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle：停用焦點 a → `a:Out:Tab`、`b:In:Tab`；b 為 NoFocus → `a:Out:Other`、無焦點；停用 a 的 parent → `a:Out:Other`、無焦點；停用非焦點 b → 無事件。新測試 `test_focus_disable.rs` 4 項：修改前 3 項失敗（停用後 `has_focus()` 仍為 true），非焦點那項本來就通過；修改後 4 項通過。
-- **Status**：**部分修復：焦點旗標與 `FocusManager` 狀態同步清除已修復；`FocusOut`／`FocusIn` 時序仍與 Qt 不同（residual，待 RC-37）**。`FocusManager` 的焦點 id 改存於共享的 `FocusState`（`Rc`），`give_focus` 時把 `Weak` 交給 widget（`WidgetBase.focus_state`）；`set_enabled_helper` 停用時若自己是焦點 widget，立即清 `has_focus`、清視窗焦點 id（`:focus` 與 `focused_widget_id()` 同步失效），並記下 pending；`FocusManager::process_pending` 於 `dispatch_event`／`dispatch_mouse_move` 前後與 `set_focus` 開頭送 `FocusOut`，再做 `focusNextChild`（Tab 鏈前序、循環）或 `clearFocus`。**Residual（可觀察的語意差異，oracle 已證）**：Qt 在 `setEnabled(false)` 回傳前送完 `FocusOut`、移交焦點、送 `FocusIn`；qtrs 把這三步延到 dispatcher 的下一個事件，期間視窗沒有焦點 widget。剩下的架構問題：呼叫堆疊仍持有該 widget 的 borrow，`set_enabled` 內無法安全觸發焦點移交。未用 `WidgetCommandQueue`，因為它的 `flush` 拿不到 `FocusManager`。`Application::FOCUS_WIDGET` 仍未與 `FocusManager` 接線（既有狀況，未動）。HUD 不受影響：HUD 不使用 widget focus。**僅 Windows 驗證。**
+- **Status**：**部分修復：焦點旗標與 `FocusManager` 狀態同步清除已修復；`FocusOut`／`FocusIn` 時序仍與 Qt 不同（residual，由 RC-37 處理）**。`FocusManager` 的焦點 id 改存於共享的 `FocusState`（`Rc`），`give_focus` 時把 `Weak` 交給 widget（`WidgetBase.focus_state`）；`set_enabled_helper` 停用時若自己是焦點 widget，立即清 `has_focus`、清視窗焦點 id（`:focus` 與 `focused_widget_id()` 同步失效），並記下 pending；`FocusManager::process_pending` 於 `dispatch_event`／`dispatch_mouse_move` 前後與 `set_focus` 開頭送 `FocusOut`，再做 `focusNextChild`（Tab 鏈前序、循環）或 `clearFocus`。**Residual（可觀察的語意差異，oracle 已證）**：Qt 在 `setEnabled(false)` 回傳前送完 `FocusOut`、移交焦點、送 `FocusIn`；qtrs 把這三步延到 dispatcher 的下一個事件，期間視窗沒有焦點 widget。剩下的架構問題：呼叫堆疊仍持有該 widget 的 borrow，`set_enabled` 內無法安全觸發焦點移交。未用 `WidgetCommandQueue`，因為它的 `flush` 拿不到 `FocusManager`。`Application::FOCUS_WIDGET` 仍未與 `FocusManager` 接線（既有狀況，未動）。HUD 不受影響：HUD 不使用 widget focus。**僅 Windows 驗證。**
+
+#### RC-37 停用焦點 widget 的焦點移交非同步
+
+- **Gap**：G8.2.a residual（RC-36 只同步清旗標）。
+- **Qt behavior** `[QT-SRC qwidget.cpp:3442-3446]`：`setEnabled_helper` 在 `setEnabled` 回傳前送 `FocusOut`、`focusNextChild()`／`clearFocus()`、送 `FocusIn`。
+- **qtrs root**：`Widget::set_enabled(&self)` 在呼叫端的 borrow 中執行，無法送事件給自己；焦點移交需要視窗 root，`FocusState` 原本不知道 root。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`setEnabled` 一回傳就讀）同 RC-36。`test_focus_disable.rs` 改為 6 項：先加上只做 `borrow().set_enabled()` 的 `set_widget_enabled`，3 項時序測試失敗（`left: []`，事件尚未送出）；修改後 6 項通過，含祖先被 `borrow_mut()` 時不 panic、延到下一個事件的 guard，與 `Widget::set_enabled` 入口仍延後的測試。
+- **Status**：**已修復（一般路徑同步；borrow 衝突路徑延後）**。`FocusState` 記住 `FocusManager` 的視窗 root（`process_pending`／`set_focus` 時寫入）；新增 `set_widget_enabled(&WidgetRef, bool)`：放掉 borrow 後從該 widget 子樹找出待移交的 `FocusState`，若整棵視窗樹都能 `try_borrow_mut` 就立即送 `FocusOut`、移交、送 `FocusIn`，否則留給 `FocusManager::process_pending`。
+- **Residual**：borrow 衝突（例如在祖先的事件處理中停用子 widget）或經由 `Widget::set_enabled` 呼叫時，事件仍延到 dispatcher 的下一個事件；repo 內沒有非測試的 widget `set_enabled` 呼叫端，故未做機械式替換。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

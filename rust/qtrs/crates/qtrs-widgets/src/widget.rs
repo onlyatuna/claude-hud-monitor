@@ -14,6 +14,16 @@ use std::rc::{Rc, Weak};
 pub type WidgetRef = Rc<RefCell<Box<dyn Widget>>>;
 pub type WidgetWeak = Weak<RefCell<Box<dyn Widget>>>;
 
+/// `QWidget::setEnabled`. Unlike `Widget::set_enabled`, which runs while the widget is borrowed,
+/// this also sends `FocusOut` / `FocusIn` before it returns when the focus widget is disabled
+/// (qwidget.cpp:3442-3446), unless another widget of the window is still borrowed.
+pub fn set_widget_enabled(widget: &WidgetRef, enabled: bool) {
+    widget.borrow().set_enabled(enabled);
+    if !enabled {
+        crate::focus::move_focus_off_disabled(widget);
+    }
+}
+
 /// Points each of `children` at `parent`, so ancestor-dependent lookups (the style sheet
 /// cascade) can walk upwards.
 ///
@@ -443,7 +453,8 @@ impl WidgetBase {
         }
         self.enabled.set(enable);
         // Disabling the focus widget takes the focus away (qwidget.cpp:3442-3446). The flag and the
-        // window's focus id change now; the events follow in `FocusManager::process_pending`.
+        // window's focus id change now; the events follow in `set_widget_enabled` or, when it
+        // could not send them, `FocusManager::process_pending`.
         if !enable {
             let focus = self.focus_state.borrow().upgrade();
             if focus.is_some_and(|f| f.lose(self.object_data.id, !parent_disabled)) {

@@ -1,7 +1,7 @@
-use crate::widget::WidgetRef;
+use crate::widget::{WidgetRef, WidgetWeak};
 use qtrs_core::event::{Event, EventKind, FocusReason};
 use qtrs_core::object::ObjectId;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Focus policy defining how a widget accepts keyboard focus (`Qt::FocusPolicy`).
@@ -95,6 +95,8 @@ fn send_focus_out(root: &WidgetRef, id: ObjectId, reason: FocusReason) {
 pub(crate) struct FocusState {
     focused: Cell<Option<ObjectId>>,
     lost: Cell<Option<LostFocus>>,
+    /// The window the `FocusManager` works on, where a lost focus moves on.
+    root: RefCell<WidgetWeak>,
 }
 
 /// A focus widget that was disabled; its `FocusOut` and the focus move are still to come.
@@ -106,7 +108,7 @@ struct LostFocus {
 
 impl FocusState {
     /// `id` is being disabled: if it is the focus widget, the window has no focus widget from now
-    /// on, and `FocusManager::process_pending` finishes the job. Returns whether `id` had focus.
+    /// on, and `move_lost_focus` finishes the job. Returns whether `id` had focus.
     pub(crate) fn lose(&self, id: ObjectId, parent_enabled: bool) -> bool {
         if self.focused.get() != Some(id) {
             return false;
@@ -114,6 +116,76 @@ impl FocusState {
         self.focused.set(None);
         self.lost.set(Some(LostFocus { id, parent_enabled }));
         true
+    }
+}
+
+fn give_focus(state: &Rc<FocusState>, widget: &WidgetRef, reason: FocusReason) {
+    let mut new = widget.borrow_mut();
+    state.focused.set(Some(new.id()));
+    *new.widget_base().focus_state.borrow_mut() = Rc::downgrade(state);
+    new.set_has_focus(true);
+    let mut ev = Event::new_spontaneous(EventKind::FocusIn { reason });
+    new.event(&mut ev);
+    new.focus_in_event(reason);
+    new.update();
+}
+
+/// Finishes what `QWidgetPrivate::setEnabled_helper` does when it disables the focus widget
+/// (qwidget.cpp:3442-3446): `focusNextChild()`, or `clearFocus()` when the parent is disabled or
+/// no widget is next. The widget dropped the focus itself, but it is borrowed while it is
+/// disabled, so its `FocusOut` and the next widget's `FocusIn` are sent here.
+fn move_lost_focus(state: &Rc<FocusState>, root: &WidgetRef) {
+    let Some(lost) = state.lost.take() else {
+        return;
+    };
+    let next = lost
+        .parent_enabled
+        .then(|| next_in_tab_chain(root, lost.id))
+        .flatten();
+    let reason = if next.is_some() {
+        FocusReason::Tab
+    } else {
+        FocusReason::Other
+    };
+    send_focus_out(root, lost.id, reason);
+    if let Some(next) = next {
+        give_focus(state, &next, reason);
+    }
+}
+
+/// Whether no widget of the tree is borrowed, so the focus can move without a `BorrowMutError`.
+fn tree_is_free(w: &WidgetRef) -> bool {
+    if w.try_borrow_mut().is_err() {
+        return false;
+    }
+    let children = w.borrow().children();
+    children.iter().all(tree_is_free)
+}
+
+fn pending_focus_state(w: &WidgetRef) -> Option<Rc<FocusState>> {
+    let Ok(widget) = w.try_borrow() else {
+        return None;
+    };
+    let state = widget.widget_base().focus_state.borrow().upgrade();
+    if let Some(state) = state.filter(|s| s.lost.get().is_some()) {
+        return Some(state);
+    }
+    let children = widget.children();
+    drop(widget);
+    children.iter().find_map(pending_focus_state)
+}
+
+/// After `widget` was disabled and released: if that took the focus away from it or a widget
+/// below it, sends the events and moves the focus on now, as `setEnabled` does before it
+/// returns. While a widget of the window is still borrowed this would panic, so the move is
+/// left to `FocusManager::process_pending` on the dispatcher's next event.
+pub(crate) fn move_focus_off_disabled(widget: &WidgetRef) {
+    let Some(state) = pending_focus_state(widget) else {
+        return;
+    };
+    let root = state.root.borrow().upgrade();
+    if let Some(root) = root.filter(tree_is_free) {
+        move_lost_focus(&state, &root);
     }
 }
 
@@ -156,41 +228,18 @@ impl FocusManager {
         };
         match find_widget_by_id(root, new_id) {
             Some(new_widget) => {
-                self.give_focus(&new_widget, reason);
+                give_focus(&self.state, &new_widget, reason);
                 true
             }
             None => false,
         }
     }
 
-    fn give_focus(&self, widget: &WidgetRef, reason: FocusReason) {
-        let mut new = widget.borrow_mut();
-        self.state.focused.set(Some(new.id()));
-        *new.widget_base().focus_state.borrow_mut() = Rc::downgrade(&self.state);
-        new.set_has_focus(true);
-        let mut ev = Event::new_spontaneous(EventKind::FocusIn { reason });
-        new.event(&mut ev);
-        new.focus_in_event(reason);
-        new.update();
-    }
-
-    /// Finishes what `QWidgetPrivate::setEnabled_helper` does when it disables the focus widget
-    /// (qwidget.cpp:3442-3446): `focusNextChild()`, or `clearFocus()` when the parent is disabled
-    /// or no widget is next. The widget dropped the focus itself, but it is borrowed while it is
-    /// disabled, so its `FocusOut` and the next widget's `FocusIn` are sent here.
+    /// Sends the events and moves the focus for a focus widget disabled while the window was
+    /// borrowed (see `move_focus_off_disabled`), and records `root` as the window.
     pub fn process_pending(&mut self, root: &WidgetRef) {
-        let Some(lost) = self.state.lost.take() else {
-            return;
-        };
-        let next = lost
-            .parent_enabled
-            .then(|| next_in_tab_chain(root, lost.id))
-            .flatten();
-        let reason = if next.is_some() { FocusReason::Tab } else { FocusReason::Other };
-        send_focus_out(root, lost.id, reason);
-        if let Some(next) = next {
-            self.give_focus(&next, reason);
-        }
+        *self.state.root.borrow_mut() = Rc::downgrade(root);
+        move_lost_focus(&self.state, root);
     }
 
     /// Clears keyboard focus from any currently focused widget.

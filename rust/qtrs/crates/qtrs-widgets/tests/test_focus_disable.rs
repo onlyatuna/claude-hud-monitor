@@ -1,16 +1,17 @@
-//! RC-36: disabling the focus widget takes the focus away from it.
+//! RC-36/RC-37: disabling the focus widget takes the focus away from it.
 //!
 //! `QWidgetPrivate::setEnabled_helper` (qwidget.cpp:3442-3446): when the widget being disabled is
 //! its window's focus widget, `focusNextChild()` moves the focus on (Tab reason), and when the
-//! parent is disabled or no widget is next, `clearFocus()` drops it (Other reason).
-//! Reference: PySide6 6.11.2, buttons `a` and `b`, `a` focused:
+//! parent is disabled or no widget is next, `clearFocus()` drops it (Other reason). All of it
+//! happens before `setEnabled` returns.
+//! Reference: PySide6 6.11.2, buttons `a` and `b`, `a` focused, read right after `setEnabled`:
 //! - `a.setEnabled(False)` -> `a:Out:Tab`, `b:In:Tab`, focus widget `b`;
 //! - with `b` NoFocus -> `a:Out:Other`, no focus widget;
 //! - disabling `a`'s parent -> `a:Out:Other`, no focus widget;
 //! - disabling `b` -> no event, focus stays on `a`.
 //!
-//! In qtrs the widget is borrowed while it is disabled, so `hasFocus()` and the window's focus
-//! widget change at once and the events are sent by the dispatcher on its next event.
+//! `set_widget_enabled` does the same. When a widget of the window is still borrowed, the focus
+//! flag and the window's focus widget change at once and the events wait for the next event.
 
 use qtrs_core::event::{Event, EventKind, FocusReason};
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
@@ -194,41 +195,32 @@ impl Tree {
 
 #[test]
 fn disabling_the_focus_widget_moves_the_focus_to_the_next_one() {
-    let mut t = tree(false, FocusPolicy::StrongFocus);
+    let t = tree(false, FocusPolicy::StrongFocus);
 
-    t.a.borrow().set_enabled(false);
-    assert!(!t.a.borrow().has_focus());
-    assert_eq!(t.focus(), None);
-
-    t.next_event();
+    set_widget_enabled(&t.a, false);
     assert_eq!(t.events(), ["a:Out:Tab", "b:In:Tab"]);
+    assert!(!t.a.borrow().has_focus());
     assert_eq!(t.focus(), Some(t.b.borrow().id()));
     assert!(t.b.borrow().has_focus());
 }
 
 #[test]
 fn with_no_next_widget_the_focus_is_cleared() {
-    let mut t = tree(false, FocusPolicy::NoFocus);
+    let t = tree(false, FocusPolicy::NoFocus);
 
-    t.a.borrow().set_enabled(false);
-    assert!(!t.a.borrow().has_focus());
-    assert_eq!(t.focus(), None);
-
-    t.next_event();
+    set_widget_enabled(&t.a, false);
     assert_eq!(t.events(), ["a:Out:Other"]);
+    assert!(!t.a.borrow().has_focus());
     assert_eq!(t.focus(), None);
 }
 
 #[test]
 fn disabling_the_parent_clears_the_focus() {
-    let mut t = tree(true, FocusPolicy::StrongFocus);
+    let t = tree(true, FocusPolicy::StrongFocus);
 
-    t.c.borrow().set_enabled(false);
-    assert!(!t.a.borrow().has_focus());
-    assert_eq!(t.focus(), None);
-
-    t.next_event();
+    set_widget_enabled(&t.c, false);
     assert_eq!(t.events(), ["a:Out:Other"]);
+    assert!(!t.a.borrow().has_focus());
     assert_eq!(t.focus(), None);
     assert!(!t.b.borrow().has_focus());
 }
@@ -237,9 +229,40 @@ fn disabling_the_parent_clears_the_focus() {
 fn disabling_another_widget_leaves_the_focus_alone() {
     let mut t = tree(false, FocusPolicy::StrongFocus);
 
-    t.b.borrow().set_enabled(false);
+    set_widget_enabled(&t.b, false);
     t.next_event();
     assert!(t.events().is_empty());
     assert_eq!(t.focus(), Some(t.a.borrow().id()));
     assert!(t.a.borrow().has_focus());
+}
+
+/// A borrowed ancestor (say, disabling a child from the parent's event handler) leaves the events
+/// to the next event instead of panicking; the focus state still changes at once.
+#[test]
+fn with_a_borrowed_ancestor_the_events_wait_for_the_next_event() {
+    let mut t = tree(false, FocusPolicy::StrongFocus);
+
+    let guard = t.root.borrow_mut();
+    set_widget_enabled(&t.a, false);
+    drop(guard);
+    assert!(t.events().is_empty());
+    assert!(!t.a.borrow().has_focus());
+    assert_eq!(t.focus(), None);
+
+    t.next_event();
+    assert_eq!(t.events(), ["a:Out:Tab", "b:In:Tab"]);
+    assert_eq!(t.focus(), Some(t.b.borrow().id()));
+}
+
+/// `Widget::set_enabled` on a borrowed widget cannot send the events; they wait for the next one.
+#[test]
+fn the_borrowed_entry_point_defers_the_events() {
+    let mut t = tree(false, FocusPolicy::StrongFocus);
+
+    t.a.borrow().set_enabled(false);
+    assert!(t.events().is_empty());
+    assert_eq!(t.focus(), None);
+
+    t.next_event();
+    assert_eq!(t.events(), ["a:Out:Tab", "b:In:Tab"]);
 }
