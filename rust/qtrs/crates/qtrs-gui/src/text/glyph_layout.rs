@@ -608,19 +608,14 @@ mod tests {
     use std::sync::Arc;
     use crate::text::glyph_face::parse_face;
 
+    /// Arial's regular face, looked up through the font database so every platform finds it
+    /// where it is installed.
     fn get_test_font() -> (Arc<Vec<u8>>, SharedGlyphFace) {
-        let path = std::path::Path::new("C:/Windows/Fonts/arial.ttf");
-        let data = if path.exists() {
-            std::fs::read(path).unwrap()
-        } else {
-            let p2 = std::path::Path::new("C:/Windows/Fonts/segoeui.ttf");
-            if p2.exists() {
-                std::fs::read(p2).unwrap()
-            } else {
-                vec![]
-            }
-        };
-
+        let raw = crate::text::font_database::with_global_font_database(|db| {
+            db.get_raw_font_data("Arial")
+        })
+        .expect("Arial is installed");
+        let data = raw.as_slice().to_vec();
         let face = parse_face(&SharedFontData::from_vec(data.clone()), 0).unwrap();
         (Arc::new(data), face)
     }
