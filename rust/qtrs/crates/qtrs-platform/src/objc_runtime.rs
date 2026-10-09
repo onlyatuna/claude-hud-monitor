@@ -249,7 +249,6 @@ pub struct MockObjectData {
     pub menu: Id,
     pub button: Id,
     pub contents: Id,
-    pub opacity: f64,
     pub visible_frame: CGRect,
     pub scale_factor: f64,
     pub material: NSInteger,
@@ -274,7 +273,6 @@ impl Default for MockObjectData {
             menu: Id::NIL,
             button: Id::NIL,
             contents: Id::NIL,
-            opacity: 1.0,
             visible_frame: CGRect::ZERO,
             scale_factor: 1.0,
             material: 0,
@@ -625,24 +623,8 @@ impl ObjcMsg {
 
         #[cfg(not(target_os = "macos"))]
         {
-            let runtime = MockObjcRuntime::instance();
-            let sel_name = runtime
-                .selectors
-                .lock()
-                .unwrap()
-                .iter()
-                .find(|(_, &v)| v == (sel.0 as usize))
-                .map(|(k, _)| k.clone())
-                .unwrap_or_default();
-
-            if sel_name == "setOpacity:" {
-                runtime.update_object(receiver, |data| {
-                    data.opacity = length;
-                });
-                receiver
-            } else {
-                runtime.allocate_object("NSStatusItem")
-            }
+            let _ = (sel, length);
+            MockObjcRuntime::instance().allocate_object("NSStatusItem")
         }
 
         #[cfg(target_os = "macos")]

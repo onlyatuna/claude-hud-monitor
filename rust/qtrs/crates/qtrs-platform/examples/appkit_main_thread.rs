@@ -1009,18 +1009,34 @@ mod checks {
     }
 
     fn window_present_opacity(t: &mut Recorder) {
-        let (win, layer) = presented_window(0.85);
-        // Qt keeps window opacity in [NSWindow alphaValue] (QCocoaWindow::setOpacity,
-        // qcocoawindow.mm:1206-1213); qtrs passes it to present(). Either way the frame must be
-        // composited at 0.85: alphaValue x layer opacity.
-        let alpha: f64 = send(win.ns_window(), "alphaValue");
-        let layer_opacity: f32 = send(layer, "opacity");
-        println!("  INFO [window alphaValue] {alpha}, [layer opacity] {layer_opacity}");
-        let effective = alpha * f64::from(layer_opacity);
-        t.expect(
-            (effective - 0.85).abs() < 1e-3,
-            &format!("present(_, 0.85): alphaValue x layer opacity = {effective}, expected 0.85"),
-        );
+        // Qt has one opacity knob: QCocoaWindow::setOpacity sets [NSWindow alphaValue]
+        // (qcocoawindow.mm:1206-1213) and never touches the layer. The HUD path is
+        // set_opacity(v) then present(_, v) (PlatformWindow::present_region), so the frame
+        // must be composited at v exactly once: alphaValue = v and [layer opacity] = 1.
+        for v in [0.0f32, 0.5, 0.85, 0.88, 1.0] {
+            let mut win = window(
+                "present",
+                Rect::new(100, 100, 100, 100),
+                WindowFlags::FRAMELESS,
+            );
+            win.show();
+            win.set_opacity(v);
+            let mut frame = pixmap(100, Color::from_rgba8(255, 0, 0, 255));
+            println!("  INFO present(_, {v}) -> {:?}", win.present(&mut frame, v));
+            let content: Id = send(win.ns_window(), "contentView");
+            let layer: Id = send(content, "layer");
+            let alpha: f64 = send(win.ns_window(), "alphaValue");
+            let layer_opacity: f32 = send(layer, "opacity");
+            println!("  INFO [window alphaValue] {alpha}, [layer opacity] {layer_opacity}");
+            t.expect(
+                (alpha - f64::from(v)).abs() < 1e-3,
+                &format!("set_opacity({v}): alphaValue = {alpha}, expected {v}"),
+            );
+            t.expect(
+                (layer_opacity - 1.0).abs() < 1e-3,
+                &format!("present(_, {v}): [layer opacity] = {layer_opacity}, expected 1"),
+            );
+        }
     }
 
     fn backdrop_on(t: &mut Recorder) {

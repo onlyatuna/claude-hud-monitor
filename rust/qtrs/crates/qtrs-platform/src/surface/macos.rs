@@ -79,7 +79,10 @@ impl CocoaLayerSurface {
         &self.pixel_buffer
     }
 
-    pub fn commit_to_layer(&self, opacity: f32) -> Result<(), &'static str> {
+    /// Window opacity is not applied here: like `QCocoaWindow::setOpacity`
+    /// (qcocoawindow.mm:1206-1213) it lives only in `[NSWindow alphaValue]`
+    /// (`CocoaNativeWindow::set_opacity`); the layer stays at opacity 1.
+    pub fn commit_to_layer(&self) -> Result<(), &'static str> {
         let layer = Id(self.layer_id as *mut std::ffi::c_void);
         if layer.is_nil() {
             return Ok(());
@@ -132,7 +135,6 @@ impl CocoaLayerSurface {
                 Sel::register("setContents:"),
                 Id(cg_image as *mut std::ffi::c_void),
             );
-            ObjcMsg::send_length(layer, Sel::register("setOpacity:"), opacity as f64);
             ObjcMsg::send_class_0(ca_transaction, Sel::register("commit"));
 
             if !cg_image.is_null() {
@@ -148,13 +150,11 @@ impl CocoaLayerSurface {
 
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = opacity;
             ObjcMsg::send_id(
                 layer,
                 Sel::register("setContents:"),
                 Id(self.pixel_buffer.as_ptr() as *mut std::ffi::c_void),
             );
-            ObjcMsg::send_length(layer, Sel::register("setOpacity:"), opacity as f64);
         }
 
         Ok(())
@@ -186,7 +186,7 @@ impl PlatformSurface for CocoaLayerSurface {
         Ok(())
     }
 
-    fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {
+    fn present(&mut self, pixmap: &mut Pixmap, _opacity: f32) -> Result<(), &'static str> {
         let p_width = pixmap.physical_width();
         let p_height = pixmap.physical_height();
 
@@ -200,7 +200,7 @@ impl PlatformSurface for CocoaLayerSurface {
 
         self.pixel_buffer[..copy_len].copy_from_slice(&src_data[..copy_len]);
 
-        self.commit_to_layer(opacity)?;
+        self.commit_to_layer()?;
         Ok(())
     }
 
@@ -237,7 +237,7 @@ impl PlatformSurface for CocoaLayerSurface {
             }
         }
 
-        self.commit_to_layer(opacity)?;
+        self.commit_to_layer()?;
         Ok(())
     }
 }
