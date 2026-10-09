@@ -71,6 +71,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 4. **整合失敗的處理**：完整測試失敗不代表本次修改有錯，完整測試通過也不取代針對性測試。先單獨重跑失敗項，並在基準版本（修改前的 commit）重跑，判斷是否與本批修改有關，再把結果記下。不得為了刷成全綠而反覆重跑整套。
 5. **真實 HUD 手動 smoke test**：依影響範圍決定；發布前必做。
 6. **測試去重**：每個重要的失敗模式至少要有一個看名稱就知道驗哪個契約的測試。只合併 setup、操作與斷言都相同的案例；不同的不變條件（例如「狀態沒變不送事件」與「焦點先移交再送事件」）即使放在同一個測試，也要有獨立斷言。判斷重複要看測試內容，不能只看名稱。修改前失敗的證據記在 RC 小節，不因合併而遺失。
+   - 全面審查（RC-43 之後）：qtrs-core 刪 4 項（其中 2 項把獨有斷言併入保留的測試）、qtrs-gui 刪 3 項（2 項併入），其餘 crate 與主 crate 無嚴格子集，全部保留；跨檔候選（`test_widgets_system` 對 layout／事件／按鈕測試）也逐一確認非子集。
 
 | 檢查項目 | 每個 RC | 批次整合 |
 |---|---|---|
@@ -144,7 +145,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G2.1.f [P2, READ]** `set_parent` 跨 registry 鎖與物件借用，非原子；`QT_CPP_MAPPING.md` 寫「atomically」不實。
   - **G2.1.g [D]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。理由：Rust 所有權；須在文件註明「parent 只銷毀它擁有的 Box」。
 - **Test**
-  - 既有：`test_ownership_and_deletion_cascade`、`test_child_unlink_notifies_parent`、`test_reparent_transfers_ownership_without_split_brain`、`test_borrowed_parent_links_only_update_child_metadata`。
+  - 既有：`test_ownership_and_deletion_cascade`、`test_child_unlink_notifies_parent`、`reparent_owned_moves_ownership_to_a_new_parent`（`test_owned_child_ownership.rs`；原 `test_reparent_transfers_ownership_without_split_brain` 為其子集，已在測試去重時併入）、`test_borrowed_parent_links_only_update_child_metadata`。
   - 必要：`set_parent_none_keeps_child_alive`（Drop 計數器；本次 RAN 重現失敗）；`children_destroyed_in_insertion_order`；`event_filter_on_parent_sees_child_added_removed`；`drop_child_while_parent_borrowed_leaves_no_stale_id`；`add_owned_child_sends_child_added`。
 - **HUD usage**：Python `QTimer(self)`（`refresh_controller.py:35,39`）、`UsageTable(parent=self)` + `old_table.deleteLater()`（`hud_window.py:262-266`）、`widget.setParent(None)` + `deleteLater()`（`:187-189`）。Rust：`rust/src` 不用 core `set_parent`/`add_owned_child`（grep 為空）；走 `qtrs-widgets` 自己的 `set_parent_widget`。
 
@@ -407,7 +408,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 ### C6.1 emit、connect、disconnect、順序
 - **Qt behavior** `[QT-DOC]`，括號內 `[INFERENCE]`：slot 依連線順序執行；發射期間被 disconnect／刪除的 receiver 的 slot **不再被呼叫**（`[INFERENCE]` doActivate 跳過 null receiver）；發射期間新增的連線不在本次發射中被呼叫（`[INFERENCE]`）；允許重入 emit。
 - **qtrs required**：MUST 連線順序；MUST 重入 emit 與發射中 connect 安全；**MUST 在 slot 執行之前已被 disconnect 的連線不被呼叫**；MUST `disconnect` 回傳是否真的移除了東西。
-- **Current implementation**（`core/signal/signal.rs`）：`Signal<T>` 為 `Arc<Mutex<…>>` 訂閱者列表；`emit` 先**快照**列表、放掉鎖再呼叫，並有 `highest_id` 保護。`IMPLEMENTED`：順序（`test_basic_emission`）、發射中 connect（`test_signal_emit_highest_id_protection`、`test_reentrancy_and_highest_id_guard`）、connect／disconnect／scoped／concurrent emit／non-Send 載荷。
+- **Current implementation**（`core/signal/signal.rs`）：`Signal<T>` 為 `Arc<Mutex<…>>` 訂閱者列表；`emit` 先**快照**列表、放掉鎖再呼叫，並有 `highest_id` 保護。`IMPLEMENTED`：順序（`test_basic_emission`）、發射中 connect（`test_signal_emit_highest_id_protection`；原 `test_reentrancy_and_highest_id_guard` 為重複，已在測試去重時刪除）、connect／disconnect／scoped／concurrent emit／non-Send 載荷。
 - **Known gap**
   - **G6.1.a [P0, RAN；已修復：RC-03]** **發射期間被 disconnect 的 slot 仍會執行**（快照在呼叫前複製、之後不再檢查）。重現：slot A 在發射中 disconnect slot B → B 仍被呼叫 1 次。
   - **G6.1.b [P0, RAN；已修復：RC-02]** **兩個 Signal 的 `ConnectionId` 在全域表 `GLOBAL_CONNECTIONS` 碰撞**。每個 Signal 以自己的計數器從 1 開始編號，卻共用以 id 為 key 的全域 `HashMap`。重現：兩個 `Signal<i32>` 各以 `connect_to` 接一個 receiver，`id_a=1 id_b=1`；銷毀 receiver 1 後 `a.emit` **仍呼叫 slot**（對照組：只有一個 Signal 時正確為 0 次）。後果：receiver 銷毀時的自動斷線**靜默失效**；`Signal::disconnect(id)` 會刪掉別的 Signal 的全域記錄。`ConnectionId::next()`（全域計數器）存在但沒有 Signal 使用。

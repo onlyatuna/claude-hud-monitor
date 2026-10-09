@@ -280,15 +280,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pixmap_allocation_and_dpr() {
-        let pm = Pixmap::with_dpr(200, 100, 2.0).expect("allocation failed");
-        assert_eq!(pm.physical_width(), 200);
-        assert_eq!(pm.physical_height(), 100);
-        assert_eq!(pm.device_pixel_ratio(), 2.0);
-        assert_eq!(pm.size(), Size::new(100, 50));
-    }
-
-    #[test]
     fn test_pixmap_fill_and_raw_bytes() {
         let mut pm = Pixmap::new(2, 2).expect("allocation failed");
 

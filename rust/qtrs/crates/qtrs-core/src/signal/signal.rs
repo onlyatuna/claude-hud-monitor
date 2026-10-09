@@ -784,19 +784,6 @@ mod tests {
     }
 
     #[test]
-    fn test_signal_scoped_connection() {
-        let signal: Signal<String> = Signal::new();
-        assert_eq!(signal.subscriber_count(), 0);
-
-        {
-            let _scoped = signal.connect_scoped(|_| {});
-            assert_eq!(signal.subscriber_count(), 1);
-        }
-
-        assert_eq!(signal.subscriber_count(), 0);
-    }
-
-    #[test]
     fn test_signal_disconnect_receiver() {
         let signal: Signal<u64> = Signal::new();
         let receiver1 = ObjectId::next();
@@ -925,6 +912,7 @@ mod tests {
     fn test_scoped_connection_auto_disconnect() {
         let signal = Signal::<&str>::new();
         let count = Arc::new(AtomicUsize::new(0));
+        assert_eq!(signal.subscriber_count(), 0);
 
         {
             let c = count.clone();
@@ -932,35 +920,15 @@ mod tests {
             let _guard = signal.connect_scoped(move |_| {
                 c.fetch_add(1, Ordering::SeqCst);
             });
+            assert_eq!(signal.subscriber_count(), 1);
 
             signal.emit(&"first");
             assert_eq!(count.load(Ordering::SeqCst), 1);
         }
 
+        assert_eq!(signal.subscriber_count(), 0);
         signal.emit(&"second");
         assert_eq!(count.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn test_reentrancy_and_highest_id_guard() {
-        let signal = Arc::new(Signal::<i32>::new());
-        let dynamic_called = Arc::new(AtomicBool::new(false));
-
-        let sig_clone = signal.clone();
-        let dyn_flag = dynamic_called.clone();
-
-        signal.connect(move |_| {
-            let flag = dyn_flag.clone();
-            sig_clone.connect(move |_| {
-                flag.store(true, Ordering::SeqCst);
-            });
-        });
-
-        signal.emit(&1);
-        assert_eq!(dynamic_called.load(Ordering::SeqCst), false);
-
-        signal.emit(&2);
-        assert_eq!(dynamic_called.load(Ordering::SeqCst), true);
     }
 
     #[test]

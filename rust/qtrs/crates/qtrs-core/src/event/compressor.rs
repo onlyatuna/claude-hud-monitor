@@ -93,25 +93,6 @@ mod tests {
     }
 
     #[test]
-    fn test_update_request_compression() {
-        let compressor = CoreCompressor;
-        let obj_a = ObjectId(1);
-        let mut queue: Vec<PostedEvent> = Vec::new();
-
-        queue.push(PostedEvent {
-            receiver: obj_a,
-            event: make_event(EventKind::UpdateRequest),
-            priority: 0,
-        });
-
-        let new_event = make_event(EventKind::UpdateRequest);
-        let compressed = compress_event(&mut queue, obj_a, &new_event, &compressor);
-
-        assert!(compressed);
-        assert_eq!(queue.len(), 1);
-    }
-
-    #[test]
     fn test_different_receivers_not_compressed() {
         let compressor = CoreCompressor;
         let obj_a = ObjectId(1);

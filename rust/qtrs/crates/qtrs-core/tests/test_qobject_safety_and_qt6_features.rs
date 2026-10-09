@@ -70,57 +70,6 @@ impl QObject for TestWidget {
 // -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
-// 2. Double Ownership Conflict & Tree Cascade Tests
-// -----------------------------------------------------------------------------
-
-#[test]
-fn test_reparent_transfers_ownership_without_split_brain() {
-    let mut parent_a = Box::new(TestWidget::new("parent_a"));
-    let parent_a_id = parent_a.data.id;
-    // SAFETY: parent remains boxed, unmoved, and owner-thread accessed until dropped.
-    unsafe { register_qobject(&mut *parent_a) };
-
-    let mut parent_b = Box::new(TestWidget::new("parent_b"));
-    let parent_b_id = parent_b.data.id;
-    // SAFETY: parent remains boxed, unmoved, and owner-thread accessed until dropped.
-    unsafe { register_qobject(&mut *parent_b) };
-
-    let child = Box::new(TestWidget::new("child_widget"));
-    let child_liveness = child.data.liveness();
-    // SAFETY: child remains boxed and owned at a stable address by parent_a.
-    let child_id = unsafe { parent_a.data.add_owned_child(child) };
-
-    assert_eq!(parent_a.data.children.len(), 1);
-    assert_eq!(parent_b.data.children.len(), 0);
-
-    // Reparent child to parent_b
-    let released = qtrs_core::object::reparent_owned(child_id, Some(parent_b_id)).unwrap();
-    assert!(released.is_none(), "ownership moved to parent_b, nothing released");
-
-    // Both logical children and physical ownership are transferred without leaking or trapping
-    assert_eq!(parent_a.data.children.len(), 0);
-    assert_eq!(parent_b.data.children.len(), 1);
-
-    // Dropping parent_a does NOT destroy child because child belongs to parent_b now
-    drop(parent_a);
-    // SAFETY: parent has dropped and no callbacks can still be active.
-    unsafe { unregister_qobject(parent_a_id) };
-    assert!(
-        child_liveness.load(Ordering::SeqCst),
-        "Child must still be alive after parent_a dropped"
-    );
-
-    // Dropping parent_b cascades deletion to child
-    drop(parent_b);
-    // SAFETY: parent destruction completed on the registration thread.
-    unsafe { unregister_qobject(parent_b_id) };
-    assert!(
-        !child_liveness.load(Ordering::SeqCst),
-        "Child must be cascade-destroyed with parent_b"
-    );
-}
-
-// -----------------------------------------------------------------------------
 // 3. Thread Affinity & Subtree moveToThread Migration Tests
 // -----------------------------------------------------------------------------
 

@@ -149,6 +149,8 @@ fn reparent_owned_moves_ownership_to_a_new_parent() {
     let mut a = Node::registered();
     let b = Node::registered();
     let (child_id, alive) = adopt(&mut a);
+    assert_eq!(a.data.children, vec![child_id]);
+    assert!(b.data.children.is_empty());
 
     assert!(reparent_owned(child_id, Some(b.data.id)).unwrap().is_none());
 

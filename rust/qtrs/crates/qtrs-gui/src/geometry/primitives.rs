@@ -1590,6 +1590,15 @@ mod tests {
 
         let disjoint = Rect::new(300, 300, 50, 50);
         assert_eq!(r1.intersected(&disjoint), Rect::default());
+
+        // Origin-anchored pair: overlap, disjoint emptiness and bounding union.
+        let o1 = Rect::new(0, 0, 100, 100);
+        assert_eq!(o1.intersected(&r2), Rect::new(50, 50, 50, 50));
+        assert!(o1.intersects(&r2));
+        let far = Rect::new(200, 200, 50, 50);
+        assert!(!o1.intersects(&far));
+        assert!(o1.intersected(&far).is_empty());
+        assert_eq!(o1.united(&r2), Rect::new(0, 0, 150, 150));
     }
 
     #[test]
@@ -1676,6 +1685,12 @@ mod tests {
         assert_eq!(mf1 + mf2, MarginsF::new(11.0, 21.0, 31.0, 41.0));
         assert_eq!(mf1 - mf2, MarginsF::new(10.0, 20.0, 30.0, 40.0));
         assert_eq!(mf1.to_i32(), Margins::new(11, 21, 31, 41));
+
+        let p1 = Margins::new(5, 10, 5, 10);
+        let p2 = Margins::new(2, 2, 2, 2);
+        assert_eq!(p1 + p2, Margins::new(7, 12, 7, 12));
+        assert_eq!(p1 - p2, Margins::new(3, 8, 3, 8));
+        assert!(!p1.is_null());
     }
 
     // =========================================================================
@@ -1748,38 +1763,6 @@ mod tests {
             !r.contains(Point::new(9, 10)),
             "Exterior point must be excluded"
         );
-    }
-
-    #[test]
-    fn test_rect_intersection_and_union() {
-        let r1 = Rect::new(0, 0, 100, 100);
-        let r2 = Rect::new(50, 50, 100, 100);
-
-        // Intersection
-        let inter = r1.intersected(&r2);
-        assert_eq!(inter, Rect::new(50, 50, 50, 50));
-        assert!(r1.intersects(&r2));
-
-        // Intersection
-        let r3 = Rect::new(200, 200, 50, 50);
-        assert!(!r1.intersects(&r3));
-        assert!(r1.intersected(&r3).is_empty());
-
-        // Bounding union
-
-        let union_rect = r1.united(&r2);
-        assert_eq!(union_rect, Rect::new(0, 0, 150, 150));
-    }
-
-    #[test]
-    fn test_margins_padding() {
-        let m1 = Margins::new(5, 10, 5, 10);
-        let m2 = Margins::new(2, 2, 2, 2);
-
-        assert_eq!(m1 + m2, Margins::new(7, 12, 7, 12));
-        assert_eq!(m1 - m2, Margins::new(3, 8, 3, 8));
-        assert!(!m1.is_null());
-        assert!(Margins::new(0, 0, 0, 0).is_null());
     }
 
     #[test]
