@@ -670,6 +670,15 @@ mod checks {
             send::<isize>(win.ns_window(), "level"),
             0,
         );
+        // The level comes from all flags: dropping the hint from a Tool window keeps it floating.
+        let mut tool = window("level", Rect::new(120, 120, 160, 80), WindowFlags::TOOL);
+        tool.set_stays_on_top(true);
+        tool.set_stays_on_top(false);
+        t.eq(
+            "[window level] TOOL after set_stays_on_top(true) then (false)",
+            send::<isize>(tool.ns_window(), "level"),
+            3,
+        );
     }
 
     fn window_show_hide(t: &mut Recorder) {

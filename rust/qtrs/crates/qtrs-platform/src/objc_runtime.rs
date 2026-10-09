@@ -154,7 +154,11 @@ pub const NS_WINDOW_STYLE_MASK_FULL_SIZE_CONTENT_VIEW: NSUInteger = 1 << 15;
 
 pub const NS_BACKING_STORE_BUFFERED: NSUInteger = 2;
 
-pub const NS_FLOATING_WINDOW_LEVEL: NSInteger = 3; // kCGFloatingWindowLevelKey
+// NSWindowLevel values used by QCocoaWindow::windowLevel (qcocoawindow.mm:548-564).
+pub const NS_NORMAL_WINDOW_LEVEL: NSInteger = 0; // kCGNormalWindowLevel
+pub const NS_FLOATING_WINDOW_LEVEL: NSInteger = 3; // kCGFloatingWindowLevel
+pub const NS_MODAL_PANEL_WINDOW_LEVEL: NSInteger = 8; // kCGModalPanelWindowLevel
+pub const NS_SCREEN_SAVER_WINDOW_LEVEL: NSInteger = 1000; // kCGScreenSaverWindowLevel
 pub const NS_STATUS_WINDOW_LEVEL: NSInteger = 25; // System status bar window level
 
 // ---------------------------------------------------------------------------

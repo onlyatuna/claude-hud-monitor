@@ -878,7 +878,7 @@ fn test_macos_objc_runtime_and_cocoa_window_lifecycle() {
     use qtrs_gui::geometry::primitives::Rect;
     use qtrs_platform::{
         ClosureWindowEventHandler, CocoaNativeWindow, MockObjcRuntime, PlatformWindow, WindowFlags,
-        WindowSystemEvent, NS_FLOATING_WINDOW_LEVEL,
+        WindowSystemEvent, NS_MODAL_PANEL_WINDOW_LEVEL,
     };
     use std::sync::{Arc, Mutex};
 
@@ -902,7 +902,7 @@ fn test_macos_objc_runtime_and_cocoa_window_lifecycle() {
         .expect("failed to get NSWindow mock data");
     assert_eq!(window_data.class_name, "NSWindow");
     assert_eq!(window_data.title, "macOS HUD Panel");
-    assert_eq!(window_data.level, NS_FLOATING_WINDOW_LEVEL);
+    assert_eq!(window_data.level, NS_MODAL_PANEL_WINDOW_LEVEL);
     assert!(window_data.ignores_mouse_events);
 
     win.show();

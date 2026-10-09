@@ -225,7 +225,11 @@ fn cocoa_window_is_active_only_when_it_is_the_key_window() {
     let data = MockObjcRuntime::instance().get_object_data(tip.ns_window()).unwrap();
     assert!(data.is_visible, "the tip is on screen");
     assert!(!tip.is_active(), "showing a tooltip must not take key status");
-    assert_eq!(data.level, qtrs_platform::NS_FLOATING_WINDOW_LEVEL, "tooltips float");
+    assert_eq!(
+        data.level,
+        qtrs_platform::NS_SCREEN_SAVER_WINDOW_LEVEL,
+        "tooltips go above stays-on-top windows"
+    );
 }
 
 #[test]

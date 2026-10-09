@@ -7,7 +7,8 @@ use std::sync::Mutex;
 
 use crate::objc_runtime::{
     CGFloat, CGRect, CGSize, Class, Id, ObjcMsg, Sel, NS_BACKING_STORE_BUFFERED,
-    NS_FLOATING_WINDOW_LEVEL, NS_WINDOW_STYLE_MASK_BORDERLESS, NS_WINDOW_STYLE_MASK_CLOSABLE,
+    NS_FLOATING_WINDOW_LEVEL, NS_MODAL_PANEL_WINDOW_LEVEL, NS_NORMAL_WINDOW_LEVEL,
+    NS_SCREEN_SAVER_WINDOW_LEVEL, NS_WINDOW_STYLE_MASK_BORDERLESS, NS_WINDOW_STYLE_MASK_CLOSABLE,
     NS_WINDOW_STYLE_MASK_MINIATURIZABLE, NS_WINDOW_STYLE_MASK_RESIZABLE,
     NS_WINDOW_STYLE_MASK_TITLED,
 };
@@ -128,15 +129,13 @@ impl CocoaNativeWindow {
         ObjcMsg::send_bool(ns_view, Sel::register("setWantsLayer:"), true);
         let layer = ObjcMsg::send_0(ns_view, Sel::register("layer"));
 
+        ObjcMsg::send_int(
+            ns_window,
+            Sel::register("setLevel:"),
+            cocoa_window_level(flags),
+        );
         let stays_on_top =
             flags.contains(WindowFlags::STAYS_ON_TOP) || flags.contains(WindowFlags::TOOLTIP);
-        if stays_on_top {
-            ObjcMsg::send_int(
-                ns_window,
-                Sel::register("setLevel:"),
-                NS_FLOATING_WINDOW_LEVEL,
-            );
-        }
 
         let click_through = flags.contains(WindowFlags::CLICK_THROUGH);
         if click_through {
@@ -416,9 +415,15 @@ impl PlatformWindow for CocoaNativeWindow {
     }
 
     fn set_stays_on_top(&mut self, enabled: bool) {
+        // Qt changes the hint through setWindowFlags, which recomputes the level from all
+        // flags (qcocoawindow.mm:749).
         self.stays_on_top = enabled;
-        let level = if enabled { NS_FLOATING_WINDOW_LEVEL } else { 0 };
-        ObjcMsg::send_int(self.ns_window, Sel::register("setLevel:"), level);
+        self.flags.set(WindowFlags::STAYS_ON_TOP, enabled);
+        ObjcMsg::send_int(
+            self.ns_window,
+            Sel::register("setLevel:"),
+            cocoa_window_level(self.flags),
+        );
     }
 
     fn set_click_through(&mut self, enabled: bool) {
@@ -517,6 +522,20 @@ impl PlatformWindow for CocoaNativeWindow {
             self.dispatch_cocoa_event(event);
         }
         count
+    }
+}
+
+/// `QCocoaWindow::windowLevel` (qcocoawindow.mm:548-564): Tool floats, StaysOnTop goes above
+/// Tool windows, ToolTip goes above StaysOnTop windows.
+pub fn cocoa_window_level(flags: WindowFlags) -> isize {
+    if flags.contains(WindowFlags::TOOLTIP) {
+        NS_SCREEN_SAVER_WINDOW_LEVEL
+    } else if flags.contains(WindowFlags::STAYS_ON_TOP) {
+        NS_MODAL_PANEL_WINDOW_LEVEL
+    } else if flags.contains(WindowFlags::TOOL) {
+        NS_FLOATING_WINDOW_LEVEL
+    } else {
+        NS_NORMAL_WINDOW_LEVEL
     }
 }
 
