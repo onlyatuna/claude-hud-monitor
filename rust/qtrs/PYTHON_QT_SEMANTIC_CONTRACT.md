@@ -1018,7 +1018,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.13.d [P0, RAN；已修復：RC-46]** `present()` 觸發 `NSInvalidArgumentException: -[NSView setContents:]: unrecognized selector`，程序中止：`CocoaLayerSurface::commit_to_layer`（`surface/macos.rs`）把 NSView 當 CALayer；Qt 設定的是視圖 layer 的 `contents`（`qcocoabackingstore.mm:392`）。HUD 每次重繪都 present，macOS 上第一次繪製即中止 `[INFERENCE：未在 macOS 執行 HUD]`。
   - **G11.13.e [P1, RAN；已修復：RC-47]** `set_backdrop(None)` 觸發 `NSInvalidArgumentException: -[NSView setState:]: unrecognized selector`，程序中止（`backdrop.rs:181-187` 對內容視圖送 `setState:`）；Qt 以 `removeFromSuperview` 移除自己建立的 effect view（`qcocoawindow.mm:2258-2263`）。
   - **G11.13.f [P2, RAN]** `set_backdrop(Acrylic)` 加入的 `NSVisualEffectView` 的 layer `zPosition` 為 0；Qt 設為 `-FLT_MAX`，疊在內容之下（`qcocoawindow.mm:2269-2270`）。material／blendingMode／state 與 qtrs 的對應值相符。
-  - **G11.13.g [P2, RAN]** 最小尺寸設在 `minSize`（frame）而非 `contentMinSize`：有標題列的視窗 `contentMinSize` 為 200x118，預期 200x150（`qcocoawindow.mm:1185`）。
+  - **G11.13.g [P2, RAN；已修復：RC-52]** 最小尺寸設在 `minSize`（frame）而非 `contentMinSize`：有標題列的視窗 `contentMinSize` 為 200x118，預期 200x150（`qcocoawindow.mm:1185`）。
   - **G11.13.h [P2, RAN]** `start_system_move()` 在未按下滑鼠鍵時回傳 true（Qt 只在只按左鍵時進行，否則 false：`qcocoawindow.mm:366-370`）；`start_system_resize()` 回傳 true（`QCocoaWindow` 未實作，`QPlatformWindow` 回傳 false：`qplatformwindow.cpp:495-498`）。
   - **G11.13.i [P2, RAN]** 系統匣項目長度為 `NSVariableStatusItemLength`（−1）；Qt 用 `NSSquareStatusItemLength`（−2，`qcocoasystemtrayicon.mm:37`）。
   - **G11.13.j [P1, RAN]** `set_tooltip` 設的是按鈕 `title`（文字直接顯示在選單列），`toolTip` 為 nil；Qt 設 `button.toolTip`（`qcocoasystemtrayicon.mm:195-200`）。
@@ -1256,7 +1256,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 73 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.m、G11.13.n、G11.13.o、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 74 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.g、G11.13.m、G11.13.n、G11.13.o、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1558,7 +1558,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.d | P0, RAN；已修復：RC-46 | `present()` 對 NSView 送 `setContents:`，ObjC 例外中止 |
 | G11.13.e | P1, RAN；已修復：RC-47 | `set_backdrop(None)` 對 NSView 送 `setState:`，ObjC 例外中止 |
 | G11.13.f | P2, RAN | effect view 未疊在內容之下 |
-| G11.13.g | P2, RAN | 最小尺寸設 `minSize` 而非 `contentMinSize` |
+| G11.13.g | P2, RAN；已修復：RC-52 | 最小尺寸設 `minSize` 而非 `contentMinSize` |
 | G11.13.h | P2, RAN | `start_system_move`／`start_system_resize` 回傳值與 Qt 不同 |
 | G11.13.i | P2, RAN | 系統匣項目長度非 `NSSquareStatusItemLength` |
 | G11.13.j | P1, RAN | 系統匣 tooltip 設成按鈕標題 |
@@ -2168,6 +2168,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（GitHub Actions macos-latest）。修改前 run 37991360351：TOOL 0（應 3）、STAYS_ON_TOP 3（應 8）、TOOLTIP 3（應 1000）、`set_stays_on_top(true)` 3（應 8）、TOOL 視窗 `set_stays_on_top(true)` 再 `(false)` 為 0（應 3）。修改後 run 37991736449：7 項全 PASS，`window_level` 由 FAILED 轉 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
 - **Status**：**已修復**。新增 `cocoa_window_level(flags)`（與 Qt 同序：ToolTip > StaysOnTop > Tool > Normal），`new` 一律設定層級，`set_stays_on_top` 更新 `flags` 後重算。新增常數 `NS_NORMAL_WINDOW_LEVEL`、`NS_MODAL_PANEL_WINDOW_LEVEL`、`NS_SCREEN_SAVER_WINDOW_LEVEL`。mock 測試（`test_platform_abstractions.rs` HUD 面板、`test_window_activation.rs` tooltip）的預期改為 Qt 值。
 - **Residual**：qtrs 沒有 Popup 型別與 transient parent，Qt 的 `NSPopUpMenuWindowLevel` 與 transient parent 層級（`qcocoawindow.mm:556-557,566-595`）未對應（READ）。`stays_on_top` 欄位對 TOOLTIP 仍為 true（行為未改，另案）。HUD 為 STAYS_ON_TOP，層級由 3 變 8（[INFERENCE] 影響其與其他浮動視窗的前後順序，HUD 未在 macOS 執行）。
+
+#### RC-52 Cocoa 最小尺寸設在 `contentMinSize`
+
+- **Contract gaps**：G11.13.g（已修復）。總數不變 361，已修復 73 → 74。
+- **Qt behavior** `[QT-SRC qcocoawindow.mm:1181-1185]`：`propagateSizeHints` 設 `window.contentMinSize`（內容區最小尺寸），未設定時為 (0, 0)。
+- **qtrs root**：`CocoaNativeWindow::set_minimum_size` 送 `setMinSize:`（frame 最小尺寸，含標題列），內容區可比要求的小。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，既有檢查 `window_opacity_min_size_move`）。修改前 run 37991736449：有標題列的視窗 `set_minimum_size(200, 150)` 後 `[window contentMinSize]` 為 200×118。修改後 run 37992242687：200×150 PASS。該檢查仍 FAILED，原因為 `start_system_move`／`start_system_resize` 的回傳值（G11.13.h，另案）；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
+- **Status**：**已修復**。改送 `setContentMinSize:`。mock `send_size` 不記錄 selector，無 mock 測試受影響。
+- **Residual**：Qt 同時設 `contentMaxSize` 與 `resizeIncrements`（`qcocoawindow.mm:1187-1198`），qtrs 沒有最大尺寸 API（READ）。HUD 未在 macOS 執行。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

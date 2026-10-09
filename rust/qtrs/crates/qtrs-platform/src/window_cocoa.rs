@@ -475,10 +475,12 @@ impl PlatformWindow for CocoaNativeWindow {
     }
 
     fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
+        // Qt: QCocoaWindow::propagateSizeHints sets window.contentMinSize, the minimum of the
+        // content area (qcocoawindow.mm:1181-1185), not the frame's minSize.
         self.min_size = (min_w.max(0), min_h.max(0));
         ObjcMsg::send_size(
             self.ns_window,
-            Sel::register("setMinSize:"),
+            Sel::register("setContentMinSize:"),
             CGSize::new(self.min_size.0 as CGFloat, self.min_size.1 as CGFloat),
         );
     }
