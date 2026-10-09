@@ -848,6 +848,32 @@ impl ObjcMsg {
         }
     }
 
+    /// Sends a message with 1 object argument that returns a BOOL (e.g., isEqualToString:).
+    pub fn send_id_bool_return(receiver: Id, sel: Sel, arg: Id) -> bool {
+        if receiver.is_nil() {
+            return false;
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (sel, arg);
+            false
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let res: BOOL = unsafe {
+                let msg_send: unsafe extern "C" fn(
+                    *mut c_void,
+                    *const c_void,
+                    *mut c_void,
+                ) -> BOOL = std::mem::transmute(native_bindings::objc_msgSend as *const ());
+                msg_send(receiver.0, sel.0, arg.0)
+            };
+            res == YES
+        }
+    }
+
     /// Sends a zero-argument message and returns a CGRect struct value (e.g., frame, visibleFrame)
     pub fn send_rect_return(receiver: Id, sel: Sel) -> CGRect {
         if receiver.is_nil() {

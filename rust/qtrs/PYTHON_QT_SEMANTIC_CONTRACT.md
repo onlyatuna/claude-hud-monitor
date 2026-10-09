@@ -1022,7 +1022,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.13.h [P2, RAN；已修復：RC-53]** `start_system_move()` 在未按下滑鼠鍵時回傳 true（Qt 只在只按左鍵時進行，否則 false：`qcocoawindow.mm:366-370`）；`start_system_resize()` 回傳 true（`QCocoaWindow` 未實作，`QPlatformWindow` 回傳 false：`qplatformwindow.cpp:495-498`）。
   - **G11.13.i [P2, RAN；已修復：RC-56]** 系統匣項目長度為 `NSVariableStatusItemLength`（−1）；Qt 用 `NSSquareStatusItemLength`（−2，`qcocoasystemtrayicon.mm:37`）。
   - **G11.13.j [P1, RAN；已修復：RC-57]** `set_tooltip` 設的是按鈕 `title`（文字直接顯示在選單列），`toolTip` 為 nil；Qt 設 `button.toolTip`（`qcocoasystemtrayicon.mm:195-200`）。
-  - **G11.13.k [P1, RAN]** `CocoaTheme` 在外觀為 Aqua 時回報 Dark：`query_color_scheme` 只要外觀名稱非 nil 就回 Dark（`theme.rs`）；Qt 取 `bestMatchFromAppearancesWithNames:@[Aqua, DarkAqua]`（`qcocoatheme.mm:507-509`）。
+  - **G11.13.k [P1, RAN；已修復：RC-58]** `CocoaTheme` 在外觀為 Aqua 時回報 Dark：`query_color_scheme` 只要外觀名稱非 nil 就回 Dark（`theme.rs`）；Qt 取 `bestMatchFromAppearancesWithNames:@[Aqua, DarkAqua]`（`qcocoatheme.mm:507-509`）。
   - **G11.13.l [P1, RAN；原因未定]** `show()`（`makeKeyAndOrderFront:`）後視窗不是 key window，`[NSApp isActive]` 為 NO。qtrs 沒有像 Qt 的 Cocoa 整合那樣設定與啟用 `NSApplication`；是否為 CI 環境（無使用者登入的 GUI session）造成，尚未區分 `[INFERENCE]`。
   - **G11.13.m [P1, RAN；已修復：RC-50]** `present()` 顯示的顏色通道錯置：`commit_to_layer` 以 `kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host`（little-endian 即 BGRA）建立 CGImage，但資料是 tiny-skia 的 RGBA。實測（run 37977238590，RC-46 之後才可觀察）：紅色 pixmap 的 layer 影像中心像素讀回 RGBA `[0, 0, 255, 255]`。Qt 的 backing store 影像格式與 IOSurface 一致（`qcocoabackingstore.mm`）。
   - **G11.13.n [P1, RAN；已修復：RC-49]** `present(_, 0.85)` 後 `[layer opacity]` 讀回 2（`[window alphaValue]` 為 1），有效不透明度不是 0.85。`commit_to_layer` 以 `send_length`（`CGFloat`＝double）送 `setOpacity:`，而 `CALayer.opacity` 是 `float`；是否就是這個 ABI 不符造成，尚未證實 `[INFERENCE]`。Qt 把視窗不透明度放在 `[NSWindow alphaValue]`（`QCocoaWindow::setOpacity`，`qcocoawindow.mm:1206-1213`），不設 layer opacity。
@@ -1256,7 +1256,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 79 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 80 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1562,7 +1562,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.h | P2, RAN；已修復：RC-53 | `start_system_move`／`start_system_resize` 回傳值與 Qt 不同 |
 | G11.13.i | P2, RAN；已修復：RC-56 | 系統匣項目長度非 `NSSquareStatusItemLength` |
 | G11.13.j | P1, RAN；已修復：RC-57 | 系統匣 tooltip 設成按鈕標題 |
-| G11.13.k | P1, RAN | `CocoaTheme` 在 Aqua 外觀回報 Dark |
+| G11.13.k | P1, RAN；已修復：RC-58 | `CocoaTheme` 在 Aqua 外觀回報 Dark |
 | G11.13.l | P1, RAN；原因未定 | `show()` 後視窗不是 key window，NSApp 未啟用 |
 | G11.13.m | P1, RAN；已修復：RC-50 | `present()` 的 CGImage 把 RGBA 位元組當 BGRA，紅色顯示為藍色 |
 | G11.13.n | P1, RAN；已修復：RC-49 | `present(_, 0.85)` 後 layer `opacity` 讀回 2 |
@@ -2222,6 +2222,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（GitHub Actions macos-latest，`status_item_lifecycle`）。修改前 run 37994564912：`toolTip` None，按鈕 title 為 "Claude HUD macOS"。檢查新增「title 不是 tooltip」斷言；修改後 run 37995168958：`toolTip` "Claude HUD macOS"、title ""，兩項 PASS。`status_item_lifecycle` 仍 FAILED，唯一剩餘失敗為 drop 後 `[statusItem statusBar]` 非 nil（原因未判定，見 Residual）；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
 - **Status**：**已修復**。改送 `setToolTip:`，不再設 title。
 - **Residual**：drop（`removeStatusItem:`）後 `[statusItem statusBar]` 仍非 nil：可能是檢查的預期不成立（AppKit 移除後不清除 `statusBar`），也可能是移除未生效，或 qtrs 未 retain `statusItemWithLength:` 的回傳值（Qt `:37` retain、`:55` release）；三者皆未驗證 [INFERENCE]；已列於 C11.13「未判定的檢查」，不另立 gap。
+
+#### RC-58 `CocoaTheme` 依有效外觀的最佳匹配判斷深色
+
+- **Contract gaps**：G11.13.k（已修復）。總數不變 361，已修復 79 → 80。
+- **Qt behavior** `[QT-SRC qcocoatheme.mm:505-511]`：`[NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[Aqua, DarkAqua]]` 為 DarkAqua 時 Dark，否則 Light。
+- **qtrs root**：`CocoaTheme::query_color_scheme` 只要外觀的 `name` 非 nil 就回 Dark（Aqua 也是 Dark）；NSApp 或外觀為 nil 時也回 Dark。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，`theme_color_scheme`）。修改前 run 37995168958：外觀 Aqua、最佳匹配 Aqua，`color_scheme()` 為 Dark（預期 Light）。修改後 run 37995822532：Light PASS，`theme_color_scheme` 由 FAILED 轉 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
+- **Status**：**已修復**。macOS 以 `bestMatchFromAppearancesWithNames:` 加 `isEqualToString:` 判斷（新增 `ObjcMsg::send_id_bool_return`）；mock runtime 沒有外觀，回 Light（與 Qt 不匹配時的結果相同）。
+- **Residual**：CI 只有 Aqua 外觀，DarkAqua 分支未實際執行（READ）。外觀變更通知（Qt `effectiveAppearance` 觀察者）不在此項。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

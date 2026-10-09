@@ -319,25 +319,40 @@ pub mod cocoa_theme {
             Self::default()
         }
 
+        /// `QCocoaTheme::updateColorScheme` (qcocoatheme.mm:505-511): Dark only when the
+        /// effective appearance's best match among Aqua and DarkAqua is DarkAqua; Light otherwise.
+        #[cfg(target_os = "macos")]
         pub fn query_color_scheme() -> ColorScheme {
+            use crate::objc_runtime::{nsstring_from_str, Id};
             let nsapp_class = Class::get("NSApplication").unwrap_or(Class::NIL);
             let nsapp = ObjcMsg::send_class_0(nsapp_class, Sel::register("sharedApplication"));
-            if nsapp.is_nil() {
-                return ColorScheme::Dark;
-            }
-
             let appearance = ObjcMsg::send_0(nsapp, Sel::register("effectiveAppearance"));
-            if appearance.is_nil() {
-                return ColorScheme::Dark;
-            }
 
-            // In macOS AppKit, effectiveAppearance name can be checked
-            let name_id = ObjcMsg::send_0(appearance, Sel::register("name"));
-            if !name_id.is_nil() {
+            let aqua = nsstring_from_str("NSAppearanceNameAqua");
+            let dark_aqua = nsstring_from_str("NSAppearanceNameDarkAqua");
+            let array_class = Id(Class::get("NSArray").unwrap_or(Class::NIL).0);
+            let names = ObjcMsg::send_id(array_class, Sel::register("arrayWithObject:"), aqua);
+            let names = ObjcMsg::send_id(names, Sel::register("arrayByAddingObject:"), dark_aqua);
+            let best = ObjcMsg::send_id(
+                appearance,
+                Sel::register("bestMatchFromAppearancesWithNames:"),
+                names,
+            );
+            let dark =
+                ObjcMsg::send_id_bool_return(best, Sel::register("isEqualToString:"), dark_aqua);
+            ObjcMsg::send_0(aqua, Sel::register("release"));
+            ObjcMsg::send_0(dark_aqua, Sel::register("release"));
+            if dark {
                 ColorScheme::Dark
             } else {
                 ColorScheme::Light
             }
+        }
+
+        /// The mock runtime has no appearance; like Qt's fallback this is Light.
+        #[cfg(not(target_os = "macos"))]
+        pub fn query_color_scheme() -> ColorScheme {
+            ColorScheme::Light
         }
 
         pub fn set_color_scheme(&self, scheme: ColorScheme) {
