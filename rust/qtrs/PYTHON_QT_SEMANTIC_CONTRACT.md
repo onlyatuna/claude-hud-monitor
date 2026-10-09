@@ -562,6 +562,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G7.6.c [P1]** 無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning`。
   - **G7.6.d [P2]** 閉包 panic 會跳過 `clear_current`（無 guard）。
   - **G7.6.e [P2]** `EventLoopThreadHandle` 無 Drop／join，丟棄即分離。
+  - **G7.6.f [P1, RAN（macOS CI）；已修復：RC-44]** macOS 上每個執行緒的事件迴圈都用 `CocoaEventDispatcher`，它要求主執行緒，所以 `spawn_with_event_loop` 與任何非主執行緒的 `EventLoop::process_events`／`exec` 一定 panic。
 - **Test**：必要：`thread_handle_is_finished_true_after_thread_returns_without_join`；`quit_ends_event_loop_after_queued_events_run`。
 - **HUD usage**：Python 只用 `threading.Thread`；Rust 只用 `std::thread::Builder`（`refresh_controller.rs:132`、`hotkey.rs:126`、`config.rs:438`、`providers/agy.rs:259,265`）；`qtrs_core::thread::*` 在 `rust/src` 無任何使用。
 
@@ -1226,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 341 項：D 12、P0 34、P1 148、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 65 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 342 項：D 12、P0 34、P1 149、P2 142、test gap 5（計數含已修復項；標籤含「已修復」者共 66 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1367,6 +1368,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.6.c | P1 | 無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning` |
 | G7.6.d | P2 | 閉包 panic 會跳過 `clear_current` |
 | G7.6.e | P2 | `EventLoopThreadHandle` 無 Drop／join，丟棄即分離 |
+| G7.6.f | P1, RAN（macOS CI）；已修復：RC-44 | macOS 非主執行緒的事件迴圈用 Cocoa dispatcher 而 panic |
 | G7.7.a | P2, READ | 靜默 no-op 取代警告 |
 | G7.7.b | P2, READ | 無擁有者檢查 |
 | G7.9.a | P2, READ；P0 主張已被讀碼推翻，待驗證 | 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new` |
@@ -2046,6 +2048,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Status**：**已修復（入口調整）**。`Widget` trait 移除 `set_enabled`，`WidgetBase::set_enabled` 移除；`set_widget_enabled(&WidgetRef, bool)` 為唯一入口，`set_enabled_helper` 改為必收 `&mut Vec<EnabledNotice>`。所有轉發 impl（qtrs-widgets 各 widget、測試、`usage_table.rs` 4 處）刪除；`Menu` 原本在 `set_enabled` 內呼叫自己的 `update()`，改為在 `event(EnabledChange)` 時呼叫（對應 `changeEvent` 的重繪）。只對未包進 `WidgetRef` 的 widget 呼叫的測試（`test_stylesheet_disabled`／`test_stylesheet_enabled`／`test_accessibility`）改為先包進 `WidgetRef`。`test_focus_disable.rs::the_borrowed_entry_point_defers_the_events` 隨入口移除而刪除（RC-37 的 borrow 衝突延後路徑仍由 `with_a_borrowed_ancestor_the_events_wait_for_the_next_event` 覆蓋）。
 - **去重**：入口移除後，該測試與 `a_change_is_notified_once_and_no_change_not_at_all`（`b` 部分完全相同）、`the_children_are_notified_before_the_parent`（`c` 部分僅差父項重複設定）重複；已刪除，父項「重複設定不送事件」的斷言併入 `the_children_are_notified_before_the_parent`。
 - **Residual**：未新增 `changeEvent` hook（另行評估）；呼叫端仍 borrow 的 widget 收不到自己的 `EnabledChange`、祖先被 borrow 時焦點移交延後（RC-37／RC-38 既有 residual，不變）。
+
+#### RC-44 macOS 非主執行緒的事件迴圈使用 Cocoa dispatcher
+
+- **Contract gaps**：G7.6.f（新增，已修復）。總數 341 → 342，已修復 65 → 66。
+- **Qt behavior** `[QT-SRC qthread_unix.cpp:316-325; qcocoaintegration.mm:353-356]`：Darwin 上 `QThreadPrivate::createEventDispatcher` 預設回傳 `QEventDispatcherUNIX`（只有 `QT_EVENT_DISPATCHER_CORE_FOUNDATION` 為正數時才用 CoreFoundation）；`QCocoaEventDispatcher` 只由 GUI 平台外掛為主執行緒建立。
+- **qtrs root**：`DefaultEventDispatcher` 是編譯期型別別名（`dispatcher.rs`），macOS 上固定為 `CocoaEventDispatcher`，與執行緒無關；它的 `process_events` 先 `assert_main_thread`，所以非主執行緒的事件迴圈一律 panic。`spawn_with_event_loop` 又在 `init_current(false)` 之前建立 `EventLoop`，若此時尚無人宣告主執行緒，worker 會被當成主執行緒。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，手動診斷 job）。修改前 run 37961515905：`test_thread_system::test_thread_with_event_loop` 失敗，`test_post_before_loop` 6 項中 5 項失敗；同根因也讓 qtrs-core lib 11 項、`test_signal_direct_and_queued` 1 項失敗、`layered_tests` 逾時（這些測試在 libtest 工作執行緒上跑事件迴圈）。修改後 run 37964138214：上述 5 個測試目標全部通過（`layered_tests` 0.7 s），Windows 88 個目標仍全部通過，Ubuntu 結果不變。本機 Windows 完整整合驗證見 commit 說明。Windows 不受影響，因此這是只在 macOS 能觀察到的修改前失敗。
+- **Status**：**已修復**。macOS 的 `DefaultEventDispatcher` 改為 `DarwinEventDispatcher`：`EventLoop::new` 時依 `ThreadContext::is_main_thread()` 選 Cocoa（主執行緒）或 UNIX（其他執行緒），其餘方法直接轉給所選的 dispatcher。`spawn_with_event_loop` 先 `init_current(false, None)` 再建立事件迴圈。
+- **Residual**：(1) 原本在 libtest 工作執行緒上失敗的事件迴圈測試，現在在 macOS 上是經由 UNIX dispatcher 通過，**不代表 Cocoa dispatcher 的路徑被驗證**；主執行緒上的 Cocoa dispatcher 仍需專用的主執行緒測試入口。(2) `UnixEventDispatcher` 在非 Linux 平台只用 Condvar 等待，socket notifier 不會由核心事件觸發（epoll 只在 Linux），macOS worker 的 socket notifier 只能經 `trigger_socket_event` 觸發。(3) 「主執行緒」仍由 qtrs 判定（第一個詢問的執行緒），未檢查作業系統的主執行緒。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

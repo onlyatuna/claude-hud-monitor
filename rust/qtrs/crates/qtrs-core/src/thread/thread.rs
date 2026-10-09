@@ -58,6 +58,9 @@ impl Thread {
         let handle = StdThreadBuilder::new()
             .name("qtrs-event-thread".to_string())
             .spawn(move || {
+                // A spawned thread is never the main thread; say so before the loop picks its
+                // dispatcher (macOS: UNIX, not Cocoa) and before anything can claim it as main.
+                ThreadContext::init_current(false, None);
                 let mut event_loop = EventLoop::new();
                 let sender = event_loop.sender();
                 let thread_id = ThreadId::current();
