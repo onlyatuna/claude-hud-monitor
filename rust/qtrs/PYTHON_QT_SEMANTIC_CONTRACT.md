@@ -70,6 +70,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 3. **批次 push**：一批通過整合驗證後一次 `git push origin main:develop`，交由 GitHub CI 跑跨平台驗證。CI 失敗時，以各 RC 的獨立 commit 與針對性測試縮小範圍。
 4. **整合失敗的處理**：完整測試失敗不代表本次修改有錯，完整測試通過也不取代針對性測試。先單獨重跑失敗項，並在基準版本（修改前的 commit）重跑，判斷是否與本批修改有關，再把結果記下。不得為了刷成全綠而反覆重跑整套。
 5. **真實 HUD 手動 smoke test**：依影響範圍決定；發布前必做。
+6. **測試去重**：每個重要的失敗模式至少要有一個看名稱就知道驗哪個契約的測試。只合併 setup、操作與斷言都相同的案例；不同的不變條件（例如「狀態沒變不送事件」與「焦點先移交再送事件」）即使放在同一個測試，也要有獨立斷言。判斷重複要看測試內容，不能只看名稱。修改前失敗的證據記在 RC 小節，不因合併而遺失。
 
 | 檢查項目 | 每個 RC | 批次整合 |
 |---|---|---|
@@ -2040,8 +2041,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Contract gaps**：G8.2.a（RC-38 Residual）。計數不變。
 - **Qt behavior** `[QT-SRC qwidget.cpp:3405-3476]`：`QWidget::setEnabled` 是唯一入口，`setEnabled_helper` 在返回前依序送出子項與自己的 `EnabledChange`；狀態未變（含重複設定）時不送。
 - **qtrs root**：`Widget::set_enabled(&self)` 在呼叫端的 borrow 中執行，`event()` 需要 `&mut self`，無法同步送事件給自己；它只更新狀態（`WidgetBase::set_enabled` → `set_enabled_helper(.., None)`），事件與焦點移交都不送，或延後到下一個事件。
-- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle `rc43_oracle.py`（`root`{`c`{`x`,`a`},`b`}，`changeEvent` 記錄，`setEnabled` 一返回就讀）：b off → `b:EC:off`、再 off → 無、on → `b:EC:on`；c off → `x:EC:off`、`a:EC:off`、`c:EC:off`、再 off → 無、on → `x/a/c:EC:on`。新測試 `test_enabled_change.rs::the_widget_entry_point_notifies_before_it_returns`：以 `t.b.borrow().set_enabled(..)` 撰寫時修改前失敗（`left: []`、`right: ["b:EC:off"]`）；入口移除後呼叫改為 `set_widget_enabled`，斷言不變，通過。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle `rc43_oracle.py`（`root`{`c`{`x`,`a`},`b`}，`changeEvent` 記錄，`setEnabled` 一返回就讀）：b off → `b:EC:off`、再 off → 無、on → `b:EC:on`；c off → `x:EC:off`、`a:EC:off`、`c:EC:off`、再 off → 無、on → `x/a/c:EC:on`。新測試 `the_widget_entry_point_notifies_before_it_returns`：以 `t.b.borrow().set_enabled(..)` 撰寫時修改前失敗（`left: []`、`right: ["b:EC:off"]`）；入口移除後呼叫改為 `set_widget_enabled`，斷言不變，通過。
 - **Status**：**已修復（入口調整）**。`Widget` trait 移除 `set_enabled`，`WidgetBase::set_enabled` 移除；`set_widget_enabled(&WidgetRef, bool)` 為唯一入口，`set_enabled_helper` 改為必收 `&mut Vec<EnabledNotice>`。所有轉發 impl（qtrs-widgets 各 widget、測試、`usage_table.rs` 4 處）刪除；`Menu` 原本在 `set_enabled` 內呼叫自己的 `update()`，改為在 `event(EnabledChange)` 時呼叫（對應 `changeEvent` 的重繪）。只對未包進 `WidgetRef` 的 widget 呼叫的測試（`test_stylesheet_disabled`／`test_stylesheet_enabled`／`test_accessibility`）改為先包進 `WidgetRef`。`test_focus_disable.rs::the_borrowed_entry_point_defers_the_events` 隨入口移除而刪除（RC-37 的 borrow 衝突延後路徑仍由 `with_a_borrowed_ancestor_the_events_wait_for_the_next_event` 覆蓋）。
+- **去重**：入口移除後，該測試與 `a_change_is_notified_once_and_no_change_not_at_all`（`b` 部分完全相同）、`the_children_are_notified_before_the_parent`（`c` 部分僅差父項重複設定）重複；已刪除，父項「重複設定不送事件」的斷言併入 `the_children_are_notified_before_the_parent`。
 - **Residual**：未新增 `changeEvent` hook（另行評估）；呼叫端仍 borrow 的 widget 收不到自己的 `EnabledChange`、祖先被 borrow 時焦點移交延後（RC-37／RC-38 既有 residual，不變）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）

@@ -199,26 +199,6 @@ impl Tree {
     }
 }
 
-/// RC-43: enabling and disabling notify before the call returns, a repeated change of a parent
-/// notifies nothing. Before RC-43 this ran through `Widget::set_enabled`, which sent no event.
-#[test]
-fn the_widget_entry_point_notifies_before_it_returns() {
-    let t = tree(None);
-
-    set_widget_enabled(&t.b, false);
-    assert_eq!(t.take(), ["b:EC:off"]);
-    set_widget_enabled(&t.b, false);
-    assert!(t.take().is_empty());
-    set_widget_enabled(&t.b, true);
-    assert_eq!(t.take(), ["b:EC:on"]);
-    set_widget_enabled(&t.c, false);
-    assert_eq!(t.take(), ["x:EC:off", "a:EC:off", "c:EC:off"]);
-    set_widget_enabled(&t.c, false);
-    assert!(t.take().is_empty());
-    set_widget_enabled(&t.c, true);
-    assert_eq!(t.take(), ["x:EC:on", "a:EC:on", "c:EC:on"]);
-}
-
 #[test]
 fn a_change_is_notified_once_and_no_change_not_at_all() {
     let t = tree(None);
@@ -231,12 +211,16 @@ fn a_change_is_notified_once_and_no_change_not_at_all() {
     assert_eq!(t.take(), ["b:EC:on"]);
 }
 
+/// Also RC-43: a repeated change of the parent notifies nothing. All of it is in the log before
+/// `set_widget_enabled` returns (the removed `Widget::set_enabled` sent nothing).
 #[test]
 fn the_children_are_notified_before_the_parent() {
     let t = tree(Some("x"));
 
     set_widget_enabled(&t.c, false);
     assert_eq!(t.take(), ["x:Out", "x:EC:off", "a:EC:off", "c:EC:off"]);
+    set_widget_enabled(&t.c, false);
+    assert!(t.take().is_empty());
     set_widget_enabled(&t.c, true);
     assert_eq!(t.take(), ["x:EC:on", "a:EC:on", "c:EC:on"]);
 }
