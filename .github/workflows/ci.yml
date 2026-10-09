@@ -220,6 +220,11 @@ jobs:
             libxkbcommon-dev libx11-dev libxrandr-dev \
             libxcursor-dev libxi-dev libxinerama-dev \
             libgl1-mesa-dev libgles2-mesa-dev pkg-config
+          # The font tests resolve Arial and a CJK fallback, as the HUD does on Windows.
+          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
+            | sudo debconf-set-selections
+          sudo apt-get install -y ttf-mscorefonts-installer fonts-noto-cjk
+          fc-list | grep -iE "arial|noto sans cjk" | head -n 5
 
       # Lists every target that does not compile on this platform; `cargo test` stops at the first.
       - name: Compile every qtrs target (cargo check --keep-going)
