@@ -162,30 +162,14 @@ fn tree_is_free(w: &WidgetRef) -> bool {
     children.iter().all(tree_is_free)
 }
 
-fn pending_focus_state(w: &WidgetRef) -> Option<Rc<FocusState>> {
-    let Ok(widget) = w.try_borrow() else {
-        return None;
-    };
-    let state = widget.widget_base().focus_state.borrow().upgrade();
-    if let Some(state) = state.filter(|s| s.lost.get().is_some()) {
-        return Some(state);
-    }
-    let children = widget.children();
-    drop(widget);
-    children.iter().find_map(pending_focus_state)
-}
-
-/// After `widget` was disabled and released: if that took the focus away from it or a widget
-/// below it, sends the events and moves the focus on now, as `setEnabled` does before it
-/// returns. While a widget of the window is still borrowed this would panic, so the move is
-/// left to `FocusManager::process_pending` on the dispatcher's next event.
-pub(crate) fn move_focus_off_disabled(widget: &WidgetRef) {
-    let Some(state) = pending_focus_state(widget) else {
-        return;
-    };
+/// After the focus widget was disabled and released (`set_widget_enabled`): sends the events
+/// and moves the focus on now, as `setEnabled` does before it returns. While a widget of the
+/// window is still borrowed this would panic, so the move is left to
+/// `FocusManager::process_pending` on the dispatcher's next event.
+pub(crate) fn move_lost_focus_now(state: &Rc<FocusState>) {
     let root = state.root.borrow().upgrade();
     if let Some(root) = root.filter(tree_is_free) {
-        move_lost_focus(&state, &root);
+        move_lost_focus(state, &root);
     }
 }
 

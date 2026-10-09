@@ -60,6 +60,7 @@ pub enum EventType {
     TabletMove = 87,
     TabletPress = 92,
     TabletRelease = 93,
+    EnabledChange = 98,
     ToolTip = 110,
     WhatsThis = 111,
     StatusTip = 112,

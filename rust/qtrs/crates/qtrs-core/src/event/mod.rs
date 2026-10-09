@@ -346,6 +346,9 @@ pub enum EventKind {
 
     /// Thread migration event (`QEvent::ThreadChange`).
     ThreadChange,
+
+    /// The widget's effective enabled state changed (`QEvent::EnabledChange`).
+    EnabledChange,
 }
 
 impl fmt::Debug for EventKind {
@@ -671,6 +674,7 @@ impl fmt::Debug for EventKind {
                 write!(f, "ChildRemoved(child={:?})", child_id)
             }
             EventKind::ThreadChange => write!(f, "ThreadChange"),
+            EventKind::EnabledChange => write!(f, "EnabledChange"),
         }
     }
 }
@@ -725,6 +729,7 @@ impl EventKind {
             EventKind::ChildAdded { .. } => EventType::ChildAdded,
             EventKind::ChildRemoved { .. } => EventType::ChildRemoved,
             EventKind::ThreadChange => EventType::ThreadChange,
+            EventKind::EnabledChange => EventType::EnabledChange,
             EventKind::TabletPress { .. } => EventType::TabletPress,
             EventKind::TabletMove { .. } => EventType::TabletMove,
             EventKind::TabletRelease { .. } => EventType::TabletRelease,

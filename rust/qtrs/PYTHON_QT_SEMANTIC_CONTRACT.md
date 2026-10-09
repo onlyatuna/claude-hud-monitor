@@ -188,7 +188,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 ### C3.1 QEvent 物件模型
 - **Qt behavior** `[QT-SRC qcoreevent.h]`：事件建構時為 accepted；`type()` 為 `QEvent::Type` 數值；OS 來源事件 `spontaneous()` 為 true。
 - **qtrs required**：MUST 新事件 accepted 且非 spontaneous；OS 來源 MUST 以 `new_spontaneous` 建；每個與 Qt 同名的 `EventType` 數值 MUST 等於 Qt 數值；HUD 會收到的事件 MUST 有對應 type。
-- **Current implementation**：`IMPLEMENTED`：`Event::new/new_spontaneous/accept/ignore`；87 個 `EventType` 中 85 個與 `qcoreevent.h` 數值一致（稽核者逐一比對，`READ`）。`PARTIAL`：僅 60/87 可由 `EventKind` 到達（`Paint`(12)、`Create`、`Destroy`、`ParentChange`、`UpdateLater`、`ChildPolished`、`WindowTitleChange`、`PaletteChange`、`Clipboard`、`SockAct` 到不了）。`ABSENT`：另外 93 種 Qt 事件（`Polish`、`LanguageChange`、`StyleChange`、`FontChange`、`EnabledChange`、`ActivationChange`、`WindowStateChange`、`ApplicationActivate/Deactivate`、`LocaleChange`…）；`registerEventType`、`sendSpontaneousEvent`、`isPosted`。
+- **Current implementation**：`IMPLEMENTED`：`Event::new/new_spontaneous/accept/ignore`；88 個 `EventType` 中 86 個與 `qcoreevent.h` 數值一致（稽核者逐一比對，`READ`；RC-38 加入 `EnabledChange`=98）。`PARTIAL`：僅 61/88 可由 `EventKind` 到達（`Paint`(12)、`Create`、`Destroy`、`ParentChange`、`UpdateLater`、`ChildPolished`、`WindowTitleChange`、`PaletteChange`、`Clipboard`、`SockAct` 到不了）。`ABSENT`：另外 92 種 Qt 事件（`Polish`、`LanguageChange`、`StyleChange`、`FontChange`、`ActivationChange`、`WindowStateChange`、`ApplicationActivate/Deactivate`、`LocaleChange`…）；`registerEventType`、`sendSpontaneousEvent`、`isPosted`。
 - **Known gap**：**G3.1.a [P2, READ]** `Pointer`=251、`DpiChanged`=250 不是 Qt 數值（Qt：`Pointer`=218、`DevicePixelRatioChange`=222）；**G3.1.b [D]** `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)`（恆為 type 1000）。理由：Rust 型別安全；HUD 不用；**G3.1.c [P1, READ]** 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等。
 - **Test**：既有 `event/mod.rs::tests::*`、`test_advanced_event_system.rs::test_event_type_mapping`。必要：以表格逐一比對每個 `EventType as u32` 與 Qt 數值；每個 `EventKind` 變體有唯一 `event_type()`。
 - **HUD usage**：Python 覆寫 widget handler（`hud_window.py:560-622`、`usage_table.py:160`）；`QEvent`/`postEvent`/`sendEvent`/`installEventFilter` 未用。Rust 只用 `EventKind::MetaCall`（`main.rs:44-55`）與 widgets 的 `UpdateRequest`。
@@ -581,7 +581,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qwidget.cpp:3405-3476]`：`setEnabled` 傳遞到所有後代、清除被停用的焦點 widget、送 `EnabledChange`、重繪；QSS `:disabled` 生效。
 - **qtrs required**：MUST 傳遞到後代、MUST 重繪、停用 widget MUST 不收滑鼠／鍵盤／焦點；`:disabled` SHOULD 一致。
 - **Current implementation**：`PARTIAL`。`set_enabled` 只 `Cell.set`：不傳遞、不重繪、無事件、不處理焦點；`Button` 在 handler 內自己檢查；`:disabled` 從未提供給樣式解析（`pseudo_states` 是 `&[]` 或只有 hover/pressed）。
-- **Known gap**：**G8.2.a [P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）]** （修復前：） 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺。 RC-33：`WidgetBase::set_enabled` 依 `setEnabled_helper` 傳遞到後代（自己的 children 與 layout 內 widget）、記錄明確停用（`force_disabled` = `WA_ForceDisabled`）、在停用的 parent 下無法啟用、狀態改變時 `update()`。RC-36：停用焦點 widget 時同步清掉 `has_focus` 與視窗焦點 id。RC-37：`set_widget_enabled` 在回傳前送出 `FocusOut`、`focusNextChild`／`clearFocus`、`FocusIn`；視窗內仍有 widget 被 borrow 時（含 `Widget::set_enabled` 這個 borrow 中的入口）退回 RC-36 的延後處理。仍缺：`EnabledChange` 事件（QSS `:disabled` 見 G8.5.e／RC-34）。
+- **Known gap**：**G8.2.a [P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38（僅 `set_widget_enabled` 入口）]** （修復前：） 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺。 RC-33：`WidgetBase::set_enabled` 依 `setEnabled_helper` 傳遞到後代（自己的 children 與 layout 內 widget）、記錄明確停用（`force_disabled` = `WA_ForceDisabled`）、在停用的 parent 下無法啟用、狀態改變時 `update()`。RC-36：停用焦點 widget 時同步清掉 `has_focus` 與視窗焦點 id。RC-37：`set_widget_enabled` 在回傳前送出 `FocusOut`、`focusNextChild`／`clearFocus`、`FocusIn`；視窗內仍有 widget 被 borrow 時（含 `Widget::set_enabled` 這個 borrow 中的入口）退回 RC-36 的延後處理。RC-38：`set_widget_enabled` 在回傳前依 Qt 順序送 `EnabledChange`（子項先於 parent、焦點事件排在該焦點 widget 的位置）。仍缺：經 `Widget::set_enabled`（borrow 中）呼叫時不送 `EnabledChange`，且焦點移交延後；呼叫端仍 borrow 的 widget 收不到 `EnabledChange`（QSS `:disabled` 見 G8.5.e／RC-34）。
 - **Test**：必要：`disable_parent_disables_children_and_repaints`；`disabled_button_ignores_press`；`qss_disabled_color`。
 - **HUD usage**：Python `self.icon.setEnabled(not muted)`（`usage_table.py:323`）；Rust 自訂 icon widget 把 `set_enabled` 轉給 base（重繪視 widget 而定）。
 
@@ -1345,7 +1345,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.a | P1, READ | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
-| G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後） | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
+| G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38（僅 `set_widget_enabled` 入口） | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
 | G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
@@ -1965,6 +1965,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`setEnabled` 一回傳就讀）同 RC-36。`test_focus_disable.rs` 改為 6 項：先加上只做 `borrow().set_enabled()` 的 `set_widget_enabled`，3 項時序測試失敗（`left: []`，事件尚未送出）；修改後 6 項通過，含祖先被 `borrow_mut()` 時不 panic、延到下一個事件的 guard，與 `Widget::set_enabled` 入口仍延後的測試。
 - **Status**：**已修復（一般路徑同步；borrow 衝突路徑延後）**。`FocusState` 記住 `FocusManager` 的視窗 root（`process_pending`／`set_focus` 時寫入）；新增 `set_widget_enabled(&WidgetRef, bool)`：放掉 borrow 後從該 widget 子樹找出待移交的 `FocusState`，若整棵視窗樹都能 `try_borrow_mut` 就立即送 `FocusOut`、移交、送 `FocusIn`，否則留給 `FocusManager::process_pending`。
 - **Residual**：borrow 衝突（例如在祖先的事件處理中停用子 widget）或經由 `Widget::set_enabled` 呼叫時，事件仍延到 dispatcher 的下一個事件；repo 內沒有非測試的 widget `set_enabled` 呼叫端，故未做機械式替換。
+
+#### RC-38 停用／啟用不送 `EnabledChange`
+
+- **Gap**：G8.2.a（`EnabledChange` 部分）、G3.1.c（缺少的事件型別）。
+- **Qt behavior** `[QT-SRC qwidget.cpp:3429-3476, qcoreevent.h:139]`：`setEnabled_helper` 狀態未變直接返回；改變時先處理焦點（`focusNextChild`／`clearFocus`），再遞迴子 widget，最後 `sendEvent(q, EnabledChange)`（type 98），故子項先於 parent，handler 內 `isEnabled()` 已是新值。
+- **qtrs root**：`EventKind`／`EventType` 無 `EnabledChange`；`set_enabled_helper` 在呼叫端 borrow 中執行，無法對自己或子項呼叫 `&mut self` 的 `event()`。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`root`{`c`{`x`,`a`},`b`}，`setEnabled` 一回傳就讀）：停用 b → `b:EC:off`、再停用 → 無、啟用 → `b:EC:on`；x 焦點、停用 c → `x:Out`、`x:EC:off`、`a:EC:off`、`c:EC:off`，啟用 c → `x/a/c:EC:on`；x 先明確停用 → 只有 a、c；a 焦點、停用 c → `x:EC:off`、`a:Out`、`a:EC:off`、`c:EC:off`；a 焦點、停用 a → `a:Out`、`b:In`、`a:EC:off`。新測試 `test_enabled_change.rs` 5 項：修改前（保留新事件型別、還原 widget.rs／focus.rs）5 項全失敗（無 `EnabledChange`）；修改後 5 項通過，`test_focus_disable.rs` 6 項、`test_widget_enabled.rs` 3 項仍通過。
+- **Status**：**已修復（`set_widget_enabled` 入口）**。新增 `EventKind::EnabledChange`／`EventType::EnabledChange = 98`；`set_enabled_helper` 回傳是否改變，並在給定時依 Qt 順序記錄 `EnabledNotice`（`FocusLost(Rc<FocusState>)`、`Changed(WidgetRef)`，後者在子項遞迴後由 parent 記錄、頂層由 `set_widget_enabled` 記錄）；`set_widget_enabled` 放掉 borrow 後依序重播：焦點移交（RC-37 的 `move_lost_focus_now`，取代原本的子樹搜尋）與 `event(EnabledChange)`（非 spontaneous）。`set_widget_enabled` 直接呼叫 `WidgetBase`（Qt 的 `setEnabled` 非 virtual），不經 `Widget::set_enabled` 覆寫。
+- **Residual**：`Widget::set_enabled`（borrow 中）路徑不送 `EnabledChange`；呼叫端仍 borrow 的 widget 跳過；有祖先被 borrow 時焦點移交延後但 `EnabledChange` 仍立即送出，此時順序與 Qt 不同。焦點移交在重播時才計算下一個 widget（Qt 在遞迴子項前計算），被停用的焦點 widget 有可 Tab 的子項時可能不同 `[INFERENCE]`，未測。`EnabledChange` 沒有接到 `changeEvent` 類 hook，widget 只能在 `event()` 看到；重繪仍由 helper 的 `update()` 負責。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

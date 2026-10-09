@@ -15,13 +15,40 @@ pub type WidgetRef = Rc<RefCell<Box<dyn Widget>>>;
 pub type WidgetWeak = Weak<RefCell<Box<dyn Widget>>>;
 
 /// `QWidget::setEnabled`. Unlike `Widget::set_enabled`, which runs while the widget is borrowed,
-/// this also sends `FocusOut` / `FocusIn` before it returns when the focus widget is disabled
-/// (qwidget.cpp:3442-3446), unless another widget of the window is still borrowed.
+/// this sends the events before it returns, in Qt's order (qwidget.cpp:3429-3476): each widget
+/// whose state changed gets `EnabledChange` after those below it, and a disabled focus widget
+/// gets `FocusOut` (and the next one `FocusIn`) before its own `EnabledChange`. The focus move
+/// waits for the dispatcher's next event while a widget of the window is still borrowed, and a
+/// widget still borrowed by the caller gets no `EnabledChange`.
 pub fn set_widget_enabled(widget: &WidgetRef, enabled: bool) {
-    widget.borrow().set_enabled(enabled);
-    if !enabled {
-        crate::focus::move_focus_off_disabled(widget);
+    let mut notices = Vec::new();
+    let changed = {
+        let w = widget.borrow();
+        let base = w.widget_base();
+        base.force_disabled.set(!enabled);
+        base.set_enabled_helper(enabled, Some(&mut notices))
+    };
+    if changed {
+        notices.push(EnabledNotice::Changed(widget.clone()));
     }
+    for notice in notices {
+        match notice {
+            EnabledNotice::FocusLost(state) => crate::focus::move_lost_focus_now(&state),
+            EnabledNotice::Changed(w) => {
+                if let Ok(mut w) = w.try_borrow_mut() {
+                    w.event(&mut Event::new(EventKind::EnabledChange));
+                }
+            }
+        }
+    }
+}
+
+/// What `set_enabled_helper` did, in Qt's order, for `set_widget_enabled` to send the events for.
+pub(crate) enum EnabledNotice {
+    /// The focus widget was disabled; its window's focus is to move on.
+    FocusLost(Rc<crate::focus::FocusState>),
+    /// The widget's effective state changed (`QEvent::EnabledChange`).
+    Changed(WidgetRef),
 }
 
 /// Points each of `children` at `parent`, so ancestor-dependent lookups (the style sheet
@@ -439,26 +466,35 @@ impl WidgetBase {
     /// disabled explicitly stays disabled when its parent is enabled again.
     pub fn set_enabled(&self, enabled: bool) {
         self.force_disabled.set(!enabled);
-        self.set_enabled_helper(enabled);
+        self.set_enabled_helper(enabled, None);
     }
 
-    /// `QWidgetPrivate::setEnabled_helper`.
-    fn set_enabled_helper(&self, enable: bool) {
+    /// `QWidgetPrivate::setEnabled_helper`. Returns whether the state changed; `notices`, when
+    /// given, collects the events to send once the widgets are released.
+    fn set_enabled_helper(
+        &self,
+        enable: bool,
+        mut notices: Option<&mut Vec<EnabledNotice>>,
+    ) -> bool {
         let parent_disabled = self
             .parent_widget()
             .and_then(|p| p.upgrade())
             .is_some_and(|p| p.try_borrow().is_ok_and(|p| !p.is_enabled()));
         if (enable && parent_disabled) || enable == self.enabled.get() {
-            return;
+            return false;
         }
         self.enabled.set(enable);
         // Disabling the focus widget takes the focus away (qwidget.cpp:3442-3446). The flag and the
         // window's focus id change now; the events follow in `set_widget_enabled` or, when it
         // could not send them, `FocusManager::process_pending`.
         if !enable {
-            let focus = self.focus_state.borrow().upgrade();
-            if focus.is_some_and(|f| f.lose(self.object_data.id, !parent_disabled)) {
-                self.has_focus.set(false);
+            if let Some(focus) = self.focus_state.borrow().upgrade() {
+                if focus.lose(self.object_data.id, !parent_disabled) {
+                    self.has_focus.set(false);
+                    if let Some(n) = notices.as_deref_mut() {
+                        n.push(EnabledNotice::FocusLost(focus));
+                    }
+                }
             }
         }
         // The children are this widget's own and those of its layout, as `EmptyWidget::children`.
@@ -466,17 +502,20 @@ impl WidgetBase {
         if let Some(layout) = self.layout.borrow().as_ref() {
             children.extend(layout.widgets());
         }
-        for child in children {
-            let Ok(child) = child.try_borrow() else { continue };
+        for child_ref in children {
+            let Ok(child) = child_ref.try_borrow() else { continue };
             let base = child.widget_base();
             // Enabling skips explicitly disabled children; disabling skips disabled ones.
             let skip = if enable { base.force_disabled.get() } else { !base.enabled.get() };
-            if !skip {
-                base.set_enabled_helper(enable);
+            if !skip && base.set_enabled_helper(enable, notices.as_deref_mut()) {
+                if let Some(n) = notices.as_deref_mut() {
+                    n.push(EnabledNotice::Changed(child_ref.clone()));
+                }
             }
         }
         // `QWidget::changeEvent(EnabledChange)` repaints (qwidget.cpp:9491-9492).
         self.update();
+        true
     }
 
     pub fn update(&self) {
