@@ -63,8 +63,7 @@ jobs:
   # and annotations instead of guessed at.
   diagnostics:
     name: Missing dependencies (${{ matrix.os }})
-    needs: changes
-    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     continue-on-error: true
     strategy:
       fail-fast: false
