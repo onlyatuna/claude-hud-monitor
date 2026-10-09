@@ -193,6 +193,12 @@ mod cg {
         ) -> CGContextRef;
         pub fn CGContextDrawImage(context: CGContextRef, rect: CGRect, image: CGImageRef);
         pub fn CGContextRelease(context: CGContextRef);
+        pub fn CFRetain(object: *const c_void) -> *const c_void;
+        pub fn CFRelease(object: *const c_void);
+        pub fn CGImageGetDataProvider(image: CGImageRef) -> *mut c_void;
+        pub fn CGDataProviderCopyData(provider: *mut c_void) -> *const c_void;
+        pub fn CFDataGetBytePtr(data: *const c_void) -> *const u8;
+        pub fn CFDataGetLength(data: *const c_void) -> isize;
     }
 }
 
@@ -450,6 +456,11 @@ mod checks {
             name: "window_present_opacity",
             origin: "test_platform_abstractions::test_platform_parity_gaps_verification (CocoaLayerSurface present)",
             run: window_present_opacity,
+        },
+        CheckDef {
+            name: "window_present_frame_immutable",
+            origin: "test_platform_abstractions::test_platform_parity_gaps_verification (CocoaLayerSurface present)",
+            run: window_present_frame_immutable,
         },
         CheckDef {
             name: "backdrop_on",
@@ -948,6 +959,53 @@ mod checks {
             &rgba[centre..centre + 4],
             &[255, 0, 0, 255][..],
         );
+    }
+
+    /// The bytes behind a CGImage, copied (`CGDataProviderCopyData`).
+    fn image_bytes(image: cg::CGImageRef) -> Vec<u8> {
+        unsafe {
+            let data = cg::CGDataProviderCopyData(cg::CGImageGetDataProvider(image));
+            let bytes = std::slice::from_raw_parts(
+                cg::CFDataGetBytePtr(data),
+                cg::CFDataGetLength(data) as usize,
+            )
+            .to_vec();
+            cg::CFRelease(data);
+            bytes
+        }
+    }
+
+    fn window_present_frame_immutable(t: &mut Recorder) {
+        // Qt never writes into a buffer Core Animation still holds: a flushed IOSurface stays
+        // untouched while in use and the next frame goes to another one
+        // (qcocoabackingstore.mm:141,163,347,392-402). A frame given to the layer must keep its
+        // bytes after the next present. Bytes are compared, not colours (channel order: G11.13.m).
+        let (mut win, layer) = presented_window(1.0);
+        let first: Id = send(layer, "contents");
+        if first.is_nil() || unsafe { cg::CFGetTypeID(first.as_ptr()) != cg::CGImageGetTypeID() } {
+            t.expect(
+                false,
+                "[[contentView layer] contents] is a CGImage after present",
+            );
+            return;
+        }
+        let first = unsafe { cg::CFRetain(first.as_ptr()) } as cg::CGImageRef;
+        let red = image_bytes(first);
+        let mut blue = pixmap(100, Color::from_rgba8(0, 0, 255, 255));
+        println!(
+            "  INFO second present() -> {:?}",
+            win.present(&mut blue, 1.0)
+        );
+        let second: Id = send(layer, "contents");
+        t.expect(
+            image_bytes(second.as_ptr() as cg::CGImageRef) != red,
+            "the second frame's image has different bytes from the first",
+        );
+        t.expect(
+            image_bytes(first) == red,
+            "the first frame's image keeps its bytes after the second present",
+        );
+        unsafe { cg::CFRelease(first as *const _) };
     }
 
     fn window_present_opacity(t: &mut Recorder) {

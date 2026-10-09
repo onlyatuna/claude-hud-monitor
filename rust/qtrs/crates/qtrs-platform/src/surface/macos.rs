@@ -19,12 +19,13 @@ mod core_graphics {
     extern "C" {
         pub fn CGColorSpaceCreateDeviceRGB() -> CGColorSpaceRef;
         pub fn CGColorSpaceRelease(space: CGColorSpaceRef);
-        pub fn CGDataProviderCreateWithData(
-            info: *mut c_void,
-            data: *const u8,
-            size: usize,
-            releaseData: *const c_void,
-        ) -> CGDataProviderRef;
+        pub fn CFDataCreate(
+            allocator: *const c_void,
+            bytes: *const u8,
+            length: isize,
+        ) -> *const c_void;
+        pub fn CFRelease(object: *const c_void);
+        pub fn CGDataProviderCreateWithCFData(data: *const c_void) -> CGDataProviderRef;
         pub fn CGDataProviderRelease(provider: CGDataProviderRef);
         pub fn CGImageCreate(
             width: usize,
@@ -88,12 +89,19 @@ impl CocoaLayerSurface {
         unsafe {
             use core_graphics::*;
             let color_space = CGColorSpaceCreateDeviceRGB();
-            let provider = CGDataProviderCreateWithData(
-                std::ptr::null_mut(),
-                self.pixel_buffer.as_ptr(),
-                self.pixel_buffer.len(),
+            // Qt never lets Core Animation hold memory it will write again: the flushed
+            // IOSurface stays untouched while in use (qcocoabackingstore.mm:141,163,347,392-402).
+            // The layer keeps this image after we return, so it gets its own copy of the frame;
+            // `pixel_buffer` is overwritten by the next present and reallocated by `resize`.
+            let data = CFDataCreate(
                 std::ptr::null(),
+                self.pixel_buffer.as_ptr(),
+                self.pixel_buffer.len() as isize,
             );
+            let provider = CGDataProviderCreateWithCFData(data);
+            if !data.is_null() {
+                CFRelease(data);
+            }
 
             let bitmap_info = K_CG_IMAGE_ALPHA_PREMULTIPLIED_FIRST | K_CG_BITMAP_BYTE_ORDER_32_HOST;
             let cg_image = CGImageCreate(
