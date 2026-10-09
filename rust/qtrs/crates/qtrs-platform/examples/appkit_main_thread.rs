@@ -25,7 +25,10 @@
 //! Not covered: native event delivery. The Cocoa event dispatcher does not dispatch `NSEvent`s or
 //! run the CFRunLoop (Contract G7.6.h), and no check here relies on it.
 //!
-//! Usage: cargo run -p qtrs-platform --example appkit_main_thread [CHECK]   (macOS only)
+//! Usage: cargo run -p qtrs-platform --example appkit_main_thread [CHECK | --known-open=A,B,...]
+//! (macOS only). `--known-open` names checks that are expected not to be `ok` because of an open
+//! Contract gap: the supervisor then exits 0 when every other check is `ok` and every listed one
+//! is still not `ok`, and exits 1 otherwise, so a newly passing check must leave the list.
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
@@ -37,8 +40,11 @@ fn main() {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let code = match args.get(1).map(String::as_str) {
-        None => harness::supervise(&args[0]),
-        Some(name) => harness::run_child(name),
+        None => harness::supervise(&args[0], &[]),
+        Some(arg) => match arg.strip_prefix("--known-open=") {
+            Some(list) => harness::supervise(&args[0], &list.split(',').collect::<Vec<_>>()),
+            None => harness::run_child(arg),
+        },
     };
     std::process::exit(code);
 }
@@ -85,10 +91,17 @@ mod harness {
         }
     }
 
-    pub fn supervise(exe: &str) -> i32 {
+    pub fn supervise(exe: &str, known_open: &[&str]) -> i32 {
         println!(
             "children run without {HEADLESS_VARS:?}, so Cocoa factories create real AppKit objects"
         );
+        if let Some(unknown) = known_open
+            .iter()
+            .find(|name| !CHECKS.iter().any(|c| c.name == **name))
+        {
+            println!("--known-open names no check: {unknown}");
+            return 1;
+        }
         let mut results = Vec::new();
         for check in CHECKS {
             println!("::group::{}", check.name);
@@ -117,11 +130,28 @@ mod harness {
 
         println!("\n=== AppKit main-thread checks ===");
         for (name, verdict, how, secs) in &results {
-            println!("{verdict:7} {name} ({how}, {secs:.1} s)");
+            let open = if known_open.contains(name) {
+                " [known open]"
+            } else {
+                ""
+            };
+            println!("{verdict:7} {name} ({how}, {secs:.1} s){open}");
         }
         let bad = results.iter().filter(|r| r.1 != "ok").count();
         println!("{} checks, {bad} not ok", results.len());
-        i32::from(bad > 0)
+        let unexpected: Vec<_> = results
+            .iter()
+            .filter(|r| (r.1 != "ok") != known_open.contains(&r.0))
+            .map(|r| r.0)
+            .collect();
+        if unexpected.is_empty() {
+            0
+        } else {
+            println!(
+                "not as expected (not ok and not listed, or listed and now ok): {unexpected:?}"
+            );
+            1
+        }
     }
 
     extern "C" {

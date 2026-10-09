@@ -187,11 +187,12 @@ jobs:
         working-directory: rust
         run: cargo fmt --check
 
-  # Manual diagnostic run of the qtrs workspace (not a gate yet): the push gate above covers only
-  # the main crate. Normal test threading on purpose, to surface parallel-isolation failures.
+  # The qtrs workspace gate on every Rust change. Normal test threading on purpose, to surface
+  # parallel-isolation failures.
   test-qtrs:
     name: qtrs Workspace Test (${{ matrix.os }})
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
     # Some tests are known to hang when run serially; cap a stuck run instead of the 6 h default.
     timeout-minutes: 90
     strategy:
@@ -250,10 +251,15 @@ jobs:
 
       # qtrs-platform AppKit checks (windows, status items, menus, screens, cursor, theme) on the
       # OS main thread, one child process per check, reporting ok/FAILED/ENV/CRASH per check.
+      # Known open (rust/qtrs/PYTHON_QT_SEMANTIC_CONTRACT.md C11.13): window_key_status (G11.13.l,
+      # needs the NSApp launch of G7.6.h), window_flipped (G11.13.c), status_item_message (ENV:
+      # no app bundle). Any other check not ok, or a listed one passing, fails the step.
       - name: macOS main-thread AppKit checks (qtrs-platform)
         if: ${{ runner.os == 'macOS' && !cancelled() }}
         working-directory: rust/qtrs
-        run: cargo run -j 1 -q -p qtrs-platform --example appkit_main_thread
+        run: >-
+          cargo run -j 1 -q -p qtrs-platform --example appkit_main_thread --
+          --known-open=window_key_status,window_flipped,status_item_message
 
       - name: Run qtrs doc tests
         if: ${{ !cancelled() }}
