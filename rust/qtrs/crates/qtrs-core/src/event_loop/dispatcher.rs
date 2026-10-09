@@ -138,15 +138,26 @@ impl EventDispatcher for GenericEventDispatcher {
     fn send_timer_events(&mut self, _registry: &mut TimerRegistry) {}
 }
 
+/// Which creation path an event loop comes from, which decides its dispatcher, as in Qt:
+/// `Core` is `QThreadPrivate::createEventDispatcher` (worker threads and `QCoreApplication`,
+/// qthread_unix.cpp:316-325, qcoreapplication.cpp:518-523); `Gui` is the platform plugin's
+/// dispatcher that `QGuiApplication` asks for (qguiapplication.cpp:1629-1643). The thread does
+/// not matter. Only macOS has a separate GUI dispatcher in qtrs (Cocoa); elsewhere both kinds get
+/// the platform's one dispatcher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatcherKind {
+    Core,
+    Gui,
+}
+
 #[cfg(windows)]
 pub type DefaultEventDispatcher = super::dispatcher_win::Win32EventDispatcher;
 
 #[cfg(target_os = "linux")]
 pub type DefaultEventDispatcher = super::dispatcher_unix::UnixEventDispatcher;
 
-/// macOS: the Cocoa dispatcher on the main thread, the UNIX one on every other thread, as Qt does
-/// (`QThreadPrivate::createEventDispatcher` returns `QEventDispatcherUNIX` on Darwin,
-/// qthread_unix.cpp:316-325; only the GUI platform plugin creates `QCocoaEventDispatcher`).
+/// macOS: `Core` loops use the UNIX dispatcher (Qt's `QEventDispatcherUNIX`), `Gui` loops the
+/// Cocoa one (`QCocoaEventDispatcher`, qcocoaintegration.mm:353-356).
 #[cfg(target_os = "macos")]
 pub type DefaultEventDispatcher = DarwinEventDispatcher;
 
@@ -175,12 +186,12 @@ impl EventDispatcherHandle for DarwinEventDispatcherHandle {
 
 #[cfg(target_os = "macos")]
 impl DarwinEventDispatcher {
-    /// Picks the dispatcher for the calling thread.
-    pub fn new() -> Self {
-        if crate::object::ThreadContext::is_main_thread() {
-            Self::Cocoa(super::dispatcher_cocoa::CocoaEventDispatcher::new())
-        } else {
-            Self::Unix(super::dispatcher_unix::UnixEventDispatcher::new())
+    pub fn new(kind: DispatcherKind) -> Self {
+        match kind {
+            DispatcherKind::Gui => {
+                Self::Cocoa(super::dispatcher_cocoa::CocoaEventDispatcher::new())
+            }
+            DispatcherKind::Core => Self::Unix(super::dispatcher_unix::UnixEventDispatcher::new()),
         }
     }
 
@@ -254,6 +265,54 @@ impl EventDispatcher for DarwinEventDispatcher {
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub type DefaultEventDispatcher = GenericEventDispatcher;
 
-pub fn create_default_dispatcher() -> DefaultEventDispatcher {
-    DefaultEventDispatcher::new()
+pub fn create_dispatcher(kind: DispatcherKind) -> DefaultEventDispatcher {
+    #[cfg(target_os = "macos")]
+    return DarwinEventDispatcher::new(kind);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = kind;
+        DefaultEventDispatcher::new()
+    }
+}
+
+/// RC-45: Qt picks the dispatcher by how the loop is created, not by the calling thread. Darwin
+/// `QThreadPrivate::createEventDispatcher` (qthread_unix.cpp:316-325) returns `QEventDispatcherUNIX`
+/// for every thread with no main-thread check, and `QCoreApplication` uses that path too
+/// (qcoreapplication.cpp:518-523); only `QGuiApplication` asks the platform plugin
+/// (qguiapplication.cpp:1629-1643), which on macOS creates `QCocoaEventDispatcher`.
+#[cfg(all(test, target_os = "macos"))]
+mod darwin_tests {
+    use super::{DarwinEventDispatcher, DispatcherKind};
+    use crate::event_loop::EventLoop;
+    use crate::object::ThreadContext;
+
+    #[test]
+    fn a_core_loop_on_the_main_thread_uses_the_unix_dispatcher() {
+        ThreadContext::init_current(true, None);
+        let el = EventLoop::new();
+        let unix = matches!(el.dispatcher, DarwinEventDispatcher::Unix(_));
+        drop(el);
+        ThreadContext::clear_current();
+        assert!(
+            unix,
+            "a core event loop must use the UNIX dispatcher even on the main thread"
+        );
+    }
+
+    #[test]
+    fn a_worker_loop_uses_the_unix_dispatcher() {
+        let unix = std::thread::spawn(|| {
+            let el = EventLoop::new();
+            matches!(el.dispatcher, DarwinEventDispatcher::Unix(_))
+        })
+        .join()
+        .unwrap();
+        assert!(unix, "a worker event loop must use the UNIX dispatcher");
+    }
+
+    #[test]
+    fn a_gui_loop_uses_the_cocoa_dispatcher() {
+        let el = EventLoop::with_dispatcher_kind(DispatcherKind::Gui);
+        assert!(matches!(el.dispatcher, DarwinEventDispatcher::Cocoa(_)));
+    }
 }

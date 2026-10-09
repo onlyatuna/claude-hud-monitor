@@ -7,7 +7,7 @@ use std::sync::RwLock;
 use crate::event::Event;
 use crate::event_loop::{
     install_application_event_filter, remove_application_event_filter,
-    EventLoop,
+    DispatcherKind, EventLoop,
 };
 use crate::meta::MetaObject;
 use crate::object::{
@@ -79,6 +79,13 @@ impl CoreApplication {
     /// # Panics
     /// Panics if a `CoreApplication` or derivative application instance already exists.
     pub fn new(args: Vec<String>) -> Self {
+        Self::with_dispatcher_kind(args, DispatcherKind::Core)
+    }
+
+    /// Like `new`, with the event loop's dispatcher from the `kind` creation path.
+    /// `GuiApplication` passes `DispatcherKind::Gui`, as `QGuiApplication` takes its dispatcher
+    /// from the platform plugin.
+    pub fn with_dispatcher_kind(args: Vec<String>, kind: DispatcherKind) -> Self {
         APP_INSTANCE_EXISTS.store(true, Ordering::SeqCst);
 
         // Initialize main thread context
@@ -115,7 +122,7 @@ impl CoreApplication {
 
         // Setup local thread event loop
         let _ = LOCAL_EVENT_LOOP.try_with(|el| {
-            let event_loop = EventLoop::new();
+            let event_loop = EventLoop::with_dispatcher_kind(kind);
             let handle = event_loop.handle();
             crate::event_loop::register_thread_event_loop(ThreadId::current(), handle);
             *el.borrow_mut() = Some(event_loop);

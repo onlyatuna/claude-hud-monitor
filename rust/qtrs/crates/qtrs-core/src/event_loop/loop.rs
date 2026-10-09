@@ -99,7 +99,8 @@ pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
     crate::object::dispatch_to_object(receiver, event)
 }
 use super::dispatcher::{
-    create_default_dispatcher, DefaultEventDispatcher, DispatchResult, EventDispatcherHandle,
+    create_dispatcher, DefaultEventDispatcher, DispatchResult, DispatcherKind,
+    EventDispatcherHandle,
 };
 
 #[derive(Debug)]
@@ -209,8 +210,15 @@ pub struct EventLoop {
 }
 
 impl EventLoop {
+    /// A core event loop (worker threads and `CoreApplication`), whichever thread creates it.
     pub fn new() -> Self {
-        let dispatcher = create_default_dispatcher();
+        Self::with_dispatcher_kind(DispatcherKind::Core)
+    }
+
+    /// An event loop whose dispatcher comes from the `kind` creation path; `GuiApplication`
+    /// creates its loop with `DispatcherKind::Gui`.
+    pub fn with_dispatcher_kind(kind: DispatcherKind) -> Self {
+        let dispatcher = create_dispatcher(kind);
         let timer_registry = Arc::new(Mutex::new(TimerRegistry::new()));
 
         #[cfg(windows)]
@@ -237,7 +245,7 @@ impl EventLoop {
 
     /// Creates an event loop with a shared event queue.
     pub fn with_queue(queue: Arc<Mutex<EventQueue>>) -> Self {
-        let dispatcher = create_default_dispatcher();
+        let dispatcher = create_dispatcher(DispatcherKind::Core);
         let timer_registry = Arc::new(Mutex::new(TimerRegistry::new()));
 
         #[cfg(windows)]

@@ -2,6 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
 use qtrs_core::application::CoreApplication;
+use qtrs_core::event_loop::DispatcherKind;
 use qtrs_core::meta::MetaObject;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_core::signal::Signal;
@@ -99,7 +100,9 @@ pub struct GuiApplication {
 impl GuiApplication {
     /// Initializes a new `GuiApplication` instance.
     pub fn new(args: Vec<String>) -> Self {
-        let core_app = CoreApplication::new(args);
+        // `QGuiApplication` takes its event dispatcher from the platform plugin
+        // (qguiapplication.cpp:1629-1643): the GUI path, chosen when the loop is created.
+        let core_app = CoreApplication::with_dispatcher_kind(args, DispatcherKind::Gui);
 
         // Ensure default palette and font are established
         {
