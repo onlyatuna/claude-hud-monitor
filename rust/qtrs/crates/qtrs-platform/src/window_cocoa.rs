@@ -93,12 +93,7 @@ impl CocoaNativeWindow {
             return Err("NSWindow allocation failed");
         }
 
-        let cg_rect = CGRect::new(
-            rect.x as f64,
-            rect.y as f64,
-            rect.width as f64,
-            rect.height as f64,
-        );
+        let cg_rect = native_rect(rect);
 
         let ns_window = ObjcMsg::send_window_init(
             ns_window_alloc,
@@ -397,12 +392,7 @@ impl PlatformWindow for CocoaNativeWindow {
 
     fn set_geometry(&mut self, rect: Rect) {
         self.geometry = rect;
-        let cg_rect = CGRect::new(
-            rect.x as f64,
-            rect.y as f64,
-            rect.width as f64,
-            rect.height as f64,
-        );
+        let cg_rect = native_rect(rect);
         ObjcMsg::send_window_init(
             self.ns_window,
             Sel::register("setFrame:display:"),
@@ -564,12 +554,24 @@ pub fn qt_mac_flip_rect(rect: Rect, reference_height: i32) -> Rect {
     )
 }
 
+/// Height of the primary screen (the one with the menu bar, `[NSScreen screens][0]`), the
+/// reference of every Qt top-left <-> Cocoa bottom-left conversion (qcocoascreen.mm:226-227).
 #[inline]
 pub fn qt_mac_primary_screen_height() -> i32 {
     use crate::screen::PlatformScreen;
-    crate::screen::GenericScreen::default_primary()
-        .geometry()
-        .height
+    crate::screen::CocoaScreen::screens()[0].geometry().height
+}
+
+/// `QCocoaScreen::mapToNative` (qcocoascreen.mm:815-818): Qt's top-left global rect as the
+/// bottom-left rect AppKit expects.
+fn native_rect(rect: Rect) -> CGRect {
+    let flipped = qt_mac_flip_global_rect(rect);
+    CGRect::new(
+        flipped.x as f64,
+        flipped.y as f64,
+        flipped.width as f64,
+        flipped.height as f64,
+    )
 }
 
 #[inline]

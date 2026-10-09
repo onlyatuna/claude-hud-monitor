@@ -1012,7 +1012,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`crates/qtrs-platform/examples/appkit_main_thread.rs`（CI test-qtrs 的 macOS 步驟）。監督程序對每項檢查開一個子程序（逾時 30 s；移除 `CI`、`GITHUB_ACTIONS`、`QT_QPA_PLATFORM`、`QTRS_HEADLESS` 使工廠建立真實 AppKit 物件）；子程序以 `pthread_main_np()` 確認在主執行緒（並確認衍生執行緒回傳 0），比照 `QTEST_MAIN` 先建立 `GuiApplication`，再執行一項檢查。斷言讀回 AppKit 的狀態（`level`、`isVisible`、`subviews`、`contentMinSize`…）；以 `objc_setExceptionPreprocessor` 在例外丟出前記錄 name／reason／call stack（先呼叫原 preprocessor，不吞例外）。結果分類：`ok`、`FAILED`（行為斷言失敗）、`ENV`（環境不具備，註明原因）、`CRASH`（訊號，通常為 ObjC 例外）、`PANIC`、`TIMEOUT`。原本在 libtest worker 執行緒上碰真實 AppKit 的 qtrs-platform 測試段落改為 `#[cfg(not(target_os = "macos"))]`（其他平台仍以 mock 執行），由對應檢查取代；`test_macos_flipped_coordinates_and_wayland_wheel_scale` 拆為 `test_macos_content_view_is_flipped`、`test_qt_mac_flip_point_and_rect_are_reversible`、`test_wayland_wheel_delta_scale`。
 - **Evidence**：`RAN`（GitHub Actions macos-latest，run 37975274292；螢幕 1024x768、backingScaleFactor 1）。RC-46 之後（run 37977238590）共 22 項：`window_present` 轉為 `ok`，新增的 `window_present_pixels`、`window_present_opacity` 為 `FAILED`（G11.13.m、G11.13.n）。RC-47 之後（run 37983110238）共 25 項：`backdrop_off` 由 `CRASH` 轉為 `ok`；新增 `backdrop_off_without_backdrop`、`backdrop_on_off_on_off`（修改前 run 37979484145 皆為 `CRASH`，修改後 `ok`）與 `backdrop_on_twice`（修改前後皆 `FAILED`，G11.13.p）。RC-48 之後（run 37984586161）共 26 項：新增 `window_present_frame_immutable`（修改前 run 37984347135 `FAILED`，修改後 `ok`）。RC-49（run 37987393718）把 `window_present_opacity` 改為沿 HUD 路徑（`set_opacity(v)` 再 `present(_, v)`）檢查 0、0.5、0.85、0.88、1.0，修改後 `ok`；項目數仍為 26。RC-50（run 37989707256）把 `window_present_pixels` 擴充為紅、綠、藍、半透明紅四色，修改後 `ok`。RC-51（run 37991736449）在 `window_level` 加入 TOOL 視窗 `set_stays_on_top(true)` 再 `(false)` 的案例，修改後 `ok`。原 20 項：`ok` 9（`window_title_and_style`、`window_show_hide`、`window_click_through`、`window_event_bridge`、`status_item_menu`、`menu_native`、`screen_metrics`、`cursor_shape`、`integration_factory`）、`FAILED` 8、`CRASH` 2、`ENV` 1。qtrs-platform 三個 libtest 目標（`test_platform_abstractions`、`test_platform_modern_features`、`test_window_activation`）在 macOS 由 SIGABRT 轉為通過；Windows 88/88、Ubuntu 失敗目標不變。
 - **Known gap**（皆為此 run 的實測結果，未修）
-  - **G11.13.a [P1, RAN]** 視窗幾何未翻轉座標：`CocoaNativeWindow::new` 與 `set_geometry` 把 Qt 的左上原點 y 直接當 Cocoa y（frame y 120，預期 768−(120+400)=248）；Qt 以 `QCocoaScreen::mapToNative` 轉換（`qcocoawindow.mm:304`）。
+  - **G11.13.a [P1, RAN；已修復：RC-59]** 視窗幾何未翻轉座標：`CocoaNativeWindow::new` 與 `set_geometry` 把 Qt 的左上原點 y 直接當 Cocoa y（frame y 120，預期 768−(120+400)=248）；Qt 以 `QCocoaScreen::mapToNative` 轉換（`qcocoawindow.mm:304`）。
   - **G11.13.b [P1, RAN；已修復：RC-51]** 視窗層級：TOOL 為 0（Qt `NSFloatingWindowLevel` 3）、STAYS_ON_TOP 為 3（Qt `NSModalPanelWindowLevel` 8）、TOOLTIP 為 3（Qt `NSScreenSaverWindowLevel` 1000）、`set_stays_on_top(true)` 為 3（`qcocoawindow.mm:548-563`）。
   - **G11.13.c [P1, RAN]** 內容視圖 `isFlipped` 為 NO：qtrs 用一般 `NSView`（未註冊 `QNSView`）；Qt 的 `QNSView` 回傳 YES（`qnsview_drawing.mm:67-70`、`qcocoawindow.mm:120`）。
   - **G11.13.d [P0, RAN；已修復：RC-46]** `present()` 觸發 `NSInvalidArgumentException: -[NSView setContents:]: unrecognized selector`，程序中止：`CocoaLayerSurface::commit_to_layer`（`surface/macos.rs`）把 NSView 當 CALayer；Qt 設定的是視圖 layer 的 `contents`（`qcocoabackingstore.mm:392`）。HUD 每次重繪都 present，macOS 上第一次繪製即中止 `[INFERENCE：未在 macOS 執行 HUD]`。
@@ -1256,7 +1256,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 80 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 81 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1552,7 +1552,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.11.a | P2 | 第二次啟動「喚醒」第一個 HUD 後的可觀察結果 |
 | G11.11.b | P2 | 剪貼簿：兩個 HUD 都不用 |
 | G11.12.a | P2 | 無視窗圖示 API |
-| G11.13.a | P1, RAN | Cocoa 視窗幾何未翻轉座標 |
+| G11.13.a | P1, RAN；已修復：RC-59 | Cocoa 視窗幾何未翻轉座標 |
 | G11.13.b | P1, RAN；已修復：RC-51 | Cocoa 視窗層級與 Qt `windowLevel` 不同 |
 | G11.13.c | P1, RAN | 內容視圖 `isFlipped` 為 NO（非 `QNSView`） |
 | G11.13.d | P0, RAN；已修復：RC-46 | `present()` 對 NSView 送 `setContents:`，ObjC 例外中止 |
@@ -2231,6 +2231,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（GitHub Actions macos-latest，`theme_color_scheme`）。修改前 run 37995168958：外觀 Aqua、最佳匹配 Aqua，`color_scheme()` 為 Dark（預期 Light）。修改後 run 37995822532：Light PASS，`theme_color_scheme` 由 FAILED 轉 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
 - **Status**：**已修復**。macOS 以 `bestMatchFromAppearancesWithNames:` 加 `isEqualToString:` 判斷（新增 `ObjcMsg::send_id_bool_return`）；mock runtime 沒有外觀，回 Light（與 Qt 不匹配時的結果相同）。
 - **Residual**：CI 只有 Aqua 外觀，DarkAqua 分支未實際執行（READ）。外觀變更通知（Qt `effectiveAppearance` 觀察者）不在此項。
+
+#### RC-59 Cocoa 視窗幾何以主螢幕高度翻轉為 AppKit 座標
+
+- **Contract gaps**：G11.13.a（已修復）。總數不變 361，已修復 80 → 81。
+- **Qt behavior** `[QT-SRC qcocoawindow.mm:303-305]`：`setCocoaGeometry` 以 `QCocoaScreen::mapToNative(rect)` 轉換；`[QT-SRC qcocoascreen.mm:815-818]` `mapToNative` 為 `qt_mac_flip(rect, 主螢幕 geometry)`；`[QT-SRC qcocoascreen.mm:226-227]` 參考螢幕永遠是主螢幕（選單列所在螢幕）。
+- **qtrs root**：`CocoaNativeWindow::new`（`initWithContentRect:`）與 `set_geometry`（`setFrame:display:`）直接把 Qt 左上原點的 y 當作 Cocoa 左下原點的 y。第二層：`qt_mac_primary_screen_height()` 取自寫死 1920×1080 的 `GenericScreen::default_primary()`，即使接上翻轉，參考高度也不是實際螢幕（CI 為 768）。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，`window_geometry`；主螢幕高 768）。修改前 run 37995822532：建立後 frame y 120（預期 248）、`set_geometry` 後 y 160（預期 308）。修改後 run 37996312390：兩項 PASS，`window_geometry` 由 FAILED 轉 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
+- **Status**：**已修復**。`new` 與 `set_geometry` 經 `native_rect`（`qt_mac_flip_global_rect`）轉換；`qt_mac_primary_screen_height()` 改取 `CocoaScreen::screens()[0]`（`[NSScreen screens][0]`）的高度。
+- **Residual**：有標題列的視窗 `set_geometry` 以內容矩形呼叫 `setFrame:display:`，Qt 先經 `frameRectForContentRect:`（`qcocoawindow.mm:305`），未修也未測（READ）。`CocoaScreen::primary()` 用 `[NSScreen mainScreen]`（有 key window 的螢幕），Qt 用 `CGMainDisplayID()`（READ，多螢幕時不同）。單元測試 `test_platform_abstractions.rs:1496-1507` 以同一函式自算預期值，無法抓到參考高度錯誤（READ）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
