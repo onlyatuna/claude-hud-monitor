@@ -1020,7 +1020,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.13.f [P2, RAN；已修復：RC-54]** `set_backdrop(Acrylic)` 加入的 `NSVisualEffectView` 的 layer `zPosition` 為 0；Qt 設為 `-FLT_MAX`，疊在內容之下（`qcocoawindow.mm:2269-2270`）。material／blendingMode／state 與 qtrs 的對應值相符。
   - **G11.13.g [P2, RAN；已修復：RC-52]** 最小尺寸設在 `minSize`（frame）而非 `contentMinSize`：有標題列的視窗 `contentMinSize` 為 200x118，預期 200x150（`qcocoawindow.mm:1185`）。
   - **G11.13.h [P2, RAN；已修復：RC-53]** `start_system_move()` 在未按下滑鼠鍵時回傳 true（Qt 只在只按左鍵時進行，否則 false：`qcocoawindow.mm:366-370`）；`start_system_resize()` 回傳 true（`QCocoaWindow` 未實作，`QPlatformWindow` 回傳 false：`qplatformwindow.cpp:495-498`）。
-  - **G11.13.i [P2, RAN]** 系統匣項目長度為 `NSVariableStatusItemLength`（−1）；Qt 用 `NSSquareStatusItemLength`（−2，`qcocoasystemtrayicon.mm:37`）。
+  - **G11.13.i [P2, RAN；已修復：RC-56]** 系統匣項目長度為 `NSVariableStatusItemLength`（−1）；Qt 用 `NSSquareStatusItemLength`（−2，`qcocoasystemtrayicon.mm:37`）。
   - **G11.13.j [P1, RAN]** `set_tooltip` 設的是按鈕 `title`（文字直接顯示在選單列），`toolTip` 為 nil；Qt 設 `button.toolTip`（`qcocoasystemtrayicon.mm:195-200`）。
   - **G11.13.k [P1, RAN]** `CocoaTheme` 在外觀為 Aqua 時回報 Dark：`query_color_scheme` 只要外觀名稱非 nil 就回 Dark（`theme.rs`）；Qt 取 `bestMatchFromAppearancesWithNames:@[Aqua, DarkAqua]`（`qcocoatheme.mm:507-509`）。
   - **G11.13.l [P1, RAN；原因未定]** `show()`（`makeKeyAndOrderFront:`）後視窗不是 key window，`[NSApp isActive]` 為 NO。qtrs 沒有像 Qt 的 Cocoa 整合那樣設定與啟用 `NSApplication`；是否為 CI 環境（無使用者登入的 GUI session）造成，尚未區分 `[INFERENCE]`。
@@ -1256,7 +1256,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 77 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 78 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1560,7 +1560,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.f | P2, RAN；已修復：RC-54 | effect view 未疊在內容之下 |
 | G11.13.g | P2, RAN；已修復：RC-52 | 最小尺寸設 `minSize` 而非 `contentMinSize` |
 | G11.13.h | P2, RAN；已修復：RC-53 | `start_system_move`／`start_system_resize` 回傳值與 Qt 不同 |
-| G11.13.i | P2, RAN | 系統匣項目長度非 `NSSquareStatusItemLength` |
+| G11.13.i | P2, RAN；已修復：RC-56 | 系統匣項目長度非 `NSSquareStatusItemLength` |
 | G11.13.j | P1, RAN | 系統匣 tooltip 設成按鈕標題 |
 | G11.13.k | P1, RAN | `CocoaTheme` 在 Aqua 外觀回報 Dark |
 | G11.13.l | P1, RAN；原因未定 | `show()` 後視窗不是 key window，NSApp 未啟用 |
@@ -2204,6 +2204,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（GitHub Actions macos-latest，`backdrop_on_twice`）。修改前 run 37993379780：Acrylic 再 Mica 後 effect view 子視圖 2 個（預期 1）。修改後 run 37993998228：1 個，material 13；`backdrop_on`、`backdrop_off`、`backdrop_off_without_backdrop`、`backdrop_on_off_on_off` 仍 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
 - **Status**：**已修復**。`backdrop_view` 已有 view 時沿用並更新 material／blendingMode／state／appearance；為空時才建立、設 `wantsLayer` 與 `zPosition` 並加入內容視圖。
 - **Residual**：G11.13.q（effect view 的 alloc +1 未釋放，`CocoaNativeWindow` 無 Drop）仍未處理。
+
+#### RC-56 Cocoa 系統匣項目以 `NSSquareStatusItemLength` 建立
+
+- **Contract gaps**：G11.13.i（已修復）。總數不變 361，已修復 77 → 78。
+- **Qt behavior** `[QT-SRC qcocoasystemtrayicon.mm:37]`：`statusItemWithLength:NSSquareStatusItemLength`。`[QT-SRC qcocoasystemtrayicon.mm:88-98]`：只有由 `QAppleIconEngine` 提供原生 `NSImage` 的圖示才改為 `NSVariableStatusItemLength`；pixmap 圖示（`:101` 之後）維持 Square。
+- **qtrs root**：`CocoaStatusItem::new` 以 `NS_VARIABLE_STATUS_ITEM_LENGTH`（−1）建立。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，`status_item_lifecycle`）。修改前 run 37993998228：`[statusItem length]` −1.0，預期 −2.0。修改後 run 37994564912：−2.0 PASS；`status_item_lifecycle` 仍 FAILED，原因為 toolTip（G11.13.j）與 drop 後 `statusBar` 非 nil（未判定），皆另案；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
+- **Status**：**已修復**。改用 `NS_SQUARE_STATUS_ITEM_LENGTH`。M2 審查建議 `set_icon` 後改為 Variable；依 Qt 原始碼該切換只屬於原生 NSImage 分支，qtrs 只有 pixmap 圖示，故未採用。
+- **Residual**：無原生 NSImage 圖示路徑（READ）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

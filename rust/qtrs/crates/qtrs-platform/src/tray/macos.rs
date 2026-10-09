@@ -2,7 +2,7 @@ use qtrs_core::object::ThreadContext;
 use qtrs_gui::paint::Pixmap;
 
 use crate::menu::PlatformMenu;
-use crate::objc_runtime::{Class, Id, ObjcMsg, Sel, NS_VARIABLE_STATUS_ITEM_LENGTH};
+use crate::objc_runtime::{Class, Id, ObjcMsg, Sel, NS_SQUARE_STATUS_ITEM_LENGTH};
 use crate::platform_tray::PlatformTrayIcon;
 
 pub struct CocoaStatusItem {
@@ -29,10 +29,13 @@ impl CocoaStatusItem {
         let status_bar_class = Class::get("NSStatusBar").unwrap_or(Class::NIL);
         let status_bar = ObjcMsg::send_class_0(status_bar_class, Sel::register("systemStatusBar"));
 
+        // Qt: statusItemWithLength:NSSquareStatusItemLength (qcocoasystemtrayicon.mm:37). Qt
+        // switches to NSVariableStatusItemLength only for icons backed by a native NSImage
+        // (QAppleIconEngine, :88-98); pixmap icons keep the square length.
         let status_item = ObjcMsg::send_length(
             status_bar,
             Sel::register("statusItemWithLength:"),
-            NS_VARIABLE_STATUS_ITEM_LENGTH,
+            NS_SQUARE_STATUS_ITEM_LENGTH,
         );
 
         Self {
