@@ -56,6 +56,8 @@ pub struct CocoaNativeWindow {
     min_size: (i32, i32),
     vibrancy_view: Option<Id>,
     vibrancy_material: Option<CocoaVibrancyMaterial>,
+    /// The `NSVisualEffectView` added by `set_backdrop`, removed by `set_backdrop(None)`.
+    backdrop_view: Option<Id>,
 }
 
 unsafe impl Send for CocoaNativeWindow {}
@@ -164,6 +166,7 @@ impl CocoaNativeWindow {
             min_size: (0, 0),
             vibrancy_view: None,
             vibrancy_material: None,
+            backdrop_view: None,
         })
     }
 
@@ -503,6 +506,7 @@ impl PlatformWindow for CocoaNativeWindow {
             self.ns_view,
             backdrop,
             dark_mode,
+            &mut self.backdrop_view,
         )
     }
 

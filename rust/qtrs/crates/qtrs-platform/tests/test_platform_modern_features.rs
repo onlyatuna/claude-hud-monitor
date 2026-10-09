@@ -1,5 +1,5 @@
 use qtrs_gui::geometry::primitives::{Point, Rect};
-use qtrs_platform::backdrop::{set_window_backdrop, BackdropType};
+use qtrs_platform::backdrop::BackdropType;
 use qtrs_platform::drag_drop::{DropAction, DropEvent};
 use qtrs_platform::ime::CompositionContext;
 use qtrs_platform::window_system_interface::{WindowSystemEvent, WindowSystemEventHandler};
@@ -22,6 +22,7 @@ fn test_backdrop_type_variants() {
     // Calling with a null/dummy handle should safely return false without crashing
     #[cfg(windows)]
     {
+        use qtrs_platform::backdrop::set_window_backdrop;
         let null_hwnd = std::ptr::null_mut();
         assert!(!set_window_backdrop(null_hwnd, BackdropType::Mica, true));
         assert!(!set_window_backdrop(

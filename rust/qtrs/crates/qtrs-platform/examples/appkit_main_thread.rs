@@ -462,6 +462,21 @@ mod checks {
             run: backdrop_off,
         },
         CheckDef {
+            name: "backdrop_off_without_backdrop",
+            origin: "rust/src/ui/hud_window.rs (HUD startup, non-table modes)",
+            run: backdrop_off_without_backdrop,
+        },
+        CheckDef {
+            name: "backdrop_on_off_on_off",
+            origin: "rust/src/ui/hud_window.rs (theme and mode switches)",
+            run: backdrop_on_off_on_off,
+        },
+        CheckDef {
+            name: "backdrop_on_twice",
+            origin: "rust/src/ui/hud_window.rs (theme and mode switches)",
+            run: backdrop_on_twice,
+        },
+        CheckDef {
             name: "status_item_lifecycle",
             origin: "test_platform_abstractions::test_cross_platform_tray_icon_implementations, ::test_macos_cocoa_status_item_and_menu_objc_integration",
             run: status_item_lifecycle,
@@ -1003,10 +1018,10 @@ mod checks {
             WindowFlags::FRAMELESS,
         );
         win.set_backdrop(BackdropType::Acrylic, true);
-        t.info(&format!(
-            "effect views after Acrylic: {}",
-            effect_views(win.ns_window()).len()
-        ));
+        let views = effect_views(win.ns_window());
+        t.info(&format!("effect views after Acrylic: {}", views.len()));
+        // Keep the effect view alive across its removal so it can be inspected afterwards.
+        let removed = views.first().map(|&view| send::<Id>(view, "retain"));
         t.expect(
             win.set_backdrop(BackdropType::None, false),
             "set_backdrop(None) returns true",
@@ -1017,6 +1032,97 @@ mod checks {
             effect_views(win.ns_window()).len(),
             0,
         );
+        if let Some(view) = removed {
+            t.expect(
+                send::<Id>(view, "superview").is_nil(),
+                "[effectView superview] is nil after set_backdrop(None)",
+            );
+            send::<()>(view, "release");
+        }
+        // Qt removes only the effect view; the content view stays (qcocoawindow.mm:2261).
+        t.eq(
+            "[window contentView] is ns_view() after set_backdrop(None)",
+            send::<Id>(win.ns_window(), "contentView"),
+            win.ns_view(),
+        );
+    }
+
+    fn backdrop_off_without_backdrop(t: &mut Recorder) {
+        // The HUD calls set_backdrop(None) on a new window for every mode but "table"
+        // (rust/src/ui/hud_window.rs:302-307). Qt: no effect view for the identifier and an empty
+        // area -> nothing is created or removed (qcocoawindow.mm:2258-2276).
+        let mut win = window(
+            "CocoaHUD",
+            Rect::new(50, 50, 600, 400),
+            WindowFlags::FRAMELESS,
+        );
+        t.expect(
+            win.set_backdrop(BackdropType::None, false),
+            "set_backdrop(None) on a new window returns true",
+        );
+        t.eq(
+            "NSVisualEffectView subviews",
+            effect_views(win.ns_window()).len(),
+            0,
+        );
+        t.eq(
+            "[window contentView] is ns_view()",
+            send::<Id>(win.ns_window(), "contentView"),
+            win.ns_view(),
+        );
+    }
+
+    fn backdrop_on_off_on_off(t: &mut Recorder) {
+        let mut win = window(
+            "CocoaHUD",
+            Rect::new(50, 50, 600, 400),
+            WindowFlags::FRAMELESS,
+        );
+        for round in 1..=2 {
+            t.expect(
+                win.set_backdrop(BackdropType::Acrylic, true),
+                &format!("round {round}: set_backdrop(Acrylic) returns true"),
+            );
+            t.eq(
+                &format!("round {round}: NSVisualEffectView subviews after Acrylic"),
+                effect_views(win.ns_window()).len(),
+                1,
+            );
+            t.expect(
+                win.set_backdrop(BackdropType::None, false),
+                &format!("round {round}: set_backdrop(None) returns true"),
+            );
+            t.eq(
+                &format!("round {round}: NSVisualEffectView subviews after None"),
+                effect_views(win.ns_window()).len(),
+                0,
+            );
+        }
+    }
+
+    fn backdrop_on_twice(t: &mut Recorder) {
+        // Qt keeps one effect view per area and updates it in place (qcocoawindow.mm:2258-2259,
+        // 2278-2281).
+        let mut win = window(
+            "CocoaHUD",
+            Rect::new(50, 50, 600, 400),
+            WindowFlags::FRAMELESS,
+        );
+        win.set_backdrop(BackdropType::Acrylic, true);
+        win.set_backdrop(BackdropType::Mica, true);
+        let views = effect_views(win.ns_window());
+        t.eq(
+            "NSVisualEffectView subviews after Acrylic, Mica",
+            views.len(),
+            1,
+        );
+        if let Some(&view) = views.last() {
+            t.eq(
+                "[effectView material] (HUDWindow, the Mica mapping in backdrop.rs)",
+                send::<isize>(view, "material"),
+                13,
+            );
+        }
     }
 
     fn status_item_lifecycle(t: &mut Recorder) {

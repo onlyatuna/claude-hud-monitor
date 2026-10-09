@@ -155,11 +155,15 @@ fn set_win10_accent(hwnd: windows_sys::Win32::Foundation::HWND, state: u32, flag
 }
 
 /// Applies frosted-glass / backdrop material effect on macOS using NSVisualEffectView.
+///
+/// `backdrop_view` is the window's effect view slot: set when an effect view is added and
+/// taken when `BackdropType::None` removes it.
 pub fn set_cocoa_window_backdrop(
     ns_window: crate::objc_runtime::Id,
     ns_view: crate::objc_runtime::Id,
     backdrop: BackdropType,
     dark_mode: bool,
+    backdrop_view: &mut Option<crate::objc_runtime::Id>,
 ) -> bool {
     use crate::objc_runtime::{Class, Id, ObjcMsg, Sel};
 
@@ -179,9 +183,10 @@ pub fn set_cocoa_window_backdrop(
 
     match backdrop {
         BackdropType::None => {
-            let content_view = ObjcMsg::send_0(target_window, Sel::register("contentView"));
-            if !content_view.is_nil() {
-                ObjcMsg::send_int(content_view, Sel::register("setState:"), 0);
+            // Qt removes the area's effect view from its superview and forgets it; the content
+            // view is untouched (QCocoaWindow::manageVisualEffectArea, qcocoawindow.mm:2258-2263).
+            if let Some(effect_view) = backdrop_view.take() {
+                ObjcMsg::send_0(effect_view, Sel::register("removeFromSuperview"));
             }
             true
         }
@@ -231,14 +236,9 @@ pub fn set_cocoa_window_backdrop(
             } else {
                 ObjcMsg::send_id(target_window, Sel::register("setContentView:"), effect_view);
             }
+            *backdrop_view = Some(effect_view);
 
             true
         }
     }
-}
-
-#[cfg(not(windows))]
-pub fn set_window_backdrop(handle: isize, backdrop: BackdropType, dark_mode: bool) -> bool {
-    let id = crate::objc_runtime::Id(handle as *mut std::ffi::c_void);
-    set_cocoa_window_backdrop(id, crate::objc_runtime::Id::NIL, backdrop, dark_mode)
 }
