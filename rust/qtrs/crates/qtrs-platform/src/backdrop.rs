@@ -213,7 +213,16 @@ pub fn set_cocoa_window_backdrop(
             ObjcMsg::send_int(effect_view, Sel::register("setMaterial:"), material);
             ObjcMsg::send_int(effect_view, Sel::register("setBlendingMode:"), 0); // BehindWindow
             ObjcMsg::send_int(effect_view, Sel::register("setState:"), 1); // Active
+
+            // Qt stacks the effect layer below the content layer (z 0): wantsLayer, then
+            // layer.zPosition = -FLT_MAX (qcocoawindow.mm:2267-2270). zPosition is a CGFloat.
             ObjcMsg::send_bool(effect_view, Sel::register("setWantsLayer:"), true);
+            let effect_layer = ObjcMsg::send_0(effect_view, Sel::register("layer"));
+            ObjcMsg::send_length(
+                effect_layer,
+                Sel::register("setZPosition:"),
+                f64::from(-f32::MAX),
+            );
 
             let app_name = if dark_mode {
                 "NSAppearanceNameDarkAqua"

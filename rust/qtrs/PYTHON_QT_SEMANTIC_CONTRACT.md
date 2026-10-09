@@ -1017,7 +1017,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.13.c [P1, RAN]** 內容視圖 `isFlipped` 為 NO：qtrs 用一般 `NSView`（未註冊 `QNSView`）；Qt 的 `QNSView` 回傳 YES（`qnsview_drawing.mm:67-70`、`qcocoawindow.mm:120`）。
   - **G11.13.d [P0, RAN；已修復：RC-46]** `present()` 觸發 `NSInvalidArgumentException: -[NSView setContents:]: unrecognized selector`，程序中止：`CocoaLayerSurface::commit_to_layer`（`surface/macos.rs`）把 NSView 當 CALayer；Qt 設定的是視圖 layer 的 `contents`（`qcocoabackingstore.mm:392`）。HUD 每次重繪都 present，macOS 上第一次繪製即中止 `[INFERENCE：未在 macOS 執行 HUD]`。
   - **G11.13.e [P1, RAN；已修復：RC-47]** `set_backdrop(None)` 觸發 `NSInvalidArgumentException: -[NSView setState:]: unrecognized selector`，程序中止（`backdrop.rs:181-187` 對內容視圖送 `setState:`）；Qt 以 `removeFromSuperview` 移除自己建立的 effect view（`qcocoawindow.mm:2258-2263`）。
-  - **G11.13.f [P2, RAN]** `set_backdrop(Acrylic)` 加入的 `NSVisualEffectView` 的 layer `zPosition` 為 0；Qt 設為 `-FLT_MAX`，疊在內容之下（`qcocoawindow.mm:2269-2270`）。material／blendingMode／state 與 qtrs 的對應值相符。
+  - **G11.13.f [P2, RAN；已修復：RC-54]** `set_backdrop(Acrylic)` 加入的 `NSVisualEffectView` 的 layer `zPosition` 為 0；Qt 設為 `-FLT_MAX`，疊在內容之下（`qcocoawindow.mm:2269-2270`）。material／blendingMode／state 與 qtrs 的對應值相符。
   - **G11.13.g [P2, RAN；已修復：RC-52]** 最小尺寸設在 `minSize`（frame）而非 `contentMinSize`：有標題列的視窗 `contentMinSize` 為 200x118，預期 200x150（`qcocoawindow.mm:1185`）。
   - **G11.13.h [P2, RAN；已修復：RC-53]** `start_system_move()` 在未按下滑鼠鍵時回傳 true（Qt 只在只按左鍵時進行，否則 false：`qcocoawindow.mm:366-370`）；`start_system_resize()` 回傳 true（`QCocoaWindow` 未實作，`QPlatformWindow` 回傳 false：`qplatformwindow.cpp:495-498`）。
   - **G11.13.i [P2, RAN]** 系統匣項目長度為 `NSVariableStatusItemLength`（−1）；Qt 用 `NSSquareStatusItemLength`（−2，`qcocoasystemtrayicon.mm:37`）。
@@ -1256,7 +1256,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 75 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.g、G11.13.h、G11.13.m、G11.13.n、G11.13.o、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 76 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.m、G11.13.n、G11.13.o、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1557,7 +1557,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.c | P1, RAN | 內容視圖 `isFlipped` 為 NO（非 `QNSView`） |
 | G11.13.d | P0, RAN；已修復：RC-46 | `present()` 對 NSView 送 `setContents:`，ObjC 例外中止 |
 | G11.13.e | P1, RAN；已修復：RC-47 | `set_backdrop(None)` 對 NSView 送 `setState:`，ObjC 例外中止 |
-| G11.13.f | P2, RAN | effect view 未疊在內容之下 |
+| G11.13.f | P2, RAN；已修復：RC-54 | effect view 未疊在內容之下 |
 | G11.13.g | P2, RAN；已修復：RC-52 | 最小尺寸設 `minSize` 而非 `contentMinSize` |
 | G11.13.h | P2, RAN；已修復：RC-53 | `start_system_move`／`start_system_resize` 回傳值與 Qt 不同 |
 | G11.13.i | P2, RAN | 系統匣項目長度非 `NSSquareStatusItemLength` |
@@ -2186,6 +2186,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（GitHub Actions macos-latest，`window_opacity_min_size_move`）。修改前 run 37992242687：`pressedMouseButtons = 0` 時 `start_system_move()` 為 true、`start_system_resize(RIGHT)` 為 true（預期皆 false）。修改後 run 37992919342：兩項 PASS，`window_opacity_min_size_move` 由 FAILED 轉 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
 - **Status**：**已修復**。`start_system_move` 先檢查 `[NSEvent pressedMouseButtons] == 1`，否則回傳 false；`start_system_resize` 回傳 false。mock 測試（`test_platform_modern_features.rs`）預期改為 false（mock 無按下的滑鼠鍵）。
 - **Residual**：按下左鍵時 qtrs 仍以 `[NSApp currentEvent]` 呼叫 `performWindowDragWithEvent:`（currentEvent 為 nil 時不拖曳卻回傳 true）；Qt 合成 `NSEventTypeLeftMouseDown` 事件（`qcocoawindow.mm:372-381`）。按鍵按下的正向路徑在 CI 無法驅動，未驗證（READ）。HUD 的系統移動／縮放只走 Win32 `post_system_*`（`hud_window.rs:435-438`），macOS 未接線。
+
+#### RC-54 Cocoa backdrop 的 effect view layer 疊在內容之下
+
+- **Contract gaps**：G11.13.f（已修復）。總數不變 361，已修復 75 → 76。
+- **Qt behavior** `[QT-SRC qcocoawindow.mm:2266-2271]`：新建 `NSVisualEffectView` 後設 `wantsLayer = YES`、`layer.zPosition = -FLT_MAX`，讓效果層位於內容 layer（z 0）之下，再 `addSubview:`。
+- **qtrs root**：`set_cocoa_window_backdrop` 只設 `wantsLayer`，未設 `zPosition`（為 0），effect view 以子視圖加入，可能疊在內容之上。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，`backdrop_on`）。修改前 run 37992919342：`[[effectView layer] zPosition]` 0.0，預期 -3.4028234663852886e38。修改後 run 37993379780：PASS，`backdrop_on` 由 FAILED 轉 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
+- **Status**：**已修復**。`setWantsLayer:` 後取 `layer` 送 `setZPosition:`（CGFloat，經 `send_length`，型別與 CALayer 的 `zPosition` 相符），值為 `f64::from(-f32::MAX)`。
+- **Residual**：Qt 依區域設定 effect view 的 `frame`（`qcocoawindow.mm:2278`），qtrs 未設 frame（READ；實際覆蓋範圍未驗證）。合成後的畫面未擷取。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
