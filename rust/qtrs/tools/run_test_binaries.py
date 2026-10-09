@@ -58,7 +58,7 @@ def kill_tree(proc):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timeout", type=float, default=600.0, help="seconds per test target")
+    parser.add_argument("--timeout", type=float, default=120.0, help="seconds per test target")
     args = parser.parse_args()
 
     results = []

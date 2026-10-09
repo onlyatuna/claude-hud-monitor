@@ -235,7 +235,8 @@ jobs:
       # One binary at a time with a time limit each, so one hang does not hide the rest.
       - name: Run qtrs test binaries (per-binary timeout)
         working-directory: rust/qtrs
-        run: python tools/run_test_binaries.py --timeout 600
+        # 120 s: about 5x the slowest normal target observed (test_tooltip, 23.1 s on Windows).
+        run: python tools/run_test_binaries.py --timeout 120
 
       - name: Run qtrs doc tests
         if: ${{ !cancelled() }}
