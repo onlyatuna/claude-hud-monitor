@@ -22,7 +22,11 @@ fn hint_width(object_name: &str, text: &str, dpr: f32) -> i32 {
     l.size_hint().width
 }
 
+/// The application device pixel ratio is process-global: tests take turns.
+static DPR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn widths(dpr: f32) -> [i32; 3] {
+    let _guard = DPR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     [
         hint_width("MetricTitle", "WEEKLY 7D", dpr),
         hint_width("HeaderTitle", "AI AGENT HUD (3-IN-1)", dpr),
