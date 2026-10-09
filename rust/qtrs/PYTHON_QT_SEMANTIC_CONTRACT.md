@@ -1027,7 +1027,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.13.m [P1, RAN；已修復：RC-50]** `present()` 顯示的顏色通道錯置：`commit_to_layer` 以 `kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host`（little-endian 即 BGRA）建立 CGImage，但資料是 tiny-skia 的 RGBA。實測（run 37977238590，RC-46 之後才可觀察）：紅色 pixmap 的 layer 影像中心像素讀回 RGBA `[0, 0, 255, 255]`。Qt 的 backing store 影像格式與 IOSurface 一致（`qcocoabackingstore.mm`）。
   - **G11.13.n [P1, RAN；已修復：RC-49]** `present(_, 0.85)` 後 `[layer opacity]` 讀回 2（`[window alphaValue]` 為 1），有效不透明度不是 0.85。`commit_to_layer` 以 `send_length`（`CGFloat`＝double）送 `setOpacity:`，而 `CALayer.opacity` 是 `float`；是否就是這個 ABI 不符造成，尚未證實 `[INFERENCE]`。Qt 把視窗不透明度放在 `[NSWindow alphaValue]`（`QCocoaWindow::setOpacity`，`qcocoawindow.mm:1206-1213`），不設 layer opacity。
   - **G11.13.o [P1, RAN；已修復：RC-48]** `commit_to_layer` 以 `CGDataProviderCreateWithData` 直接引用 `pixel_buffer`（不複製、無 release callback），layer 持有這個 CGImage；下一次 `present` 會覆寫同一塊記憶體，`resize` 會重新配置（舊指標懸空）。Qt 在 Core Animation 仍使用某個 IOSurface 時不重用它（`qcocoabackingstore.mm:141,163,347`）。未觀察到實際損毀 `[INFERENCE]`；RC-46 之前這條路徑在 macOS 上會先中止，無法到達。
-  - **G11.13.p [P2, RAN]** backdrop 開啟路徑每次都建立並加入新的 `NSVisualEffectView`，不看是否已有：`set_backdrop(Acrylic)` 後 `set_backdrop(Mica)`，內容視圖有 2 個 effect view（`backdrop_on_twice`，run 37979484145 與 37983110238）。RC-47 之後 slot 只記住最後一個，`set_backdrop(None)` 只移除最後一個。Qt 每個區域只有一個 effect view，已存在時就地更新 material／blendingMode／state（`qcocoawindow.mm:2258-2259,2278-2281`）。HUD 在主題切換時重新呼叫 `set_backdrop`（`rust/src/ui/hud_window.rs:793-794`）。
+  - **G11.13.p [P2, RAN；已修復：RC-55]** backdrop 開啟路徑每次都建立並加入新的 `NSVisualEffectView`，不看是否已有：`set_backdrop(Acrylic)` 後 `set_backdrop(Mica)`，內容視圖有 2 個 effect view（`backdrop_on_twice`，run 37979484145 與 37983110238）。RC-47 之後 slot 只記住最後一個，`set_backdrop(None)` 只移除最後一個。Qt 每個區域只有一個 effect view，已存在時就地更新 material／blendingMode／state（`qcocoawindow.mm:2258-2259,2278-2281`）。HUD 在主題切換時重新呼叫 `set_backdrop`（`rust/src/ui/hud_window.rs:793-794`）。
   - **G11.13.q [P2, READ]** `set_cocoa_window_backdrop` 以 `alloc`／`init` 取得 effect view（+1），加入父視圖後未 release；`set_backdrop(None)` 只 `removeFromSuperview`，該 +1 永不釋放（`set_vibrancy` 同樣如此）。`CocoaNativeWindow` 也沒有 `Drop`。未以 instance count 實測 `[INFERENCE]`。
 - **未判定的檢查**：`status_item_lifecycle` 的「drop 之後 `[statusItem statusBar]` 為 nil」失敗；此預期是對 AppKit `removeStatusItem:` 行為的推定 `[INFERENCE]`，修系統匣前須先確認這個 oracle，不列為缺口。`status_item_message` 為 `ENV`：未打包成 app bundle 時 `[NSUserNotificationCenter defaultUserNotificationCenter]` 為 nil，通知遞送無法觀察；qtrs 端 `last_message` 斷言通過。
 - **Test**：`appkit_main_thread`（上述 20 項）；每項檢查註明取代的 libtest 測試。
@@ -1256,7 +1256,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 76 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.m、G11.13.n、G11.13.o、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 77 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.b、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1567,7 +1567,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.m | P1, RAN；已修復：RC-50 | `present()` 的 CGImage 把 RGBA 位元組當 BGRA，紅色顯示為藍色 |
 | G11.13.n | P1, RAN；已修復：RC-49 | `present(_, 0.85)` 後 layer `opacity` 讀回 2 |
 | G11.13.o | P1, RAN；已修復：RC-48 | CGImage 直接引用 `pixel_buffer`，之後覆寫或重新配置時 layer 仍持有該影像 |
-| G11.13.p | P2, RAN | 連續兩次開啟 backdrop 會疊加兩個 effect view |
+| G11.13.p | P2, RAN；已修復：RC-55 | 連續兩次開啟 backdrop 會疊加兩個 effect view |
 | G11.13.q | P2, READ | effect view 的 alloc/init 參照從未 release |
 | G12.3.a | P1 | QMenu 規則被解析但不消費 |
 | G12.3.b | P0, READ；已修復：RC-15 | Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px` |
@@ -2195,6 +2195,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（GitHub Actions macos-latest，`backdrop_on`）。修改前 run 37992919342：`[[effectView layer] zPosition]` 0.0，預期 -3.4028234663852886e38。修改後 run 37993379780：PASS，`backdrop_on` 由 FAILED 轉 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
 - **Status**：**已修復**。`setWantsLayer:` 後取 `layer` 送 `setZPosition:`（CGFloat，經 `send_length`，型別與 CALayer 的 `zPosition` 相符），值為 `f64::from(-f32::MAX)`。
 - **Residual**：Qt 依區域設定 effect view 的 `frame`（`qcocoawindow.mm:2278`），qtrs 未設 frame（READ；實際覆蓋範圍未驗證）。合成後的畫面未擷取。
+
+#### RC-55 Cocoa backdrop 再次開啟時沿用既有的 effect view
+
+- **Contract gaps**：G11.13.p（已修復）。總數不變 361，已修復 76 → 77。
+- **Qt behavior** `[QT-SRC qcocoawindow.mm:2258-2259,2265-2273,2278-2281]`：每個區域只保留一個 effect view；已存在時取出並就地更新 material、blendingMode、state，只有不存在時才建立並加入。
+- **qtrs root**：`set_cocoa_window_backdrop` 每次開啟都 alloc 新的 `NSVisualEffectView` 並 `addSubview:`，再覆寫 `backdrop_view`；舊 view 仍在視圖樹中。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，`backdrop_on_twice`）。修改前 run 37993379780：Acrylic 再 Mica 後 effect view 子視圖 2 個（預期 1）。修改後 run 37993998228：1 個，material 13；`backdrop_on`、`backdrop_off`、`backdrop_off_without_backdrop`、`backdrop_on_off_on_off` 仍 ok；其餘 AppKit 檢查與 macOS qtrs 失敗目標（5 個）不變。
+- **Status**：**已修復**。`backdrop_view` 已有 view 時沿用並更新 material／blendingMode／state／appearance；為空時才建立、設 `wantsLayer` 與 `zPosition` 並加入內容視圖。
+- **Residual**：G11.13.q（effect view 的 alloc +1 未釋放，`CocoaNativeWindow` 無 Drop）仍未處理。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

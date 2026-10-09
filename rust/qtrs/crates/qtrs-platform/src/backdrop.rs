@@ -194,11 +194,20 @@ pub fn set_cocoa_window_backdrop(
         | BackdropType::MicaAlt
         | BackdropType::Acrylic
         | BackdropType::BlurBehind => {
-            let effect_class = Class::get("NSVisualEffectView").unwrap_or(Class::NIL);
-            let effect_alloc = ObjcMsg::send_class_0(effect_class, Sel::register("alloc"));
-            if effect_alloc.is_nil() {
-                return false;
-            }
+            // Qt keeps one effect view per area and updates it in place
+            // (QCocoaWindow::manageVisualEffectArea, qcocoawindow.mm:2258-2259,2278-2281).
+            let existing = *backdrop_view;
+            let effect_view = match existing {
+                Some(view) => view,
+                None => {
+                    let effect_class = Class::get("NSVisualEffectView").unwrap_or(Class::NIL);
+                    let effect_alloc = ObjcMsg::send_class_0(effect_class, Sel::register("alloc"));
+                    if effect_alloc.is_nil() {
+                        return false;
+                    }
+                    ObjcMsg::send_0(effect_alloc, Sel::register("init"))
+                }
+            };
 
             // Material selection:
             // HUDWindow = 13, Popover = 6, UnderWindowBackground = 2
@@ -209,20 +218,9 @@ pub fn set_cocoa_window_backdrop(
                 BackdropType::None => 0,
             };
 
-            let effect_view = ObjcMsg::send_0(effect_alloc, Sel::register("init"));
             ObjcMsg::send_int(effect_view, Sel::register("setMaterial:"), material);
             ObjcMsg::send_int(effect_view, Sel::register("setBlendingMode:"), 0); // BehindWindow
             ObjcMsg::send_int(effect_view, Sel::register("setState:"), 1); // Active
-
-            // Qt stacks the effect layer below the content layer (z 0): wantsLayer, then
-            // layer.zPosition = -FLT_MAX (qcocoawindow.mm:2267-2270). zPosition is a CGFloat.
-            ObjcMsg::send_bool(effect_view, Sel::register("setWantsLayer:"), true);
-            let effect_layer = ObjcMsg::send_0(effect_view, Sel::register("layer"));
-            ObjcMsg::send_length(
-                effect_layer,
-                Sel::register("setZPosition:"),
-                f64::from(-f32::MAX),
-            );
 
             let app_name = if dark_mode {
                 "NSAppearanceNameDarkAqua"
@@ -239,13 +237,24 @@ pub fn set_cocoa_window_backdrop(
                 ObjcMsg::send_id(effect_view, Sel::register("setAppearance:"), appearance);
             }
 
-            let content_view = ObjcMsg::send_0(target_window, Sel::register("contentView"));
-            if !content_view.is_nil() {
-                ObjcMsg::send_id(content_view, Sel::register("addSubview:"), effect_view);
-            } else {
-                ObjcMsg::send_id(target_window, Sel::register("setContentView:"), effect_view);
+            if existing.is_none() {
+                // Qt stacks the effect layer below the content layer (z 0): wantsLayer, then
+                // layer.zPosition = -FLT_MAX (qcocoawindow.mm:2267-2270). zPosition is a CGFloat.
+                ObjcMsg::send_bool(effect_view, Sel::register("setWantsLayer:"), true);
+                let effect_layer = ObjcMsg::send_0(effect_view, Sel::register("layer"));
+                ObjcMsg::send_length(
+                    effect_layer,
+                    Sel::register("setZPosition:"),
+                    f64::from(-f32::MAX),
+                );
+                let content_view = ObjcMsg::send_0(target_window, Sel::register("contentView"));
+                if !content_view.is_nil() {
+                    ObjcMsg::send_id(content_view, Sel::register("addSubview:"), effect_view);
+                } else {
+                    ObjcMsg::send_id(target_window, Sel::register("setContentView:"), effect_view);
+                }
+                *backdrop_view = Some(effect_view);
             }
-            *backdrop_view = Some(effect_view);
 
             true
         }
