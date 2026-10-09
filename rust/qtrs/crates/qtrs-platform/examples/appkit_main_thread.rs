@@ -1263,10 +1263,12 @@ mod checks {
             string(send(button, "toolTip")),
             Some("Claude HUD macOS".into()),
         );
-        t.info(&format!(
-            "[[statusItem button] title] = {:?}",
-            string(send(button, "title"))
-        ));
+        // Qt never sets the button title, so the tooltip text is not drawn in the menu bar.
+        let title = string(send(button, "title"));
+        t.expect(
+            title.as_deref() != Some("Claude HUD macOS"),
+            &format!("[[statusItem button] title] is not the tooltip: {title:?}"),
+        );
 
         t.expect(item.show().is_ok(), "show returns Ok");
         t.expect(

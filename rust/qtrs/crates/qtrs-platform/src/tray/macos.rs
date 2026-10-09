@@ -146,10 +146,11 @@ impl PlatformTrayIcon for CocoaStatusItem {
     fn set_tooltip(&mut self, tooltip: &str) -> Result<(), &'static str> {
         self.tooltip = tooltip.to_string();
 
-        // Set title and tooltip
+        // Qt: m_statusItem.button.toolTip (qcocoasystemtrayicon.mm:195-200); the button title
+        // is never set, so no text appears in the menu bar.
         let button = ObjcMsg::send_0(self.status_item, Sel::register("button"));
         if !button.is_nil() {
-            ObjcMsg::send_str(button, Sel::register("setTitle:"), tooltip);
+            ObjcMsg::send_str(button, Sel::register("setToolTip:"), tooltip);
         }
         Ok(())
     }
