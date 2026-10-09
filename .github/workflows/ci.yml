@@ -227,6 +227,17 @@ jobs:
         run: cargo check -j 1 --workspace --all-targets --keep-going
         continue-on-error: true
 
-      - name: Run qtrs workspace tests (cargo test)
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # One binary at a time with a time limit each, so one hang does not hide the rest.
+      - name: Run qtrs test binaries (per-binary timeout)
         working-directory: rust/qtrs
-        run: cargo test -j 1 --workspace --no-fail-fast
+        run: python tools/run_test_binaries.py --timeout 600
+
+      - name: Run qtrs doc tests
+        if: ${{ !cancelled() }}
+        working-directory: rust/qtrs
+        run: cargo test -j 1 --workspace --doc
