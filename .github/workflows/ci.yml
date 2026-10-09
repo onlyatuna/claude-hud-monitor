@@ -188,3 +188,45 @@ jobs:
         working-directory: rust
         run: cargo fmt --check
         continue-on-error: true
+
+  # Manual diagnostic run of the qtrs workspace (not a gate yet): the push gate above covers only
+  # the main crate. Normal test threading on purpose, to surface parallel-isolation failures.
+  test-qtrs:
+    name: qtrs Workspace Test (${{ matrix.os }})
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    # Some tests are known to hang when run serially; cap a stuck run instead of the 6 h default.
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust/qtrs -> target"
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev libx11-dev libxrandr-dev \
+            libxcursor-dev libxi-dev libxinerama-dev \
+            libgl1-mesa-dev libgles2-mesa-dev pkg-config
+
+      # Lists every target that does not compile on this platform; `cargo test` stops at the first.
+      - name: Compile every qtrs target (cargo check --keep-going)
+        working-directory: rust/qtrs
+        run: cargo check -j 1 --workspace --all-targets --keep-going
+        continue-on-error: true
+
+      - name: Run qtrs workspace tests (cargo test)
+        working-directory: rust/qtrs
+        run: cargo test -j 1 --workspace --no-fail-fast
