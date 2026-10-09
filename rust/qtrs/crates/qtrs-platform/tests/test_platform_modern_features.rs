@@ -146,6 +146,7 @@ fn test_dpi_change_and_ime_events_in_window_system() {
 }
 
 #[test]
+#[cfg(windows)]
 fn test_platform_window_advanced_features_support() {
     let mut win = qtrs_platform::window::NativeWindow::new(
         "TestAdvancedFeatures",

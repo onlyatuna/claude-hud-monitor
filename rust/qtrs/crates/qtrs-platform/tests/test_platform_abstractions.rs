@@ -5,6 +5,7 @@ use qtrs_gui::paint::Pixmap;
 use qtrs_gui::tiny_skia::Color;
 use qtrs_platform::*;
 #[test]
+#[cfg(windows)]
 fn test_platform_screen_primary_and_multi_screens() {
     let screen = Win32Screen::primary();
     let geom = screen.geometry();
@@ -57,6 +58,7 @@ fn test_platform_screen_primary_and_multi_screens() {
 }
 
 #[test]
+#[cfg(windows)]
 fn test_platform_cursor_shapes() {
     let mut cursor = Win32Cursor::new();
     assert_eq!(cursor.current_shape(), CursorShape::Arrow);
@@ -72,6 +74,7 @@ fn test_platform_cursor_shapes() {
 }
 
 #[test]
+#[cfg(windows)]
 fn test_platform_theme_detection_and_notification() {
     let theme = Win32Theme::new();
     let scheme = theme.color_scheme();
@@ -98,6 +101,7 @@ fn test_platform_theme_detection_and_notification() {
 }
 
 #[test]
+#[cfg(windows)]
 fn test_platform_window_abstraction_trait() {
     let rect = Rect::new(100, 100, 300, 200);
     let mut native_win = NativeWindow::new(
@@ -126,6 +130,7 @@ fn test_platform_window_abstraction_trait() {
 }
 
 #[test]
+#[cfg(windows)]
 fn test_platform_tray_abstraction_trait() {
     let mut pixmap = Pixmap::new(16, 16).expect("failed to create pixmap");
     pixmap.fill(Color::from_rgba8(255, 100, 0, 255));
@@ -150,6 +155,7 @@ fn test_platform_tray_abstraction_trait() {
 }
 
 #[test]
+#[cfg(windows)]
 fn test_platform_hotkey_manager() {
     let rect = Rect::new(0, 0, 10, 10);
     let win = NativeWindow::new("Hotkey Window", rect, WindowFlags::NORMAL)
@@ -209,6 +215,7 @@ fn test_platform_integration_factory() {
     assert!(tray.hide().is_ok());
 }
 #[test]
+#[cfg(windows)]
 fn test_window_system_events_dispatch_pipeline() {
     use std::sync::{Arc, Mutex};
     use windows_sys::Win32::UI::WindowsAndMessaging::{

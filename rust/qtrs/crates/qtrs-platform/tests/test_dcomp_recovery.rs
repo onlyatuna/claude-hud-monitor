@@ -1,4 +1,5 @@
 //! Tests DirectComposition device loss resilience, GDI fallback, and WindowSystem self-healing.
+#![cfg(windows)]
 
 use qtrs_gui::geometry::primitives::Rect;
 use qtrs_gui::paint::Pixmap;

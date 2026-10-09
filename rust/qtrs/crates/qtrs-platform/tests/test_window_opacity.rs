@@ -1,5 +1,6 @@
 //! `setWindowOpacity` must take effect whichever presenter a window ends up with
 //! (Qt: `qwindowswindow.cpp:494-530` for standard windows, `qwindowsbackingstore.cpp:66` for layered ones).
+#![cfg(windows)]
 
 use qtrs_gui::geometry::primitives::Rect;
 use qtrs_gui::geometry::Region;
