@@ -106,7 +106,9 @@ fn test_reentrant_layout_request_during_callback() {
     parent.borrow().update_layout();
     // Two buttons that cannot grow vertically in a 200px tall `QVBoxLayout`: `qGeomCalc` splits
     // the spare 133px into three equal gaps (above, between and below), so the first sits at 44.
+    // The button height comes from Segoe UI's metrics, installed only on Windows.
     let first_y = btn1.borrow().geometry().y;
+    #[cfg(windows)]
     assert_eq!(first_y, 44);
 
     TEST2_SIBLING.with(|s| *s.borrow_mut() = Some(btn2.clone()));

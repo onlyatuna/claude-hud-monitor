@@ -227,8 +227,10 @@ fn test_button_layout_toggle_btn_size_hint_matches_qt() {
     let hint = btn.size_hint();
     // In Qt: content width is max(advance(7), min_width(18)) = 18.
     // Total width = 18 + padding (4+4) + border (1+1) = 28 px.
-    // Height = clamp(15 + padding 2 + border 2, max_height 18) = 18 px.
+    // Height = clamp(15 + padding 2 + border 2, max_height 18) = 18 px; 15 is Segoe UI's line
+    // height at 11px, and Segoe UI is installed only on Windows.
     assert_eq!(hint.width, 28, "button width should match Qt (28 px)");
+    #[cfg(windows)]
     assert_eq!(hint.height, 18, "button height should match Qt (18 px)");
 }
 

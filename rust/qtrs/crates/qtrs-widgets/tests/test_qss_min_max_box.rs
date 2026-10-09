@@ -44,15 +44,18 @@ fn test_label_min_max_include_padding_and_border() {
 #[test]
 fn test_label_size_hint_is_expanded_to_minimum_size_and_ignores_max_height() {
     // PySide6: L1 hint 40x(15|16), L3 hint 24x26, L5 hint 22x18 (L5's `max-height: 30px` is no hint)
-    for (qss, w, h) in [
-        ("padding: 1px 4px; border: 1px solid #888; min-width: 30px; font-size: 9px;", Some(40), None),
-        ("padding: 2px 3px; border: 1px solid #888; min-height: 20px; font-size: 9px;", Some(24), Some(26)),
-        ("padding: 3px; min-height: 12px; max-height: 30px; font-size: 9px;", Some(22), Some(18)),
+    // L3's and L5's widths are the text's ("AB" in Segoe UI 9px, installed only on Windows) plus
+    // the box; L1's width and every height come from `min-*`.
+    let text_width_matches_oracle = cfg!(windows);
+    for (qss, w, h, w_from_text) in [
+        ("padding: 1px 4px; border: 1px solid #888; min-width: 30px; font-size: 9px;", Some(40), None, false),
+        ("padding: 2px 3px; border: 1px solid #888; min-height: 20px; font-size: 9px;", Some(24), Some(26), true),
+        ("padding: 3px; min-height: 12px; max-height: 30px; font-size: 9px;", Some(22), Some(18), true),
     ] {
         let l = Label::new("AB");
         l.set_style_sheet(&format!("QLabel {{ {qss} }}"));
         let hint = l.size_hint();
-        if let Some(w) = w {
+        if let Some(w) = w.filter(|_| !w_from_text || text_width_matches_oracle) {
             assert_eq!(hint.width, w, "{qss}");
         }
         if let Some(h) = h {
