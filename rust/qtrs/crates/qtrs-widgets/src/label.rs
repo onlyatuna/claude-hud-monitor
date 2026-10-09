@@ -266,6 +266,14 @@ impl Widget for Label {
         self.base.set_enabled(enabled);
     }
 
+    fn has_focus(&self) -> bool {
+        self.base.has_focus()
+    }
+
+    fn set_has_focus(&self, focus: bool) {
+        self.base.set_has_focus(focus);
+    }
+
     fn update(&self) {
         self.base.update();
     }
