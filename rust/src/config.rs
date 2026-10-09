@@ -784,12 +784,53 @@ mod tests {
         assert_eq!(deserialized.claude_profile, "auto");
     }
 
-    /// Waits until the debounced save has run `expected` times (5 s cap). The debounce is tens of
-    /// milliseconds, so a fixed sleep right after it expires fails on a loaded CI runner.
-    fn wait_for_saves(counter: &std::sync::atomic::AtomicUsize, expected: usize) {
+    /// Waits until the debouncer has finished `expected` saves (5 s cap). The worker counts a
+    /// save after `save_fn` returns, so waiting on the debouncer's own count also covers the
+    /// test's counter; a fixed sleep right after the debounce expires fails on a loaded runner.
+    fn wait_for_saves(debouncer: &ResizeDebouncer, expected: usize) {
         let limit = Instant::now() + Duration::from_secs(5);
-        while counter.load(Ordering::SeqCst) < expected && Instant::now() < limit {
+        while debouncer.save_count() < expected && Instant::now() < limit {
             std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Asserts no save has run yet, when that is decidable: the counter is read first, then the
+    /// time since `requested` (taken before the last `request_save`). The save cannot run
+    /// before `requested + debounce`, and no earlier deadline can have expired unless the test
+    /// thread stalled for a debounce between two events (`split`). A stalled thread observes
+    /// nothing instead of failing on a save the debouncer was right to make.
+    fn assert_no_save_yet(
+        counter: &std::sync::atomic::AtomicUsize,
+        requested: Instant,
+        debounce: Duration,
+        split: bool,
+    ) {
+        let saves = counter.load(Ordering::SeqCst);
+        if !split && requested.elapsed() < debounce {
+            assert_eq!(saves, 0, "a save ran before the debounce elapsed");
+        }
+    }
+
+    /// Whether the previous request (`previous`, taken before its `request_save`) is at least
+    /// one debounce before now (taken after the current `request_save` returned). Only then can
+    /// the debouncer have saved between the two, splitting the burst.
+    fn gap_reached_debounce(previous: Option<Instant>, debounce: Duration) -> bool {
+        previous.is_some_and(|t| t.elapsed() >= debounce)
+    }
+
+    /// A burst whose events were all closer than the debounce coalesces into exactly one save;
+    /// a burst the test thread split by stalling may legitimately save more than once.
+    fn assert_one_save(
+        counter: &std::sync::atomic::AtomicUsize,
+        debouncer: &ResizeDebouncer,
+        split: bool,
+    ) {
+        let saves = counter.load(Ordering::SeqCst);
+        if split {
+            assert!(saves >= 1, "the burst was never saved");
+        } else {
+            assert_eq!(saves, 1, "the burst was not coalesced into one save");
+            assert_eq!(debouncer.save_count(), 1);
         }
     }
 
@@ -799,30 +840,32 @@ mod tests {
         let counter_clone = Arc::clone(&save_counter);
 
         let cfg = Arc::new(Mutex::new(Config::default()));
+        let debounce = Duration::from_millis(60);
         let debouncer = ResizeDebouncer::with_save_fn(
             Arc::clone(&cfg),
-            Duration::from_millis(60),
+            debounce,
             Arc::new(move |_| {
                 counter_clone.fetch_add(1, Ordering::SeqCst);
             }),
         );
 
         // Multiple rapid resize events
+        let mut last_request: Option<Instant> = None;
+        let mut split = false;
         for i in 0..5 {
             cfg.lock().table_width = 500 + i * 10;
+            let requested = Instant::now();
             debouncer.request_save();
+            split |= gap_reached_debounce(last_request, debounce);
+            last_request = Some(requested);
             std::thread::sleep(Duration::from_millis(10));
         }
 
-        // Initially within debounce window, save_count is 0
-        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
+        // Still within the debounce window of the last event: nothing saved yet
+        assert_no_save_yet(&save_counter, last_request.unwrap(), debounce, split);
 
-        // Wait past debounce duration (60ms)
-        wait_for_saves(&save_counter, 1);
-
-        // Exactly one save must have fired
-        assert_eq!(save_counter.load(Ordering::SeqCst), 1);
-        assert_eq!(debouncer.save_count(), 1);
+        wait_for_saves(&debouncer, 1);
+        assert_one_save(&save_counter, &debouncer, split);
     }
 
     #[test]
@@ -831,37 +874,30 @@ mod tests {
         let counter_clone = Arc::clone(&save_counter);
 
         let cfg = Arc::new(Mutex::new(Config::default()));
+        let debounce = Duration::from_millis(120);
         let debouncer = ResizeDebouncer::with_save_fn(
             Arc::clone(&cfg),
-            Duration::from_millis(120),
+            debounce,
             Arc::new(move |_| {
                 counter_clone.fetch_add(1, Ordering::SeqCst);
             }),
         );
 
-        // Event A
-        cfg.lock().table_width = 510;
-        debouncer.request_save();
-        std::thread::sleep(Duration::from_millis(60));
-        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
+        // Events A, B, C 60 ms apart: each one resets the 120 ms deadline
+        let mut last_request: Option<Instant> = None;
+        let mut split = false;
+        for width in [510, 520, 530] {
+            cfg.lock().table_width = width;
+            let requested = Instant::now();
+            debouncer.request_save();
+            split |= gap_reached_debounce(last_request, debounce);
+            last_request = Some(requested);
+            std::thread::sleep(Duration::from_millis(60));
+            assert_no_save_yet(&save_counter, requested, debounce, split);
+        }
 
-        // Event B (resets 120ms deadline)
-        cfg.lock().table_width = 520;
-        debouncer.request_save();
-        std::thread::sleep(Duration::from_millis(60));
-        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
-
-        // Event C (resets 120ms deadline)
-        cfg.lock().table_width = 530;
-        debouncer.request_save();
-        std::thread::sleep(Duration::from_millis(60));
-        assert_eq!(save_counter.load(Ordering::SeqCst), 0);
-
-        // Wait past remaining debounce (now > 120ms since event C)
-        wait_for_saves(&save_counter, 1);
-
-        assert_eq!(save_counter.load(Ordering::SeqCst), 1);
-        assert_eq!(debouncer.save_count(), 1);
+        wait_for_saves(&debouncer, 1);
+        assert_one_save(&save_counter, &debouncer, split);
     }
 
     #[test]
@@ -934,7 +970,7 @@ mod tests {
 
         // Normal resize after restore
         debouncer.request_save();
-        wait_for_saves(&save_counter, 1);
+        wait_for_saves(&debouncer, 1);
 
         assert_eq!(save_counter.load(Ordering::SeqCst), 1);
         assert_eq!(debouncer.save_count(), 1);
