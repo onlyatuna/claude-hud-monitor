@@ -6,8 +6,7 @@ use std::sync::RwLock;
 
 use crate::event::Event;
 use crate::event_loop::{
-    install_application_event_filter, remove_application_event_filter,
-    DispatcherKind, EventLoop,
+    install_application_event_filter, remove_application_event_filter, DispatcherKind, EventLoop,
 };
 use crate::meta::MetaObject;
 use crate::object::{
@@ -177,6 +176,13 @@ impl CoreApplication {
                 false
             }
         })
+    }
+
+    /// Type name of the calling thread's application event dispatcher, or `None` when this
+    /// thread has no application event loop (`QCoreApplication::eventDispatcher()` class name).
+    pub fn event_dispatcher_class_name() -> Option<&'static str> {
+        use crate::event_loop::EventDispatcher;
+        LOCAL_EVENT_LOOP.with(|el| el.borrow().as_ref().map(|l| l.dispatcher.class_name()))
     }
 
     /// Tells the application to exit with a return code (`QCoreApplication::exit`).

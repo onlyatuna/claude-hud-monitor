@@ -50,6 +50,11 @@ pub trait EventDispatcher: Send + Sync {
     fn send_timer_events(&mut self, registry: &mut TimerRegistry);
     fn register_socket_notifier(&mut self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
     fn unregister_socket_notifier(&mut self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
+    /// The concrete dispatcher's type name, like Qt's
+    /// `QAbstractEventDispatcher::instance()->metaObject()->className()`.
+    fn class_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -259,6 +264,9 @@ impl EventDispatcher for DarwinEventDispatcher {
     }
     fn unregister_socket_notifier(&mut self, notifier: &Arc<crate::event_loop::SocketNotifier>) {
         self.inner_mut().unregister_socket_notifier(notifier);
+    }
+    fn class_name(&self) -> &'static str {
+        self.inner().class_name()
     }
 }
 

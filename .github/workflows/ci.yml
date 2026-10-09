@@ -238,6 +238,13 @@ jobs:
         # 120 s: about 5x the slowest normal target observed (test_tooltip, 23.1 s on Windows).
         run: python tools/run_test_binaries.py --timeout 120
 
+      # libtest runs tests on worker threads; this runs GuiApplication/CoreApplication on the OS
+      # main thread, one child process per check with its own time limit.
+      - name: macOS main-thread entry (application dispatcher and event loop)
+        if: ${{ runner.os == 'macOS' && !cancelled() }}
+        working-directory: rust/qtrs
+        run: cargo run -j 1 -q -p qtrs-gui --example main_thread_entry
+
       - name: Run qtrs doc tests
         if: ${{ !cancelled() }}
         working-directory: rust/qtrs
