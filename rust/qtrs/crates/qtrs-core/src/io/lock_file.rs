@@ -212,12 +212,15 @@ fn is_process_alive(pid: u32) -> bool {
     }
     #[cfg(not(windows))]
     {
-        // On Unix, kill(pid, 0) checks if process exists
-        unsafe { libc_kill_check(pid as i32) }
+        // Qt: QLockFilePrivate::isProcessRunning treats the PID as dead only when
+        // kill(pid, 0) fails with ESRCH (qlockfile_unix.cpp:296-299); EPERM means it exists.
+        let Ok(pid) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
+        // SAFETY: signal 0 performs only the existence and permission check.
+        if unsafe { libc::kill(pid, 0) } == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
     }
-}
-
-#[cfg(not(windows))]
-unsafe fn libc_kill_check(_pid: i32) -> bool {
-    false
 }

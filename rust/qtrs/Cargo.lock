@@ -260,6 +260,7 @@ dependencies = [
 name = "qtrs-core"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "qtrs-derive",
  "windows-sys",
 ]
