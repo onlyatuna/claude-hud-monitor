@@ -342,8 +342,13 @@ fn test_url_and_url_query_manipulation() {
     assert!(url.as_str().contains("lang=rust"));
     assert!(url.as_str().contains("status=active"));
 
-    // 3. Local file URL conversion
+    // 3. Local file URL conversion. Drive letters and `\` are Windows path syntax: Qt converts
+    // them only on Windows (qurl.cpp:3293-3295, 1545-1547), so each platform round-trips a
+    // native absolute path.
+    #[cfg(windows)]
     let local_path = PathBuf::from(r"C:\Users\test\document.txt");
+    #[cfg(not(windows))]
+    let local_path = PathBuf::from("/Users/test/document.txt");
     let file_url = Url::from_local_file(&local_path);
     assert!(file_url.as_str().starts_with("file://"));
 
