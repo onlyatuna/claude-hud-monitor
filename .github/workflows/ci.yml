@@ -182,12 +182,10 @@ jobs:
       - name: Lint (clippy)
         working-directory: rust
         run: cargo clippy -- -D warnings
-        continue-on-error: true
 
       - name: Format (rustfmt)
         working-directory: rust
         run: cargo fmt --check
-        continue-on-error: true
 
   # Manual diagnostic run of the qtrs workspace (not a gate yet): the push gate above covers only
   # the main crate. Normal test threading on purpose, to surface parallel-isolation failures.
