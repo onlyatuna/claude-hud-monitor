@@ -58,9 +58,6 @@ impl Widget for CustomPaintedGauge {
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
     }
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
     fn update(&self) {}
     fn dirty_rect(&self) -> Option<Rect> {
         self.base.dirty_rect()

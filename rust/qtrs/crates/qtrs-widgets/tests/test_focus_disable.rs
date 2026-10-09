@@ -59,9 +59,6 @@ impl Widget for Probe {
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
     }
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
     fn update(&self) {
         self.base.update();
     }
@@ -252,19 +249,4 @@ fn with_a_borrowed_ancestor_the_events_wait_for_the_next_event() {
     t.next_event();
     assert_eq!(t.events(), ["a:Out:Tab", "b:In:Tab"]);
     assert_eq!(t.focus(), Some(t.b.borrow().id()));
-}
-
-/// `Widget::set_enabled` on a borrowed widget cannot send the events; they wait for the next one.
-/// The window is only shared-borrowed, so the focus widget is `b` at once, as after Qt's
-/// `setEnabled` (RC-42).
-#[test]
-fn the_borrowed_entry_point_defers_the_events() {
-    let mut t = tree(false, FocusPolicy::StrongFocus);
-
-    t.a.borrow().set_enabled(false);
-    assert!(t.events().is_empty());
-    assert_eq!(t.focus(), Some(t.b.borrow().id()));
-
-    t.next_event();
-    assert_eq!(t.events(), ["a:Out:Tab", "b:In:Tab"]);
 }

@@ -1,6 +1,6 @@
 use qtrs_widgets::{
-    AccessibleAction, AccessibleId, AccessibleNode, AccessibleRole, AccessibleState,
-    AccessibleTree, Button, Widget, WidgetRef,
+    set_widget_enabled, AccessibleAction, AccessibleId, AccessibleNode, AccessibleRole,
+    AccessibleState, AccessibleTree, Button, Widget, WidgetRef,
 };
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -23,16 +23,21 @@ fn widget_snapshot_uses_widget_semantics_and_focus_state() {
 
 #[test]
 fn accessible_invoke_activates_button_once_and_respects_enabled_state() {
-    let mut button = Button::new("Run");
+    let button = Button::new("Run");
     let activations = std::sync::Arc::new(AtomicUsize::new(0));
     let observed = activations.clone();
     let _connection = button.clicked.connect(move |_| {
         observed.fetch_add(1, Ordering::SeqCst);
     });
+    let widget: WidgetRef = std::rc::Rc::new(RefCell::new(Box::new(button)));
 
-    assert!(button.perform_accessible_action(AccessibleAction::Invoke));
-    button.set_enabled(false);
-    assert!(!button.perform_accessible_action(AccessibleAction::Invoke));
+    assert!(widget
+        .borrow_mut()
+        .perform_accessible_action(AccessibleAction::Invoke));
+    set_widget_enabled(&widget, false);
+    assert!(!widget
+        .borrow_mut()
+        .perform_accessible_action(AccessibleAction::Invoke));
     assert_eq!(activations.load(Ordering::SeqCst), 1);
 }
 

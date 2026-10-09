@@ -343,10 +343,6 @@ impl Widget for StackedWidget {
         self.base.is_enabled()
     }
 
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
-
     fn update(&self) {
         self.base.update();
     }

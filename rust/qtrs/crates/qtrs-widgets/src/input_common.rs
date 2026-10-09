@@ -42,10 +42,6 @@ macro_rules! leaf_widget_common {
             self.base.enabled.get()
         }
 
-        fn set_enabled(&self, enabled: bool) {
-            self.base.set_enabled(enabled);
-        }
-
         fn dirty_rect(&self) -> Option<qtrs_gui::geometry::primitives::Rect> {
             self.base.dirty.get()
         }

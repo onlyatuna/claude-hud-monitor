@@ -259,10 +259,6 @@ impl Widget for HoverButton {
         self.base.is_enabled()
     }
 
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
-
     fn update(&self) {
         self.base.update();
     }
@@ -473,7 +469,6 @@ fn test_dirty_region_culling_skips_non_intersecting_widgets() {
         fn is_visible(&self) -> bool { self.base.is_visible() }
         fn set_visible(&self, v: bool) { self.base.set_visible(v); }
         fn is_enabled(&self) -> bool { true }
-        fn set_enabled(&self, _: bool) {}
         fn geometry(&self) -> Rect { self.base.geometry() }
         fn set_geometry(&self, r: Rect) { self.base.set_geometry(r); }
         fn update(&self) { self.base.update(); }

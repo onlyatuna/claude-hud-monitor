@@ -62,7 +62,6 @@ impl Widget for Probe {
     fn is_enabled(&self) -> bool {
         true
     }
-    fn set_enabled(&self, _enabled: bool) {}
     fn update(&self) {}
     fn dirty_rect(&self) -> Option<Rect> {
         None

@@ -185,9 +185,6 @@ impl Widget for UsageDial {
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
     }
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
     fn update(&self) {
         self.base.update();
     }
@@ -537,9 +534,6 @@ impl Widget for ProviderIconWidget {
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
     }
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
     fn update(&self) {
         self.base.update();
     }
@@ -667,9 +661,6 @@ impl Widget for GlyphWidget {
     }
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
-    }
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
     }
     fn update(&self) {
         self.base.update();
@@ -820,9 +811,6 @@ impl Widget for SeparatorWidget {
     }
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
-    }
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
     }
     fn update(&self) {
         self.base.update();

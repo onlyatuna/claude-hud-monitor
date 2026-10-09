@@ -10,7 +10,7 @@ use qtrs_widgets::command::{WidgetCommand, WidgetCommandQueue};
 use qtrs_widgets::frame::Frame;
 use qtrs_widgets::hit_test::EventTreeDispatcher;
 use qtrs_widgets::layout::{BoxLayout, Direction, Layout};
-use qtrs_widgets::widget::{EmptyWidget, WidgetRef};
+use qtrs_widgets::widget::{set_widget_enabled, EmptyWidget, WidgetRef};
 
 thread_local! {
     static TEST1_BTN: RefCell<Option<WidgetRef>> = const { RefCell::new(None) };
@@ -190,7 +190,7 @@ fn test_sibling_mutation_without_borrow_mut() {
             TEST3_SIBLING.with(|s| {
                 if let Some(b2) = s.borrow().as_ref() {
                     b2.borrow().set_geometry(Rect::new(100, 100, 80, 40));
-                    b2.borrow().set_enabled(false);
+                    set_widget_enabled(&b2, false);
                     b2.borrow().update();
                 }
             });

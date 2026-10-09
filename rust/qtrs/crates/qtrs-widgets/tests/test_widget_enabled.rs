@@ -31,23 +31,23 @@ fn state(p: &WidgetRef, a: &WidgetRef, b: &WidgetRef) -> (bool, bool, bool) {
 #[test]
 fn disabling_a_parent_disables_its_children_until_it_is_enabled_again() {
     let (p, a, b) = tree();
-    p.borrow().set_enabled(false);
+    set_widget_enabled(&p, false);
     assert_eq!(state(&p, &a, &b), (false, false, false));
-    b.borrow().set_enabled(true);
+    set_widget_enabled(&b, true);
     assert_eq!(state(&p, &a, &b), (false, false, false));
-    b.borrow().set_enabled(false);
-    p.borrow().set_enabled(true);
+    set_widget_enabled(&b, false);
+    set_widget_enabled(&p, true);
     assert_eq!(state(&p, &a, &b), (true, true, false));
-    b.borrow().set_enabled(true);
+    set_widget_enabled(&b, true);
     assert_eq!(state(&p, &a, &b), (true, true, true));
 }
 
 #[test]
 fn an_explicitly_disabled_child_stays_disabled_across_the_parent_toggling() {
     let (p, a, b) = tree();
-    a.borrow().set_enabled(false);
-    p.borrow().set_enabled(false);
-    p.borrow().set_enabled(true);
+    set_widget_enabled(&a, false);
+    set_widget_enabled(&p, false);
+    set_widget_enabled(&p, true);
     assert_eq!(state(&p, &a, &b), (true, false, true));
 }
 
@@ -55,6 +55,6 @@ fn an_explicitly_disabled_child_stays_disabled_across_the_parent_toggling() {
 fn a_child_disabled_through_its_parent_repaints() {
     let (p, a, _) = tree();
     a.borrow().clear_dirty();
-    p.borrow().set_enabled(false);
+    set_widget_enabled(&p, false);
     assert!(a.borrow().dirty_rect().is_some());
 }

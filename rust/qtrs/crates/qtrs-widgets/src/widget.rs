@@ -14,19 +14,21 @@ use std::rc::{Rc, Weak};
 pub type WidgetRef = Rc<RefCell<Box<dyn Widget>>>;
 pub type WidgetWeak = Weak<RefCell<Box<dyn Widget>>>;
 
-/// `QWidget::setEnabled`. Unlike `Widget::set_enabled`, which runs while the widget is borrowed,
-/// this sends the events before it returns, in Qt's order (qwidget.cpp:3429-3476): each widget
-/// whose state changed gets `EnabledChange` after those below it, and a disabled focus widget
-/// gets `FocusOut` (and the next one `FocusIn`) before its own `EnabledChange`. The focus move
-/// waits for the dispatcher's next event while a widget of the window is still borrowed, and a
-/// widget still borrowed by the caller gets no `EnabledChange`.
+/// `QWidget::setEnabled`, the only way to enable or disable a widget: it records the explicit
+/// state, passes the effective one down the tree (qwidget.cpp:3405-3476) and sends the events
+/// before it returns, in Qt's order: each widget whose state changed gets `EnabledChange` after
+/// those below it, and a disabled focus widget gets `FocusOut` (and the next one `FocusIn`)
+/// before its own `EnabledChange`. A widget is not enabled under a disabled parent, and a child
+/// disabled explicitly stays disabled when its parent is enabled again. The focus move waits for
+/// the dispatcher's next event while a widget of the window is still borrowed, and a widget
+/// still borrowed by the caller gets no `EnabledChange`.
 pub fn set_widget_enabled(widget: &WidgetRef, enabled: bool) {
     let mut notices = Vec::new();
     let changed = {
         let w = widget.borrow();
         let base = w.widget_base();
         base.force_disabled.set(!enabled);
-        base.set_enabled_helper(enabled, Some(&mut notices))
+        base.set_enabled_helper(enabled, &mut notices)
     };
     if changed {
         notices.push(EnabledNotice::Changed(widget.clone()));
@@ -143,8 +145,6 @@ pub trait Widget: QObject + 'static {
 
     fn set_visible(&self, visible: bool);
     fn is_enabled(&self) -> bool;
-
-    fn set_enabled(&self, enabled: bool);
 
     fn update(&self);
     fn dirty_rect(&self) -> Option<Rect>;
@@ -462,21 +462,9 @@ impl WidgetBase {
         &buf[..n]
     }
 
-    /// `QWidget::setEnabled`: records the explicit state and passes the effective one down the
-    /// tree (qwidget.cpp:3405-3476). A widget is not enabled under a disabled parent, and a child
-    /// disabled explicitly stays disabled when its parent is enabled again.
-    pub fn set_enabled(&self, enabled: bool) {
-        self.force_disabled.set(!enabled);
-        self.set_enabled_helper(enabled, None);
-    }
-
-    /// `QWidgetPrivate::setEnabled_helper`. Returns whether the state changed; `notices`, when
-    /// given, collects the events to send once the widgets are released.
-    fn set_enabled_helper(
-        &self,
-        enable: bool,
-        mut notices: Option<&mut Vec<EnabledNotice>>,
-    ) -> bool {
+    /// `QWidgetPrivate::setEnabled_helper`. Returns whether the state changed; `notices` collects
+    /// the events to send once the widgets are released.
+    fn set_enabled_helper(&self, enable: bool, notices: &mut Vec<EnabledNotice>) -> bool {
         let parent_disabled = self
             .parent_widget()
             .and_then(|p| p.upgrade())
@@ -492,9 +480,7 @@ impl WidgetBase {
             if let Some(focus) = self.focus_state.borrow().upgrade() {
                 if focus.lose(self.object_data.id, !parent_disabled) {
                     self.has_focus.set(false);
-                    if let Some(n) = notices.as_deref_mut() {
-                        n.push(EnabledNotice::FocusLost(focus));
-                    }
+                    notices.push(EnabledNotice::FocusLost(focus));
                 }
             }
         }
@@ -508,10 +494,8 @@ impl WidgetBase {
             let base = child.widget_base();
             // Enabling skips explicitly disabled children; disabling skips disabled ones.
             let skip = if enable { base.force_disabled.get() } else { !base.enabled.get() };
-            if !skip && base.set_enabled_helper(enable, notices.as_deref_mut()) {
-                if let Some(n) = notices.as_deref_mut() {
-                    n.push(EnabledNotice::Changed(child_ref.clone()));
-                }
+            if !skip && base.set_enabled_helper(enable, notices) {
+                notices.push(EnabledNotice::Changed(child_ref.clone()));
             }
         }
         // `QWidget::changeEvent(EnabledChange)` repaints (qwidget.cpp:9491-9492).
@@ -938,10 +922,6 @@ impl Widget for EmptyWidget {
 
     fn is_enabled(&self) -> bool {
         self.base.enabled.get()
-    }
-
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
     }
 
     fn update(&self) {

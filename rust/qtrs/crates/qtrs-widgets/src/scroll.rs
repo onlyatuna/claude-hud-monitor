@@ -251,10 +251,6 @@ impl Widget for ScrollBar {
         self.base.is_enabled()
     }
 
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
-
     fn update(&self) {
         self.base.update();
     }
@@ -680,10 +676,6 @@ impl Widget for ScrollArea {
 
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
-    }
-
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
     }
 
     fn update(&self) {

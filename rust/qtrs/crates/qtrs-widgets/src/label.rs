@@ -262,10 +262,6 @@ impl Widget for Label {
         self.base.is_enabled()
     }
 
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
-
     fn focus_policy(&self) -> crate::focus::FocusPolicy {
         self.base.focus_policy()
     }

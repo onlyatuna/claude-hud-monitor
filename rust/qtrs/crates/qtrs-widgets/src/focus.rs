@@ -272,7 +272,7 @@ impl FocusManager {
     }
 
     /// Sends the events and moves the focus for a focus widget disabled while the window was
-    /// borrowed (see `move_focus_off_disabled`), and records `root` as the window.
+    /// borrowed (see `move_lost_focus_now`), and records `root` as the window.
     pub fn process_pending(&mut self, root: &WidgetRef) {
         *self.state.root.borrow_mut() = Rc::downgrade(root);
         move_lost_focus(&self.state, root);

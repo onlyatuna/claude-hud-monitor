@@ -105,9 +105,6 @@ impl Widget for Probe {
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
     }
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
     fn update(&self) {
         self.base.update();
     }
@@ -262,7 +259,7 @@ fn release_and_wheel_propagate_like_press() {
 fn disabled_widget_passes_mouse_press_to_its_parent() {
     let log: Log = Default::default();
     let (root, _mid, leaf) = tree(Resp::Accept, Resp::NotHandled, Resp::Accept, &log);
-    leaf.borrow().set_enabled(false);
+    set_widget_enabled(&leaf, false);
     let mut d = EventTreeDispatcher::new();
 
     d.dispatch_event(&root, &mut press(60, 40));
@@ -279,7 +276,7 @@ fn disabled_widget_passes_mouse_press_to_its_parent() {
 fn press_on_child_of_disabled_parent_is_not_delivered_to_the_child() {
     let log: Log = Default::default();
     let (root, mid, _leaf) = tree(Resp::Accept, Resp::Accept, Resp::Accept, &log);
-    mid.borrow().set_enabled(false);
+    set_widget_enabled(&mid, false);
     let mut d = EventTreeDispatcher::new();
 
     d.dispatch_event(&root, &mut press(60, 40));
@@ -351,7 +348,6 @@ impl Widget for PressOnlyProbe {
         is_visible() -> bool;
         set_visible(visible: bool);
         is_enabled() -> bool;
-        set_enabled(enabled: bool);
         update();
         dirty_rect() -> Option<Rect>;
         clear_dirty();

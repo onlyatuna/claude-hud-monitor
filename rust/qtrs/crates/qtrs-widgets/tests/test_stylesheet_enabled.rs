@@ -10,7 +10,9 @@
 //! disabled widget is blue.
 
 use qtrs_gui::tiny_skia::Color;
-use qtrs_widgets::{Button, Frame, Label, ProgressBar, Widget};
+use qtrs_widgets::{set_widget_enabled, Button, Frame, Label, ProgressBar, Widget, WidgetRef};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 fn rgb(r: u8, g: u8, b: u8) -> Option<Color> {
     Some(Color::from_rgba8(r, g, b, 255))
@@ -28,49 +30,44 @@ fn sheet(sel: &str, with_disabled: bool) -> String {
     s
 }
 
-/// Runs the oracle sequence on one widget; `color` reads its resolved colour.
-fn check(sel: &str, w: &dyn Widget, set_sheet: &dyn Fn(&str), color: &dyn Fn() -> Option<Color>) {
+/// Runs the oracle sequence on one widget of type `W`; `color` reads its resolved colour.
+fn check<W: Widget + 'static>(sel: &str, w: W, color: fn(&W) -> Option<Color>) {
+    let w: WidgetRef = Rc::new(RefCell::new(Box::new(w)));
+    let color = || color(w.borrow().as_any().downcast_ref::<W>().unwrap());
     let c = |(r, g, b): (u8, u8, u8)| rgb(r, g, b);
-    set_sheet(&sheet(sel, true));
+    w.borrow().set_style_sheet(&sheet(sel, true));
     assert_eq!(color(), c(GREEN), "{sel} enabled");
-    w.set_enabled(false);
+    set_widget_enabled(&w, false);
     assert_eq!(color(), c(RED), "{sel} disabled");
-    w.set_enabled(true);
+    set_widget_enabled(&w, true);
     assert_eq!(color(), c(GREEN), "{sel} enabled again");
-    set_sheet(&sheet(sel, false));
-    w.set_enabled(false);
+    w.borrow().set_style_sheet(&sheet(sel, false));
+    set_widget_enabled(&w, false);
     assert_eq!(color(), c(BLUE), "{sel} disabled, no :disabled rule");
 }
 
 #[test]
 fn a_label_matches_enabled_only_while_enabled() {
-    let l = Label::new("a");
-    check("QLabel", &l, &|s| l.set_style_sheet(s), &|| {
-        l.resolved_style().color
-    });
+    check("QLabel", Label::new("a"), |l| l.resolved_style().color);
 }
 
 #[test]
 fn a_frame_matches_enabled_only_while_enabled() {
     let mut f = Frame::new();
     f.base.object_data.set_object_name("F");
-    check("QFrame#F", &f, &|s| f.set_style_sheet(s), &|| {
-        f.resolved_style().color
-    });
+    check("QFrame#F", f, |f| f.resolved_style().color);
 }
 
 #[test]
 fn a_button_matches_enabled_only_while_enabled() {
-    let b = Button::new("b");
-    check("QPushButton", &b, &|s| b.set_style_sheet(s), &|| {
+    check("QPushButton", Button::new("b"), |b| {
         b.resolved_style().color
     });
 }
 
 #[test]
 fn a_progress_bar_matches_enabled_only_while_enabled() {
-    let g = ProgressBar::new();
-    check("QProgressBar", &g, &|s| g.set_style_sheet(s), &|| {
+    check("QProgressBar", ProgressBar::new(), |g| {
         g.resolved_groove_style().color
     });
 }

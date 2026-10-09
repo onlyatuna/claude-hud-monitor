@@ -67,9 +67,6 @@ impl Widget for Probe {
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
     }
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-    }
     fn update(&self) {
         self.base.update();
     }
@@ -200,6 +197,26 @@ impl Tree {
     fn take(&self) -> Vec<String> {
         std::mem::take(&mut *self.log.borrow_mut())
     }
+}
+
+/// RC-43: enabling and disabling notify before the call returns, a repeated change of a parent
+/// notifies nothing. Before RC-43 this ran through `Widget::set_enabled`, which sent no event.
+#[test]
+fn the_widget_entry_point_notifies_before_it_returns() {
+    let t = tree(None);
+
+    set_widget_enabled(&t.b, false);
+    assert_eq!(t.take(), ["b:EC:off"]);
+    set_widget_enabled(&t.b, false);
+    assert!(t.take().is_empty());
+    set_widget_enabled(&t.b, true);
+    assert_eq!(t.take(), ["b:EC:on"]);
+    set_widget_enabled(&t.c, false);
+    assert_eq!(t.take(), ["x:EC:off", "a:EC:off", "c:EC:off"]);
+    set_widget_enabled(&t.c, false);
+    assert!(t.take().is_empty());
+    set_widget_enabled(&t.c, true);
+    assert_eq!(t.take(), ["x:EC:on", "a:EC:on", "c:EC:on"]);
 }
 
 #[test]

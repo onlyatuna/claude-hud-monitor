@@ -1437,6 +1437,11 @@ impl QObject for Menu {
     }
 
     fn event(&mut self, event: &mut Event) -> bool {
+        // `QWidget::changeEvent(EnabledChange)` repaints; the menu's dirty area is its own.
+        if matches!(event.kind, EventKind::EnabledChange) {
+            self.update();
+            return false;
+        }
         if !self.base.is_visible() {
             return false;
         }
@@ -1548,11 +1553,6 @@ impl Widget for Menu {
 
     fn is_enabled(&self) -> bool {
         self.base.is_enabled()
-    }
-
-    fn set_enabled(&self, enabled: bool) {
-        self.base.set_enabled(enabled);
-        self.update();
     }
 
     fn update(&self) {
