@@ -120,6 +120,11 @@ impl CocoaNativeWindow {
         );
 
         ObjcMsg::send_id(ns_window, Sel::register("setContentView:"), ns_view);
+        // Qt: QNSView makes itself layer-backed (qnsview_drawing.mm:57) and the backing store
+        // flushes into the view's layer (QCocoaWindow::contentLayer, qcocoawindow.mm:2235-2241;
+        // qcocoabackingstore.mm:392), not into the view.
+        ObjcMsg::send_bool(ns_view, Sel::register("setWantsLayer:"), true);
+        let layer = ObjcMsg::send_0(ns_view, Sel::register("layer"));
 
         let stays_on_top =
             flags.contains(WindowFlags::STAYS_ON_TOP) || flags.contains(WindowFlags::TOOLTIP);
@@ -137,7 +142,7 @@ impl CocoaNativeWindow {
         }
 
         let surface = CocoaLayerSurface::new(
-            ns_view.as_ptr() as usize,
+            layer.as_ptr() as usize,
             rect.width as u32,
             rect.height as u32,
         )?;

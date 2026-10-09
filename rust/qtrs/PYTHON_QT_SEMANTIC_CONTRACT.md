@@ -1010,12 +1010,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC testlib/qtest.h:233-241,278-297]`：`QTEST_MAIN` 展開為 `main()`，先在主執行緒建立 `QGuiApplication`／`QApplication`，再於同一執行緒執行測試函式；AppKit 物件屬於主執行緒。
 - **qtrs required**：macOS 的 Cocoa 後端 MUST 在作業系統主執行緒上、以 AppKit 回報的實際狀態驗證，對照 Qt 用同一 API 的做法；`is_headless()` 的 Generic 替身與 `MockObjcRuntime` 都不能代表 AppKit 驗證。
 - **Current implementation**：`crates/qtrs-platform/examples/appkit_main_thread.rs`（CI test-qtrs 的 macOS 步驟）。監督程序對每項檢查開一個子程序（逾時 30 s；移除 `CI`、`GITHUB_ACTIONS`、`QT_QPA_PLATFORM`、`QTRS_HEADLESS` 使工廠建立真實 AppKit 物件）；子程序以 `pthread_main_np()` 確認在主執行緒（並確認衍生執行緒回傳 0），比照 `QTEST_MAIN` 先建立 `GuiApplication`，再執行一項檢查。斷言讀回 AppKit 的狀態（`level`、`isVisible`、`subviews`、`contentMinSize`…）；以 `objc_setExceptionPreprocessor` 在例外丟出前記錄 name／reason／call stack（先呼叫原 preprocessor，不吞例外）。結果分類：`ok`、`FAILED`（行為斷言失敗）、`ENV`（環境不具備，註明原因）、`CRASH`（訊號，通常為 ObjC 例外）、`PANIC`、`TIMEOUT`。原本在 libtest worker 執行緒上碰真實 AppKit 的 qtrs-platform 測試段落改為 `#[cfg(not(target_os = "macos"))]`（其他平台仍以 mock 執行），由對應檢查取代；`test_macos_flipped_coordinates_and_wayland_wheel_scale` 拆為 `test_macos_content_view_is_flipped`、`test_qt_mac_flip_point_and_rect_are_reversible`、`test_wayland_wheel_delta_scale`。
-- **Evidence**：`RAN`（GitHub Actions macos-latest，run 37975274292；螢幕 1024x768、backingScaleFactor 1）。20 項：`ok` 9（`window_title_and_style`、`window_show_hide`、`window_click_through`、`window_event_bridge`、`status_item_menu`、`menu_native`、`screen_metrics`、`cursor_shape`、`integration_factory`）、`FAILED` 8、`CRASH` 2、`ENV` 1。qtrs-platform 三個 libtest 目標（`test_platform_abstractions`、`test_platform_modern_features`、`test_window_activation`）在 macOS 由 SIGABRT 轉為通過；Windows 88/88、Ubuntu 失敗目標不變。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，run 37975274292；螢幕 1024x768、backingScaleFactor 1）。20 項：RC-46 之後（run 37977238590）共 22 項：`window_present` 轉為 `ok`，新增的 `window_present_pixels`、`window_present_opacity` 為 `FAILED`（G11.13.m、G11.13.n）。原 20 項：`ok` 9（`window_title_and_style`、`window_show_hide`、`window_click_through`、`window_event_bridge`、`status_item_menu`、`menu_native`、`screen_metrics`、`cursor_shape`、`integration_factory`）、`FAILED` 8、`CRASH` 2、`ENV` 1。qtrs-platform 三個 libtest 目標（`test_platform_abstractions`、`test_platform_modern_features`、`test_window_activation`）在 macOS 由 SIGABRT 轉為通過；Windows 88/88、Ubuntu 失敗目標不變。
 - **Known gap**（皆為此 run 的實測結果，未修）
   - **G11.13.a [P1, RAN]** 視窗幾何未翻轉座標：`CocoaNativeWindow::new` 與 `set_geometry` 把 Qt 的左上原點 y 直接當 Cocoa y（frame y 120，預期 768−(120+400)=248）；Qt 以 `QCocoaScreen::mapToNative` 轉換（`qcocoawindow.mm:304`）。
   - **G11.13.b [P1, RAN]** 視窗層級：TOOL 為 0（Qt `NSFloatingWindowLevel` 3）、STAYS_ON_TOP 為 3（Qt `NSModalPanelWindowLevel` 8）、TOOLTIP 為 3（Qt `NSScreenSaverWindowLevel` 1000）、`set_stays_on_top(true)` 為 3（`qcocoawindow.mm:548-563`）。
   - **G11.13.c [P1, RAN]** 內容視圖 `isFlipped` 為 NO：qtrs 用一般 `NSView`（未註冊 `QNSView`）；Qt 的 `QNSView` 回傳 YES（`qnsview_drawing.mm:67-70`、`qcocoawindow.mm:120`）。
-  - **G11.13.d [P0, RAN]** `present()` 觸發 `NSInvalidArgumentException: -[NSView setContents:]: unrecognized selector`，程序中止：`CocoaLayerSurface::commit_to_layer`（`surface/macos.rs`）把 NSView 當 CALayer；Qt 設定的是視圖 layer 的 `contents`（`qcocoabackingstore.mm:392`）。HUD 每次重繪都 present，macOS 上第一次繪製即中止 `[INFERENCE：未在 macOS 執行 HUD]`。
+  - **G11.13.d [P0, RAN；已修復：RC-46]** `present()` 觸發 `NSInvalidArgumentException: -[NSView setContents:]: unrecognized selector`，程序中止：`CocoaLayerSurface::commit_to_layer`（`surface/macos.rs`）把 NSView 當 CALayer；Qt 設定的是視圖 layer 的 `contents`（`qcocoabackingstore.mm:392`）。HUD 每次重繪都 present，macOS 上第一次繪製即中止 `[INFERENCE：未在 macOS 執行 HUD]`。
   - **G11.13.e [P1, RAN]** `set_backdrop(None)` 觸發 `NSInvalidArgumentException: -[NSView setState:]: unrecognized selector`，程序中止（`backdrop.rs:181-187` 對內容視圖送 `setState:`）；Qt 以 `removeFromSuperview` 移除自己建立的 effect view（`qcocoawindow.mm:2258-2263`）。
   - **G11.13.f [P2, RAN]** `set_backdrop(Acrylic)` 加入的 `NSVisualEffectView` 的 layer `zPosition` 為 0；Qt 設為 `-FLT_MAX`，疊在內容之下（`qcocoawindow.mm:2269-2270`）。material／blendingMode／state 與 qtrs 的對應值相符。
   - **G11.13.g [P2, RAN]** 最小尺寸設在 `minSize`（frame）而非 `contentMinSize`：有標題列的視窗 `contentMinSize` 為 200x118，預期 200x150（`qcocoawindow.mm:1185`）。
@@ -1024,6 +1024,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.13.j [P1, RAN]** `set_tooltip` 設的是按鈕 `title`（文字直接顯示在選單列），`toolTip` 為 nil；Qt 設 `button.toolTip`（`qcocoasystemtrayicon.mm:195-200`）。
   - **G11.13.k [P1, RAN]** `CocoaTheme` 在外觀為 Aqua 時回報 Dark：`query_color_scheme` 只要外觀名稱非 nil 就回 Dark（`theme.rs`）；Qt 取 `bestMatchFromAppearancesWithNames:@[Aqua, DarkAqua]`（`qcocoatheme.mm:507-509`）。
   - **G11.13.l [P1, RAN；原因未定]** `show()`（`makeKeyAndOrderFront:`）後視窗不是 key window，`[NSApp isActive]` 為 NO。qtrs 沒有像 Qt 的 Cocoa 整合那樣設定與啟用 `NSApplication`；是否為 CI 環境（無使用者登入的 GUI session）造成，尚未區分 `[INFERENCE]`。
+  - **G11.13.m [P1, RAN]** `present()` 顯示的顏色通道錯置：`commit_to_layer` 以 `kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host`（little-endian 即 BGRA）建立 CGImage，但資料是 tiny-skia 的 RGBA。實測（run 37977238590，RC-46 之後才可觀察）：紅色 pixmap 的 layer 影像中心像素讀回 RGBA `[0, 0, 255, 255]`。Qt 的 backing store 影像格式與 IOSurface 一致（`qcocoabackingstore.mm`）。
+  - **G11.13.n [P1, RAN；原因未定]** `present(_, 0.85)` 後 `[layer opacity]` 讀回 2（`[window alphaValue]` 為 1），有效不透明度不是 0.85。`commit_to_layer` 以 `send_length`（`CGFloat`＝double）送 `setOpacity:`，而 `CALayer.opacity` 是 `float`；是否就是這個 ABI 不符造成，尚未證實 `[INFERENCE]`。Qt 把視窗不透明度放在 `[NSWindow alphaValue]`（`QCocoaWindow::setOpacity`，`qcocoawindow.mm:1206-1213`），不設 layer opacity。
+  - **G11.13.o [P1, READ]** `commit_to_layer` 以 `CGDataProviderCreateWithData` 直接引用 `pixel_buffer`（不複製、無 release callback），layer 持有這個 CGImage；下一次 `present` 會覆寫同一塊記憶體，`resize` 會重新配置（舊指標懸空）。Qt 在 Core Animation 仍使用某個 IOSurface 時不重用它（`qcocoabackingstore.mm:141,163,347`）。未觀察到實際損毀 `[INFERENCE]`；RC-46 之前這條路徑在 macOS 上會先中止，無法到達。
 - **未判定的檢查**：`status_item_lifecycle` 的「drop 之後 `[statusItem statusBar]` 為 nil」失敗；此預期是對 AppKit `removeStatusItem:` 行為的推定 `[INFERENCE]`，修系統匣前須先確認這個 oracle，不列為缺口。`status_item_message` 為 `ENV`：未打包成 app bundle 時 `[NSUserNotificationCenter defaultUserNotificationCenter]` 為 nil，通知遞送無法觀察；qtrs 端 `last_message` 斷言通過。
 - **Test**：`appkit_main_thread`（上述 20 項）；每項檢查註明取代的 libtest 測試。
 - **HUD usage**：macOS 上的 HUD 視窗、背景、系統匣、主題都走這些路徑；未在 macOS 執行 HUD。
@@ -1251,7 +1254,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 356 項：D 12、P0 35、P1 158、P2 146、test gap 5（計數含已修復項；標籤含「已修復」者共 67 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 359 項：D 12、P0 35、P1 161、P2 146、test gap 5（計數含已修復項；標籤含「已修復」者共 68 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1550,7 +1553,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.a | P1, RAN | Cocoa 視窗幾何未翻轉座標 |
 | G11.13.b | P1, RAN | Cocoa 視窗層級與 Qt `windowLevel` 不同 |
 | G11.13.c | P1, RAN | 內容視圖 `isFlipped` 為 NO（非 `QNSView`） |
-| G11.13.d | P0, RAN | `present()` 對 NSView 送 `setContents:`，ObjC 例外中止 |
+| G11.13.d | P0, RAN；已修復：RC-46 | `present()` 對 NSView 送 `setContents:`，ObjC 例外中止 |
 | G11.13.e | P1, RAN | `set_backdrop(None)` 對 NSView 送 `setState:`，ObjC 例外中止 |
 | G11.13.f | P2, RAN | effect view 未疊在內容之下 |
 | G11.13.g | P2, RAN | 最小尺寸設 `minSize` 而非 `contentMinSize` |
@@ -1559,6 +1562,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.j | P1, RAN | 系統匣 tooltip 設成按鈕標題 |
 | G11.13.k | P1, RAN | `CocoaTheme` 在 Aqua 外觀回報 Dark |
 | G11.13.l | P1, RAN；原因未定 | `show()` 後視窗不是 key window，NSApp 未啟用 |
+| G11.13.m | P1, RAN | `present()` 的 CGImage 把 RGBA 位元組當 BGRA，紅色顯示為藍色 |
+| G11.13.n | P1, RAN；原因未定 | `present(_, 0.85)` 後 layer `opacity` 讀回 2 |
+| G11.13.o | P1, READ | CGImage 直接引用 `pixel_buffer`，之後覆寫或重新配置時 layer 仍持有該影像 |
 | G12.3.a | P1 | QMenu 規則被解析但不消費 |
 | G12.3.b | P0, READ；已修復：RC-15 | Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px` |
 | G12.3.c | P1, READ | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |
@@ -2104,6 +2110,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（GitHub Actions macos-latest）。新測試（`dispatcher.rs` 的 `darwin_tests`，只在 macOS 編譯，直接斷言 dispatcher 的實際變體）：修改前 run 37967968187，`a_core_loop_on_the_main_thread_uses_the_unix_dispatcher` 與 `a_worker_loop_uses_the_unix_dispatcher` 都失敗（後者是未呼叫 `init_current` 的 `std::thread` 搶到主執行緒判定而拿到 Cocoa）；修改後 run 37968728183，這兩項與新增的 `a_gui_loop_uses_the_cocoa_dispatcher` 通過，其餘 88 個目標的結果與修改前的 develop run 37967310808 相同，Windows 88/88。`a_gui_loop_uses_the_cocoa_dispatcher` 依賴新 API，只有修改後結果。本機 Windows 完整整合驗證見 commit 說明。
 - **Status**：**已修復**。新增 `DispatcherKind { Core, Gui }` 與 `create_dispatcher(kind)`；`EventLoop::new()`／`with_queue` 走 Core，新增 `EventLoop::with_dispatcher_kind`；`CoreApplication::new` 走 Core，新增 `CoreApplication::with_dispatcher_kind`；`GuiApplication::new` 以 `DispatcherKind::Gui` 建立。macOS：Core → UNIX、Gui → Cocoa；其他平台兩種皆為該平台唯一的 dispatcher。dispatcher 在建立時決定，不替換。
 - **Residual**：(1) ~~GUI 路徑的端對端驗證尚無測試~~ → 已由 macOS 主執行緒入口 `crates/qtrs-gui/examples/main_thread_entry.rs` 補上（CI test-qtrs 的 macOS 步驟）：每項檢查一個子程序，以 `pthread_main_np()` 確認在作業系統主執行緒（並確認衍生執行緒回傳 0），斷言 `CoreApplication::event_dispatcher_class_name()` 的實際型別，並以 qtrs 計時器事件呼叫 `exit(7)` 後確認 `exec` 回傳 7。run 37970663014：`gui` 得 `CocoaEventDispatcher`、`core` 得 `UnixEventDispatcher`，兩者事件迴圈都進入並離開。對照組（RC-44 `a76a387` 加同一入口，run 37970690553）：`core` 得 Cocoa 而失敗，證明此入口能抓到建立規則的回歸。只涵蓋 qtrs 事件，不代表 NSEvent／CFRunLoop 已派送（G7.6.h）。(2) G7.6.h：Cocoa dispatcher 未真正整合 Cocoa 事件。(3) RC-44 Residual 的 socket notifier 與主執行緒判定問題不變。
+
+#### RC-46 Cocoa `present()` 寫入內容視圖的 layer
+
+- **Contract gaps**：G11.13.d（已修復）；另新增未修的 G11.13.m（顏色通道）、G11.13.n（不透明度）、G11.13.o（影像緩衝區生命週期）。這三項在修復前無法觀察，因為 `present()` 先中止；不屬本 RC。總數 356 → 359，已修復 67 → 68。
+- **Qt behavior** `[QT-SRC qnsview_drawing.mm:57; qcocoawindow.mm:2235-2241; qcocoabackingstore.mm:354-355,392]`：`QNSView` 初始化時設 `wantsLayer = YES`，成為 layer-backed view；flush 取 `QCocoaWindow::contentLayer()`（即 `m_view.layer`），設定的是這個 layer 的 `contents`。
+- **qtrs root**：`CocoaNativeWindow::new` 把內容視圖（`NSView`）本身的指標交給 `CocoaLayerSurface` 當作 layer，視圖也未設 `wantsLayer`；`commit_to_layer` 對 `NSView` 送 `setContents:`，AppKit 丟出 `NSInvalidArgumentException`，Rust 無法攔截外來例外而中止。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，主執行緒入口 `appkit_main_thread`）。修改前 run 37975274292：`window_present` 為 `CRASH`（SIGABRT），例外記錄為 `-[NSView setContents:]: unrecognized selector`，call stack 經 `CocoaLayerSurface::commit_to_layer` → `ObjcMsg::send_id`。修改後 run 37977238590：`window_present` 為 `ok`，斷言 `[contentView wantsLayer]`、內容視圖有 layer、`[[contentView layer] contents]` 是 100x100 的 CGImage。其餘檢查的分類與修改前相同；新增的像素與不透明度檢查失敗（G11.13.m、G11.13.n）。qtrs 各目標：macOS 5 個、Ubuntu 7 個失敗目標與修改前相同，Windows 88/88。
+- **Status**：**已修復**。`CocoaNativeWindow::new` 在 `setContentView:` 之後對內容視圖送 `setWantsLayer: YES`，再把 `[view layer]` 交給 `CocoaLayerSurface`。非 macOS 的 mock runtime 中 `layer` 回傳接收者本身，既有 mock 測試行為不變。
+- **Residual**：`present()` 不再中止，但畫面內容尚不正確：顏色通道錯置（G11.13.m）、不透明度錯誤（G11.13.n）；影像緩衝區的生命週期未對齊 Qt（G11.13.o，讀碼）。未設定 `layerContentsPlacement`（Qt 為 TopLeft，`qnsview_drawing.mm:189-195`）與 `contentsScale`（`qcocoabackingstore.mm:366-371`）；Retina 下未驗證。若 `set_backdrop` 以 effect view 取代內容視圖（`backdrop.rs:232`），surface 仍指向舊視圖的 layer（READ，未驗證）。HUD 未在 macOS 執行。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

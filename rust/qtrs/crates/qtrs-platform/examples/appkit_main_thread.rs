@@ -160,6 +160,42 @@ mod harness {
     }
 }
 
+/// CoreGraphics calls for reading a layer's image back.
+#[cfg(target_os = "macos")]
+mod cg {
+    use std::ffi::c_void;
+
+    use qtrs_platform::objc_runtime::CGRect;
+
+    pub type CGImageRef = *mut c_void;
+    pub type CGColorSpaceRef = *mut c_void;
+    pub type CGContextRef = *mut c_void;
+
+    pub const ALPHA_PREMULTIPLIED_LAST: u32 = 1;
+    pub const BYTE_ORDER_32_BIG: u32 = 4 << 12;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        pub fn CFGetTypeID(object: *const c_void) -> usize;
+        pub fn CGImageGetTypeID() -> usize;
+        pub fn CGImageGetWidth(image: CGImageRef) -> usize;
+        pub fn CGImageGetHeight(image: CGImageRef) -> usize;
+        pub fn CGColorSpaceCreateDeviceRGB() -> CGColorSpaceRef;
+        pub fn CGColorSpaceRelease(space: CGColorSpaceRef);
+        pub fn CGBitmapContextCreate(
+            data: *mut c_void,
+            width: usize,
+            height: usize,
+            bits_per_component: usize,
+            bytes_per_row: usize,
+            space: CGColorSpaceRef,
+            bitmap_info: u32,
+        ) -> CGContextRef;
+        pub fn CGContextDrawImage(context: CGContextRef, rect: CGRect, image: CGImageRef);
+        pub fn CGContextRelease(context: CGContextRef);
+    }
+}
+
 /// Raw message sends for reading AppKit state back; qtrs's `ObjcMsg` has no getter for most of it.
 #[cfg(target_os = "macos")]
 mod objc {
@@ -287,7 +323,7 @@ mod checks {
     use qtrs_gui::tiny_skia::Color;
     use qtrs_platform::backdrop::BackdropType;
     use qtrs_platform::menu::{CocoaMenu, PlatformMenu};
-    use qtrs_platform::objc_runtime::{CGSize, Id};
+    use qtrs_platform::objc_runtime::{CGRect, CGSize, Id};
     use qtrs_platform::theme::PlatformTheme;
     use qtrs_platform::tray::{CocoaStatusItem, PlatformTrayIcon};
     use qtrs_platform::{
@@ -297,6 +333,7 @@ mod checks {
         WindowSystemEvent,
     };
 
+    use super::cg;
     use super::objc::{array, class, is_kind_of, ns_string, rect, send, send1, send2, string, yes};
 
     /// Soft assertions: every result is printed and the check runs to the end.
@@ -403,6 +440,16 @@ mod checks {
             name: "window_present",
             origin: "test_platform_abstractions::test_platform_parity_gaps_verification (CocoaLayerSurface present)",
             run: window_present,
+        },
+        CheckDef {
+            name: "window_present_pixels",
+            origin: "test_platform_abstractions::test_platform_parity_gaps_verification (CocoaLayerSurface present)",
+            run: window_present_pixels,
+        },
+        CheckDef {
+            name: "window_present_opacity",
+            origin: "test_platform_abstractions::test_platform_parity_gaps_verification (CocoaLayerSurface present)",
+            run: window_present_opacity,
         },
         CheckDef {
             name: "backdrop_on",
@@ -810,7 +857,8 @@ mod checks {
         );
     }
 
-    fn window_present(t: &mut Recorder) {
+    /// A shown 100x100 frameless window after `present(red, opacity)`, and its content layer.
+    fn presented_window(opacity: f32) -> (CocoaNativeWindow, Id) {
         let mut win = window(
             "present",
             Rect::new(100, 100, 100, 100),
@@ -818,17 +866,87 @@ mod checks {
         );
         win.show();
         let mut frame = pixmap(100, Color::from_rgba8(255, 0, 0, 255));
-        t.expect(
-            win.present(&mut frame, 0.85).is_ok(),
-            "present() returns Ok",
-        );
-        // Qt: the backing store sets the view layer's contents (qcocoabackingstore.mm:392).
+        let presented = win.present(&mut frame, opacity);
+        println!("  INFO present() -> {presented:?}");
         let content: Id = send(win.ns_window(), "contentView");
         let layer: Id = send(content, "layer");
+        (win, layer)
+    }
+
+    fn window_present(t: &mut Recorder) {
+        let (win, layer) = presented_window(1.0);
+        let content: Id = send(win.ns_window(), "contentView");
+        // Qt: QNSView is layer-backed (qnsview_drawing.mm:57) and the backing store sets the
+        // content layer's contents (QCocoaWindow::contentLayer, qcocoawindow.mm:2235-2241;
+        // qcocoabackingstore.mm:392).
+        t.expect(yes(content, "wantsLayer"), "[contentView wantsLayer]");
         t.expect(!layer.is_nil(), "the content view has a layer");
+        let contents: Id = send(layer, "contents");
+        let image = contents.as_ptr() as cg::CGImageRef;
+        let is_image =
+            !contents.is_nil() && unsafe { cg::CFGetTypeID(image) == cg::CGImageGetTypeID() };
         t.expect(
-            !send::<Id>(layer, "contents").is_nil(),
-            "[[contentView layer] contents] is set after present",
+            is_image,
+            "[[contentView layer] contents] is a CGImage after present",
+        );
+        if is_image {
+            t.eq(
+                "contents CGImage size (the presented pixmap)",
+                unsafe { (cg::CGImageGetWidth(image), cg::CGImageGetHeight(image)) },
+                (100, 100),
+            );
+        }
+    }
+
+    fn window_present_pixels(t: &mut Recorder) {
+        let (_win, layer) = presented_window(1.0);
+        let contents: Id = send(layer, "contents");
+        let image = contents.as_ptr() as cg::CGImageRef;
+        if contents.is_nil() || unsafe { cg::CFGetTypeID(image) != cg::CGImageGetTypeID() } {
+            t.expect(
+                false,
+                "[[contentView layer] contents] is a CGImage after present",
+            );
+            return;
+        }
+        // Draw the layer's image into an RGBA (premultiplied last, big endian) bitmap and read
+        // the centre pixel: the colour AppKit composites for the opaque red pixmap.
+        let mut rgba = vec![0u8; 100 * 100 * 4];
+        unsafe {
+            let space = cg::CGColorSpaceCreateDeviceRGB();
+            let context = cg::CGBitmapContextCreate(
+                rgba.as_mut_ptr().cast(),
+                100,
+                100,
+                8,
+                100 * 4,
+                space,
+                cg::ALPHA_PREMULTIPLIED_LAST | cg::BYTE_ORDER_32_BIG,
+            );
+            cg::CGContextDrawImage(context, CGRect::new(0.0, 0.0, 100.0, 100.0), image);
+            cg::CGContextRelease(context);
+            cg::CGColorSpaceRelease(space);
+        }
+        let centre = (50 * 100 + 50) * 4;
+        t.eq(
+            "RGBA of the layer image's centre pixel (red pixmap)",
+            &rgba[centre..centre + 4],
+            &[255, 0, 0, 255][..],
+        );
+    }
+
+    fn window_present_opacity(t: &mut Recorder) {
+        let (win, layer) = presented_window(0.85);
+        // Qt keeps window opacity in [NSWindow alphaValue] (QCocoaWindow::setOpacity,
+        // qcocoawindow.mm:1206-1213); qtrs passes it to present(). Either way the frame must be
+        // composited at 0.85: alphaValue x layer opacity.
+        let alpha: f64 = send(win.ns_window(), "alphaValue");
+        let layer_opacity: f32 = send(layer, "opacity");
+        println!("  INFO [window alphaValue] {alpha}, [layer opacity] {layer_opacity}");
+        let effective = alpha * f64::from(layer_opacity);
+        t.expect(
+            (effective - 0.85).abs() < 1e-3,
+            &format!("present(_, 0.85): alphaValue x layer opacity = {effective}, expected 0.85"),
         );
     }
 
