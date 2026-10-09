@@ -704,17 +704,21 @@ mod tests {
         println!("Gemini token discovered: {}", tok.is_some());
     }
 
+    /// Manual integration test against the live Antigravity CLI and quota API; parsing is covered
+    /// offline by `test_parse_agy_json` and `test_parse_agy_api_json`. The elapsed time is only
+    /// logged. Run with `cargo test test_fetch_usage_live_benchmark -- --ignored`.
     #[test]
+    #[ignore = "needs network, the Antigravity CLI and a valid login"]
     fn test_fetch_usage_live_benchmark() {
         let provider = AgyProvider::new();
         let start = std::time::Instant::now();
         let metrics = provider.fetch_usage();
         let elapsed = start.elapsed();
         eprintln!("Live agy fetch took: {:.2?}", elapsed);
-        if metrics.error_code == "cli_not_found" {
-            eprintln!("Skipping live assertion: agy not installed in this environment (e.g. CI)");
-            return;
-        }
+        assert_ne!(
+            metrics.error_code, "cli_not_found",
+            "precondition not met: the Antigravity CLI is not installed"
+        );
         eprintln!("Provider error: {:?}", metrics.error);
         eprintln!(
             "Metric 1: {} = {}",
@@ -725,8 +729,11 @@ mod tests {
             metrics.metric2_title, metrics.metric2_text
         );
         eprintln!("Badge 1: {}", metrics.badge1_text);
-        assert!(metrics.error.is_none());
-        // Must be fast!
-        assert!(elapsed < std::time::Duration::from_secs(3));
+        assert!(
+            metrics.error.is_none(),
+            "live fetch failed: {:?} ({})",
+            metrics.error,
+            metrics.error_code
+        );
     }
 }

@@ -582,7 +582,11 @@ mod tests {
         let empty_json = serde_json::json!({});
         assert_eq!(extract_token(&empty_json), None);
     }
+    /// Manual integration test against the live Claude usage endpoint; parsing is covered offline
+    /// by `test_parse_claude_response`. Usage numbers depend on the account, so only success is
+    /// asserted. Run with `cargo test test_live_fetch_usage -- --ignored`.
     #[test]
+    #[ignore = "needs network and a valid Claude login"]
     fn test_live_fetch_usage() {
         let p = ClaudeProvider::new();
         let m = p.fetch_usage();
@@ -597,5 +601,11 @@ mod tests {
         );
         eprintln!("[test_live_fetch_usage] error: {:?}", m.error);
         eprintln!("[test_live_fetch_usage] error_code: {}", m.error_code);
+        assert!(
+            m.error.is_none(),
+            "live fetch failed: {:?} ({})",
+            m.error,
+            m.error_code
+        );
     }
 }
