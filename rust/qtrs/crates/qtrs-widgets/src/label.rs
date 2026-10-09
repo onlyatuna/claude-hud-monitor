@@ -167,7 +167,7 @@ impl Label {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        let mut buf = [""; 3];
+        let mut buf = [""; 4];
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QLabel",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),

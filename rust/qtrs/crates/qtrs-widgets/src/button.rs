@@ -126,7 +126,7 @@ impl Button {
         self.update();
     }
     pub fn resolved_style(&self) -> crate::style::stylesheet::ResolvedStyle {
-        let mut buf = [""; 3];
+        let mut buf = [""; 4];
         let pseudo = self.base.style_pseudo_states(
             self.state == ButtonState::Hovered,
             self.state == ButtonState::Pressed,

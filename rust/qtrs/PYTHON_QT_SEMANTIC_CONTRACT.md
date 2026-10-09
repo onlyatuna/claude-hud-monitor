@@ -624,7 +624,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.5.b [P1, READ]** `attributes` 只有 Label；同一條規則對 Button／Frame／ProgressBar 無效。
   - **G8.5.c [P0, READ；已修復：RC-05]** **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty；`Label::set_text` 會 `request_layout`，但 `set_font`/`set_alignment`/style/property 不會，`Button::set_text/set_font` 也不會——需要手動 `update_layout`。
   - **G8.5.d [P0, READ；已修復：RC-10]** `Window::set_style_sheet` 是**整個 Application 的**（呼叫 `Application::set_style_sheet`），Python `HUDWindow.setStyleSheet` 只作用於該子樹（`hud_window.py:246,250`）；Rust HUD 兩者都呼叫（`hud_window.rs:231-232`）→ 影響其他頂層視窗與 popup。
-  - **G8.5.e [P1, READ；`:disabled` 已修復：RC-34；`:focus` 已修復：RC-35]** （修復前：） `:disabled`/`:focus` 不支援。 RC-34：Label、Frame、ProgressBar（groove／chunk）、Button 在停用時帶 `disabled` pseudo-state；Button 停用時不再帶 `hover`。RC-35：同四類 widget 在 `has_focus` 時帶 `focus` pseudo-state（由 `FocusManager` 設定）。仍缺：`:enabled`；Label／ProgressBar 未覆寫 `set_has_focus`（trait 預設 no-op），`FocusManager` 對它們設焦點不會生效。
+  - **G8.5.e [P1, READ；`:disabled` 已修復：RC-34；`:focus` 已修復：RC-35；`:enabled` 已修復：RC-39]** （修復前：） `:disabled`/`:focus` 不支援。 RC-34：Label、Frame、ProgressBar（groove／chunk）、Button 在停用時帶 `disabled` pseudo-state；Button 停用時不再帶 `hover`。RC-35：同四類 widget 在 `has_focus` 時帶 `focus` pseudo-state（由 `FocusManager` 設定）。RC-39：同四類 widget 啟用時帶 `enabled` pseudo-state，與 `disabled` 互斥。仍缺：Label／ProgressBar 未覆寫 `set_has_focus`（trait 預設 no-op），`FocusManager` 對它們設焦點不會生效。
   - **G8.5.f [P1, READ]** **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在；選單外觀來自寫死的 `MenuStyle`（`rust/src/ui/tray_icon.rs`），手動複製了 Python QSS 的數值；`QMenu::item:selected/:disabled` 不驅動 hover／停用色。
   - **G8.5.g [P2, READ]** `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄；`margin` 只有選單消費。
   - **G8.5.h [P2, READ]** 父 widget 的 `font` 繼承未實作（`[INFERENCE]`，未對照 `qstylesheetstyle.cpp`）。
@@ -1364,7 +1364,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.5.b | P1, READ | `attributes` 只有 Label |
 | G8.5.c | P0, READ；已修復：RC-05 | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
 | G8.5.d | P0, READ；已修復：RC-10 | `Window::set_style_sheet` 是**整個 Application 的** |
-| G8.5.e | P1, READ；`:disabled` 已修復：RC-34；`:focus` 已修復：RC-35 | `:disabled`/`:focus` 不支援 |
+| G8.5.e | P1, READ；`:disabled` 已修復：RC-34；`:focus` 已修復：RC-35；`:enabled` 已修復：RC-39 | `:disabled`/`:focus` 不支援 |
 | G8.5.f | P1, READ | **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在 |
 | G8.5.g | P2, READ | `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄 |
 | G8.5.h | P2, READ | 父 widget 的 `font` 繼承未實作 |
@@ -1974,6 +1974,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`root`{`c`{`x`,`a`},`b`}，`setEnabled` 一回傳就讀）：停用 b → `b:EC:off`、再停用 → 無、啟用 → `b:EC:on`；x 焦點、停用 c → `x:Out`、`x:EC:off`、`a:EC:off`、`c:EC:off`，啟用 c → `x/a/c:EC:on`；x 先明確停用 → 只有 a、c；a 焦點、停用 c → `x:EC:off`、`a:Out`、`a:EC:off`、`c:EC:off`；a 焦點、停用 a → `a:Out`、`b:In`、`a:EC:off`。新測試 `test_enabled_change.rs` 5 項：修改前（保留新事件型別、還原 widget.rs／focus.rs）5 項全失敗（無 `EnabledChange`）；修改後 5 項通過，`test_focus_disable.rs` 6 項、`test_widget_enabled.rs` 3 項仍通過。
 - **Status**：**已修復（`set_widget_enabled` 入口）**。新增 `EventKind::EnabledChange`／`EventType::EnabledChange = 98`；`set_enabled_helper` 回傳是否改變，並在給定時依 Qt 順序記錄 `EnabledNotice`（`FocusLost(Rc<FocusState>)`、`Changed(WidgetRef)`，後者在子項遞迴後由 parent 記錄、頂層由 `set_widget_enabled` 記錄）；`set_widget_enabled` 放掉 borrow 後依序重播：焦點移交（RC-37 的 `move_lost_focus_now`，取代原本的子樹搜尋）與 `event(EnabledChange)`（非 spontaneous）。`set_widget_enabled` 直接呼叫 `WidgetBase`（Qt 的 `setEnabled` 非 virtual），不經 `Widget::set_enabled` 覆寫。
 - **Residual**：`Widget::set_enabled`（borrow 中）路徑不送 `EnabledChange`；呼叫端仍 borrow 的 widget 跳過；有祖先被 borrow 時焦點移交延後但 `EnabledChange` 仍立即送出，此時順序與 Qt 不同。**未驗證 residual（不在 RC-38 完成範圍、不宣稱與 Qt 等價）**：焦點移交在重播時才計算下一個 widget（Qt 在遞迴子項前計算），被停用的焦點 widget 自己有可 Tab 的子項時結果可能不同 `[INFERENCE]`，未測；待以 PySide6 oracle 測「被停用的焦點容器本身有可聚焦子 widget」後再判定。`EnabledChange` 沒有接到 `changeEvent` 類 hook，widget 只能在 `event()` 看到；重繪仍由 helper 的 `update()` 負責。
+
+#### RC-39 QSS `:enabled` 不比對
+
+- **Contract gaps**：G8.5.e（`:enabled` 部分）。計數不變（G8.5.e 已於 RC-34 計入）。
+- **Qt behavior** `[QT-SRC qstylesheetstyle.cpp:1756-1765, qcssparser.cpp:304]`：`pseudoClass` 在 `State_Enabled` 時設 `PseudoClass_Enabled`（`:hover` 只在此分支），否則設 `PseudoClass_Disabled`，兩者互斥。
+- **qtrs root**：`WidgetBase::style_pseudo_states` 只產生 hover／disabled／pressed／focus，從不產生 `enabled`，`:enabled` 規則永遠不比對。
+- **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`S { color: blue } S:enabled { color: green } S:disabled { color: red }`，S 為 `QLabel`、`QFrame#F`、`QPushButton`、`QProgressBar`）：啟用 green、停用 red、再啟用 green；去掉 `:disabled` 規則後停用為 blue（`:enabled` 不套用）。新測試 `test_stylesheet_enabled.rs` 4 項：修改前全失敗（啟用時為 blue）；修改後全過；`test_stylesheet_disabled`／`focus`／`style`／`type_inheritance` 仍全過。
+- **Status**：**已修復（Label、Frame、ProgressBar groove／chunk、Button）**。`style_pseudo_states` 啟用時先加 `enabled`；pseudo-state 緩衝由 3 擴為 4（enabled＋hover＋pressed＋focus）。其他 widget（未走 `style_pseudo_states` 者）未處理。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
