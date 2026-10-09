@@ -177,7 +177,50 @@ mod native_bindings {
         pub fn sel_registerName(name: *const c_char) -> *const c_void;
         pub fn sel_getName(sel: *const c_void) -> *const c_char;
         pub fn objc_msgSend();
+        pub fn objc_allocateClassPair(
+            superclass: *mut c_void,
+            name: *const c_char,
+            extra_bytes: usize,
+        ) -> *mut c_void;
+        pub fn objc_registerClassPair(class: *mut c_void);
+        pub fn class_getInstanceMethod(class: *mut c_void, sel: *const c_void) -> *mut c_void;
+        pub fn method_getTypeEncoding(method: *mut c_void) -> *const c_char;
+        pub fn class_addMethod(
+            class: *mut c_void,
+            sel: *const c_void,
+            imp: *const c_void,
+            types: *const c_char,
+        ) -> BOOL;
     }
+}
+
+/// The content view class: an `NSView` subclass named `QNSView` whose `-isFlipped` returns YES,
+/// like Qt's (qnsview_drawing.mm:67-70), registered with the runtime on first use.
+#[cfg(target_os = "macos")]
+pub fn qnsview_class() -> Class {
+    extern "C" fn is_flipped(_this: *mut c_void, _cmd: *const c_void) -> BOOL {
+        YES
+    }
+    static CLASS: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| unsafe {
+        let existing = objc_get_class("QNSView");
+        if !existing.is_nil() {
+            return existing.0 as usize;
+        }
+        let ns_view = objc_get_class("NSView");
+        let name = CString::new("QNSView").unwrap();
+        let class = native_bindings::objc_allocateClassPair(ns_view.0, name.as_ptr(), 0);
+        let sel = Sel::register("isFlipped");
+        let inherited = native_bindings::class_getInstanceMethod(ns_view.0, sel.0);
+        native_bindings::class_addMethod(
+            class,
+            sel.0,
+            is_flipped as *const c_void,
+            native_bindings::method_getTypeEncoding(inherited),
+        );
+        native_bindings::objc_registerClassPair(class);
+        class as usize
+    });
+    Class(*CLASS as *mut c_void)
 }
 
 /// Creates an NSString object from a UTF-8 string on macOS

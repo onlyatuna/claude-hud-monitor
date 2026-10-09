@@ -19,11 +19,9 @@ mod core_graphics {
     extern "C" {
         pub fn CGColorSpaceCreateDeviceRGB() -> CGColorSpaceRef;
         pub fn CGColorSpaceRelease(space: CGColorSpaceRef);
-        pub fn CFDataCreate(
-            allocator: *const c_void,
-            bytes: *const u8,
-            length: isize,
-        ) -> *const c_void;
+        pub fn CFDataCreateMutable(allocator: *const c_void, capacity: isize) -> *mut c_void;
+        pub fn CFDataSetLength(data: *mut c_void, length: isize);
+        pub fn CFDataGetMutableBytePtr(data: *mut c_void) -> *mut u8;
         pub fn CFRelease(object: *const c_void);
         pub fn CGDataProviderCreateWithCFData(data: *const c_void) -> CGDataProviderRef;
         pub fn CGDataProviderRelease(provider: CGDataProviderRef);
@@ -96,11 +94,26 @@ impl CocoaLayerSurface {
             // IOSurface stays untouched while in use (qcocoabackingstore.mm:141,163,347,392-402).
             // The layer keeps this image after we return, so it gets its own copy of the frame;
             // `pixel_buffer` is overwritten by the next present and reallocated by `resize`.
-            let data = CFDataCreate(
-                std::ptr::null(),
-                self.pixel_buffer.as_ptr(),
-                self.pixel_buffer.len() as isize,
-            );
+            // The content view is flipped like QNSView (qnsview_drawing.mm:67-70), so its layer
+            // flips contents when rendering ([CALayer contentsAreFlipped]); the copy then stores
+            // the rows bottom-up, and the frame's first row still shows at the top.
+            let len = self.pixel_buffer.len();
+            let data = CFDataCreateMutable(std::ptr::null(), len as isize);
+            if !data.is_null() {
+                CFDataSetLength(data, len as isize);
+                let copy = std::slice::from_raw_parts_mut(CFDataGetMutableBytePtr(data), len);
+                if ObjcMsg::send_bool_return(layer, Sel::register("contentsAreFlipped")) {
+                    let stride = (self.width * 4) as usize;
+                    for (dst, src) in copy
+                        .chunks_exact_mut(stride)
+                        .zip(self.pixel_buffer.chunks_exact(stride).rev())
+                    {
+                        dst.copy_from_slice(src);
+                    }
+                } else {
+                    copy.copy_from_slice(&self.pixel_buffer);
+                }
+            }
             let provider = CGDataProviderCreateWithCFData(data);
             if !data.is_null() {
                 CFRelease(data);

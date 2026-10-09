@@ -69,9 +69,11 @@ impl CocoaNativeWindow {
         ThreadContext::assert_main_thread("CocoaNativeWindow::new");
 
         let window_class = Class::get("NSWindow").ok_or("Cannot find NSWindow class")?;
-        let view_class = Class::get("QNSView")
-            .or_else(|| Class::get("NSView"))
-            .ok_or("Cannot find class (QNSView / NSView)")?;
+        // Qt's content view is a QNSView, whose -isFlipped returns YES (qnsview_drawing.mm:67-70).
+        #[cfg(target_os = "macos")]
+        let view_class = crate::objc_runtime::qnsview_class();
+        #[cfg(not(target_os = "macos"))]
+        let view_class = Class::get("QNSView").ok_or("Cannot find class QNSView")?;
 
         let mut style_mask = if flags.contains(WindowFlags::FRAMELESS)
             || flags.contains(WindowFlags::TOOLTIP)
