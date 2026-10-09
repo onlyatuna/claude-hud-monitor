@@ -55,6 +55,33 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 一律 `-j 1`、一次一個 cargo。`QT_QPA_PLATFORM=offscreen` 不可用。
 
+### 分層驗證流程（RC-41 起）
+
+可以延後的是廣泛的整合測試，不是每個 RC 的證據。
+
+1. **每個 RC（必做，不可省略）**：
+   - 對照 Qt 原始碼（`[QT-SRC]`）；行為變更時跑 PySide6 oracle。
+   - 先寫永久測試，記錄修改前失敗。
+   - 修改後跑新測試與直接相關的回歸測試；對新增或修改的檔案跑格式檢查（`rustfmt --check`）。可另跑局部 clippy。
+   - 每個 RC 一個 commit，commit 前記錄上述結果。
+2. **每批 RC（約 3 個，或一組相關修改完成時）**：跑上方「驗證指令」的 workspace 與應用層全套，加上 `cargo clippy -j 1 -- -D warnings` 與 `cargo fmt --check`。
+   - RC 若修改 `WidgetBase`、`FocusManager`、事件派送或共用生命週期等核心路徑，提早跑，不等滿 3 個。
+   - 若 RC 的影響無法由針對性測試涵蓋，該 RC 必須跑完整驗證，不得為省時跳過。
+3. **批次 push**：一批通過整合驗證後一次 `git push origin main:develop`，交由 GitHub CI 跑跨平台驗證。CI 失敗時，以各 RC 的獨立 commit 與針對性測試縮小範圍。
+4. **整合失敗的處理**：完整測試失敗不代表本次修改有錯，完整測試通過也不取代針對性測試。先單獨重跑失敗項，並在基準版本（修改前的 commit）重跑，判斷是否與本批修改有關，再把結果記下。不得為了刷成全綠而反覆重跑整套。
+5. **真實 HUD 手動 smoke test**：依影響範圍決定；發布前必做。
+
+| 檢查項目 | 每個 RC | 批次整合 |
+|---|---|---|
+| 修改前失敗、修改後通過的針對性測試 | 必做 | — |
+| 直接相關的回歸測試 | 必做 | 再整體確認 |
+| Qt／PySide6 oracle | 行為變更時必做 | 不必重複 |
+| `cargo fmt --check` | 建議（觸及的檔案） | 必做 |
+| Clippy | 局部可每次跑 | 完整 `-D warnings` |
+| qtrs workspace 全測試 | 一般 RC 不必 | 必做 |
+| 主 crate 全測試 | 一般 RC 不必 | 必做 |
+| 真實 HUD 手動 smoke test | 依影響範圍 | 發布前必做 |
+
 ---
 
 ## 1. Scope
