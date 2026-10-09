@@ -213,10 +213,30 @@ impl StorageInfo {
         }
     }
 
+    /// `QStorageInfoPrivate::retrieveVolumeInfo` (qstorageinfo_unix.cpp:403-418): one
+    /// statvfs; valid and ready only when it succeeds; sizes are block counts times the
+    /// fragment size.
     #[cfg(not(windows))]
+    // statvfs field widths differ: fsblkcnt_t is u32 on macOS, u64 on Linux.
+    #[allow(clippy::useless_conversion)]
     fn refresh_unix(&mut self) {
-        self.is_ready = true;
-        self.is_valid = true;
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(path) = std::ffi::CString::new(self.root_path.as_os_str().as_bytes()) else {
+            self.is_ready = false;
+            self.is_valid = false;
+            return;
+        };
+        // SAFETY: `path` is NUL-terminated and `buf` is a properly sized out-parameter.
+        let mut buf: libc::statvfs = unsafe { std::mem::zeroed() };
+        let ok = unsafe { libc::statvfs(path.as_ptr(), &mut buf) } == 0;
+        self.is_ready = ok;
+        self.is_valid = ok;
+        if ok {
+            let fragment = u64::from(buf.f_frsize);
+            self.bytes_total = u64::from(buf.f_blocks) * fragment;
+            self.bytes_free = u64::from(buf.f_bfree) * fragment;
+            self.bytes_available = u64::from(buf.f_bavail) * fragment;
+        }
         self.fs_type = "posix".to_string();
     }
 }
