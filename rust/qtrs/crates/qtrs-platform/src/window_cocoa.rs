@@ -440,6 +440,12 @@ impl PlatformWindow for CocoaNativeWindow {
     }
 
     fn start_system_move(&self) -> bool {
+        // Qt: only while the left button alone is pressed; otherwise the move is refused
+        // (QCocoaWindow::startSystemMove, qcocoawindow.mm:366-370).
+        let ns_event = Id(Class::get("NSEvent").unwrap_or(Class::NIL).0);
+        if ObjcMsg::send_usize_return(ns_event, Sel::register("pressedMouseButtons")) != 1 {
+            return false;
+        }
         let nsapp = ObjcMsg::send_class_0(
             Class::get("NSApplication").unwrap_or(Class::NIL),
             Sel::register("sharedApplication"),
@@ -457,8 +463,10 @@ impl PlatformWindow for CocoaNativeWindow {
         true
     }
 
+    /// `QCocoaWindow` has no system resize; `QPlatformWindow::startSystemResize` returns false
+    /// (qplatformwindow.cpp:495-498).
     fn start_system_resize(&self, _edges: crate::platform_window::WindowEdges) -> bool {
-        true
+        false
     }
 
     fn set_opacity(&mut self, opacity: f32) {
