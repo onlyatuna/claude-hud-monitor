@@ -317,6 +317,18 @@ impl<'a> Painter<'a> {
             Brush::Color(color) => {
                 let mut c = *color;
                 c.apply_opacity(opacity);
+                if self.state.composition_mode == CompositionMode::SourceOver {
+                    crate::paint::solid_fill::fill_path_source_over(
+                        &mut self.device.as_pixmap_mut(),
+                        path,
+                        fill_rule,
+                        self.state.antialiasing,
+                        transform,
+                        c.premultiply().to_color_u8(),
+                        mask_ref,
+                    );
+                    return;
+                }
                 let paint = Paint {
                     shader: Shader::SolidColor(c),
                     blend_mode,

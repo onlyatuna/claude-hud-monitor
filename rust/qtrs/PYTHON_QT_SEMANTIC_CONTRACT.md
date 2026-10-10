@@ -690,6 +690,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`PARTIAL`。`render_widget_recursive`：可見性 + dirty 相交裁剪 → `translate` → `paint_event` → children；**沒有 per-widget clip**（`set_clip_rect` 只有 dirty clip 與 `scroll.rs`、`backing_store.rs` 呼叫）。
 - **Known gap**：**G8.7.a [P1, READ]** 無 child 裁剪（溢出的 label 文字、自訂 painter 不被裁）；**G8.7.b [P2]** 髒區只有整個 widget。
   - **G8.7.c [P1, RAN；已修復：RC-64]** 文字 shaping 每次重建 HarfBuzz face：`GlyphLayout::shape_with_engines` 每次呼叫都以 `rustybuzz::Face::from_slice` 重新解析字型的 GSUB/GPOS，約佔每次 `draw_text` 的一半；Qt 把 `hb_face_t`／`hb_font_t` 存在 `QFontEngine` 上（`qharfbuzzng.cpp:668-676, 709`）。
+  - **G8.7.d [P1, RAN；已修復：RC-65]** 純色填滿的 SourceOver 合成與 Qt 不同：`Painter::fill_path` 交給 tiny-skia 的通用 raster pipeline，進位方式與 Qt 的 `BYTE_MUL` 不同（例如目的灰階 1 經 alpha 230 的黑色覆蓋後得 1，Qt 得 0），半透明大面積填滿每像素約 4 ns；Qt 以 coverage span 加 `comp_func_solid_SourceOver` 合成（`qdrawhelper.cpp:4027-4062`、`qcompositionfunctions.cpp:697-711`）。
 - **Test**：既有 `test_dirty_region_culling_skips_non_intersecting_widgets`。必要：`child_painting_is_clipped_to_its_geometry`。
 - **HUD usage**：自訂 painter（`UsageDial`、icons，`usage_table.rs`）。
 
@@ -1264,7 +1265,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 369 項：D 12、P0 35、P1 167、P2 150、test gap 5（計數含已修復項；標籤含「已修復」者共 87 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 370 項：D 12、P0 35、P1 168、P2 150、test gap 5（計數含已修復項；標籤含「已修復」者共 88 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1454,6 +1455,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.7.a | P1, READ | 無 child 裁剪 |
 | G8.7.b | P2 | 髒區只有整個 widget |
 | G8.7.c | P1, RAN；已修復：RC-64 | 文字 shaping 每次重建 HarfBuzz face |
+| G8.7.d | P1, RAN；已修復：RC-65 | 純色填滿的 SourceOver 合成與 Qt 不同（進位、速度） |
 | G8.8.a | P0, READ；已修復：RC-11c + HUD 接線 | Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,16 |
 | G8.8.b | P2, READ | 無 `showText` 的 `rect` 參數、`QToolTip::font/palette` |
 | G8.8.c | P2, READ | 游標大小固定 16×16 邏輯像素；`QWindowsCursor::size()` 與 `fromNativePixels`（DPR）未建模 |
@@ -2439,9 +2441,37 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
   - paint 約少 0.9 ms（兩次差異大，單次量測雜訊明顯）；預估省下的 face 解析約 1.4 ms／幀，量到的較少。仍只量合成的 `SetWindowPos`。
 - **Residual**：
-  - shaping 本身（face 以外）每次仍約 45 µs，每幀約 1.2 ms；Qt 對同一字串也每次 shaping（`qtextengine.cpp:1675, 1712` 的 `hb_shape_full`），但 HarfBuzz 把 shape plan 快取在 face 上（`3rdparty/harfbuzz-ng/src/hb-shape.cc:145` `hb_shape_plan_create_cached2`）；rustybuzz 每次重建 plan。是否值得再做，需先量。
-  - 圓角矩形 fill／stroke 每幀約 2.4 ms，原因未查（下一項）。
+  - shaping 本身（face 以外）每次仍約 45 µs，每幀約 1.2 ms；Qt 對同一字串也每次 shaping（`qtextengine.cpp:1675, 1712` 的 `hb_shape_full`），但 HarfBuzz 把 shape plan 快取在 face 上（`3rdparty/harfbuzz-ng/src/hb-shape.cc:145` `hb_shape_plan_create_cached2`）；rustybuzz 每次重建 plan。是否值得再做，需先量。（已量：獨立 microbenchmark 中 `rustybuzz::shape` 9.4 µs、沿用 plan 的 `shape_with_plan` 3.0 µs，每幀約省 0.17 ms，不另立 RC。）
+  - 圓角矩形 fill／stroke 每幀約 2.4 ms，原因未查（見 RC-65）。
   - 透過 `font.font_data` 在記憶體中建立的字型（`GlyphLayout` 的 `font_data` 路徑）每次建立新 engine，face 不共用。
+
+#### RC-65 純色填滿的 SourceOver 合成與 Qt 不同
+
+- **Contract gaps**：G8.7.d（新增，已修復）。總數 369 → 370，已修復 87 → 88。
+- **為什麼是這一項**：RC-64 剖析時圓角矩形（視窗底板、卡片）的 fill 每次約 356 µs。Release microbenchmark（556 × 513 實體像素的視窗底板，暫時測試，量完已刪）：
+  - tiny-skia 抗鋸齒 fill：alpha 230 為 1263 µs，同一路徑不透明為 202 µs，不抗鋸齒仍為 938 µs；clip mask 只多約 10%（建 mask 22 µs）。
+  - 抗鋸齒 coverage 只畫進 `Mask` 約 105 µs。成本在 tiny-skia 通用 pipeline 的半透明 SourceOver 合成，約每像素 4 ns。
+- **Qt behavior** `[QT-SRC gui/painting/qdrawhelper.cpp:4027-4062; gui/painting/qcompositionfunctions.cpp:697-711; gui/painting/qdrawhelper_p.h:603-608, 623-633]`：純色 brush 由 rasterizer 產生 coverage span，`blend_color_argb` 對每個 span 呼叫 `comp_func_solid_SourceOver`：`c = BYTE_MUL(color, coverage)`，`dest = c + BYTE_MUL(dest, 255 - alpha(c))`；不透明且全覆蓋時直接 `qt_memfill`。`BYTE_MUL` 是 Qt 自己對 `x * a / 255` 的近似（不一定是最接近的整數）。
+- **qtrs root**：`Painter::fill_path_with_rule` 把純色 brush 交給 tiny-skia 的 `fill_path`，合成用 tiny-skia 的進位（目的灰階 1 經 alpha 230 的黑色覆蓋後得 `[1, 1, 1, 231]`，Qt 得 `[0, 0, 0, 230]`），且大面積半透明填滿慢。
+- **Evidence**：`RAN`（GitHub Actions 三平台；本機 Windows）。新增 `qtrs-gui/tests/test_solid_fill_blend.rs`：256 級預乘灰階目的上填滿半透明黑色（alpha 230 無 clip、alpha 128 有 clip），逐像素比對 Qt 公式；另一項檢查不透明全覆蓋直接取代目的。
+  - 修改前 run 38052031968（只加檢查，基於 develop `ca16083`）：三平台皆只有 `test_solid_fill_blend` 失敗，`destination grey 1`：`[1, 1, 1, 231]`，預期 `[0, 0, 0, 230]`。
+  - 修改後 run 38053100783：三平台全部通過。
+- **Status**：**已修復**。
+  - 新增 `paint/solid_fill.rs`：tiny-skia 只產生 coverage（畫進重複使用的 `Mask`，只增不減，穩定繪製時不配置記憶體），合成改用 Qt 的公式。整列 255 的 coverage 視為 span：不透明時填色，半透明時以 16 位元通道、每次四個像素的固定迴圈計算（同一個 `255 - alpha`），可被向量化；邊緣像素用 Qt 64 位元版的 `BYTE_MUL`。clip mask（不抗鋸齒，只有 0／255）以 AND 併入 coverage。
+  - `Painter::fill_path_with_rule`：`Brush::Color` 且組合模式為 SourceOver 時走這條路徑；其他 brush 與組合模式不變。stroke 不變。
+  - microbenchmark：視窗底板 fill 1207 µs → 約 506 µs（無 clip）、569 µs（有 clip）。
+- **Measurement**（Release，同 RC-63b 方法，60 × 4 px，各兩次）：
+
+| build | 每步往返 p50 ms | WM_SIZE handler p50／p90 ms | paint p50 ms（佔 handler） |
+|---|---|---|---|
+| RC-64 `ca16083` | 4.2；4.3 | 3.4／4.3；3.4／4.1 | 2.4（69%）；2.4（69%） |
+| RC-65 | 4.0；4.0 | 3.1／3.8；3.0／3.9 | 2.0（64%）；1.9（64%） |
+
+  - paint 約少 0.45 ms。仍只量合成的 `SetWindowPos`。
+- **Residual**：
+  - 抗鋸齒 coverage 仍由 tiny-skia 產生，與 Qt rasterizer 的 coverage 不同（邊緣像素數值）；本 RC 只改合成。
+  - stroke 與漸層、紋理 brush 仍走 tiny-skia 合成（進位與 Qt 不同）。
+  - Qt 對大面積填滿另以多執行緒分段（`QT_THREAD_PARALLEL_FILLS`），qtrs 沒有。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

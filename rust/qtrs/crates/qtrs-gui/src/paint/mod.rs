@@ -10,6 +10,7 @@ pub mod painter;
 pub mod palette;
 pub mod path;
 pub mod pixmap;
+mod solid_fill;
 mod text_blend;
 
 pub use backing_store::BackingStore;
