@@ -199,8 +199,7 @@ impl Layout for StackedLayout {
                 w.set_visible(should_be_visible);
             }
             drop(w);
-            let new_size = Size::new(child_rect.width, child_rect.height);
-            crate::layout::relayout_child_after_resize(widget, old_size, new_size);
+            crate::layout::relayout_child_after_resize(widget, old_size);
         }
     }
     fn widgets(&self) -> Vec<WidgetRef> {

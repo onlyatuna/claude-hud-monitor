@@ -140,6 +140,122 @@ impl Widget for MetricCountingProbe {
     }
 }
 
+/// A container that, like `QWidget::setGeometry` (qwidget.cpp:7328), asks for no repaint when
+/// its geometry did not change, and counts the repaint requests it gets.
+struct UpdateCountingContainer {
+    base: WidgetBase,
+    updates: Rc<AtomicUsize>,
+}
+
+impl UpdateCountingContainer {
+    fn with_layout(layout: Box<dyn Layout>) -> (WidgetRef, Rc<AtomicUsize>) {
+        let updates = Rc::new(AtomicUsize::new(0));
+        let mut container = Self {
+            base: WidgetBase::new(),
+            updates: Rc::clone(&updates),
+        };
+        container.set_layout(layout);
+        (Rc::new(RefCell::new(Box::new(container))), updates)
+    }
+}
+
+impl QObject for UpdateCountingContainer {
+    fn object_data(&self) -> &ObjectData {
+        &self.base.object_data
+    }
+    fn object_data_mut(&mut self) -> &mut ObjectData {
+        &mut self.base.object_data
+    }
+    fn event(&mut self, _event: &mut Event) -> bool {
+        false
+    }
+}
+
+impl Widget for UpdateCountingContainer {
+    fn widget_base(&self) -> &WidgetBase {
+        &self.base
+    }
+    fn id(&self) -> ObjectId {
+        self.base.object_data.id
+    }
+    fn geometry(&self) -> Rect {
+        self.base.geometry.get()
+    }
+    fn set_geometry(&self, rect: Rect) {
+        if self.base.geometry.get() != rect {
+            self.base.geometry.set(rect);
+            self.update();
+        }
+    }
+    fn size_hint(&self) -> Size {
+        self.base.layout.borrow().as_ref().unwrap().size_hint()
+    }
+    fn minimum_size_hint(&self) -> Size {
+        self.base.layout.borrow().as_ref().unwrap().minimum_size()
+    }
+    fn maximum_size(&self) -> Size {
+        Size::new(16777215, 16777215)
+    }
+    fn is_visible(&self) -> bool {
+        self.base.visible.get()
+    }
+    fn set_visible(&self, visible: bool) {
+        self.base.visible.set(visible);
+    }
+    fn is_enabled(&self) -> bool {
+        true
+    }
+    fn update(&self) {
+        self.updates.fetch_add(1, Ordering::SeqCst);
+        self.base.update();
+    }
+    fn dirty_rect(&self) -> Option<Rect> {
+        self.base.dirty.get()
+    }
+    fn clear_dirty(&self) {
+        self.base.dirty.set(None);
+    }
+    fn layout_mut(&mut self) -> Option<&mut Box<dyn Layout>> {
+        self.base.layout.get_mut().as_mut()
+    }
+    fn layout_ref_mut(&self) -> Option<std::cell::RefMut<'_, Box<dyn Layout>>> {
+        std::cell::RefMut::filter_map(self.base.layout.try_borrow_mut().ok()?, |l| l.as_mut()).ok()
+    }
+    fn set_layout(&mut self, layout: Box<dyn Layout>) {
+        *self.base.layout.get_mut() = Some(layout);
+    }
+    fn parent_widget(&self) -> Option<WidgetWeak> {
+        self.base.parent_widget()
+    }
+    fn set_parent_widget(&self, parent: Option<WidgetWeak>) {
+        self.base.set_parent_widget(parent);
+    }
+    fn window_id(&self) -> Option<ObjectId> {
+        self.base.window_id.get()
+    }
+    fn set_window_id(&self, window_id: Option<ObjectId>) {
+        self.base.window_id.set(window_id);
+    }
+    fn children(&self) -> Vec<WidgetRef> {
+        self.base.children.borrow().clone()
+    }
+    fn add_child(&mut self, child: WidgetRef) {
+        self.base.children.borrow_mut().push(child);
+    }
+    fn remove_child(&mut self, child_id: ObjectId) {
+        self.base
+            .children
+            .borrow_mut()
+            .retain(|c| c.borrow().id() != child_id);
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 #[test]
 fn test_box_layout_caches_child_metrics_and_does_not_requery_during_resize() {
     let mut layout = BoxLayout::vertical();
@@ -640,6 +756,82 @@ fn test_a_changed_size_hint_reaches_the_cached_layout_through_update_geometry() 
     );
 }
 
+/// An aligned item on an `Ignored` axis is cut to the widget's own size hint, not to the item's
+/// (which `Ignored` makes 0) [QT-SRC qlayoutitem.cpp:432-447, 670-673], and keeps that after a
+/// resize that reuses the cached limits.
+#[test]
+fn test_an_aligned_item_on_an_ignored_axis_takes_the_widget_size_hint() {
+    let (aligned, _, _, _, _) = MetricCountingProbe::new(50, 30);
+    aligned
+        .borrow()
+        .widget_base()
+        .set_size_policy(QSizePolicy::new(Policy::Ignored, Policy::Ignored));
+    let mut layout = BoxLayout::vertical();
+    layout.add_widget_aligned(
+        Rc::clone(&aligned),
+        0,
+        ItemAlignment::LEFT | ItemAlignment::TOP,
+    );
+    let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
+    root.borrow_mut().set_layout(Box::new(layout));
+
+    let mut win = window::Window::new(
+        "AlignedIgnoredTest",
+        Rect::new(0, 0, 200, 200),
+        qtrs_platform::window::WindowFlags::FRAMELESS,
+    )
+    .unwrap();
+    win.set_root_widget(root);
+    win.render_and_present();
+    assert_eq!(aligned.borrow().geometry().size(), Size::new(50, 30));
+
+    win.set_geometry(Rect::new(0, 0, 300, 260));
+    win.render_and_present();
+    assert_eq!(
+        aligned.borrow().geometry().size(),
+        Size::new(50, 30),
+        "the cached aligned size survives a resize"
+    );
+}
+
+/// The aligned size is cached with the other metrics, so it must be dropped like them: a new size
+/// hint announced through `updateGeometry` reaches an aligned item's geometry.
+#[test]
+fn test_a_changed_size_hint_reaches_an_aligned_item() {
+    let (aligned, _, _, _, _) = MetricCountingProbe::new(50, 30);
+    let mut layout = BoxLayout::vertical();
+    layout.add_widget_aligned(
+        Rc::clone(&aligned),
+        0,
+        ItemAlignment::LEFT | ItemAlignment::TOP,
+    );
+    let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
+    root.borrow_mut().set_layout(Box::new(layout));
+
+    let mut win = window::Window::new(
+        "AlignedHintChangeTest",
+        Rect::new(0, 0, 200, 200),
+        qtrs_platform::window::WindowFlags::FRAMELESS,
+    )
+    .unwrap();
+    win.set_root_widget(root);
+    win.render_and_present();
+    assert_eq!(aligned.borrow().geometry().size(), Size::new(50, 30));
+
+    {
+        let w = aligned.borrow();
+        let probe = w.as_any().downcast_ref::<MetricCountingProbe>().unwrap();
+        *probe.hint.borrow_mut() = Size::new(90, 40);
+        probe.widget_base().update_geometry();
+    }
+    win.render_and_present();
+    assert_eq!(
+        aligned.borrow().geometry().size(),
+        Size::new(90, 40),
+        "the aligned item took the new hint"
+    );
+}
+
 /// root (VBox) -> [mid container (VBox) -> leaf, sibling]. A resize lays out `mid` again, which
 /// must not invalidate the root layout's metrics: `QLayout` handles a resize of an activated
 /// layout with `doResize` only, and `mw->updateGeometry()` runs only at the end of `activate()`
@@ -730,5 +922,70 @@ fn test_a_resize_does_not_requery_an_aligned_item() {
         aligned.borrow().geometry().size(),
         Size::new(50, 30),
         "aligned item cut to its hint"
+    );
+}
+
+/// root (VBox) -> [container aligned LEFT (VBox) -> leaf]. The container's width is cut to its
+/// size hint; its height follows the cell. Qt sends a resize, and so lays the container's layout
+/// out again and repaints it, only when the widget's own size changed: `setGeometry_sys`
+/// compares the clamped widget size, not the rectangle the parent layout offered
+/// [QT-SRC qwidget.cpp:7297-7329; qlayout.cpp:528-530].
+#[test]
+fn test_an_aligned_container_is_laid_out_again_only_when_its_own_size_changes() {
+    let (leaf, _, _, _, leaf_set_geom) = MetricCountingProbe::new(50, 30);
+    let mut inner = BoxLayout::vertical();
+    inner.add_widget(Rc::clone(&leaf));
+    let (container, container_updates) = UpdateCountingContainer::with_layout(Box::new(inner));
+
+    let mut layout = BoxLayout::vertical();
+    layout.add_widget_aligned(Rc::clone(&container), 0, ItemAlignment::LEFT);
+    let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
+    root.borrow_mut().set_layout(Box::new(layout));
+
+    let mut win = window::Window::new(
+        "AlignedContainerResizeTest",
+        Rect::new(0, 0, 200, 200),
+        qtrs_platform::window::WindowFlags::FRAMELESS,
+    )
+    .unwrap();
+    win.set_root_widget(root);
+    win.render_and_present();
+    win.render_and_present();
+    let container_size = container.borrow().geometry().size();
+    let leaf_height = leaf.borrow().geometry().height;
+    let settled = leaf_set_geom.load(Ordering::SeqCst);
+    let settled_updates = container_updates.load(Ordering::SeqCst);
+
+    for width in [260, 320] {
+        win.set_geometry(Rect::new(0, 0, width, 200));
+        win.render_and_present();
+        assert_eq!(
+            container.borrow().geometry().size(),
+            container_size,
+            "a wider cell leaves the aligned container's size alone"
+        );
+        assert_eq!(
+            leaf_set_geom.load(Ordering::SeqCst),
+            settled,
+            "width {width}: the container kept its size, so its layout must not run again"
+        );
+        assert_eq!(
+            container_updates.load(Ordering::SeqCst),
+            settled_updates,
+            "width {width}: the container kept its geometry, so nothing may ask it to repaint"
+        );
+    }
+
+    win.set_geometry(Rect::new(0, 0, 320, 300));
+    win.render_and_present();
+    let taller = container.borrow().geometry().height;
+    assert!(
+        taller > container_size.height,
+        "the container follows the cell's height"
+    );
+    assert_eq!(
+        leaf.borrow().geometry().height,
+        leaf_height + (taller - container_size.height),
+        "the container's size changed, so its layout ran and the leaf got the extra height"
     );
 }

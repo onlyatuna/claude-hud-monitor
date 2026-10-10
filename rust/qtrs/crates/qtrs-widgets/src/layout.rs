@@ -469,8 +469,7 @@ impl Layout for BoxLayout {
                 let limits = self.geom_cache.borrow().as_ref().unwrap().limits[i];
                 item_set_geometry_with(&**item.widget.borrow(), rect, item.alignment, limits);
             }
-            let new_size = Size::new(rect.width, rect.height);
-            relayout_child_after_resize(&item.widget, old_size, new_size);
+            relayout_child_after_resize(&item.widget, old_size);
         }
     }
 }
@@ -921,22 +920,25 @@ impl Layout for GridLayout {
             let limits = self.geom_cache.borrow().as_ref().unwrap().limits[i];
             let rect = Rect::new(left, top, w, h);
             item_set_geometry_with(&**item.widget.borrow(), rect, item.alignment, limits);
-            let new_size = Size::new(w, h);
-            relayout_child_after_resize(&item.widget, old_size, new_size);
+            relayout_child_after_resize(&item.widget, old_size);
         }
     }
 }
 
-/// After a layout gave `child` a new geometry: a child that owns a layout lays it out again
-/// when its size changed or the layout is still invalid. The child's metric cache stays: a new
+/// After a layout placed `child`: a child that owns a layout lays it out again when its own size
+/// changed or the layout is still invalid. The size is the widget's, not the cell's: an aligned or
+/// size-limited item can keep its size in a resized cell, and Qt resizes (`QEvent::Resize`) only
+/// when the widget's size changed (qwidget.cpp:7317-7329). The child's metric cache stays: a new
 /// size moves its items but changes none of their size hints (`QBoxLayout::setGeometry` only
 /// re-runs `setupGeom` when the layout is dirty, qboxlayout.cpp:735-742). An invalid layout has
 /// already dropped its metrics.
-pub(crate) fn relayout_child_after_resize(child: &WidgetRef, old_size: Size, new_size: Size) {
-    let needs_pass = child
-        .borrow()
+pub(crate) fn relayout_child_after_resize(child: &WidgetRef, old_size: Size) {
+    let w = child.borrow();
+    let g = w.geometry();
+    let needs_pass = w
         .layout_ref_mut()
-        .map(|layout| old_size != new_size || layout.is_dirty());
+        .map(|layout| old_size != Size::new(g.width, g.height) || layout.is_dirty());
+    drop(w);
     if needs_pass == Some(true) {
         crate::layout_scheduler::LayoutScheduler::request_layout(child);
     }

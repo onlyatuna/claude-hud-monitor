@@ -612,6 +612,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.1.b [P2, READ]** 隱藏 item 的 geometry 被設為 (0,0,0,0)（Qt 不動它）。
   - **G8.1.c [P1, READ]** 無 Show/Hide 事件；依賴 `showEvent` 的子類別無法實作；`Window::show/hide` 不通知 widget 樹。
   - **G8.1.d [P1, READ；已修復：RC-63、RC-63b、RC-63c、RC-63d]** Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件：`BoxLayout` 與 `GridLayout` 在 `set_geometry` 時無條件標記 dirty，`size_hint`／`minimum_size` 未快取已算出的 layout struct / minSize / sizeHint，每次查詢或尺寸改變皆重新走訪所有子元件詢問尺寸提示；Qt 以 `dirty`／`needRecalc` 與 `geomArray` 快取尺寸指標，resize 僅呼叫 `qGeomCalc` 重新分配空間，不重新詢問子元件（`qboxlayout.cpp:219-361,590-625,735-775`、`qgridlayout.cpp:719-745,880-928,1181-1205,1320-1328`）。
+  - **G8.1.e [P2, RAN；已修復：RC-66]** 父 layout 排完子 widget 後，用分配給它的 cell 大小（而非 widget 實際大小）判斷子容器是否要重排：對齊或受限的子容器在 cell 變大而自身大小不變時，仍被排入 `LayoutScheduler` 並收到一次 `update()`。Qt 只在 widget 自身大小改變時送 `QEvent::Resize`（`qwidget.cpp:7297-7329`），activated layout 只在收到 Resize 時 `doResize`（`qlayout.cpp:528-530`）。
 - **Test**：既有無（probe 只涵蓋建構時 hidden）。必要：`hide_child_relayouts_parent_without_manual_call`；`show_hide_events_delivered`。
 - **HUD usage**：Python `setVisible`（`hud_window.py:156,292,306,520,671`、`provider_card.py:50,139-193`）；Rust 同位置。
 
@@ -1265,7 +1266,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 370 項：D 12、P0 35、P1 168、P2 150、test gap 5（計數含已修復項；標籤含「已修復」者共 88 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 371 項：D 12、P0 35、P1 168、P2 151、test gap 5（計數含已修復項；標籤含「已修復」者共 89 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1422,6 +1423,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
 | G8.1.d | P1, READ；已修復：RC-63、RC-63b、RC-63c、RC-63d | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
+| G8.1.e | P2, RAN；已修復：RC-66 | 子容器以 cell 大小而非自身大小判斷是否重排，多一次排程與重繪請求 |
 | G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；`Widget::set_enabled` 不送事件的入口已移除：RC-43 | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
@@ -2472,6 +2474,23 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 抗鋸齒 coverage 仍由 tiny-skia 產生，與 Qt rasterizer 的 coverage 不同（邊緣像素數值）；本 RC 只改合成。
   - stroke 與漸層、紋理 brush 仍走 tiny-skia 合成（進位與 Qt 不同）。
   - Qt 對大面積填滿另以多執行緒分段（`QT_THREAD_PARALLEL_FILLS`），qtrs 沒有。
+
+#### RC-66 對齊子容器以 cell 大小判斷是否重排
+
+- **Contract gaps**：G8.1.e（新增，已修復）。總數 370 → 371，已修復 88 → 89。
+- **來源**：使用者反向審查 RC-63d → RC-63 時指出（當時列為待驗證 P2）。本 RC 先以測試確認再修。
+- **Qt behavior** `[QT-SRC widgets/kernel/qwidget.cpp:7297-7329; widgets/kernel/qlayout.cpp:528-530]`：`setGeometry_sys` 先把尺寸夾到 min／max，再拿 widget 自己的舊尺寸比較；尺寸與位置都沒變就直接返回，尺寸沒變就不送 `QEvent::Resize`。子 widget 的 layout 只在收到 Resize 時 `doResize`。父 layout 給的 cell 大小不參與比較。
+- **qtrs root**：`BoxLayout::activate`、`GridLayout::activate`、`StackedLayout::activate` 把 cell 大小當成新尺寸傳給 `relayout_child_after_resize`。對齊（或尺寸受限）的子容器在 cell 變大但自身大小不變時，仍被 `LayoutScheduler::request_layout` 排入。`activate_pending` 看到 layout 幾何未變，不重排，但仍對它呼叫 `widget.update()`。
+- **實際影響（量測後）**：比審查推測的小。內部 layout 不會重跑（`activate_pending` 以 layout 自己的幾何把關），多出的只有一次排程與一次重繪請求。`EmptyWidget::set_geometry` 本身就無條件 `update()`，所以對 `EmptyWidget` 子容器這次重繪請求是重複的；對像 Qt 一樣在幾何不變時不重繪的自訂 widget，則是多出的重繪。
+- **Evidence**：`RAN`（GitHub Actions 三平台；本機 Windows）。新增 `test_an_aligned_container_is_laid_out_again_only_when_its_own_size_changes`（`qtrs-widgets/tests/test_layout_metric_caching.rs`）：視窗 → VBox → 靠左對齊的容器（`UpdateCountingContainer`，幾何不變時不 `update()`）→ 葉節點。只加寬時檢查容器大小不變、內部 layout 不重跑、容器不收到重繪請求；加高時檢查容器變高且葉節點拿到多出的高度。
+  - 修改前（本機）：`width 260: the container kept its geometry, so nothing may ask it to repaint`，`left: 6`、`right: 5`。內部 layout 未重跑那一項在修改前已通過。
+  - 修改前 run 38054610699（只加檢查，基於 develop `8027144`）：三平台皆只有此測試失敗，`left: 6`、`right: 5`。
+  - 修改後 run 38055021017：三平台全部通過。
+  - 同時補上審查建議的兩項 `aligned_pref` 語意測試（修改前後皆通過，屬覆蓋補強）：`test_an_aligned_item_on_an_ignored_axis_takes_the_widget_size_hint`（`Ignored` 軸對齊時取 widget 自身 size hint 50 × 30，而非 item 的 0；resize 後沿用快取仍為 50 × 30，`qlayoutitem.cpp:432-447, 670-673`）與 `test_a_changed_size_hint_reaches_an_aligned_item`（hint 改為 90 × 40 並 `update_geometry()` 後，對齊 item 的幾何變為 90 × 40）。
+- **Status**：**已修復**。`relayout_child_after_resize(child, old_size)` 在 item 放好之後讀子 widget 的實際尺寸再比較；三個呼叫點都不再傳 cell 大小。
+- **Residual**：
+  - `EmptyWidget::set_geometry` 在幾何未變時仍無條件 `update()`，Qt 會直接返回（`qwidget.cpp:7328`）。屬另一個 root cause，未改。
+  - 視窗 resize 時整個視窗本來就重繪，本 RC 對 HUD 縮放的 paint 時間預期沒有可見影響 [INFERENCE]，未另做 Release 量測。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
