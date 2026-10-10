@@ -304,10 +304,16 @@ mod tests {
 
         ctrl.states
             .insert("mock_panic".to_string(), ProviderState::default());
+        // The worker calls the notify callback after it has sent its result.
+        let (finished, finished_rx) = std::sync::mpsc::channel();
+        ctrl.set_notify_callback(move || {
+            let _ = finished.send(());
+        });
         ctrl.launch("mock_panic", prov);
 
-        // Wait for worker thread to finish
-        std::thread::sleep(Duration::from_millis(200));
+        finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the worker did not finish");
 
         let results = ctrl.drain_results(&providers);
         assert_eq!(results.len(), 1);
