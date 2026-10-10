@@ -387,8 +387,11 @@ mod tests {
         ctrl.set_interval(5); // Minimum is 20
         assert_eq!(ctrl.interval, Duration::from_secs(20));
     }
-    struct MockInstantProvider;
-    impl Provider for MockInstantProvider {
+    /// Returns once the test sends on `release`, so the test decides when the worker finishes.
+    struct GatedProvider {
+        release: parking_lot::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+    impl Provider for GatedProvider {
         fn provider_id(&self) -> &str {
             "mock_instant"
         }
@@ -396,6 +399,7 @@ mod tests {
             "Mock Instant"
         }
         fn fetch_usage(&self) -> UsageMetrics {
+            let _ = self.release.lock().recv_timeout(Duration::from_secs(5));
             UsageMetrics {
                 provider_id: "mock_instant".to_string(),
                 metric1_text: "42%".to_string(),
@@ -408,29 +412,31 @@ mod tests {
     fn test_refresh_controller_pipeline_and_late_notify() {
         let mut ctrl = RefreshController::new(60);
         let mut providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::new();
-        let prov = Arc::new(MockInstantProvider);
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let prov = Arc::new(GatedProvider {
+            release: parking_lot::Mutex::new(release_rx),
+        });
         providers.insert("mock_instant".to_string(), prov.clone());
 
         ctrl.states
             .insert("mock_instant".to_string(), ProviderState::default());
 
-        // 1. Launch before setting callback
+        // 1. Launch before setting the callback; the worker waits in `fetch_usage`.
         ctrl.launch("mock_instant", prov);
 
-        // 2. Set callback late
-        let notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let notified_clone = Arc::clone(&notified);
+        // 2. Set the callback while the worker is still running, then let it finish.
+        let (notified, notified_rx) = std::sync::mpsc::channel();
         ctrl.set_notify_callback(move || {
-            notified_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            let _ = notified.send(());
         });
+        release.send(()).unwrap();
 
-        // 3. Wait briefly for thread to finish
-        std::thread::sleep(Duration::from_millis(150));
+        // 3. The worker reads the callback when it finishes, so the late callback is called.
+        notified_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the callback set while the worker ran was not called");
 
-        // 4. Callback should have been called even though set late!
-        assert!(notified.load(std::sync::atomic::Ordering::SeqCst));
-
-        // 5. Poll should drain and return the updates
+        // 4. Poll should drain and return the updates
         let updates = ctrl.poll(&providers);
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].provider_id, "mock_instant");
