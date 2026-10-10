@@ -27,6 +27,48 @@ type LcdGlyphCache = Arc<
 >;
 /// Upper bound on cached glyph bitmaps per engine (a CJK font could otherwise grow without limit).
 const MONO_GLYPH_CACHE_LIMIT: usize = 4096;
+type ShapingFaceCache =
+    Arc<std::sync::Mutex<std::collections::HashMap<u16, Option<Arc<ShapingFace>>>>>;
+
+thread_local! {
+    static SHAPING_FACE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread built a shaping face (`hb_face_t`) from font data. For tests that
+/// check the face is built once per engine and size, not per shaped string.
+#[doc(hidden)]
+pub fn shaping_face_parse_count() -> usize {
+    SHAPING_FACE_PARSES.with(|n| n.get())
+}
+
+/// The HarfBuzz face and font of an engine at one ppem (`hb_qt_face_get_for_engine` and
+/// `hb_qt_font_get_for_engine`, qharfbuzzng.cpp:668-676, 709): parsing the GSUB/GPOS lookups is
+/// most of the cost of shaping a short string, so it is done once and kept on the engine.
+pub struct ShapingFace {
+    // Declared before `_data` so it is dropped first, while the bytes it borrows are alive.
+    face: rustybuzz::Face<'static>,
+    _data: SharedFontData,
+}
+
+impl ShapingFace {
+    fn new(data: &SharedFontData, face_index: u32, ppem: u16) -> Option<Self> {
+        SHAPING_FACE_PARSES.with(|n| n.set(n.get() + 1));
+        let bytes = data.as_slice();
+        // SAFETY: `SharedFontData` is an `Arc` over font bytes that are never moved or written
+        // while a clone exists (an owned `Vec` or a read-only file mapping). `_data` keeps one for
+        // as long as `face` lives, `face` is dropped before it, and `face()` lends it out only for
+        // the lifetime of `&self`.
+        let bytes: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) };
+        let mut face = rustybuzz::Face::from_slice(bytes, face_index)?;
+        face.set_pixels_per_em(Some((ppem, ppem)));
+        Some(Self { face, _data: data.clone() })
+    }
+
+    pub fn face(&self) -> &rustybuzz::Face<'_> {
+        &self.face
+    }
+}
 
 #[derive(Clone)]
 pub struct FontEngine {
@@ -42,6 +84,8 @@ pub struct FontEngine {
     mono_cache: MonoGlyphCache,
     /// Cached LCD glyph bitmaps, three coverages per pixel; `None` when the face has none.
     lcd_cache: LcdGlyphCache,
+    /// Shaping faces per ppem, built on first use; `None` when the font data does not parse.
+    shaping_faces: ShapingFaceCache,
 }
 
 impl FontEngine {
@@ -54,18 +98,33 @@ impl FontEngine {
             color_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             mono_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             lcd_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            shaping_faces: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         }
     }
 
     /// Sets the raw binary font data for OpenType shaping.
     pub fn with_raw_data(mut self, raw_data: impl Into<SharedFontData>) -> Self {
         self.raw_data = Some(raw_data.into());
+        // Faces built from other data (shared with clones of this engine) do not apply.
+        self.shaping_faces = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         self
+    }
+
+    /// The HarfBuzz face for shaping at `ppem`, built once per engine and ppem; `None` without
+    /// OpenType data.
+    pub fn shaping_face(&self, ppem: u16) -> Option<Arc<ShapingFace>> {
+        let data = self.raw_data.as_ref()?;
+        let mut faces = self.shaping_faces.lock().unwrap_or_else(|e| e.into_inner());
+        faces
+            .entry(ppem)
+            .or_insert_with(|| ShapingFace::new(data, self.face_index, ppem).map(Arc::new))
+            .clone()
     }
 
     /// Sets the face index within a font collection file.
     pub fn with_face_index(mut self, face_index: u32) -> Self {
         self.face_index = face_index;
+        self.shaping_faces = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
         self
     }
     /// Checks whether `glyph_id` is an OpenType color glyph with COLRv0 layers.
@@ -470,20 +529,9 @@ impl GlyphLayout {
             return Self::empty();
         }
 
-        // Pre-parse rustybuzz faces once per engine (zero-copy table header parsing). Qt sets the
-        // HarfBuzz font's ppem to the whole pixel size (`hb_font_set_ppem(int(ppem))`), which selects
-        // the GPOS device-table adjustments.
+        // Qt sets the HarfBuzz font's ppem to the whole pixel size (`hb_font_set_ppem(int(ppem))`),
+        // which selects the GPOS device-table adjustments.
         let ppem = font.size as u16;
-        let rb_faces: Vec<Option<rustybuzz::Face>> = engines
-            .iter()
-            .map(|e| {
-                e.raw_data.as_ref().and_then(|data| {
-                    let mut face = rustybuzz::Face::from_slice(data.as_slice(), e.face_index)?;
-                    face.set_pixels_per_em(Some((ppem, ppem)));
-                    Some(face)
-                })
-            })
-            .collect();
 
         let runs = Self::partition_into_runs(text, engines);
         let mut glyphs = Vec::with_capacity(text.len());
@@ -493,9 +541,9 @@ impl GlyphLayout {
 
         for run in runs {
             let engine = &engines[run.engine_index];
-            let maybe_rb_face = rb_faces.get(run.engine_index).and_then(|f| f.as_ref());
+            let shaping_face = engine.shaping_face(ppem);
 
-            if let Some(rb_face) = maybe_rb_face {
+            if let Some(rb_face) = shaping_face.as_deref().map(ShapingFace::face) {
                 // Qt `shapeTextWithHarfbuzzNG` path:
                 let mut buffer = rustybuzz::UnicodeBuffer::new();
                 buffer.push_str(run.text);

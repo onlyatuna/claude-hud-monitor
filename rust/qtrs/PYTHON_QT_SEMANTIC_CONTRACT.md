@@ -689,6 +689,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：child MUST 被裁剪到自己的 geometry；widget `paint_event` MUST 不畫到自己矩形外。
 - **Current implementation**：`PARTIAL`。`render_widget_recursive`：可見性 + dirty 相交裁剪 → `translate` → `paint_event` → children；**沒有 per-widget clip**（`set_clip_rect` 只有 dirty clip 與 `scroll.rs`、`backing_store.rs` 呼叫）。
 - **Known gap**：**G8.7.a [P1, READ]** 無 child 裁剪（溢出的 label 文字、自訂 painter 不被裁）；**G8.7.b [P2]** 髒區只有整個 widget。
+  - **G8.7.c [P1, RAN；已修復：RC-64]** 文字 shaping 每次重建 HarfBuzz face：`GlyphLayout::shape_with_engines` 每次呼叫都以 `rustybuzz::Face::from_slice` 重新解析字型的 GSUB/GPOS，約佔每次 `draw_text` 的一半；Qt 把 `hb_face_t`／`hb_font_t` 存在 `QFontEngine` 上（`qharfbuzzng.cpp:668-676, 709`）。
 - **Test**：既有 `test_dirty_region_culling_skips_non_intersecting_widgets`。必要：`child_painting_is_clipped_to_its_geometry`。
 - **HUD usage**：自訂 painter（`UsageDial`、icons，`usage_table.rs`）。
 
@@ -1263,7 +1264,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 368 項：D 12、P0 35、P1 166、P2 150、test gap 5（計數含已修復項；標籤含「已修復」者共 86 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 369 項：D 12、P0 35、P1 167、P2 150、test gap 5（計數含已修復項；標籤含「已修復」者共 87 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1452,6 +1453,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.6.c | P1 | 無 layout 導出的頂層最小尺寸 |
 | G8.7.a | P1, READ | 無 child 裁剪 |
 | G8.7.b | P2 | 髒區只有整個 widget |
+| G8.7.c | P1, RAN；已修復：RC-64 | 文字 shaping 每次重建 HarfBuzz face |
 | G8.8.a | P0, READ；已修復：RC-11c + HUD 接線 | Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,16 |
 | G8.8.b | P2, READ | 無 `showText` 的 `rect` 參數、`QToolTip::font/palette` |
 | G8.8.c | P2, READ | 游標大小固定 16×16 邏輯像素；`QWindowsCursor::size()` 與 `fromNativePixels`（DPR）未建模 |
@@ -2337,8 +2339,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 觸發 `invalidate()` 時同時清除指標快取並標記 `needs_activation`。
 - **審查後的修正**：RC-63 留下三個缺陷（smart-max 回歸、同一輪排版跑兩次、原生 resize 路徑仍清掉尺寸指標快取），見 RC-63b；巢狀 layout 的祖先快取與對齊 item 的查詢見 RC-63c、RC-63d。
 - **Residual**：
-  - 樣式解析結果快取尚未建立（G8.5.f / 下一 RC-64）。
-  - Label 的尺寸與字型度量快取尚未建立（G8.3.f / 下一 RC-65）。
+  - 樣式解析結果快取尚未建立；Label 的尺寸與字型度量快取尚未建立。RC-63c 之後量測顯示兩者佔 resize 時間不到 5%，原訂的 RC-64／RC-65 改為依 paint 剖析的結果處理（見 RC-64）。
 
 #### RC-63b RC-63 的三個缺陷：smart-max 回歸、重複 activation、resize 路徑仍清除尺寸指標快取
 
@@ -2410,6 +2411,37 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - handler 時間約減半，來自 RC-63c：祖先 layout 不再每幀重建指標，layout 從約 1.8 ms 降到 0.1 ms，dispatch 從約 0.7 ms 降到 0。RC-63d 在這個情境沒有可量出的差異（HUD 對齊的 item 不多）；它的效果由計數測試證明。
   - resize 時的剩餘成本主要是 paint（約 78%），屬 RC-64／RC-65 的範圍。仍只量合成的 `SetWindowPos`。
 - **Residual**：無新增。
+
+#### RC-64 文字 shaping 每次重建 HarfBuzz face
+
+- **Contract gaps**：G8.7.c（新增，已修復）。總數 368 → 369，已修復 86 → 87。
+- **為什麼是這一項**：原訂 RC-64 是樣式解析快取、RC-65 是 Label size-hint 快取。RC-63c 之後先量測（Release、外部程序 60 × 4 px `SetWindowPos`、暫時插樁，量完已移除）：`resolve_style` 每幀 45 次、合計約 0.1 ms，layout 0.1 ms，paint 約 78%。再把 paint 拆開（120 × 2 px，每幀平均）：
+  - `draw_text` 每幀 28 次，shaping 每次約 92–96 µs，合計約 2.6 ms；其中約 51 µs 是 `rustybuzz::Face::from_slice`。字形點陣已有快取（每字形 0.2 µs），混色每次約 1.6 µs。
+  - 圓角矩形（視窗底板與卡片）每幀約 2.4 ms：fill 每次約 356 µs、stroke 約 102 µs，原因未查（另立項）。
+  - 樣式解析每次約 3 µs。
+- **Qt behavior** `[QT-SRC gui/text/qharfbuzzng.cpp:668-676, 709; gui/text/qfontengine.cpp:167-171]`：`hb_qt_face_get_for_engine` 第一次建立 `hb_face_t` 後存在 `QFontEngine::face_`，`hb_qt_font_get_for_engine` 同樣把 `hb_font_t` 存在 `font_`；之後每次 shaping 都重用，不再解析字型表。
+- **qtrs root**：`GlyphLayout::shape_with_engines` 每次呼叫都對每個 engine 執行 `rustybuzz::Face::from_slice`（解析 GSUB/GPOS lookup），即使該 engine 不會用到；`FontEngine` 有字形點陣快取，但沒有 shaping face 快取。
+- **Evidence**：`RAN`（GitHub Actions 三平台；本機 Windows）。新增 `qtrs-gui/tests/test_shaping_face_cache.rs`，以 `#[doc(hidden)] shaping_face_parse_count()`（每執行緒計數，只在建立 face 時加一）計數：
+  - `test_shaping_with_an_engine_again_reuses_its_face`：從字型檔建立 engine（每平台一個已知檔案），每次以 clone 呼叫（`draw_text` 每次都從資料庫取得 clone）；暖機後再 shaping 三個字串，face 不得重建。
+  - `test_engines_resolved_from_the_font_database_keep_their_face`：每次都重新 `resolve_font_engines_for_text_global`，同上。macOS 解析系統字型時 engine 沒有 OpenType 資料（不經 HarfBuzz），此項在 macOS 直接返回，由上一項涵蓋。
+  - 修改前 run 38042941562（只加檢查與計數，基於 develop `36a528e`）：三平台皆只有 `test_shaping_face_cache` 失敗，重建次數 3（預期 0）；macOS 為第一項失敗、第二項依上述返回。第一版檢查（run 38042356362）在 macOS 因系統字型沒有 OpenType 資料而在前置斷言失敗，已改為從字型檔建立 engine。
+  - 修改後 run 38043273400：success（三平台全部 job 通過）。
+- **Status**：**已修復**。
+  - `ShapingFace`：持有字型資料（`SharedFontData`，`Arc`）與借用它的 `rustybuzz::Face`，face 先於資料釋放；以 `unsafe` 將借用延長為 `'static`，`face()` 只以 `&self` 的生命週期借出（SAFETY 註解說明資料不會移動或改寫）。
+  - `FontEngine::shaping_face(ppem)`：每個 engine、每個 ppem 建一次，存在 engine 上（`Arc<Mutex<HashMap>>`，與既有字形快取相同，clone 共用）。`with_raw_data`／`with_face_index` 換一個新快取，避免沿用別的資料建立的 face。ppem 照 Qt 取整數像素大小。
+  - `shape_with_engines` 只為實際用到的 engine 取 face，不再預先為全部 engine 建立。
+- **Measurement**（Release，同 RC-63b 方法，60 × 4 px，各兩次）：
+
+| build | 每步往返 p50 ms | WM_SIZE handler p50／p90 ms | paint p50 ms（佔 handler） |
+|---|---|---|---|
+| RC-63d `36a528e` | 5.6；6.0 | 4.8／5.4；5.0／7.0 | 3.6（76%）；3.8（77%） |
+| RC-64 | 5.5；4.5 | 4.5／6.2；3.6／4.5 | 3.1（71%）；2.5（69%） |
+
+  - paint 約少 0.9 ms（兩次差異大，單次量測雜訊明顯）；預估省下的 face 解析約 1.4 ms／幀，量到的較少。仍只量合成的 `SetWindowPos`。
+- **Residual**：
+  - shaping 本身（face 以外）每次仍約 45 µs，每幀約 1.2 ms；Qt 對同一字串也每次 shaping（`qtextengine.cpp:1675, 1712` 的 `hb_shape_full`），但 HarfBuzz 把 shape plan 快取在 face 上（`3rdparty/harfbuzz-ng/src/hb-shape.cc:145` `hb_shape_plan_create_cached2`）；rustybuzz 每次重建 plan。是否值得再做，需先量。
+  - 圓角矩形 fill／stroke 每幀約 2.4 ms，原因未查（下一項）。
+  - 透過 `font.font_data` 在記憶體中建立的字型（`GlyphLayout` 的 `font_data` 路徑）每次建立新 engine，face 不共用。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
