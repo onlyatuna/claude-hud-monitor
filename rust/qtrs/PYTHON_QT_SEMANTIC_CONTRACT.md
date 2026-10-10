@@ -611,6 +611,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.1.a [P1, READ]** **show／hide 不自動重排**（**已修復：RC-26**：`WidgetBase::set_visible` 改呼叫 `update_geometry`，與 Qt 一樣只在可見性真的改變時請求 parent 重排；`Menu` 為彈出視窗不在此列）；HUD 以手動 `update_layout()` 補（`provider_card.rs:347-348,406-420,435`、`hud_window.rs:254,590,608,636`）。
   - **G8.1.b [P2, READ]** 隱藏 item 的 geometry 被設為 (0,0,0,0)（Qt 不動它）。
   - **G8.1.c [P1, READ]** 無 Show/Hide 事件；依賴 `showEvent` 的子類別無法實作；`Window::show/hide` 不通知 widget 樹。
+  - **G8.1.d [P1, READ；已修復：RC-63]** Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件：`BoxLayout` 與 `GridLayout` 在 `set_geometry` 時無條件標記 dirty，`size_hint`／`minimum_size` 未快取已算出的 layout struct / minSize / sizeHint，每次查詢或尺寸改變皆重新走訪所有子元件詢問尺寸提示；Qt 以 `dirty`／`needRecalc` 與 `geomArray` 快取尺寸指標，resize 僅呼叫 `qGeomCalc` 重新分配空間，不重新詢問子元件（`qboxlayout.cpp:219-361,590-625,735-775`、`qgridlayout.cpp:719-745,880-928,1181-1205,1320-1328`）。
 - **Test**：既有無（probe 只涵蓋建構時 hidden）。必要：`hide_child_relayouts_parent_without_manual_call`；`show_hide_events_delivered`。
 - **HUD usage**：Python `setVisible`（`hud_window.py:156,292,306,520,671`、`provider_card.py:50,139-193`）；Rust 同位置。
 
@@ -1262,7 +1263,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 367 項：D 12、P0 35、P1 165、P2 150、test gap 5（計數含已修復項；標籤含「已修復」者共 85 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 368 項：D 12、P0 35、P1 166、P2 150、test gap 5（計數含已修復項；標籤含「已修復」者共 86 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1418,6 +1419,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.a | P1, READ | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
+| G8.1.d | P1, READ；已修復：RC-63 | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
 | G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；`Widget::set_enabled` 不送事件的入口已移除：RC-43 | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
@@ -2316,6 +2318,26 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - Qt 在 launch 後插入 Window 選單、載入應用程式選單（`qcocoaintegration.mm:158-160`、`qcocoaapplicationdelegate.mm:196`）；qtrs 沒有選單列。
   - 平台整合要在第一次 `process_events` 之前建立，delegate 才收得到 `applicationDidFinishLaunching:`；`qtrs-widgets` 的 `Application::new` 會先建立它，只用 `GuiApplication` 的程式則不一定。
   - HUD 未在 macOS 執行。
+
+#### RC-63 Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件
+
+- **Contract gaps**：G8.1.d（已修復）。總數 367 → 368，已修復 85 → 86。
+- **Qt behavior** `[QT-SRC qboxlayout.cpp:219-361, 590-625, 735-775; qgridlayout.cpp:719-745, 880-928, 1181-1205, 1320-1328; qlayoutitem.cpp:408-474]`：
+  - `QBoxLayout` 將尺寸指標（`sizeHint`、`minSize`、`maxSize`、`geomArray`）與激活需求（`dirty`）分開管理。`setupGeom()` 計算後快取於 `geomArray` 並清除 `dirty`；後續 `sizeHint()`、`minimumSize()` 與 `maximumSize()` 直接回傳快取值。幾何變更（`setGeometry(r)`）在 `r != geometry() && !dirty` 時重用已快取的 `geomArray`，僅執行 `qGeomCalc` 重新分配空間，絕不重複詢問子元件之尺寸指標。
+  - `QGridLayout` 以 `needRecalc` 保護 `setupLayoutData()`；若未標記重算，直接重用 `rowData` 與 `colData`。
+  - `QWidgetItem::setGeometry` 在 `align == 0`（無對齊）時僅以 `wid->maximumSize()` 夾取邊界，只有在具有對齊標記時才查詢 `sizeHint()`。
+- **qtrs root**：`BoxLayout` 與 `GridLayout` 之 `size_hint()`、`minimum_size()` 與 `expanding_directions()` 每次皆重新執行 `setup_geom()` / `setup_layout_data()`；`set_geometry()` 每次無條件將 `dirty` 設為 true；且未區分「尺寸指標快取」與「排版啟動（activate）排程」，導致單次 resize 或尺寸查詢引發全樹子元件指數級重複詢問。
+- **Evidence**：`RAN`（GitHub Actions windows-latest / ubuntu-22.04 / macos-latest，run 38031319538）。新增原生黑箱測試 `test_layout_metric_caching.rs`（使用 `MetricCountingProbe` 統計子元件 `size_hint` 被查詢次數）。
+  - 修改前 run 38031319538：`test_layout_metric_caching` FAILED（`assertion left == right failed: left: 6, right: 3`，各平台 89 targets, 1 not ok）。
+  - 修改後：`test_layout_metric_caching` 2/2 ok。
+- **Status**：**已修復**。
+  - `BoxLayout` 與 `GridLayout` 引入 `metric_dirty: Cell<bool>` 與 `needs_activation: Cell<bool>`，將尺寸指標快取（`BoxGeom`、`GridGeom`）與 layout activate 需求解耦。
+  - `size_hint()`、`minimum_size()`、`expanding_directions()` 與 `set_geometry()` 在 `!metric_dirty` 時重用快取結構，不重複詢問子元件。
+  - `layout_engine::item_set_geometry` 在 `align == ItemAlignment::NONE` 時直接以 `widget.maximum_size()` 夾取，不走訪 `size_hint()`，且保留置中位移計算。
+  - 觸發 `invalidate()` 時同時清除指標快取並標記 `needs_activation`。
+- **Residual**：
+  - 樣式解析結果快取尚未建立（G8.5.f / 下一 RC-64）。
+  - Label 的尺寸與字型度量快取尚未建立（G8.3.f / 下一 RC-65）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

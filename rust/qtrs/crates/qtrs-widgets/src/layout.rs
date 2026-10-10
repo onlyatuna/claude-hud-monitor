@@ -1,3 +1,4 @@
+use std::cell::{Cell, RefCell};
 use crate::layout_engine::{
     distribute_multi_box, find_size, init_empty_multi_box, item_expanding, item_is_empty,
     item_maximum_size, item_minimum_size, item_set_geometry, item_size_hint, q_geom_calc,
@@ -193,7 +194,9 @@ pub struct BoxLayout {
     margins: Margins,
     spacing: i32,
     items: Vec<LayoutItem>,
-    dirty: bool,
+    metric_dirty: Cell<bool>,
+    needs_activation: Cell<bool>,
+    geom_cache: RefCell<Option<BoxGeom>>,
 }
 
 impl BoxLayout {
@@ -204,7 +207,9 @@ impl BoxLayout {
             margins: Margins::new(0, 0, 0, 0),
             spacing: 6,
             items: Vec::new(),
-            dirty: true,
+            metric_dirty: Cell::new(true),
+            needs_activation: Cell::new(true),
+            geom_cache: RefCell::new(None),
         }
     }
 
@@ -340,8 +345,10 @@ impl Layout for BoxLayout {
     }
 
     fn set_geometry(&mut self, rect: Rect) {
+        if self.geometry == rect && !self.needs_activation.get() {
+            return;
+        }
         self.geometry = rect;
-        self.dirty = true;
         self.activate();
     }
 
@@ -394,38 +401,36 @@ impl Layout for BoxLayout {
     }
 
     fn size_hint(&self) -> Size {
-        self.setup_geom().hint
+        self.ensure_geom().hint
     }
 
     fn minimum_size(&self) -> Size {
-        self.setup_geom().min
+        self.ensure_geom().min
     }
 
     fn expanding_directions(&self) -> (bool, bool) {
-        self.setup_geom().expanding
+        self.ensure_geom().expanding
     }
 
     fn invalidate(&mut self) {
-        self.dirty = true;
+        self.metric_dirty.set(true);
+        self.needs_activation.set(true);
+        *self.geom_cache.borrow_mut() = None;
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty
+        self.needs_activation.get()
     }
 
     /// `QBoxLayout::setGeometry`.
     fn activate(&mut self) {
-        if !self.dirty {
-            return;
-        }
-        self.dirty = false;
-
+        self.needs_activation.set(false);
         if self.items.is_empty() {
             return;
         }
 
         let horz = self.direction == Direction::LeftToRight;
-        let mut chain = self.setup_geom().chain;
+        let mut chain = self.ensure_geom().chain;
         let s = Rect::new(
             self.geometry.x + self.margins.left,
             self.geometry.y + self.margins.top,
@@ -454,8 +459,11 @@ impl Layout for BoxLayout {
                 item_set_geometry(&**item.widget.borrow(), rect, item.alignment);
             }
             let new_size = Size::new(rect.width, rect.height);
-            if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
-                if old_size != new_size || child_layout.is_dirty() {
+            if let Some(mut child_layout) = item.widget.borrow().layout_ref_mut() {
+                let dirty = child_layout.is_dirty();
+                if old_size != new_size || dirty {
+                    child_layout.invalidate();
+                    drop(child_layout);
                     crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
                 }
             }
@@ -464,6 +472,7 @@ impl Layout for BoxLayout {
 }
 
 /// What `QBoxLayoutPrivate::setupGeom` computes.
+#[derive(Clone)]
 struct BoxGeom {
     chain: Vec<LayoutStruct>,
     min: Size,
@@ -472,6 +481,18 @@ struct BoxGeom {
 }
 
 impl BoxLayout {
+    fn ensure_geom(&self) -> BoxGeom {
+        if !self.metric_dirty.get() {
+            if let Some(cached) = self.geom_cache.borrow().as_ref() {
+                return cached.clone();
+            }
+        }
+        let geom = self.setup_geom();
+        *self.geom_cache.borrow_mut() = Some(geom.clone());
+        self.metric_dirty.set(false);
+        geom
+    }
+
     /// `QBoxLayoutPrivate::setupGeom`: the chain handed to `qGeomCalc` and the layout's sizes.
     fn setup_geom(&self) -> BoxGeom {
         let horz = self.direction == Direction::LeftToRight;
@@ -580,6 +601,15 @@ pub struct GridItem {
     pub alignment: ItemAlignment,
 }
 
+#[derive(Clone)]
+struct GridGeom {
+    rows: Vec<LayoutStruct>,
+    cols: Vec<LayoutStruct>,
+    hint: Size,
+    min: Size,
+    expanding: (bool, bool),
+}
+
 /// Grid layout laying out widgets in a 2D grid of rows and columns (`QGridLayout`).
 pub struct GridLayout {
     geometry: Rect,
@@ -591,9 +621,10 @@ pub struct GridLayout {
     col_stretches: Vec<u32>,
     col_min_widths: Vec<i32>,
     row_min_heights: Vec<i32>,
-    dirty: bool,
+    metric_dirty: Cell<bool>,
+    needs_activation: Cell<bool>,
+    geom_cache: RefCell<Option<GridGeom>>,
 }
-
 impl GridLayout {
     pub fn new() -> Self {
         Self {
@@ -606,10 +637,11 @@ impl GridLayout {
             col_stretches: Vec::new(),
             col_min_widths: Vec::new(),
             row_min_heights: Vec::new(),
-            dirty: true,
+            metric_dirty: Cell::new(true),
+            needs_activation: Cell::new(true),
+            geom_cache: RefCell::new(None),
         }
     }
-
     pub fn add_widget(&mut self, widget: WidgetRef, row: usize, column: usize) {
         self.add_widget_with_span(widget, row, column, 1, 1);
     }
@@ -674,7 +706,6 @@ impl GridLayout {
 
     /// `QGridLayout::setRowMinimumHeight` equivalent: the row is laid out at least this tall
     /// even when no item in it asks for it.
-
     pub fn set_row_minimum_height(&mut self, row: usize, min_h: i32) {
         if row >= self.row_min_heights.len() {
             self.row_min_heights.resize(row + 1, 0);
@@ -712,7 +743,37 @@ impl GridLayout {
             .max()
             .unwrap_or(0)
     }
+    fn ensure_geom(&self) -> GridGeom {
+        if !self.metric_dirty.get() {
+            if let Some(cached) = self.geom_cache.borrow().as_ref() {
+                return cached.clone();
+            }
+        }
+        let (rows, cols) = self.setup_layout_data();
+        let hint_raw = find_size(&rows, &cols, |d| d.size_hint);
+        let min_raw = find_size(&rows, &cols, |d| d.minimum_size);
+        let hint = Size::new(
+            hint_raw.width + self.margins.left + self.margins.right,
+            hint_raw.height + self.margins.top + self.margins.bottom,
+        );
+        let min = Size::new(
+            min_raw.width + self.margins.left + self.margins.right,
+            min_raw.height + self.margins.top + self.margins.bottom,
+        );
+        let expanding = (cols.iter().any(|c| c.expansive), rows.iter().any(|r| r.expansive));
+        let geom = GridGeom {
+            rows,
+            cols,
+            hint,
+            min,
+            expanding,
+        };
+        *self.geom_cache.borrow_mut() = Some(geom.clone());
+        self.metric_dirty.set(false);
+        geom
+    }
 }
+
 
 impl Default for GridLayout {
     fn default() -> Self {
@@ -726,8 +787,10 @@ impl Layout for GridLayout {
     }
 
     fn set_geometry(&mut self, rect: Rect) {
+        if self.geometry == rect && !self.needs_activation.get() {
+            return;
+        }
         self.geometry = rect;
-        self.dirty = true;
         self.activate();
     }
 
@@ -778,44 +841,32 @@ impl Layout for GridLayout {
     }
 
     fn size_hint(&self) -> Size {
-        let (rows, cols) = self.setup_layout_data();
-        let size = find_size(&rows, &cols, |d| d.size_hint);
-        Size::new(
-            size.width + self.margins.left + self.margins.right,
-            size.height + self.margins.top + self.margins.bottom,
-        )
+        self.ensure_geom().hint
     }
 
     fn minimum_size(&self) -> Size {
-        let (rows, cols) = self.setup_layout_data();
-        let size = find_size(&rows, &cols, |d| d.minimum_size);
-        Size::new(
-            size.width + self.margins.left + self.margins.right,
-            size.height + self.margins.top + self.margins.bottom,
-        )
+        self.ensure_geom().min
     }
 
     fn expanding_directions(&self) -> (bool, bool) {
-        let (rows, cols) = self.setup_layout_data();
-        (cols.iter().any(|c| c.expansive), rows.iter().any(|r| r.expansive))
+        self.ensure_geom().expanding
     }
 
     fn invalidate(&mut self) {
-        self.dirty = true;
+        self.metric_dirty.set(true);
+        self.needs_activation.set(true);
+        *self.geom_cache.borrow_mut() = None;
     }
 
     fn is_dirty(&self) -> bool {
-        self.dirty
+        self.needs_activation.get()
     }
 
     /// `QGridLayoutPrivate::distribute`.
     fn activate(&mut self) {
-        if !self.dirty {
-            return;
-        }
-        self.dirty = false;
-
-        let (mut rows, mut cols) = self.setup_layout_data();
+        self.needs_activation.set(false);
+        let geom = self.ensure_geom();
+        let (mut rows, mut cols) = (geom.rows, geom.cols);
         let (rr, cc) = (rows.len(), cols.len());
         if rr == 0 || cc == 0 {
             return;
@@ -842,8 +893,11 @@ impl Layout for GridLayout {
             };
             item_set_geometry(&**item.widget.borrow(), Rect::new(left, top, w, h), item.alignment);
             let new_size = Size::new(w, h);
-            if let Some(child_layout) = item.widget.borrow().layout_ref_mut() {
-                if old_size != new_size || child_layout.is_dirty() {
+            if let Some(mut child_layout) = item.widget.borrow().layout_ref_mut() {
+                let dirty = child_layout.is_dirty();
+                if old_size != new_size || dirty {
+                    child_layout.invalidate();
+                    drop(child_layout);
                     crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
                 }
             }

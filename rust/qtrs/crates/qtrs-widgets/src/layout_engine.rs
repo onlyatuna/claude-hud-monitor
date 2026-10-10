@@ -459,7 +459,11 @@ pub fn item_set_geometry(widget: &dyn Widget, rect: Rect, align: ItemAlignment) 
         widget.set_geometry(Rect::new(0, 0, 0, 0));
         return;
     }
-    let max = item_maximum_size(widget, align);
+    let max = if align == ItemAlignment::NONE {
+        widget.maximum_size()
+    } else {
+        item_maximum_size(widget, align)
+    };
     let mut width = rect.width.min(max.width);
     let mut height = rect.height.min(max.height);
     if align.horizontal() || align.vertical() {
