@@ -836,7 +836,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G10.5.a [P1, 注意]** 既有測試 `rust/src/ui/tray_icon.rs::test_menu_text_does_not_depend_on_window_offset` **只涵蓋 `translate_device` + `Menu::paint_event`**；它斷言「平移整數裝置像素 1..7 後每列位元組相同」，**沒有走 `present_popup`**，所以不是這次修復的失敗前／通過後回歸測試——**如果有人把 `present_popup` 改回邏輯偏移，這個測試不會失敗**。實機驗證（子選單向左展開，視窗 339→534 px，父選單偏移 195 px，5 列父選單文字像素差異 0）是手動的（`RAN`），沒有進 repo。
   - **G10.5.b [P2, INFERENCE]** 子選單原點是 `parent_native + round(sg.x*dpr)`，Qt 是 `round((root+sg)*dpr)`，可差 1 裝置像素（不影響字距）。
-  - **G10.5.c [P1, READ]** `present_popup`／`exec_popup` 用 `primary_screen().device_pixel_ratio()`（`menu.rs:597,729`），不是 popup 所在螢幕的 DPR。
+  - **G10.5.c [P1, READ；已修復：RC-08]** （修復前：）`present_popup`／`exec_popup` 用 `primary_screen().device_pixel_ratio()`（`menu.rs:597,729`），不是 popup 所在螢幕的 DPR。RC-08 改為彈出視窗自己的 DPR（`menu.rs` `exec_popup` 的游標換算與 `present_popup` 皆讀 `window.device_pixel_ratio()`）；此標籤於 2026-10-10 依程式碼補登。
   - **G10.5.d [P2]** hit-test 用邏輯整數，繪製用裝置取整，差最多 1 裝置像素。
   - **G10.5.e [P2]** 非 Windows 的 `exec_popup` 沒有原生視窗。
 - **Test**：必要：以兩個「相差非整數裝置像素」的 `root_origin` 驅動 `present_popup`，比對 backing-store 中選單區域的像素；同上於 dpr 1.25 與 1.75 並開啟子選單。
@@ -872,7 +872,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G10.7.b [P1, READ]** `application_device_pixel_ratio`（各螢幕最大值）只在 `Application::new` 設一次，DPI 變更或螢幕熱插拔後 stale。
   - **G10.7.c [P1, READ]** `HighDpiScaleFactorRoundingPolicy` 存了但從不讀（grep `rounding_policy` 只有存取器）；DPR 恰為 `dpi/96`，等同 Python 設的 `PassThrough`（`main.py:46`），其他 policy 被忽略。
   - **G10.7.d [P1, READ]** RC-08 之後視窗**內**的換算都用視窗自己的 DPR，但**視窗之間沒有共同的邏輯座標系**：`Window::new` 以主螢幕 DPR 決定原生位置（視窗尚未存在，無法先問它的螢幕），之後 `set_geometry` 以視窗 DPR 換位置。Qt 以 `QHighDpiScaling` 的螢幕原點映射處理（`qhighdpiscaling.cpp`）。僅在異 DPI 多螢幕下可見。
-  - **G10.7.e [P1, READ]** 彈出選單的螢幕夾限仍取 `primary_screen().available_geometry()`（`menu.rs:551`），選單不會出現在非主螢幕；同時 `tray_icon.rs:281` 以主螢幕 DPR 換算游標位置（G11.8.a 未修）。
+  - **G10.7.e [P1, RAN；已修復：RC-67（選單夾限）；游標 DPR 部分屬 G11.8.a，未修]** 彈出選單的螢幕夾限仍取 `primary_screen().available_geometry()`（`menu.rs:551`），選單不會出現在非主螢幕；同時 `tray_icon.rs:281` 以主螢幕 DPR 換算游標位置（G11.8.a 未修）。
   - **G10.7.f [P2, READ]** `hit_test.rs:321` 的 `DpiChanged` 分支以固定的 `old_dpr = 1.0` 呼叫 `propagate_dpi_change_recursive`；`Window` 的兩條路徑已改用視窗快取的 DPR。
   - **G10.7.g [P1, READ]** 視窗 DPR 只在建立時與 `DpiChanged`（`WM_DPICHANGED`）更新；Qt 另在 `handleWindowScreenChanged`／`QPlatformWindow::handleScreenChanged` 重算（`qguiapplication.cpp:3431,3504`、`qplatformwindow.cpp:824`）並送 `QEvent::DevicePixelRatioChange`。螢幕熱插拔與跨螢幕移動而不改 DPI 的情形未涵蓋。
   - **G10.7.h [P2, READ]** `PlatformWindow::device_pixel_ratio` 只有 Windows（`GetDpiForWindow`）是每視窗；`GenericWindow`、Cocoa、Wayland、X11 回傳主螢幕 DPR（等於修改前的行為）。後三者在本機**無法編譯**，未驗證。
@@ -1266,7 +1266,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 371 項：D 12、P0 35、P1 168、P2 151、test gap 5（計數含已修復項；標籤含「已修復」者共 89 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 371 項：D 12、P0 35、P1 168、P2 151、test gap 5（計數含已修復項；標籤含「已修復」者共 91 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.5.c、G10.7.a、G10.7.e、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1502,7 +1502,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.4.e | P2, INFERENCE | `Painter::begin` 只要 ClearType 開就啟用 LCD 文字，與目的地 alpha 無關 |
 | G10.5.a | P1, 注意 | 既有測試 `rust/src/ui/tray_icon.rs::test_menu_text_does_not_depend_on_window_offset` **只涵蓋 `tr |
 | G10.5.b | P2, INFERENCE | 子選單原點是 `parent_native + round(sg.x*dpr)`，Qt 是 `round((root+sg)*dpr)`，可差 1 裝置像素 |
-| G10.5.c | P1, READ | `present_popup`／`exec_popup` 用 `primary_screen().device_pixel_ratio()` |
+| G10.5.c | P1, READ；已修復：RC-08 | `present_popup`／`exec_popup` 用 `primary_screen().device_pixel_ratio()` |
 | G10.5.d | P2 | hit-test 用邏輯整數，繪製用裝置取整，差最多 1 裝置像素 |
 | G10.5.e | P2 | 非 Windows 的 `exec_popup` 沒有原生視窗 |
 | G10.6.a | P2 | 無 `QPaintEvent` 矩形 |
@@ -1511,7 +1511,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.7.b | P1, READ | `application_device_pixel_ratio` |
 | G10.7.c | P1, READ | `HighDpiScaleFactorRoundingPolicy` 存了但從不讀 |
 | G10.7.d | P1, READ | RC-08 之後視窗**內**的換算都用視窗自己的 DPR，但**視窗之間沒有共同的邏輯座標系**：`Window::new` 以主螢幕 DPR 決定原生位置 |
-| G10.7.e | P1, READ | 彈出選單的螢幕夾限仍取 `primary_screen().available_geometry()` |
+| G10.7.e | P1, RAN；已修復：RC-67（選單夾限） | 彈出選單的螢幕夾限仍取 `primary_screen().available_geometry()` |
 | G10.7.f | P2, READ | `hit_test.rs:321` 的 `DpiChanged` 分支以固定的 `old_dpr = 1.0` 呼叫 `propagate_dpi_change_recursive |
 | G10.7.g | P1, READ | 視窗 DPR 只在建立時與 `DpiChanged` |
 | G10.7.h | P2, READ | `PlatformWindow::device_pixel_ratio` 只有 Windows |
@@ -2493,6 +2493,23 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：
   - `EmptyWidget::set_geometry` 在幾何未變時仍無條件 `update()`，Qt 會直接返回（`qwidget.cpp:7328`）。屬另一個 root cause，未改。
   - 視窗 resize 時整個視窗本來就重繪，本 RC 對 HUD 縮放的 paint 時間預期沒有可見影響 [INFERENCE]，未另做 Release 量測。
+
+#### RC-67 彈出選單以主螢幕而非點擊處的螢幕夾限
+
+- **Contract gaps**：G10.7.e（選單夾限部分，已修復）。總數不變（371）；已修復 89 → 91（另補登 G10.5.c：RC-08 已在程式碼修好、標籤未更新）。
+- **為何選這一項**：依新工作方式（P0 清點後，選仍影響 HUD、已證實與 Qt 不同、可寫 regression test 的 P1）。HUD 的托盤右鍵與視窗右鍵都經 `Timer::single_shot(0)` 呼叫 `show_hud_popup_menu` → `Menu::exec_popup(global_pos)`（`rust/src/main.rs:391-394, 425, 457`）；HUD 放在副螢幕時每次開選單都會走到。
+- **Qt behavior** `[QT-SRC widgets/widgets/qmenu.cpp:2382, 292-308, 2489-2502; gui/kernel/qguiapplication.cpp:1147-1164]`：`QMenuPrivate::popup` 以 `popupGeometry(QGuiApplication::screenAt(p))` 取夾限範圍，即點所在螢幕的 `availableGeometry()`；`screenAt` 回傳 geometry 包含該點的螢幕；沒有時 `popupGeometry` 退回選單自己的螢幕。之後的左右上下夾限都用這個範圍。
+- **qtrs root**：`Menu::exec_popup` 固定取 `platform().primary_screen().available_geometry()`（`menu.rs:551-552`），同一個範圍也存成 `popup_bounds` 供子選單夾限。副螢幕在主螢幕右側時選單被推到主螢幕右緣，在左側時被推到主螢幕左緣 8 px。
+- **Evidence**：`RAN`（GitHub Actions Windows；本機 Windows）。新增 `qtrs-widgets/tests/test_menu_popup_screen.rs`（Windows；fake platform：主螢幕 `(0,0,1920,1080)`、副螢幕在右或左，工作區扣 40 px 工作列；以執行緒訊息 `WM_CANCELMODE` 結束 `exec_popup`，比對建立的 popup 視窗矩形）：
+  - `a_menu_on_a_screen_right_of_the_primary_opens_at_the_point`：點 `(2500,400)`，修改前 `x = 1792`（主螢幕右緣），預期 2500。
+  - `a_menu_on_a_screen_left_of_the_primary_opens_at_the_point`：點 `(-1000,400)`，修改前 `x = 8`，預期 -1000。
+  - `a_menu_is_kept_inside_the_screen_it_opens_on`：點 `(3835,400)`，修改前 `x = 1792`，預期 `3840 - 8 - w = 3712`。
+  - 修改前 run 38057691287（只加檢查，基於 develop `9815200`）：只有 Windows job 失敗（測試僅 Windows），3 項皆 FAILED。修改後 run 38058047929：全部通過、0 個 warning annotation。
+- **Status**：**已修復**。`exec_popup` 取 geometry 包含 `pos` 的螢幕的 `available_geometry()`，沒有則主螢幕（與 `tooltip.rs` 的 `tip_screen` 同規則，但用工作區，對應 `popupGeometry`）。子選單沿用同一個 `popup_bounds`，因此也改在該螢幕內夾限。
+- **Residual**：
+  - 托盤以主螢幕 DPR 換算游標位置（`tray_icon.rs:281-287`，G11.8.a），只在異 DPI 多螢幕下可見；需要每螢幕 DPR，屬多螢幕座標系（G11.4.c、G10.7.d），未改。
+  - 垂直夾限的算式與 Qt 不完全相同（Qt 以 `snapToMouse` 決定往上翻時是否扣 `desktopFrame`，`qmenu.cpp:2494-2499`；qtrs 用 `Rect::bottom()` = `y+h`），本 RC 未改，測試只驗水平夾限。
+  - 沒有實機多螢幕驗證；fake platform 的螢幕 DPR 皆為 1.0。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

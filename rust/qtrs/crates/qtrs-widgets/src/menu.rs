@@ -548,8 +548,14 @@ impl Menu {
 
         self.last_triggered = None;
         let size = self.size_hint();
-        let screen = platform().primary_screen();
-        let s_geom = screen.available_geometry();
+        // `popupGeometry(QGuiApplication::screenAt(p))` (qmenu.cpp:2382, 292-308): the work area of
+        // the screen whose geometry contains the point; without one, the primary screen's.
+        let s_geom = platform()
+            .screens()
+            .into_iter()
+            .find(|s| s.geometry().contains(pos))
+            .unwrap_or_else(|| platform().primary_screen())
+            .available_geometry();
         const DESKTOP_MARGIN: i32 = 8;
 
         let mut x = pos.x;
