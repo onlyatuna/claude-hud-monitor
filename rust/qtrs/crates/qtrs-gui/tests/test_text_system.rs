@@ -304,15 +304,3 @@ fn test_qt_canonical_text_aliases() {
     let _df: QTextDocumentFragment = TextDocumentFragment::new();
     let _hl: QSyntaxHighlighter = SyntaxHighlighter::new();
 }
-#[test]
-fn test_load_chinese_font() {
-    let mut db = FontDatabase::new();
-    let f1 = db.load_font("Microsoft JhengHei");
-    println!("Microsoft JhengHei: {:?}", f1.is_some());
-    if let Some(font) = &f1 {
-        let idx = font.glyph_index('重');
-        println!("Glyph for '重': {}", idx);
-    }
-    let f2 = db.load_font("Microsoft YaHei");
-    println!("Microsoft YaHei: {:?}", f2.is_some());
-}

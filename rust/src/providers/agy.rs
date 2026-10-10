@@ -696,10 +696,10 @@ mod tests {
         assert!(m.error.is_none());
     }
 
+    /// Smoke test: reading the Windows credential store returns, token or not, without panicking.
     #[test]
     #[cfg(target_os = "windows")]
-    fn test_os_cred_token() {
-        // Just verify it doesn't crash or panic
+    fn os_cred_token_lookup_does_not_panic() {
         let tok = os_cred::get_gemini_token();
         println!("Gemini token discovered: {}", tok.is_some());
     }

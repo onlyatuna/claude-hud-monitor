@@ -777,18 +777,6 @@ fn test_linux_wayland_native_window_layer_shell_and_events() {
 }
 
 #[test]
-fn test_linux_display_server_detection() {
-    use qtrs_platform::{DisplayServerKind, UnixPlatformIntegration};
-
-    // Fall back to Generic when environment variables are unset
-    let kind = UnixPlatformIntegration::detect_display_server();
-    assert!(matches!(
-        kind,
-        DisplayServerKind::Wayland | DisplayServerKind::X11 | DisplayServerKind::Generic
-    ));
-}
-
-#[test]
 fn test_linux_dbus_wire_protocol_serialization_and_deserialization() {
     use qtrs_platform::{DbusMessage, DBUS_MESSAGE_TYPE_METHOD_CALL};
 
