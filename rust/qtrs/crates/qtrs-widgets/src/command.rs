@@ -62,44 +62,53 @@ impl WidgetCommandQueue {
     /// the next paint; this is that step, for code that is about to paint. Unlike
     /// [`flush`](Self::flush) it never runs tasks or deletions, which may need the caller's
     /// borrows released first.
+    ///
+    /// A layout that rebuilt its metrics ends with `updateGeometry()` (qlayout.cpp:1131), which
+    /// requests its parent's layout in turn; those requests are delivered too, one level per
+    /// round, until a round posts none.
     pub fn flush_layouts() {
-        let commands = COMMAND_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
-        if commands.is_empty() {
-            return;
-        }
+        loop {
+            let commands = COMMAND_QUEUE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+            if commands.is_empty() {
+                return;
+            }
 
-        let mut layout_targets: Vec<WidgetRef> = Vec::new();
-        let mut seen_layout_ids = HashSet::new();
-        let mut kept = Vec::new();
-        for cmd in commands {
-            match cmd {
-                WidgetCommand::RequestLayout(weak) => {
-                    if let Some(target) = weak.upgrade() {
-                        let Ok(widget) = target.try_borrow() else {
-                            kept.push(WidgetCommand::RequestLayout(weak));
-                            continue;
-                        };
-                        let id = widget.id();
-                        drop(widget);
-                        if seen_layout_ids.insert(id) {
-                            layout_targets.push(target);
+            let mut layout_targets: Vec<WidgetRef> = Vec::new();
+            let mut seen_layout_ids = HashSet::new();
+            let mut kept = Vec::new();
+            for cmd in commands {
+                match cmd {
+                    WidgetCommand::RequestLayout(weak) => {
+                        if let Some(target) = weak.upgrade() {
+                            let Ok(widget) = target.try_borrow() else {
+                                kept.push(WidgetCommand::RequestLayout(weak));
+                                continue;
+                            };
+                            let id = widget.id();
+                            drop(widget);
+                            if seen_layout_ids.insert(id) {
+                                layout_targets.push(target);
+                            }
                         }
                     }
+                    other => kept.push(other),
                 }
-                other => kept.push(other),
             }
-        }
-        // Commands queued while the layouts ran go after the ones that were kept.
-        COMMAND_QUEUE.with(|q| {
-            let mut queue = q.borrow_mut();
-            kept.append(&mut queue);
-            *queue = kept;
-        });
+            // Commands queued while the layouts ran go after the ones that were kept.
+            COMMAND_QUEUE.with(|q| {
+                let mut queue = q.borrow_mut();
+                kept.append(&mut queue);
+                *queue = kept;
+            });
+            if layout_targets.is_empty() {
+                return;
+            }
 
-        for target in layout_targets {
-            crate::layout_scheduler::LayoutScheduler::invalidate(&target);
+            for target in layout_targets {
+                crate::layout_scheduler::LayoutScheduler::invalidate(&target);
+            }
+            crate::layout_scheduler::LayoutScheduler::activate_pending();
         }
-        crate::layout_scheduler::LayoutScheduler::activate_pending();
     }
 
     /// Safely requests deferred deletion of a `WidgetRef`.

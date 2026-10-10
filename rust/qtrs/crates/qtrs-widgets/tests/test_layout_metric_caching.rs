@@ -580,8 +580,16 @@ fn test_window_resize_through_a_stacked_widget_reuses_the_page_metric_cache() {
         settled,
         "a resize through the stacked widget must not re-query the page's children"
     );
-    assert_eq!(page.borrow().geometry().width, 300, "the page took the new width");
-    assert_eq!(p1.borrow().geometry().width, 300, "the page was laid out again");
+    assert_eq!(
+        page.borrow().geometry().width,
+        300,
+        "the page took the new width"
+    );
+    assert_eq!(
+        p1.borrow().geometry().width,
+        300,
+        "the page was laid out again"
+    );
 }
 
 /// Invalidation goes the way Qt's does: a widget whose size hint changed calls `updateGeometry`,
@@ -621,6 +629,66 @@ fn test_a_changed_size_hint_reaches_the_cached_layout_through_update_geometry() 
         probe.widget_base().update_geometry();
     }
     win.render_and_present();
-    assert!(h1.load(Ordering::SeqCst) > settled, "the layout re-queried after updateGeometry");
-    assert_eq!(p1.borrow().geometry().width, 90, "the new hint reached the geometry");
+    assert!(
+        h1.load(Ordering::SeqCst) > settled,
+        "the layout re-queried after updateGeometry"
+    );
+    assert_eq!(
+        p1.borrow().geometry().width,
+        90,
+        "the new hint reached the geometry"
+    );
+}
+
+/// root (VBox) -> [mid container (VBox) -> leaf, sibling]. A resize lays out `mid` again, which
+/// must not invalidate the root layout's metrics: `QLayout` handles a resize of an activated
+/// layout with `doResize` only, and `mw->updateGeometry()` runs only at the end of `activate()`
+/// after an invalidation [QT-SRC qlayout.cpp:528-533, 983-995, 1131]. The sibling's queries
+/// show whether the root layout rebuilt its metrics.
+#[test]
+fn test_a_resize_keeps_the_ancestor_metric_caches_of_a_nested_layout() {
+    let (leaf, leaf_hint, leaf_min, leaf_max, _) = MetricCountingProbe::new(50, 30);
+    let mut mid_layout = BoxLayout::vertical();
+    mid_layout.add_widget(Rc::clone(&leaf));
+    let mid: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
+    mid.borrow_mut().set_layout(Box::new(mid_layout));
+
+    let (sibling, sib_hint, sib_min, sib_max, _) = MetricCountingProbe::new(40, 20);
+    let mut root_layout = BoxLayout::vertical();
+    root_layout.add_widget(Rc::clone(&mid));
+    root_layout.add_widget(Rc::clone(&sibling));
+    let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
+    root.borrow_mut().set_layout(Box::new(root_layout));
+
+    let mut win = window::Window::new(
+        "NestedResizeTest",
+        Rect::new(0, 0, 200, 200),
+        qtrs_platform::window::WindowFlags::FRAMELESS,
+    )
+    .unwrap();
+    win.set_root_widget(root);
+    win.render_and_present();
+    win.render_and_present();
+    let counts = || {
+        [
+            &leaf_hint, &leaf_min, &leaf_max, &sib_hint, &sib_min, &sib_max,
+        ]
+        .map(|c| c.load(Ordering::SeqCst))
+    };
+    let settled = counts();
+
+    for width in [260, 320] {
+        win.set_geometry(Rect::new(0, 0, width, 300));
+        win.render_and_present();
+        assert_eq!(
+            counts(),
+            settled,
+            "a resize to width {width} must not rebuild any layout's metrics (leaf h/min/max, sibling h/min/max)"
+        );
+        assert_eq!(
+            leaf.borrow().geometry().width,
+            width,
+            "the nested layout ran"
+        );
+    }
 }
