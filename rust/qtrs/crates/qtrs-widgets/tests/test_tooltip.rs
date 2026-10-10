@@ -569,7 +569,10 @@ fn an_empty_text_hides_the_tip_after_the_hide_delay() {
 mod real_windows {
     use super::*;
     use windows_sys::Win32::Foundation::{POINT, RECT};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{keybd_event, KEYEVENTF_KEYUP, VK_MENU};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        keybd_event, TrackMouseEvent, KEYEVENTF_KEYUP, TME_LEAVE, TME_QUERY, TRACKMOUSEEVENT,
+        VK_MENU,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetCursorPos, GetForegroundWindow, GetWindowRect, SendMessageW, SetCursorPos,
         SetForegroundWindow, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
@@ -639,10 +642,40 @@ mod real_windows {
         foreground() == hwnd
     }
 
-    /// Moving the real cursor makes Windows send the window a real `WM_MOUSEMOVE`, which starts a
-    /// wake-up like any other. Let it arrive, then cancel it the way a user would: a click.
+    /// Whether Windows tracks the cursor as inside `hwnd`: the window has had a real
+    /// `WM_MOUSEMOVE` and the platform layer's `TrackMouseEvent(TME_LEAVE)` request is pending.
+    fn tracks_the_cursor(hwnd: isize) -> bool {
+        let mut tme = TRACKMOUSEEVENT {
+            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_QUERY,
+            hwndTrack: 0 as _,
+            dwHoverTime: 0,
+        };
+        let queried = unsafe { TrackMouseEvent(&mut tme) } != 0;
+        queried && tme.dwFlags & TME_LEAVE != 0 && tme.hwndTrack as isize == hwnd
+    }
+
+    /// Moving the real cursor makes Windows send the window a real `WM_MOUSEMOVE` (sometimes more
+    /// than one), after which Windows tracks the cursor as inside the window. Until then Windows
+    /// answers every `WM_MOUSEMOVE` the test sends with `WM_MOUSELEAVE`, a real `Leave` that
+    /// cancels the wake-up, as it would in Qt (qwindowspointerhandler.cpp:265-273, 354-357,
+    /// 868-876). On CI runners the move sometimes never comes; nudge the cursor until it does.
+    /// Let every move arrive, then cancel the wake-up they started the way a user would: a click.
     fn settle(el: &mut EventLoop, f: &Fixture) {
+        let mut at = POINT { x: 0, y: 0 };
+        unsafe { GetCursorPos(&mut at) };
         pump_for(el, 100);
+        for dx in [1, 0, 1, 0, 1, 0] {
+            if tracks_the_cursor(f.hwnd) {
+                break;
+            }
+            unsafe { SetCursorPos(at.x + dx, at.y) };
+            pump_for(el, 200);
+        }
+        assert!(
+            tracks_the_cursor(f.hwnd),
+            "precondition: Windows never tracked the cursor as inside the window"
+        );
         let at = ((50u32 << 16) | 50) as isize;
         unsafe {
             SendMessageW(f.hwnd as _, WM_LBUTTONDOWN, MK_LBUTTON, at);

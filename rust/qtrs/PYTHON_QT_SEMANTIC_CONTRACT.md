@@ -2528,7 +2528,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 修改前 run 38072695595（只加檢查，基於 `73a035c`）：三平台 `test_modal_pump_inside_a_posted_callback_delivers_events_before_it_returns`、`test_modal_pump_inside_a_modal_pump_delivers_events_before_it_returns`（`Some(None)`，預期 `Some(Some(1))`）、`test_a_nested_pump_delivers_each_event_once_and_leaves_its_own_posts_for_the_next_turn`（`["outer returns","b","c"]`）失敗；Windows 另有 `test_menu_popup_posted_events`（`["timer","menu closed","posted"]`，選單靠 3 s watchdog 才關）。`test_a_deferred_delete_from_the_outer_loop_waits_out_a_nested_pump` 修改前後都通過（保護性）。
   - 改寫的舊測試：`test_modal_pump_is_blocked_inside_normal_pump`／`…_inside_modal_pump` 斷言的是與 Qt 不同的行為，換成上面兩項。
   - 修改後新增（以 `d4448dd` 的舊實作另跑，本機 Windows，四項都失敗）：`test_posts_made_during_a_nested_pump_wait_for_the_next_turn_in_priority_order`（外層一輪送出 3 個，預期 1）、`test_a_priority_post_between_turns_overtakes_a_lower_priority_leftover`（`[x, y]`，預期 `[y, x]`：pump 結束後 `insertion_offset` 停在舊長度，priority 插入失效）、`dispatcher_win.rs` 的 `test_modal_pump_keeping_a_deferred_delete_rearms_the_wake_up`（喚醒 0 次，預期 1）、`test_modal_pump_keeping_a_loop_blocked_deferred_delete_does_not_rearm_the_wake_up`（喚醒 1 次，預期 0）。
-  - 修改後 run 38076892164：第 1 次只有 Windows 的 `test_tooltip` 兩項計時測試失敗（`real_windows::the_button_state_of_a_native_mouse_move_reaches_the_wake_up_gate`、`the_tip_falls_asleep_after_two_seconds`，已知會偶發失敗）；本機連跑 3 次 26/26 通過；重跑失敗 job（attempt 2）全部通過。
+  - 修改後 run 38076892164：第 1 次只有 Windows 的 `test_tooltip` 兩項計時測試失敗（`real_windows::the_button_state_of_a_native_mouse_move_reaches_the_wake_up_gate`、`the_tip_falls_asleep_after_two_seconds`）；重跑失敗 job（attempt 2）全部通過。develop run 38077729233 第 1 次同樣只有前者失敗，attempt 2 通過。
+  - 這兩項失敗**不是 RC-68 造成的**：在 CI 新 runner 上把 RC-68 前（`73a035c` 的 qtrs 程式碼）與 RC-68 後並排跑（run 38084423129、38085132368、38086030526、38086965469），兩邊都以同樣的訊號失敗（加入追蹤的兩輪：RC-68 前 6/90、RC-68 後 4/90）。根因與修正見 RC-69、RC-70。
 - **Status**：**已修復**。
 - **行為差異（刻意）**：巢狀 modal pump 期間，原本會在同一輪由外層送出的 DeferredDelete 現在留到下一輪（巢狀 pump 把它重新排到本輪之後），與 Qt 的重新排入一致；刪除仍只在 loop level 允許時發生。
 - **Residual**：
@@ -2536,6 +2537,22 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - G4.3.b：modal pump 的 DeferredDelete 規則與 Qt 不同；原生 modal loop 不提高 loop level。
   - callback panic 時 `insertion_offset` 不會復原（Qt 用 `CleanUp` RAII）；修改前同樣如此。
   - `UpdateRequest` 的部分 post 路徑與 `EventSender::send` 不經壓縮與 priority（scout 指出，未驗證）。
+
+#### RC-69 tooltip 實窗測試假設 `SetCursorPos` 一定帶來原生 `WM_MOUSEMOVE`
+
+- **類別**：測試缺陷。qtrs 行為與 Qt 相同，Contract gap 數不變。
+- **症狀**：Windows CI 上 `real_windows::the_button_state_of_a_native_mouse_move_reaches_the_wake_up_gate` 偶發失敗：「a plain native move never showed the tip」。
+- **Qt behavior** `[QT-SRC plugins/platforms/windows/qwindowspointerhandler.cpp:265-273, 354-357, 868-876; widgets/kernel/qapplication.cpp:2622-2637]`：滑鼠進入視窗時 Qt 呼叫 `TrackMouseEvent(TME_LEAVE)`；Windows 回 `WM_MOUSELEAVE` 時送出 Leave，Leave 會停止 tooltip 的 wake-up 計時器。如果 Windows 認為游標不在視窗內，`TrackMouseEvent` 會立刻排入 `WM_MOUSELEAVE`。qtrs 在每個 `WM_MOUSEMOVE` 都呼叫 `TrackMouseEvent`（`qtrs-platform/src/window.rs` 的 `WM_MOUSEMOVE` 分支），結果相同。
+- **根因**（`RAN`，在 tooltip 控制器與測試加上暫時的追蹤，CI 跑 180 次）：測試的 `settle` 用 `SetCursorPos` 把游標移進視窗，再 pump 100 ms 等原生 `WM_MOUSEMOVE`。這個原生移動偶爾不會來；這時 Windows 不認為游標在視窗內，所以測試之後送的每個 `WM_MOUSEMOVE` 後面 0.1 ms 內都跟著一個 Leave，把剛啟動的 wake-up 取消。失敗當下的狀態顯示視窗是前景、游標在視窗內（`WindowFromPoint` 是測試視窗）、沒有 capture。
+  - 對應關係：收到原生移動的 170 次全部通過；沒收到的 10 次全部失敗（run 38086030526、38086965469）。
+  - 為什麼原生移動有時不來：未查明 `[INFERENCE]`。
+- **修正**（`test_tooltip.rs`）：`settle` 照舊先 pump 100 ms；接著用 `TrackMouseEvent(TME_QUERY)` 檢查 Windows 是否已追蹤游標（等同已收到原生移動）。沒有的話把游標來回推 1 px，每次 pump 200 ms，最多 6 次；最後仍未追蹤就以前置條件失敗結束，不會靜默略過。
+  - 第一版改成追蹤成立就提早結束等待，結果 run 38088237821 的 120 次中有 43 次以「MK_LBUTTON move started a tip」失敗：原生移動有時連續來兩次，第二次在點擊之後才到，重新啟動了 wake-up。所以保留完整的 100 ms。
+- **Evidence**：`RAN`（GitHub Actions Windows）。
+  - 修改前：四個 run 合計，RC-68 前、後的程式碼都會失敗（見 RC-68 Evidence）。
+  - 修改後 run 38089952648：24 個新 runner，各跑完整序列 1 次並重跑 `test_tooltip` 4 次，120 次全部通過。其中 5 次需要推 1 px（`nudges=1`），之後都追蹤成功，其餘 283 次不需推。
+- **Status**：**已修復（測試）**。
+- **Residual**：原生移動不來的系統層原因未查；本機沒有跑 `real_windows` 測試（會移動使用者的游標）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
