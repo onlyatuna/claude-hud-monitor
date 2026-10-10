@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use crate::layout_engine::{
     distribute_multi_box, find_size, init_empty_multi_box, item_expanding, item_is_empty,
-    item_maximum_size, item_minimum_size, item_set_geometry, item_size_hint, q_geom_calc,
+    item_minimum_size, item_set_geometry_with, item_size_hint, q_geom_calc, ItemLimits,
     q_max_exp_calc, setup_spacings, LayoutStruct, LAYOUT_SIZE_MAX,
 };
 use crate::size_policy::Policy;
@@ -349,6 +349,7 @@ impl Layout for BoxLayout {
             return;
         }
         self.geometry = rect;
+        self.needs_activation.set(true);
         self.activate();
     }
 
@@ -401,15 +402,18 @@ impl Layout for BoxLayout {
     }
 
     fn size_hint(&self) -> Size {
-        self.ensure_geom().hint
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().hint
     }
 
     fn minimum_size(&self) -> Size {
-        self.ensure_geom().min
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().min
     }
 
     fn expanding_directions(&self) -> (bool, bool) {
-        self.ensure_geom().expanding
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().expanding
     }
 
     fn invalidate(&mut self) {
@@ -424,13 +428,19 @@ impl Layout for BoxLayout {
 
     /// `QBoxLayout::setGeometry`.
     fn activate(&mut self) {
+        if !self.needs_activation.get() {
+            return;
+        }
         self.needs_activation.set(false);
         if self.items.is_empty() {
             return;
         }
 
+        self.ensure_geom();
+        // `qGeomCalc` writes positions into the chain, so the activation works on a copy; the
+        // cached chain stays the metric input for the next geometry pass.
+        let mut chain = self.geom_cache.borrow().as_ref().unwrap().chain.clone();
         let horz = self.direction == Direction::LeftToRight;
-        let mut chain = self.ensure_geom().chain;
         let s = Rect::new(
             self.geometry.x + self.margins.left,
             self.geometry.y + self.margins.top,
@@ -441,7 +451,7 @@ impl Layout for BoxLayout {
         let n = chain.len();
         q_geom_calc(&mut chain, 0, n, pos, space, -1);
 
-        for (item, data) in self.items.iter().zip(&chain) {
+        for (i, (item, data)) in self.items.iter().zip(&chain).enumerate() {
             let rect = if horz {
                 Rect::new(data.pos, s.y, data.size, s.height)
             } else {
@@ -456,17 +466,11 @@ impl Layout for BoxLayout {
                 // A `QSpacerItem` just remembers its rectangle.
                 item.widget.borrow().set_geometry(rect);
             } else {
-                item_set_geometry(&**item.widget.borrow(), rect, item.alignment);
+                let limits = self.geom_cache.borrow().as_ref().unwrap().limits[i];
+                item_set_geometry_with(&**item.widget.borrow(), rect, item.alignment, limits);
             }
             let new_size = Size::new(rect.width, rect.height);
-            if let Some(mut child_layout) = item.widget.borrow().layout_ref_mut() {
-                let dirty = child_layout.is_dirty();
-                if old_size != new_size || dirty {
-                    child_layout.invalidate();
-                    drop(child_layout);
-                    crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
-                }
-            }
+            relayout_child_after_resize(&item.widget, old_size, new_size);
         }
     }
 }
@@ -475,22 +479,21 @@ impl Layout for BoxLayout {
 #[derive(Clone)]
 struct BoxGeom {
     chain: Vec<LayoutStruct>,
+    /// Per item, what `item_set_geometry` bounds the item by (unused for spacers).
+    limits: Vec<ItemLimits>,
     min: Size,
     hint: Size,
     expanding: (bool, bool),
 }
 
 impl BoxLayout {
-    fn ensure_geom(&self) -> BoxGeom {
-        if !self.metric_dirty.get() {
-            if let Some(cached) = self.geom_cache.borrow().as_ref() {
-                return cached.clone();
-            }
+    fn ensure_geom(&self) {
+        if !self.metric_dirty.get() && self.geom_cache.borrow().is_some() {
+            return;
         }
         let geom = self.setup_geom();
-        *self.geom_cache.borrow_mut() = Some(geom.clone());
+        *self.geom_cache.borrow_mut() = Some(geom);
         self.metric_dirty.set(false);
-        geom
     }
 
     /// `QBoxLayoutPrivate::setupGeom`: the chain handed to `qGeomCalc` and the layout's sizes.
@@ -504,11 +507,12 @@ impl BoxLayout {
         let (mut main_exp, mut cross_exp) = (false, false);
 
         let mut chain = vec![LayoutStruct::default(); self.items.len()];
+        let mut limits = Vec::with_capacity(self.items.len());
         let mut previous_non_empty: Option<usize> = None;
 
         for (i, item) in self.items.iter().enumerate() {
             // Everything below is (main axis, cross axis).
-            let (max, min, hint, exp, empty, is_widget, policy_stretch) = if let Some(spacer) = item.spacer {
+            let (max, min, hint, exp, empty, is_widget, policy_stretch, item_limits) = if let Some(spacer) = item.spacer {
                 // Everything a `QSpacerItem` reports, transposed for a vertical layout.
                 let swap = |s: Size| if horz { (s.width, s.height) } else { (s.height, s.width) };
                 let exp = spacer.expanding_directions();
@@ -520,20 +524,27 @@ impl BoxLayout {
                     true,
                     false,
                     0,
+                    ItemLimits {
+                        item_max: spacer.maximum_size(),
+                        widget_min: Size::new(0, 0),
+                        widget_max: spacer.maximum_size(),
+                    },
                 )
             } else {
                 let w = item.widget.borrow();
                 let policy = w.size_policy();
                 let swap = |s: Size| if horz { (s.width, s.height) } else { (s.height, s.width) };
                 let exp = item_expanding(&**w, item.alignment);
+                let item_limits = ItemLimits::of(&**w, item.alignment);
                 (
-                    swap(item_maximum_size(&**w, item.alignment)),
+                    swap(item_limits.item_max),
                     swap(item_minimum_size(&**w)),
                     swap(item_size_hint(&**w)),
                     if horz { exp } else { (exp.1, exp.0) },
                     item_is_empty(&**w),
                     true,
                     (if horz { policy.horizontal_stretch } else { policy.vertical_stretch }) as i32,
+                    item_limits,
                 )
             };
 
@@ -565,6 +576,7 @@ impl BoxLayout {
             chain[i].expansive = expand;
             chain[i].stretch = if item.stretch > 0 { item.stretch as i32 } else { policy_stretch };
             chain[i].empty = empty;
+            limits.push(item_limits);
             chain[i].spacing = 0; // may be set non-zero by a later non-empty item
         }
 
@@ -577,9 +589,13 @@ impl BoxLayout {
             (max_cross as i64, max_main)
         };
         // `maxSize = QSize(maxw, maxh).expandedTo(minSize)`; `sizeHint` is bounded by both.
-        let bounded = |hint: i32, min: i32, max: i64| hint.max(min).min(max.max(min as i64).min(i32::MAX as i64) as i32);
+        let bounded = |hint: i32, min: i32, max: i64| {
+            hint.max(min)
+                .min(max.max(min as i64).min(i32::MAX as i64) as i32)
+        };
         BoxGeom {
             chain,
+            limits,
             min: Size::new(min_w + extra.width, min_h + extra.height),
             hint: Size::new(
                 bounded(hint_w, min_w, max_w) + extra.width,
@@ -605,6 +621,7 @@ pub struct GridItem {
 struct GridGeom {
     rows: Vec<LayoutStruct>,
     cols: Vec<LayoutStruct>,
+    limits: Vec<ItemLimits>,
     hint: Size,
     min: Size,
     expanding: (bool, bool),
@@ -743,13 +760,11 @@ impl GridLayout {
             .max()
             .unwrap_or(0)
     }
-    fn ensure_geom(&self) -> GridGeom {
-        if !self.metric_dirty.get() {
-            if let Some(cached) = self.geom_cache.borrow().as_ref() {
-                return cached.clone();
-            }
+    fn ensure_geom(&self) {
+        if !self.metric_dirty.get() && self.geom_cache.borrow().is_some() {
+            return;
         }
-        let (rows, cols) = self.setup_layout_data();
+        let (rows, cols, limits) = self.setup_layout_data();
         let hint_raw = find_size(&rows, &cols, |d| d.size_hint);
         let min_raw = find_size(&rows, &cols, |d| d.minimum_size);
         let hint = Size::new(
@@ -764,13 +779,13 @@ impl GridLayout {
         let geom = GridGeom {
             rows,
             cols,
+            limits,
             hint,
             min,
             expanding,
         };
-        *self.geom_cache.borrow_mut() = Some(geom.clone());
+        *self.geom_cache.borrow_mut() = Some(geom);
         self.metric_dirty.set(false);
-        geom
     }
 }
 
@@ -791,9 +806,9 @@ impl Layout for GridLayout {
             return;
         }
         self.geometry = rect;
+        self.needs_activation.set(true);
         self.activate();
     }
-
     fn add_widget(&mut self, widget: WidgetRef) {
         let r = self.row_count();
         self.add_widget(widget, r, 0);
@@ -841,15 +856,18 @@ impl Layout for GridLayout {
     }
 
     fn size_hint(&self) -> Size {
-        self.ensure_geom().hint
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().hint
     }
 
     fn minimum_size(&self) -> Size {
-        self.ensure_geom().min
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().min
     }
 
     fn expanding_directions(&self) -> (bool, bool) {
-        self.ensure_geom().expanding
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().expanding
     }
 
     fn invalidate(&mut self) {
@@ -864,9 +882,17 @@ impl Layout for GridLayout {
 
     /// `QGridLayoutPrivate::distribute`.
     fn activate(&mut self) {
+        if !self.needs_activation.get() {
+            return;
+        }
         self.needs_activation.set(false);
-        let geom = self.ensure_geom();
-        let (mut rows, mut cols) = (geom.rows, geom.cols);
+        self.ensure_geom();
+        // `qGeomCalc` writes positions into the chains, so the activation works on copies.
+        let (mut rows, mut cols) = {
+            let borrow = self.geom_cache.borrow();
+            let g = borrow.as_ref().unwrap();
+            (g.rows.clone(), g.cols.clone())
+        };
         let (rr, cc) = (rows.len(), cols.len());
         if rr == 0 || cc == 0 {
             return;
@@ -879,7 +905,7 @@ impl Layout for GridLayout {
         q_geom_calc(&mut cols, 0, cc, x, width, -1);
         q_geom_calc(&mut rows, 0, rr, y, height, -1);
 
-        for item in &self.items {
+        for (i, item) in self.items.iter().enumerate() {
             let (r2, c2) = (item.row + item.row_span - 1, item.column + item.col_span - 1);
             let left = cols[item.column].pos;
             let top = rows[item.row].pos;
@@ -891,23 +917,33 @@ impl Layout for GridLayout {
                 let g = widget.geometry();
                 Size::new(g.width, g.height)
             };
-            item_set_geometry(&**item.widget.borrow(), Rect::new(left, top, w, h), item.alignment);
+            let limits = self.geom_cache.borrow().as_ref().unwrap().limits[i];
+            let rect = Rect::new(left, top, w, h);
+            item_set_geometry_with(&**item.widget.borrow(), rect, item.alignment, limits);
             let new_size = Size::new(w, h);
-            if let Some(mut child_layout) = item.widget.borrow().layout_ref_mut() {
-                let dirty = child_layout.is_dirty();
-                if old_size != new_size || dirty {
-                    child_layout.invalidate();
-                    drop(child_layout);
-                    crate::layout_scheduler::LayoutScheduler::invalidate(&item.widget);
-                }
-            }
+            relayout_child_after_resize(&item.widget, old_size, new_size);
         }
+    }
+}
+
+/// After a layout gave `child` a new geometry: a child that owns a layout lays it out again
+/// when its size changed or the layout is still invalid. The child's metric cache stays: a new
+/// size moves its items but changes none of their size hints (`QBoxLayout::setGeometry` only
+/// re-runs `setupGeom` when the layout is dirty, qboxlayout.cpp:735-742). An invalid layout has
+/// already dropped its metrics.
+pub(crate) fn relayout_child_after_resize(child: &WidgetRef, old_size: Size, new_size: Size) {
+    let needs_pass = child
+        .borrow()
+        .layout_ref_mut()
+        .map(|layout| old_size != new_size || layout.is_dirty());
+    if needs_pass == Some(true) {
+        crate::layout_scheduler::LayoutScheduler::request_layout(child);
     }
 }
 
 impl GridLayout {
     /// `QGridLayoutPrivate::setupLayoutData`: the row and column chains of the current items.
-    fn setup_layout_data(&self) -> (Vec<LayoutStruct>, Vec<LayoutStruct>) {
+    fn setup_layout_data(&self) -> (Vec<LayoutStruct>, Vec<LayoutStruct>, Vec<ItemLimits>) {
         let rr = self.row_count();
         let cc = self.column_count();
         let stretch_of = |v: &[u32], i: usize| v.get(i).copied().unwrap_or(0) as i32;
@@ -934,6 +970,7 @@ impl GridLayout {
             empty: bool,
             h_stretch: i32,
             v_stretch: i32,
+            limits: ItemLimits,
         }
         let boxes: Vec<Boxed> = self
             .items
@@ -941,14 +978,16 @@ impl GridLayout {
             .map(|item| {
                 let w = item.widget.borrow();
                 let policy = w.size_policy();
+                let limits = ItemLimits::of(&**w, item.alignment);
                 Boxed {
                     min: item_minimum_size(&**w),
                     hint: item_size_hint(&**w),
-                    max: item_maximum_size(&**w, item.alignment),
+                    max: limits.item_max,
                     expanding: item_expanding(&**w, item.alignment),
                     empty: item_is_empty(&**w),
                     h_stretch: policy.horizontal_stretch as i32,
                     v_stretch: policy.vertical_stretch as i32,
+                    limits,
                 }
             })
             .collect();
@@ -1021,6 +1060,7 @@ impl GridLayout {
         for col in &mut cols {
             col.expansive = col.expansive || col.stretch > 0;
         }
-        (rows, cols)
+        let limits = boxes.iter().map(|b| b.limits).collect();
+        (rows, cols, limits)
     }
 }

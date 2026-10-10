@@ -42,6 +42,22 @@ impl LayoutScheduler {
         }
     }
 
+    /// Requests a layout pass on `widget` (e.g. geometry/window size changed) without
+    /// invalidating its child metric cache (`layout.invalidate()`).
+    pub fn request_layout(widget: &WidgetRef) {
+        let Ok(w) = widget.try_borrow() else {
+            return;
+        };
+        let id = w.id();
+        drop(w);
+
+        DIRTY_LAYOUTS.with(|q| {
+            let mut list = q.borrow_mut();
+            if !list.iter().any(|(existing_id, _)| *existing_id == id) {
+                list.push((id, Rc::downgrade(widget)));
+            }
+        });
+    }
     /// Runs `widget`'s own layout when it has been invalidated and nothing else is going to.
     ///
     /// `QLayout::invalidate` posts a `LayoutRequest` to the widget that owns the layout. qtrs
@@ -51,10 +67,15 @@ impl LayoutScheduler {
         let dirty = widget
             .try_borrow()
             .ok()
-            .and_then(|w| w.layout_ref_mut().map(|layout| layout.is_dirty()))
+            .and_then(|w| {
+                let g = w.geometry();
+                w.layout_ref_mut().map(|layout| {
+                    layout.is_dirty() || layout.geometry().size() != Size::new(g.width, g.height)
+                })
+            })
             .unwrap_or(false);
         if dirty {
-            Self::invalidate(widget);
+            Self::request_layout(widget);
             Self::activate_pending();
         }
     }
@@ -88,7 +109,6 @@ impl LayoutScheduler {
                     if let Some(mut layout) = widget.layout_ref_mut() {
                         if layout.is_dirty() || layout.geometry().size() != Size::new(g.width, g.height) {
                             layout.set_geometry(Rect::new(0, 0, g.width, g.height));
-                            layout.activate();
                             activated = true;
                         }
                     }

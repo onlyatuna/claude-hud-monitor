@@ -875,11 +875,6 @@ impl Widget for EmptyWidget {
             self.resize_event(new_size, old_size);
         }
 
-        if size_changed {
-            if let Some(layout) = self.base.layout.borrow_mut().as_mut() {
-                layout.invalidate();
-            }
-        }
         self.update();
     }
 

@@ -697,7 +697,7 @@ impl Window {
 
         // 3. Layout Invalidation & Activation via LayoutScheduler
         if size_changed {
-            crate::layout_scheduler::LayoutScheduler::invalidate(&self.root_widget);
+            crate::layout_scheduler::LayoutScheduler::request_layout(&self.root_widget);
             crate::layout_scheduler::LayoutScheduler::activate_pending();
         }
 
@@ -1008,7 +1008,7 @@ impl QObject for Window {
                 }
 
                 // 3. Layout Invalidation & Activation via LayoutScheduler
-                crate::layout_scheduler::LayoutScheduler::invalidate(&self.root_widget);
+                crate::layout_scheduler::LayoutScheduler::request_layout(&self.root_widget);
                 crate::layout_scheduler::LayoutScheduler::activate_pending();
 
                 // 4. Backing store invalidation & paint
@@ -1421,7 +1421,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     // 3. Invalidate layout (deduplicated by LayoutScheduler); activation, paint
                     //    and present happen once in the coalesced deferred render.
                     let dbg_inv = qtrs_platform::resize_debug::start();
-                    crate::layout_scheduler::LayoutScheduler::invalidate(&root);
+                    crate::layout_scheduler::LayoutScheduler::request_layout(&root);
                     qtrs_platform::resize_debug::end(qtrs_platform::resize_debug::Phase::LayoutInvalidate, dbg_inv);
 
                     // 4. Window::set_geometry renders synchronously itself (explicit flag,

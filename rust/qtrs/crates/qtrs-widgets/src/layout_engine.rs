@@ -455,15 +455,44 @@ pub fn item_expanding(widget: &dyn Widget, align: ItemAlignment) -> (bool, bool)
 /// hidden widget keeps no geometry. Without `heightForWidth` (not ported), a vertically aligned
 /// widget is cut to its size hint height.
 pub fn item_set_geometry(widget: &dyn Widget, rect: Rect, align: ItemAlignment) {
+    item_set_geometry_with(widget, rect, align, ItemLimits::of(widget, align));
+}
+
+/// The size limits `item_set_geometry` applies: the item's `qSmartMaxSize`
+/// (`QWidgetItem::maximumSize`) and the widget's own minimum and maximum size, which
+/// `QWidget::setGeometry` bounds the result by (qwidget.cpp:7286, 7300-7305).
+///
+/// They depend only on the widget's size metrics, so a layout computes them with the rest of its
+/// metric cache and reuses them for every geometry pass until it is invalidated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ItemLimits {
+    pub item_max: Size,
+    pub widget_min: Size,
+    pub widget_max: Size,
+}
+
+impl ItemLimits {
+    pub fn of(widget: &dyn Widget, align: ItemAlignment) -> Self {
+        Self {
+            item_max: item_maximum_size(widget, align),
+            widget_min: widget.minimum_size(),
+            widget_max: widget.maximum_size(),
+        }
+    }
+}
+
+/// `item_set_geometry` with limits computed earlier (`ItemLimits::of`).
+pub fn item_set_geometry_with(
+    widget: &dyn Widget,
+    rect: Rect,
+    align: ItemAlignment,
+    limits: ItemLimits,
+) {
     if item_is_empty(widget) {
         widget.set_geometry(Rect::new(0, 0, 0, 0));
         return;
     }
-    let max = if align == ItemAlignment::NONE {
-        widget.maximum_size()
-    } else {
-        item_maximum_size(widget, align)
-    };
+    let max = limits.item_max;
     let mut width = rect.width.min(max.width);
     let mut height = rect.height.min(max.height);
     if align.horizontal() || align.vertical() {
@@ -505,10 +534,8 @@ pub fn item_set_geometry(widget: &dyn Widget, rect: Rect, align: ItemAlignment) 
         y = 0;
     }
     // `QWidget::setGeometry` keeps the size within the widget's own minimum and maximum size.
-    let min = widget.minimum_size();
-    let max = widget.maximum_size();
-    let width = width.min(max.width).max(min.width);
-    let height = height.min(max.height).max(min.height);
+    let width = width.min(limits.widget_max.width).max(limits.widget_min.width);
+    let height = height.min(limits.widget_max.height).max(limits.widget_min.height);
     widget.set_geometry(Rect::new(x, y, width, height));
 }
 

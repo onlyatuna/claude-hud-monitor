@@ -200,11 +200,7 @@ impl Layout for StackedLayout {
             }
             drop(w);
             let new_size = Size::new(child_rect.width, child_rect.height);
-            if let Some(child_layout) = widget.borrow().layout_ref_mut() {
-                if old_size != new_size || child_layout.is_dirty() {
-                    crate::layout_scheduler::LayoutScheduler::invalidate(widget);
-                }
-            }
+            crate::layout::relayout_child_after_resize(widget, old_size, new_size);
         }
     }
     fn widgets(&self) -> Vec<WidgetRef> {

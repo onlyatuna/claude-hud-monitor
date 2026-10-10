@@ -611,7 +611,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.1.a [P1, READ]** **show／hide 不自動重排**（**已修復：RC-26**：`WidgetBase::set_visible` 改呼叫 `update_geometry`，與 Qt 一樣只在可見性真的改變時請求 parent 重排；`Menu` 為彈出視窗不在此列）；HUD 以手動 `update_layout()` 補（`provider_card.rs:347-348,406-420,435`、`hud_window.rs:254,590,608,636`）。
   - **G8.1.b [P2, READ]** 隱藏 item 的 geometry 被設為 (0,0,0,0)（Qt 不動它）。
   - **G8.1.c [P1, READ]** 無 Show/Hide 事件；依賴 `showEvent` 的子類別無法實作；`Window::show/hide` 不通知 widget 樹。
-  - **G8.1.d [P1, READ；已修復：RC-63]** Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件：`BoxLayout` 與 `GridLayout` 在 `set_geometry` 時無條件標記 dirty，`size_hint`／`minimum_size` 未快取已算出的 layout struct / minSize / sizeHint，每次查詢或尺寸改變皆重新走訪所有子元件詢問尺寸提示；Qt 以 `dirty`／`needRecalc` 與 `geomArray` 快取尺寸指標，resize 僅呼叫 `qGeomCalc` 重新分配空間，不重新詢問子元件（`qboxlayout.cpp:219-361,590-625,735-775`、`qgridlayout.cpp:719-745,880-928,1181-1205,1320-1328`）。
+  - **G8.1.d [P1, READ；已修復：RC-63、RC-63b]** Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件：`BoxLayout` 與 `GridLayout` 在 `set_geometry` 時無條件標記 dirty，`size_hint`／`minimum_size` 未快取已算出的 layout struct / minSize / sizeHint，每次查詢或尺寸改變皆重新走訪所有子元件詢問尺寸提示；Qt 以 `dirty`／`needRecalc` 與 `geomArray` 快取尺寸指標，resize 僅呼叫 `qGeomCalc` 重新分配空間，不重新詢問子元件（`qboxlayout.cpp:219-361,590-625,735-775`、`qgridlayout.cpp:719-745,880-928,1181-1205,1320-1328`）。
 - **Test**：既有無（probe 只涵蓋建構時 hidden）。必要：`hide_child_relayouts_parent_without_manual_call`；`show_hide_events_delivered`。
 - **HUD usage**：Python `setVisible`（`hud_window.py:156,292,306,520,671`、`provider_card.py:50,139-193`）；Rust 同位置。
 
@@ -1419,7 +1419,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.a | P1, READ | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
-| G8.1.d | P1, READ；已修復：RC-63 | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
+| G8.1.d | P1, READ；已修復：RC-63、RC-63b | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
 | G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；`Widget::set_enabled` 不送事件的入口已移除：RC-43 | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
@@ -2333,11 +2333,46 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Status**：**已修復**。
   - `BoxLayout` 與 `GridLayout` 引入 `metric_dirty: Cell<bool>` 與 `needs_activation: Cell<bool>`，將尺寸指標快取（`BoxGeom`、`GridGeom`）與 layout activate 需求解耦。
   - `size_hint()`、`minimum_size()`、`expanding_directions()` 與 `set_geometry()` 在 `!metric_dirty` 時重用快取結構，不重複詢問子元件。
-  - `layout_engine::item_set_geometry` 在 `align == ItemAlignment::NONE` 時直接以 `widget.maximum_size()` 夾取，不走訪 `size_hint()`，且保留置中位移計算。
+  - `layout_engine::item_set_geometry` 在 `align == ItemAlignment::NONE` 時直接以 `widget.maximum_size()` 夾取，不走訪 `size_hint()`，且保留置中位移計算。（**錯誤，RC-63b 已撤回**：這跳過了 `QWidgetItem::maximumSize` 的 `qSmartMaxSize`，`Fixed`／`Maximum` 的 widget 會被拉滿整格。）
   - 觸發 `invalidate()` 時同時清除指標快取並標記 `needs_activation`。
+- **審查後的修正**：RC-63 留下三個缺陷（smart-max 回歸、同一輪排版跑兩次、原生 resize 路徑仍清掉尺寸指標快取），見 RC-63b。
 - **Residual**：
   - 樣式解析結果快取尚未建立（G8.5.f / 下一 RC-64）。
   - Label 的尺寸與字型度量快取尚未建立（G8.3.f / 下一 RC-65）。
+
+#### RC-63b RC-63 的三個缺陷：smart-max 回歸、重複 activation、resize 路徑仍清除尺寸指標快取
+
+- **Contract gaps**：G8.1.d（RC-63 未完成的部分，含 RC-63 引入的回歸）。總數不變（368），已修復不變（86）。
+- **Qt behavior** `[QT-SRC qlayoutitem.cpp:408-474, 637-646; qlayoutengine.cpp:354-375; qwidget.cpp:7286, 7300-7305; qboxlayout.cpp:219-222, 735-742]`：
+  - `QWidgetItem::setGeometry` 不論有沒有 alignment，都以 `QWidgetItem::maximumSize()`（`qSmartMaxSize`：沒有 `GrowFlag` 的軸夾到 size hint）限制尺寸；最後 `QWidget::setGeometry` 再以 widget 自己的最小／最大尺寸夾取。
+  - `QBoxLayoutPrivate::setupGeom` 在 `!dirty` 時直接返回；`QBoxLayout::setGeometry` 只在 `dirty || r != geometry()` 時重新分配，且只有 dirty 時才重算指標。視窗或子元件改變大小只重新分配空間，不使尺寸指標失效。
+- **qtrs root**（四項，皆屬 RC-63 的快取設計未完成）：
+  1. RC-63 在 `align == NONE` 時改用 `widget.maximum_size()`，跳過 `qSmartMaxSize`：`Fixed` 的 50×30 widget 在 200×300 的格子裡被拉成 200×300 高度。
+  2. `BoxLayout`／`GridLayout::set_geometry` 自己呼叫 `activate()`，`LayoutScheduler::activate_pending` 與 `Widget::update_layout` 之後又呼叫一次；RC-63 的 `activate()` 沒有 no-op 條件，同一輪排版對每個子項目 `set_geometry` 兩次。
+  3. 原生 resize（`Window::set_geometry`、`EventKind::Resize`、`WindowSystemEvent::Resize`）呼叫 `LayoutScheduler::invalidate(root)`，`EmptyWidget::set_geometry` 在尺寸改變時 `layout.invalidate()`，box／grid 在子元件尺寸改變時也 `invalidate()` 子 layout：每次 resize 都清掉整棵樹的尺寸指標快取。
+  4. 快取命中時 `size_hint`／`minimum_size`／`expanding_directions` 也複製整份 `BoxGeom`／`GridGeom`（含 `Vec<LayoutStruct>`）。
+- **Evidence**：`RAN`（GitHub Actions 三平台；本機 Windows）。`test_layout_metric_caching.rs` 擴充：計數 `size_hint`、`minimum_size_hint`、`maximum_size` 與子元件 `set_geometry` 次數；`Fixed`／`Maximum`／`Preferred` 在 `NONE` alignment 下的實際 geometry；經 `Window::set_geometry` 的 resize 路徑。
+  - 修改前 run 38036902355（只加檢查，基於 develop `45bf91a`）：三平台皆只有 `test_layout_metric_caching` 失敗，4/4 FAILED——box 在 `set_geometry` 時 `maximum_size` 查詢 5 次（預期沿用 3 次）；grid 多餘的 `activate()` 讓子元件 `set_geometry` 3 次（預期 2 次）；`Fixed` widget 高度 300（預期 30）；視窗 resize 後子元件 `size_hint` 查詢 12 次（預期 9 次）。
+  - 修改後 run 38037828115：success（三平台 qtrs workspace、Rust、Python 全部 job 通過）。另加兩項測試：經 `StackedWidget` 的 resize 路徑（HUD 的實際樹）沿用頁面快取；`size_hint` 改變後經 `updateGeometry` 使父 layout 失效並採用新值。前者在修改前也通過（`StackedLayout` 呼叫 `LayoutScheduler::invalidate` 時頁面 layout 正被借用，`invalidate()` 實際沒有執行），所以 `stacked.rs` 的改動只是改成明確的語意，沒有修改前 FAIL。
+- **Status**：**已修復**。
+  - `layout_engine::ItemLimits`（`item_max` = `qSmartMaxSize`、`widget_min`、`widget_max`）與 `item_set_geometry_with`：`setup_geom`／`setup_layout_data` 計算尺寸指標時一併快取每個 item 的 limits，排版時沿用；`item_set_geometry` 恢復 Qt 的 smart-max 與 `QWidget::setGeometry` 夾取。
+  - `BoxLayout`／`GridLayout::activate()` 在 `needs_activation` 已清除時是 no-op；`set_geometry` 只在幾何改變或仍待排版時排一次；`LayoutScheduler::activate_pending` 不再另外呼叫 `activate()`。
+  - `LayoutScheduler::request_layout`：排入重新排版，不使尺寸指標失效；三條視窗 resize 路徑與 `activate_if_dirty` 改用它。`EmptyWidget::set_geometry` 不再 `invalidate()`。box／grid／stacked 共用 `relayout_child_after_resize`：子元件尺寸改變或 layout 仍待排版時排一次，不清子 layout 的指標（待排版的 layout 本來就已清掉指標）。`activate_if_dirty` 也比對 layout 幾何與 widget 幾何是否一致。
+  - 快取命中的查詢只讀單一欄位，不複製；排版時只複製 `qGeomCalc` 會寫入的 chain／rows／cols。
+- **Measurement**（Release，本機 Windows、DPR 1.25，HUD 卡片直向 280×410；隔離 config、`refresh_interval_sec` 3600；從外部程序送 `WM_ENTERSIZEMOVE`、逐步 `SetWindowPos`、`WM_EXITSIZEMOVE`，**不移動滑鼠**；`QTRS_RESIZE_DEBUG` 報表）：
+
+| build | 啟動後 UI 執行緒滿載秒數 | resize 步數 | 每步 SetWindowPos 往返 p50／p90 ms | WM_SIZE handler p50 ms | layout p50 ms | paint p50 ms |
+|---|---|---|---|---|---|---|
+| `196e6fd`（RC-63 之前） | 12 | 10 × 8 px | 3717.6／3810.0 | 3514.1 | 1710.9 | 4.7 |
+| `45bf91a`（RC-63） | 0 | 60 × 4 px | 10.4／13.8 | 9.3 | 2.0 | 4.1 |
+| RC-63b | 0 | 60 × 4 px | 11.3／13.5 | 10.2 | 2.0 | 4.6 |
+
+  - 速度的改善來自 RC-63；RC-63b 在這個情境沒有可量出的速度差異（差距在單次量測的雜訊內），它修的是語意回歸與重複工作。
+  - 只量了合成的 `SetWindowPos`；真正以滑鼠拖曳的 DWM sizing loop 與輸入到畫面的延遲沒有量。
+- **Residual**：
+  - Label 每次繪製與每次尺寸查詢仍重新解析樣式（RC-64、RC-65）；resize 時 paint 佔 handler 約 46%。
+  - 閒置時 UI 執行緒仍有 9–14% CPU，來源未量。
+  - `StackedLayout` 仍用單一 `dirty` 旗標、`size_hint` 不快取（每次走訪頁面，頁面本身的 layout 有快取）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
