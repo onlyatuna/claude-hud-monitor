@@ -2537,6 +2537,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - G4.3.b：modal pump 的 DeferredDelete 規則與 Qt 不同；原生 modal loop 不提高 loop level。
   - callback panic 時 `insertion_offset` 不會復原（Qt 用 `CleanUp` RAII）；修改前同樣如此。
   - `UpdateRequest` 的部分 post 路徑與 `EventSender::send` 不經壓縮與 priority（scout 指出，未驗證）。
+  - 兩次 CI 失敗原因未查明，都只在 RC-68 之後的程式碼上觀察到。
+    - `test_menu_popup_posted_events` 曾在一次完整序列中失敗（run 38088237821，job「TEMP tooltip after fix (6)」，第 83 行的 assert，耗時 0.8 s，沒有記錄到實際值）。
+      - 之後在 48 次完整序列與 1,920 次單獨或接在 `test_menu_popup_focus` 之後的執行中都沒有重現（run 38091522635、38092404585）。
+      - 加上暫時追蹤後，每次選單迴圈都依序收到喚醒、`WM_TIMER`、喚醒、`WM_CANCELMODE`，前景也都取得成功。
+      - 一般 CI step 會印出完整輸出，再發生時可以看到 assert 的實際值。
+    - `test_tooltip` 曾逾時一次（120 s，run 38086030526 的 new 7）。之後在 RC-68 之後的程式碼上又跑了 348 次，都沒有重現，當時沒有擷取最後的輸出。
 
 #### RC-69 tooltip 實窗測試假設 `SetCursorPos` 一定帶來原生 `WM_MOUSEMOVE`
 
