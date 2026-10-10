@@ -739,7 +739,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G9.3.a [P1, INFERENCE]** wrapper 是 QWidget item：其 `maximum_size` 為 16777215，而巢狀 `QLayout` 回報其子項最大值之和（巢狀的 Fixed widget 在 Qt 中不能長大，wrapper 可以）；未做 diff。
   - **G9.3.b [P2]** wrapper 多一個 child widget 進入 hit-test／paint 樹；預設 policy Preferred 而非由 layout 導出；不繼承未設定的 spacing。
-  - **G9.3.c [P0, READ]** HUD 的 `header_widget` 額外被設為 `Expanding/Fixed`（`hud_window.rs:272-275`），Python 的裸 `QHBoxLayout` 沒有這個——app 層差異。
+  - **G9.3.c [P0, READ；已修復：RC-16]** HUD 的 `header_widget` 額外被設為 `Expanding/Fixed`（`hud_window.rs:272-275`），Python 的裸 `QHBoxLayout` 沒有這個——app 層差異。
 - **Test**：既有只有間接（`usage_table.rs` 的測試）。必要：harness 擴充 box-in-box／grid-in-box，對 `addLayout` 比對；`nested_layout_max_size_matches_qt`。
 - **HUD usage**：Python `addLayout`（`hud_window.py:288,345`；`provider_card.py:53,68,80,95,107`；`usage_table.py:286`）。
 
@@ -749,7 +749,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：具體常數：`BoxLayout::new` spacing 6、margin 0；`GridLayout::new` spacing 6/6、margin 0。無 sentinel、不問 style、無 parent 繼承。
 - **Known gap**
   - **G9.4.a [P1, READ]** 依賴 Qt 預設的 layout（頂層 margin 9/11、繼承 spacing）會不同。HUD 幾乎全部明確設定。
-  - **G9.4.b [P0, 已讀兩側原始碼確認]** **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)`（`provider_card.py:27`）vs Rust `root_layout.set_spacing(2)`（`provider_card.rs:159`）。程式碼無註解說明；`[INFERENCE]` 會改變卡片高度。
+  - **G9.4.b [P0, 已讀兩側原始碼確認；已修復：RC-14]** **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)`（`provider_card.py:27`）vs Rust `root_layout.set_spacing(2)`（`provider_card.rs:159`）。程式碼無註解說明；`[INFERENCE]` 會改變卡片高度。
 - **Test**：必要：`default_margins_and_spacing_match_windows_style`（PySide6 參考）；`sublayout_inherits_parent_spacing`；`provider_card_geometry_matches_python`。
 - **HUD usage**：Python `setContentsMargins`（`hud_window.py:136,144,169`；`provider_card.py:26`；`usage_table.py:115,274,385,412`）。
 
@@ -1138,7 +1138,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 **Gap**
 - **G12.3.a [P1]** QMenu 規則被解析但不消費（G8.5.f）；Rust 卡片樣式表**丟掉了** QMenu 規則，Python 卡片樣式表有（`rust/src/ui/styles.rs:128-327`）；表格模式的 QMenu 數值是從 `get_hud_stylesheet` 複製的數字（`rust/src/ui/tray_icon.rs:258-278`）。
-- **G12.3.b [P0, READ]** Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px`（`styles.rs:192,291`），Python 沒有此屬性（`styles.py:116-124`）。
+- **G12.3.b [P0, READ；已修復：RC-15]** Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px`（`styles.rs:192,291`），Python 沒有此屬性（`styles.py:116-124`）。
 - **G12.3.c [P1, READ]** 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_solid`；Rust 不接受 `vibrant`，一律以 `panel_bg_vibrant` 自繪（`styles.rs:371`、`hud_window.rs:88-92`）。
 - **G12.3.d [P1]** 型別比對無繼承；Label 的 `pseudo_states` 為空（`:hover/:disabled` 對 label 不成立）。
 - **G12.3.e [P2]** `font-family` 清單以一個原始字串存、查找時才拆；generic（`sans-serif`/`monospace`）被跳過而非映射到系統字型，`'Consolas', monospace` 在沒有 Consolas 時沒有等寬退路。**Qt 依據**：Linux 的 `QFontconfigDatabase::resolveFontFamilyAlias` 把家族字串交給 `FcConfigSubstitute`（`qfontconfigdatabase.cpp:970-995`），`fallbacksForFamily` 另把 style hint 轉成 fontconfig 的 `sans-serif`／`monospace` 等（`getFcFamilyForStyleHint`，`:347-367`）；macOS 無此家族時依 style hint 取 Menlo 等（`qcoretextfontdatabase.mm:625-640`）；Windows 取 Courier New 等（`qwindowsfontdatabasebase.cpp:939-961`）。與 G12.6.d 同一根因（字型來源與缺字型規則），一起處理，不單獨修。CSS 的 generic 名稱在 Qt 內經哪一條路徑變成 style hint，尚未追到 `qcssparser.cpp`／`qstylesheetstyle.cpp`，`[INFERENCE]`。
@@ -1236,7 +1236,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.8.f | P1, RAN；已修復：RC-23 | 應用 | 視窗大小常數：橫向最小／預設高 Python 125／145，Rust 130／152；直向最小 Python 320、預設 410，Rust 463（由 layout 推導）／490。**已修復：RC-23**。Python 來源 `hud_window.py:31-35`（`MIN_HORIZ 540×125`、`DEF_HORIZ 690×145`、`MIN_VERT 250×320`、`DEF_VERT 280×410`）與 `config_manager.py:15-17`；`_apply_cards_layout`（`:325-354`）每次 `setMinimumSize(MIN)`，存檔值低於 MIN 才退回 DEF（不是夾到 MIN）。PySide6 實測（新 config、DPR 1.25）：橫向 `size` 690×145、`minimumSize` 540×125；直向 280×410、250×320；layout 自身最小值 435×151／265×395，**被明確的 `setMinimumSize` 蓋過**（視窗可小於內容需求）。根因＝app 常數（`config.rs`）：Rust 把直向最小高由 layout 內容推導（463，`vertical_layout_min_height()`），預設 152／490 為自訂值；`sanitize` 與 `reset_geometry` 用同一組常數，所以 Python 保留的存檔尺寸（橫向 125–129、直向 320–462）被 Rust 重設。修復：`config.rs` 常數改為 Python 值（125／145、320／410），刪除推導用的 `vertical_layout_min_height()` 與其 6 個專用常數。未改 qtrs。測試（修改前 FAIL）：`config::tests::test_config_defaults`（490 vs 410）、`test_sanitize_keeps_stored_sizes_pyside6_keeps`（152,490 vs 125,320）、`hud_window::tests::test_window_default_and_minimum_sizes_match_pyside6`（690×152 vs 690×145）。已存的 geometry：≥ 新最小的值全部保留；只有「舊 Rust 預設 152／490 以外且 < 新最小」才會被重設，而新最小比舊的低，所以沒有原本有效的存檔值變成無效。 |
 | G12.8.g | P1, RAN；已修復：RC-19 | **qtrs** | QSS `min/max-width/height` 盒模型：Qt 作用於 content＋padding＋border（`qstylesheetstyle.cpp:2603-2611`）；qtrs 當總尺寸。`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18 |
 | G12.8.h | P1, READ；已修復：RC-19 | **qtrs** | `Label::size_hint` 以 `max-height`（否則 `min-height`）當高度 hint（`label.rs`），Qt 沒有此規則 |
-| G12.8.i | P1, RAN | **qtrs** | **已修復：RC-20**（預設字型的數值差屬 Application font，未處理）。`QProgressBar`：Python `sizeHint` 91×5、`minimumSizeHint` 91×17；qtrs 160×5、0×5 |
+| G12.8.i | P1, RAN；已修復：RC-20 | **qtrs** | **已修復：RC-20**（預設字型的數值差屬 Application font，未處理）。`QProgressBar`：Python `sizeHint` 91×5、`minimumSizeHint` 91×17；qtrs 160×5、0×5 |
 | G12.8.j | P1, RAN；已修復：RC-21 | **qtrs** | 文字寬度 1 px：`WEEKLY 7D` Python 59，qtrs 59.589 → `ceil` 60；`AI AGENT HUD (3-IN-1)` 144 vs 144.107 → 145。**已修復：RC-21**。根因**不是取整規則**：`QLabel` 的 `font-family: 'Segoe UI', 'SF Pro Display', 'Microsoft JhengHei', sans-serif` 是字型家族清單，qtrs 的 QSS 解析把整串當成單一家族名，找不到而退回別的字型（量到 59.589／144.107）。`[QT-SRC qcssparser.cpp:1252-1272]` `setFontFamilyFromValues` 以逗號切開並呼叫 `QFont::setFamilies`，字型庫依序取第一個已安裝的家族（Segoe UI）。整數轉換本身 Qt 與 qtrs 一致：`QLabelPrivate::sizeForWidth` 走 `fm.boundingRect(...)`→`rb.toAlignedRect()`（`qlabel.cpp:609`、`qfontmetrics.cpp:735-749`），qtrs 對寬度取 `ceil`。`ceil` 未改。修復：`QCssValue::FontFamilies`（解析器）、`ResolvedStyle::font_families`／`font_family()`（取第一個已安裝家族，否則第一個）。測試 `qtrs-widgets/tests/test_label_text_metric_rounding.rs`（HUD 實際樣式表，PySide6 oracle）：DPR 1.25 為 59／144／88、DPR 1.0 為 58／142／80；修復前 FAIL（`[60,145,88]` 對 `[59,144,88]`；`[59,143,83]` 對 `[58,142,80]`），修復後 PASS。HUD 幾何稽核 `geometry_audit` 重跑：`claude.m2_label` sizeHint 59×14 與 Python 相同（修復前 60×14）。 |
 | G12.8.k | P2, RAN | **qtrs** | Button 的原生路徑判準與原生邊框：QSS 只有 `min-width`（無 padding／border）時 Python `QPushButton` 走原生 hint（81×24 @1.25、98×28 @1.0）、`minimumSize` 含原生邊框（22 vs 18）；qtrs 判準 `padding/border/min_width/max_height` 皆無才走原生，且原生路徑的 hint 是 18×15。HUD 沒有這種按鈕（`LayoutToggleBtn` 有 padding 與 border） |
 | G12.8.l | P2, RAN | **qtrs** | `Frame` 無內容時 `size_hint`：Python `QFrame.sizeHint()` 為 (-1,-1)，qtrs 為 100×30（`frame.rs`，`None => Size::new(100, 30)`），`minimumSizeHint` 0×0。HUD 的分隔線 `min == max` 所以不受影響 |
@@ -1419,7 +1419,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.7.b | P2, READ | 無擁有者檢查 |
 | G7.9.a | P2, READ；P0 主張已被讀碼推翻，待驗證 | 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new` |
 | G7.9.b | P1 | 發佈設定 `panic = "abort"` |
-| G8.1.a | P1, READ | **show／hide 不自動重排**。**已修復：RC-26** |
+| G8.1.a | P1, READ；已修復：RC-26 | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
 | G8.1.d | P1, READ；已修復：RC-63、RC-63b、RC-63c、RC-63d | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
@@ -1479,7 +1479,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.3.c | P0, READ；已修復：RC-16 | HUD 的 `header_widget` 額外被設為 `Expanding/Fixed` |
 | G9.4.a | P1, READ | 依賴 Qt 預設的 layout |
 | G9.4.b | P0, 已讀兩側原始碼確認；已修復：RC-14 | **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)` |
-| G9.5.a | P1, READ | 無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout。**已修復：RC-28** |
+| G9.5.a | P1, READ；已修復：RC-28 | 無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout。**已修復：RC-28** |
 | G9.5.b | P1, READ | `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_propert |
 | G9.5.c | P2 | setter 立即重排與 Qt 壓縮不同 |
 | G9.5.d | P1 | 頂層最小尺寸不從 layout 導出 |
@@ -1519,7 +1519,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.1.a | P2 | 無 `set_window_flags` |
 | G11.1.b | P1 | 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT` |
 | G11.1.c | P2, READ | X11／Wayland／Cocoa 後端是模擬，`is_active`／`TOOLTIP` 未對真實系統驗證 |
-| G11.1.d | P1, READ | `Application::active_window()` 從不被設定，無 `ActivationChange`／`isActiveWindow`（`is_active` 尚未接到 toolkit 層）。**已修復：RC-27**（`ActivationChange` 等見 C11.1） |
+| G11.1.d | P1, READ；已修復：RC-27 | `Application::active_window()` 從不被設定，無 `ActivationChange`／`isActiveWindow`（`is_active` 尚未接到 toolkit 層）。**已修復：RC-27**（`ActivationChange` 等見 C11.1） |
 | G11.2.a | P1, READ；已修復：RC-06 | 無 `Window::is_visible()` |
 | G11.2.b | P0, READ；已修復：RC-06 | `CloseRequest` 在 `WindowEventHandler` 被 `_ => {}` 吞掉 |
 | G11.2.c | P0, READ；已修復：RC-06 | 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust  |
@@ -1613,7 +1613,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.m | P1 | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu |
 | G12.5.n | P1 | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 |
 | G12.5.o | P1 | QMenu 外觀為寫死數值，非 QSS |
-| G12.5.p | P1 | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** |
+| G12.5.p | P1；已修復：RC-25 | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** |
 | G12.5.q | P1；已修復：RC-29 | `UsageDial` 最小尺寸 0 vs 84 |
 | G12.5.r | P1 | 版面切換：`StackedWidget` vs 重建 |
 | G12.5.s | P0, READ；= G8.5.d；已修復：RC-10 | `Window::set_style_sheet` 為 app 全域 |
@@ -1633,7 +1633,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.8.f | P1, RAN；已修復：RC-23 | 視窗大小常數：橫向最小／預設高 Python 125／145，Rust 130／152；直向最小 Python 320、預設 410，Rust 463（由 layout 推導）／490。**已修復：RC-23**。Python 來源 `hud_window.py:31-35`（`MIN_HORIZ 540×125`、`DEF_HORIZ 690×145`、`MIN_VERT 250×320`、`DEF_VERT 280×410`）與 `config_manager.py:15-17`；`_apply_cards_layout`（`:325-354`）每次 `setMinimumSize(MIN)`，存檔值低於 MIN 才退回 DEF（不是夾到 MIN）。PySide6 實測（新 config、DPR 1.25）：橫向 `size` 690×145、`minimumSize` 540×125；直向 280×410、250×320；layout 自身最小值 435×151／265×395，**被明確的 `setMinimumSize` 蓋過**（視窗可小於內容需求）。根因＝app 常數（`config.rs`）：Rust 把直向最小高由 layout 內容推導（463，`vertical_layout_min_height()`），預設 152／490 為自訂值；`sanitize` 與 `reset_geometry` 用同一組常數，所以 Python 保留的存檔尺寸（橫向 125–129、直向 320–462）被 Rust 重設。修復：`config.rs` 常數改為 Python 值（125／145、320／410），刪除推導用的 `vertical_layout_min_height()` 與其 6 個專用常數。未改 qtrs。測試（修改前 FAIL）：`config::tests::test_config_defaults`（490 vs 410）、`test_sanitize_keeps_stored_sizes_pyside6_keeps`（152,490 vs 125,320）、`hud_window::tests::test_window_default_and_minimum_sizes_match_pyside6`（690×152 vs 690×145）。已存的 geometry：≥ 新最小的值全部保留；只有「舊 Rust 預設 152／490 以外且 < 新最小」才會被重設，而新最小比舊的低，所以沒有原本有效的存檔值變成無效。 |
 | G12.8.g | P1, RAN；已修復：RC-19 | QSS `min/max-width/height` 盒模型：Qt 作用於 content＋padding＋border（`qstylesheetstyle.cpp:2603-2611`）；qtrs 當總尺寸。`layout_toggle_btn` 最大高 Python 22 vs Rust 18、最小寬 28 vs 18 |
 | G12.8.h | P1, READ；已修復：RC-19 | `Label::size_hint` 以 `max-height`（否則 `min-height`）當高度 hint（`label.rs`），Qt 沒有此規則 |
-| G12.8.i | P1, RAN | **已修復：RC-20**（預設字型的數值差屬 Application font，未處理）。`QProgressBar`：Python `sizeHint` 91×5、`minimumSizeHint` 91×17；qtrs 160×5、0×5 |
+| G12.8.i | P1, RAN；已修復：RC-20 | **已修復：RC-20**（預設字型的數值差屬 Application font，未處理）。`QProgressBar`：Python `sizeHint` 91×5、`minimumSizeHint` 91×17；qtrs 160×5、0×5 |
 | G12.8.j | P1, RAN；已修復：RC-21 | 文字寬度 1 px：`WEEKLY 7D` Python 59，qtrs 59.589 → `ceil` 60；`AI AGENT HUD (3-IN-1)` 144 vs 144.107 → 145。**已修復：RC-21**。根因**不是取整規則**：`QLabel` 的 `font-family: 'Segoe UI', 'SF Pro Display', 'Microsoft JhengHei', sans-serif` 是字型家族清單，qtrs 的 QSS 解析把整串當成單一家族名，找不到而退回別的字型（量到 59.589／144.107）。`[QT-SRC qcssparser.cpp:1252-1272]` `setFontFamilyFromValues` 以逗號切開並呼叫 `QFont::setFamilies`，字型庫依序取第一個已安裝的家族（Segoe UI）。整數轉換本身 Qt 與 qtrs 一致：`QLabelPrivate::sizeForWidth` 走 `fm.boundingRect(...)`→`rb.toAlignedRect()`（`qlabel.cpp:609`、`qfontmetrics.cpp:735-749`），qtrs 對寬度取 `ceil`。`ceil` 未改。修復：`QCssValue::FontFamilies`（解析器）、`ResolvedStyle::font_families`／`font_family()`（取第一個已安裝家族，否則第一個）。測試 `qtrs-widgets/tests/test_label_text_metric_rounding.rs`（HUD 實際樣式表，PySide6 oracle）：DPR 1.25 為 59／144／88、DPR 1.0 為 58／142／80；修復前 FAIL（`[60,145,88]` 對 `[59,144,88]`；`[59,143,83]` 對 `[58,142,80]`），修復後 PASS。HUD 幾何稽核 `geometry_audit` 重跑：`claude.m2_label` sizeHint 59×14 與 Python 相同（修復前 60×14）。 |
 | G12.8.k | P2, RAN | Button 的原生路徑判準與原生邊框：QSS 只有 `min-width`（無 padding／border）時 Python `QPushButton` 走原生 hint（81×24 @1.25、98×28 @1.0）、`minimumSize` 含原生邊框（22 vs 18）；qtrs 判準 `padding/border/min_width/max_height` 皆無才走原生，且原生路徑的 hint 是 18×15。HUD 沒有這種按鈕（`LayoutToggleBtn` 有 padding 與 border） |
 | G12.8.l | P2, RAN | `Frame` 無內容時 `size_hint`：Python `QFrame.sizeHint()` 為 (-1,-1)，qtrs 為 100×30（`frame.rs`，`None => Size::new(100, 30)`），`minimumSizeHint` 0×0。HUD 的分隔線 `min == max` 所以不受影響 |
@@ -1870,6 +1870,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **修改**：`PlatformWindow::device_pixel_ratio()`（**必要 trait 方法**，對應 `QPlatformWindow::devicePixelRatio`；Windows = `GetDpiForWindow`）；`RenderState.device_pixel_ratio` 為單一快取；`Window::new` 建立後讀回視窗 DPR，與放置用的主螢幕 DPR 不同時，保持原生原點並以視窗 DPR 重設原生尺寸；`do_render_and_present` 改收 `dpr` 參數；`Window::set_geometry`、`set_geometry_silent`、`present_custom`、`present_custom_at`、兩條 `DpiChanged` 路徑與 trace 全用該快取；公開 `Window::device_pixel_ratio()`；`NativeWindow::present_region` 的 `target_pos` 與 `calc_frameless_edge` 改用 `get_window_dpr(hwnd)`；`menu.rs` 的游標換算與 `present_popup` 改用彈出視窗的 DPR。
   - **驗證**：新測試 4 項 PASS；qtrs workspace 與主 crate 結果見提交說明。**沒有做像素驗證**，也**沒有在異 DPI 實機驗證**（需人工：把視窗拖到不同縮放的螢幕，確認 backing store 尺寸與內容不被縮放兩次）。
   - **未涵蓋**：G10.7.b、G10.7.d–i、G11.8.a。
+  - **實機驗證嘗試（2026-10-10）**：開發機只有一台螢幕（`GetDpiForMonitor` 120 dpi，縮放 1.25），GitHub Actions runner 亦無多螢幕；異 DPI 實機驗證**仍未完成**，需要接上縮放比例不同的第二台螢幕的人工驗證（或安裝虛擬顯示器驅動，需系統管理員權限，未做）。
 
 #### RC-09 Presenter 尊重 opacity
 - **Contract gaps**：G11.5.a（= G12.5.t）；新增 G11.5.c（test gap）。
@@ -1889,6 +1890,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **未動**：presenter 選擇（G11.5.g，production DComp 政策未決）。
   - **未涵蓋**：G11.5.c（既有 `test_dcomp_*` 仍靜默 skip）、G11.5.e、G11.5.f、G11.5.g。
   - **沒有做像素驗證。**
+  - **實機驗證嘗試（2026-10-10）**：在 GitHub Actions `windows-latest` 以 `--ignored` 執行 `dcomp_window_presents_with_the_window_opacity`（run 38056587742，暫時步驟，未合併）：失敗於 `this machine selected a presenter other than DirectComposition`。開發機同樣選不到 DComp。DComp 端對端驗證**仍未完成**，需要有可用 DirectComposition（DXGI 1.2 以上 GPU）的 Windows 機器。
 
 #### RC-10 樣式範圍與通知
 - **Contract gaps**：G8.5.d（= G12.5.s）。相關新增：G8.5.j、G8.5.k、G8.5.l；G8.5.i 的 (2)(3) 部分。
@@ -2521,5 +2523,5 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | Gap | 處置 | 理由 |
 |---|---|---|
 | G7.9.a | 降為 **P2，待驗證**（非 `D`） | 讀碼推翻 P0 主張：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於第一個 worker／熱鍵執行緒（`hud_window.rs:408`、`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`）在註冊前啟動，但只寫 atomic。**不等於所有 interleaving 皆安全**；它是 RC-04 的一個假設性表現，RC-04 修復後自然消除 |
-| G9.6.a | 降為 **P1**（非 `D`） | Python HUD 不使用 `QStackedLayout`（重建 layout）；Qt 的 `sizeHint`／`minimumSize` 取**所有頁面**的最大值 `[QT-SRC qstackedlayout.cpp:417-448]`，qtrs 只看當前頁（`stacked.rs:123-147`）。與 Qt 不同是事實，但目前 HUD 不依賴；**P0 階段不修**，待 qtrs 的 API 範圍擴大再處理。**已修復：RC-24** |
+| G9.6.a | 降為 **P1**（非 `D`）；已修復：RC-24 | Python HUD 不使用 `QStackedLayout`（重建 layout）；Qt 的 `sizeHint`／`minimumSize` 取**所有頁面**的最大值 `[QT-SRC qstackedlayout.cpp:417-448]`，qtrs 只看當前頁（`stacked.rs:123-147`）。與 Qt 不同是事實，但目前 HUD 不依賴；**P0 階段不修**，待 qtrs 的 API 範圍擴大再處理。**已修復：RC-24** |
 | G12.5.d 的 timer 部分（已結案：沿用既有 `ResizeDebouncer`，未新增 timer） | 見 RC-17 | 不得為了 parity 而新增 timer／debounce，除非先證明它不是在補 qtrs 缺陷 |
