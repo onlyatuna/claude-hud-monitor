@@ -1,3 +1,4 @@
+#![cfg(target_os = "windows")]
 use qtrs_gui::geometry::primitives::PointF;
 use qtrs_gui::paint::painter::{Painter, Pen};
 use qtrs_gui::paint::pixmap::Pixmap;
@@ -48,19 +49,16 @@ fn test_color_emoji_renders_multi_color_pixels_aligned_with_qt6() {
         }
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        println!(
-            "Total colored pixels: {}, Blue circle pixels: {}",
-            colored_pixels, blue_colored_pixels
-        );
-        assert!(
-            colored_pixels > 0,
-            "Emoji must render multi-color pixels, not be flattened into monochrome text color!"
-        );
-        assert!(
-            blue_colored_pixels > 0,
-            "Refresh emoji 🔄 must render its signature blue background from Segoe UI Emoji COLR table!"
-        );
-    }
+    println!(
+        "Total colored pixels: {}, Blue circle pixels: {}",
+        colored_pixels, blue_colored_pixels
+    );
+    assert!(
+        colored_pixels > 0,
+        "Emoji must render multi-color pixels, not be flattened into monochrome text color!"
+    );
+    assert!(
+        blue_colored_pixels > 0,
+        "Refresh emoji 🔄 must render its signature blue background from Segoe UI Emoji COLR table!"
+    );
 }

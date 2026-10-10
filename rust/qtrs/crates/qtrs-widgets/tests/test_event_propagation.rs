@@ -11,7 +11,7 @@
 
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
-use qtrs_gui::geometry::primitives::{Point, Rect};
+use qtrs_gui::geometry::primitives::Rect;
 use qtrs_widgets::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -455,7 +455,7 @@ fn wheel_over_a_label_inside_a_scroll_area_scrolls_it() {
 #[cfg(windows)]
 mod window_level {
     use super::*;
-    use qtrs_gui::geometry::primitives::Rect;
+    use qtrs_gui::geometry::primitives::{Point, Rect};
     use qtrs_platform::WindowFlags;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{

@@ -364,6 +364,7 @@ fn test_window_system_event_handler_resize() {
     assert!(win.backing_store().physical_height() > initial_store_h);
 }
 
+#[cfg(windows)]
 #[test]
 fn test_geometry_change_event_delivery() {
     use qtrs_gui::geometry::primitives::Size;
@@ -388,22 +389,20 @@ fn test_geometry_change_event_delivery() {
         rh.store(size.height, Ordering::SeqCst);
     });
 
-    #[cfg(windows)]
-    {
-        let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
-        handle_geometry_change(Delivery::Default, hwnd, Rect::new(10, 20, 480, 360));
+    let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
+    handle_geometry_change(Delivery::Default, hwnd, Rect::new(10, 20, 480, 360));
 
-        assert_eq!(win.geometry().x, 10);
-        assert_eq!(win.geometry().y, 20);
-        assert_eq!(win.geometry().width, 480);
-        assert_eq!(win.geometry().height, 360);
-        assert_eq!(resized_w.load(Ordering::SeqCst), 480);
-        assert_eq!(resized_h.load(Ordering::SeqCst), 360);
-        assert!(win.backing_store().physical_width() > initial_store_w);
-        assert!(win.backing_store().physical_height() > initial_store_h);
-    }
+    assert_eq!(win.geometry().x, 10);
+    assert_eq!(win.geometry().y, 20);
+    assert_eq!(win.geometry().width, 480);
+    assert_eq!(win.geometry().height, 360);
+    assert_eq!(resized_w.load(Ordering::SeqCst), 480);
+    assert_eq!(resized_h.load(Ordering::SeqCst), 360);
+    assert!(win.backing_store().physical_width() > initial_store_w);
+    assert!(win.backing_store().physical_height() > initial_store_h);
 }
 
+#[cfg(windows)]
 #[test]
 fn test_lazy_backing_store_resize_observable_ordering() {
     use qtrs_gui::geometry::primitives::{Rect, Size};
@@ -433,37 +432,35 @@ fn test_lazy_backing_store_resize_observable_ordering() {
         sh_cb.store(bs.physical_height(), Ordering::SeqCst);
     });
 
-    #[cfg(windows)]
-    {
-        let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
-        // Dispatch geometry change (600x450)
-        handle_geometry_change(Delivery::Default, hwnd, Rect::new(0, 0, 600, 450));
+    let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
+    // Dispatch geometry change (600x450)
+    handle_geometry_change(Delivery::Default, hwnd, Rect::new(0, 0, 600, 450));
 
-        // 1. In callback: backing store was STILL at initial size (300x200 scaled)!
-        assert_eq!(
-            store_w_during_callback.load(Ordering::SeqCst),
-            initial_store_w,
-            "Backing store must NOT be reallocated before resize callback runs!"
-        );
-        assert_eq!(
-            store_h_during_callback.load(Ordering::SeqCst),
-            initial_store_h,
-            "Backing store must NOT be reallocated before resize callback runs!"
-        );
+    // 1. In callback: backing store was STILL at initial size (300x200 scaled)!
+    assert_eq!(
+        store_w_during_callback.load(Ordering::SeqCst),
+        initial_store_w,
+        "Backing store must NOT be reallocated before resize callback runs!"
+    );
+    assert_eq!(
+        store_h_during_callback.load(Ordering::SeqCst),
+        initial_store_h,
+        "Backing store must NOT be reallocated before resize callback runs!"
+    );
 
-        // 2. After event handling / paintAndFlush: backing store was lazily resized to the new size!
-        assert!(
-            win.backing_store().physical_width() > initial_store_w,
-            "Backing store must be resized after paintAndFlush completes"
-        );
-        assert!(
-            win.backing_store().physical_height() > initial_store_h,
-            "Backing store must be resized after paintAndFlush completes"
-        );
-    }
+    // 2. After event handling / paintAndFlush: backing store was lazily resized to the new size!
+    assert!(
+        win.backing_store().physical_width() > initial_store_w,
+        "Backing store must be resized after paintAndFlush completes"
+    );
+    assert!(
+        win.backing_store().physical_height() > initial_store_h,
+        "Backing store must be resized after paintAndFlush completes"
+    );
 }
 
 
+#[cfg(windows)]
 #[test]
 fn test_resize_event_observable_ordering_before_layout_activation() {
     use qtrs_gui::geometry::primitives::{Rect, Size};
@@ -508,29 +505,26 @@ fn test_resize_event_observable_ordering_before_layout_activation() {
         cb_order_clone.store(order, Ordering::SeqCst);
     });
 
-    #[cfg(windows)]
-    {
-        let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
-        // Resize window to 600x500
-        handle_geometry_change(Delivery::Default, hwnd, Rect::new(0, 0, 600, 500));
+    let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
+    // Resize window to 600x500
+    handle_geometry_change(Delivery::Default, hwnd, Rect::new(0, 0, 600, 500));
 
-        let win_cb = cb_order.load(Ordering::SeqCst);
-        let child_res = child_resize_order.load(Ordering::SeqCst);
+    let win_cb = cb_order.load(Ordering::SeqCst);
+    let child_res = child_resize_order.load(Ordering::SeqCst);
 
-        // Assert: Window resize callback was called BEFORE child resize event!
-        assert!(
-            win_cb >= 0,
-            "Window resize callback must have been executed"
-        );
-        assert!(
-            child_res >= 0,
-            "Child resize event must have been executed via layout activation"
-        );
-        assert!(
-            win_cb < child_res,
-            "Window resize callback (order {}) must execute BEFORE child resize event (order {})",
-            win_cb,
-            child_res
-        );
-    }
+    // Assert: Window resize callback was called BEFORE child resize event!
+    assert!(
+        win_cb >= 0,
+        "Window resize callback must have been executed"
+    );
+    assert!(
+        child_res >= 0,
+        "Child resize event must have been executed via layout activation"
+    );
+    assert!(
+        win_cb < child_res,
+        "Window resize callback (order {}) must execute BEFORE child resize event (order {})",
+        win_cb,
+        child_res
+    );
 }

@@ -85,7 +85,7 @@ fn test_vertical_progress_bar_min_max_are_not_transposed() {
 /// Expected numbers are PySide6 measurements (DPR 1.25 and 1.0 agree).
 fn limits(qss: &str) -> ([i32; 2], [i32; 2], [i32; 2], [i32; 2]) {
     qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
-    let mut p = ProgressBar::new();
+    let p = ProgressBar::new();
     p.set_style_sheet(qss);
     let (mn, mx, h, mh) = (p.minimum_size(), p.maximum_size(), p.size_hint(), p.minimum_size_hint());
     ([mn.width, mn.height], [mx.width, mx.height], [h.width, h.height], [mh.width, mh.height])

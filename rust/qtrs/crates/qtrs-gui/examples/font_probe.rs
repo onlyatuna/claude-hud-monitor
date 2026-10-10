@@ -6,8 +6,9 @@
 //! requested family, whether it is INSTALLED, SUBSTITUTED or MISSING, then the numbers the Windows
 //! layout tests depend on, then every installed family.
 //!
-//! On GitHub Actions each non-installed family is also emitted as a `::warning` annotation, so the
-//! missing dependencies show on the run page. Output only: this never fails the build.
+//! On GitHub Actions each non-installed family is also emitted as a `::notice` annotation, so the
+//! missing dependencies show on the run page without counting as warnings: the Windows and macOS
+//! system families cannot be installed on the other runners. Output only: this never fails the build.
 //!
 //! Run by the `font-probe` job of `.github/workflows/ci.yml` on every OS.
 use qtrs_gui::text::font::{Font, FontWeight};
@@ -165,7 +166,7 @@ fn main() {
         let kind = if *s == Status::Substituted { "substituted by Segoe UI/Arial" } else { "missing, no substitute" };
         println!("NOT INSTALLED: {family} ({kind}) <- {who}");
         if ci {
-            println!("::warning title=font not installed ({})::{family}: {kind}. Needed by: {who}", std::env::consts::OS);
+            println!("::notice title=font not installed ({})::{family}: {kind}. Needed by: {who}", std::env::consts::OS);
         }
     }
 }

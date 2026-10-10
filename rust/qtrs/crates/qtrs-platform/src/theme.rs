@@ -297,7 +297,6 @@ impl PlatformTheme for GenericTheme {
 
 pub mod cocoa_theme {
     use super::*;
-    use crate::objc_runtime::{Class, ObjcMsg, Sel};
 
     pub struct CocoaTheme {
         cached_scheme: AtomicU8,
@@ -323,7 +322,7 @@ pub mod cocoa_theme {
         /// effective appearance's best match among Aqua and DarkAqua is DarkAqua; Light otherwise.
         #[cfg(target_os = "macos")]
         pub fn query_color_scheme() -> ColorScheme {
-            use crate::objc_runtime::{nsstring_from_str, Id};
+            use crate::objc_runtime::{nsstring_from_str, Class, Id, ObjcMsg, Sel};
             let nsapp_class = Class::get("NSApplication").unwrap_or(Class::NIL);
             let nsapp = ObjcMsg::send_class_0(nsapp_class, Sel::register("sharedApplication"));
             let appearance = ObjcMsg::send_0(nsapp, Sel::register("effectiveAppearance"));
