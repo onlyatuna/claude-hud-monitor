@@ -452,6 +452,11 @@ mod checks {
             run: window_key_status,
         },
         CheckDef {
+            name: "app_activation_policy",
+            origin: "new: QCocoaIntegration makes an executable without LSUIElement a regular app",
+            run: app_activation_policy,
+        },
+        CheckDef {
             name: "window_opacity_min_size_move",
             origin: "test_platform_modern_features::test_platform_window_move_resize_opacity_minsize",
             run: window_opacity_min_size_move,
@@ -731,14 +736,42 @@ mod checks {
         t.expect(!yes(w, "isVisible"), "[window isVisible] is NO after hide");
     }
 
+    /// `QTest::qWaitForWindowActive`: processes events until `done` or `timeout` passes.
+    fn wait_until(timeout: std::time::Duration, done: impl Fn() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if done() {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            qtrs_core::application::CoreApplication::process_events(false);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn app_state(t: &Recorder) {
+        let app: Id = send(class("NSApplication"), "sharedApplication");
+        let policy: isize = send(app, "activationPolicy");
+        t.info(&format!(
+            "[NSApp isActive] = {}, [NSApp activationPolicy] = {policy}",
+            yes(app, "isActive")
+        ));
+    }
+
     fn window_key_status(t: &mut Recorder) {
+        // QGuiApplication creates the platform integration (QCocoaIntegration) with itself.
+        let _integration = qtrs_platform::platform();
         let geometry = Rect::new(120, 120, 160, 80);
         let normal = window("n", geometry, WindowFlags::NORMAL);
         t.expect(!normal.is_active(), "not active before show");
         normal.show();
+        let became_key = wait_until(std::time::Duration::from_secs(5), || normal.is_active());
         t.expect(
-            normal.is_active(),
-            "makeKeyAndOrderFront: makes it the key window ([window isKeyWindow])",
+            became_key,
+            "after makeKeyAndOrderFront: and up to 5 s of event processing, the window is the \
+             key window ([window isKeyWindow])",
         );
         normal.hide();
         t.expect(!normal.is_active(), "orderOut: resigns key");
@@ -754,8 +787,23 @@ mod checks {
             !tip.is_active(),
             "showing a tooltip does not take key status",
         );
+        app_state(t);
+    }
+
+    /// Qt's `QCocoaIntegration` constructor calls `qt_mac_transformProccessToForegroundApplication`
+    /// (qcocoaintegration.mm:140-147), which sets `NSApplicationActivationPolicyRegular` unless
+    /// the Info.plist sets `LSUIElement` or `LSBackgroundOnly` (qcocoahelpers.mm:138-180). This
+    /// executable has no Info.plist.
+    fn app_activation_policy(t: &mut Recorder) {
+        let _integration = qtrs_platform::platform();
         let app: Id = send(class("NSApplication"), "sharedApplication");
-        t.info(&format!("[NSApp isActive] = {}", yes(app, "isActive")));
+        let policy: isize = send(app, "activationPolicy");
+        t.eq(
+            "[NSApp activationPolicy] after the integration exists (0 = Regular)",
+            policy,
+            0,
+        );
+        app_state(t);
     }
 
     fn window_opacity_min_size_move(t: &mut Recorder) {

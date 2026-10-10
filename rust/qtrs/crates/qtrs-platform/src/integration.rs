@@ -338,9 +338,110 @@ pub mod cocoa {
 
     impl Default for CocoaPlatformIntegration {
         fn default() -> Self {
+            #[cfg(target_os = "macos")]
+            if !Self::is_headless() {
+                init_ns_application();
+            }
             Self {
                 screen_changed_signal: Signal::new(),
                 theme: Arc::new(CocoaTheme::default()),
+            }
+        }
+    }
+
+    /// The `NSApplication` setup of Qt's `QCocoaIntegration` constructor
+    /// (qcocoaintegration.mm:137-161): make the process a foreground application unless
+    /// `QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM` is set, and install the application
+    /// delegate, which activates the application once it has launched.
+    #[cfg(target_os = "macos")]
+    fn init_ns_application() {
+        use crate::objc_runtime::{objc_get_class, qcocoa_application_delegate, ObjcMsg, Sel};
+        let app = ObjcMsg::send_class_0(
+            objc_get_class("NSApplication"),
+            Sel::register("sharedApplication"),
+        );
+        if std::env::var_os("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM")
+            .is_none_or(|value| value.is_empty())
+        {
+            transform_process_to_foreground_application(app);
+        }
+        ObjcMsg::send_id(
+            app,
+            Sel::register("setDelegate:"),
+            qcocoa_application_delegate(),
+        );
+    }
+
+    /// `qt_mac_transformProccessToForegroundApplication` (qcocoahelpers.mm:138-180): the
+    /// activation policy becomes `NSApplicationActivationPolicyRegular` unless the Info.plist sets
+    /// `LSUIElement` or `LSBackgroundOnly` to a true value.
+    #[cfg(target_os = "macos")]
+    fn transform_process_to_foreground_application(app: crate::objc_runtime::Id) {
+        use crate::objc_runtime::{ObjcMsg, Sel};
+        let set = |key| info_plist_int(key).is_some_and(|value| value != 0);
+        if !set("LSUIElement") && !set("LSBackgroundOnly") {
+            // NSApplicationActivationPolicyRegular
+            ObjcMsg::send_int(app, Sel::register("setActivationPolicy:"), 0);
+        }
+    }
+
+    /// The main bundle's Info.plist value for `key` as an integer, read the way Qt does: a string
+    /// is parsed as a number (0 if it is not one), a boolean is 0 or 1, a number is truncated to
+    /// `int`. `None` if the key is absent or has another type.
+    #[cfg(target_os = "macos")]
+    fn info_plist_int(key: &str) -> Option<i64> {
+        use crate::objc_runtime::{nsstring_from_str, ObjcMsg, Sel};
+        use std::ffi::{c_char, c_void, CStr};
+
+        #[link(name = "CoreFoundation", kind = "framework")]
+        extern "C" {
+            fn CFBundleGetMainBundle() -> *mut c_void;
+            fn CFBundleGetValueForInfoDictionaryKey(
+                bundle: *mut c_void,
+                key: *const c_void,
+            ) -> *const c_void;
+            fn CFGetTypeID(object: *const c_void) -> usize;
+            fn CFStringGetTypeID() -> usize;
+            fn CFBooleanGetTypeID() -> usize;
+            fn CFNumberGetTypeID() -> usize;
+            fn CFBooleanGetValue(boolean: *const c_void) -> u8;
+            fn CFNumberGetValue(number: *const c_void, kind: isize, value: *mut c_void) -> u8;
+        }
+        const K_CF_NUMBER_INT_TYPE: isize = 9;
+
+        let ns_key = nsstring_from_str(key);
+        let value =
+            unsafe { CFBundleGetValueForInfoDictionaryKey(CFBundleGetMainBundle(), ns_key.0) };
+        ObjcMsg::send_0(ns_key, Sel::register("release"));
+        if value.is_null() {
+            return None;
+        }
+        unsafe {
+            let kind = CFGetTypeID(value);
+            if kind == CFStringGetTypeID() {
+                let utf8 = ObjcMsg::send_0(
+                    crate::objc_runtime::Id(value as *mut c_void),
+                    Sel::register("UTF8String"),
+                )
+                .0 as *const c_char;
+                let text = if utf8.is_null() {
+                    ""
+                } else {
+                    CStr::from_ptr(utf8).to_str().unwrap_or("")
+                };
+                Some(text.trim().parse::<i32>().map_or(0, i64::from))
+            } else if kind == CFBooleanGetTypeID() {
+                Some(i64::from(CFBooleanGetValue(value)))
+            } else if kind == CFNumberGetTypeID() {
+                let mut number: i32 = 0;
+                CFNumberGetValue(
+                    value,
+                    K_CF_NUMBER_INT_TYPE,
+                    (&mut number as *mut i32).cast(),
+                );
+                Some(i64::from(number))
+            } else {
+                None
             }
         }
     }

@@ -223,6 +223,96 @@ pub fn qnsview_class() -> Class {
     Class(*CLASS as *mut c_void)
 }
 
+/// `[[NSProcessInfo processInfo] isOperatingSystemAtLeastVersion:{major, 0, 0}]`.
+#[cfg(target_os = "macos")]
+fn is_macos_at_least(major: NSInteger) -> bool {
+    #[repr(C)]
+    struct NSOperatingSystemVersion {
+        major: NSInteger,
+        minor: NSInteger,
+        patch: NSInteger,
+    }
+    let info = ObjcMsg::send_class_0(
+        objc_get_class("NSProcessInfo"),
+        Sel::register("processInfo"),
+    );
+    let sel = Sel::register("isOperatingSystemAtLeastVersion:");
+    let version = NSOperatingSystemVersion {
+        major,
+        minor: 0,
+        patch: 0,
+    };
+    let res: BOOL = unsafe {
+        let msg_send: unsafe extern "C" fn(
+            *mut c_void,
+            *const c_void,
+            NSOperatingSystemVersion,
+        ) -> BOOL = std::mem::transmute(native_bindings::objc_msgSend as *const ());
+        msg_send(info.0, sel.0, version)
+    };
+    res == YES
+}
+
+/// The application delegate, an `NSObject` subclass named `QCocoaApplicationDelegate` created
+/// once and never released (Qt's `sharedDelegate`). Its `-applicationDidFinishLaunching:` brings
+/// the application to the front like Qt's (qcocoaapplicationdelegate.mm:157-194): it activates
+/// the application if it is not active, and on macOS 14 and later activates it again with all
+/// its windows. Neither happens when `QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM` is set.
+#[cfg(target_os = "macos")]
+pub fn qcocoa_application_delegate() -> Id {
+    extern "C" fn did_finish_launching(
+        _this: *mut c_void,
+        _cmd: *const c_void,
+        _notification: *mut c_void,
+    ) {
+        if std::env::var_os("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM")
+            .is_some_and(|value| !value.is_empty())
+        {
+            return;
+        }
+        let current = ObjcMsg::send_class_0(
+            objc_get_class("NSRunningApplication"),
+            Sel::register("currentApplication"),
+        );
+        if !ObjcMsg::send_bool_return(current, Sel::register("isActive")) {
+            let app = ObjcMsg::send_class_0(
+                objc_get_class("NSApplication"),
+                Sel::register("sharedApplication"),
+            );
+            ObjcMsg::send_bool(app, Sel::register("activateIgnoringOtherApps:"), true);
+        }
+        if is_macos_at_least(14) {
+            // NSApplicationActivateAllWindows
+            ObjcMsg::send_int(current, Sel::register("activateWithOptions:"), 1);
+        }
+    }
+    static DELEGATE: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| unsafe {
+        let mut class = objc_get_class("QCocoaApplicationDelegate");
+        if class.is_nil() {
+            let name = CString::new("QCocoaApplicationDelegate").unwrap();
+            let raw = native_bindings::objc_allocateClassPair(
+                objc_get_class("NSObject").0,
+                name.as_ptr(),
+                0,
+            );
+            native_bindings::class_addMethod(
+                raw,
+                Sel::register("applicationDidFinishLaunching:").0,
+                did_finish_launching as *const c_void,
+                c"v@:@".as_ptr(),
+            );
+            native_bindings::objc_registerClassPair(raw);
+            class = Class(raw);
+        }
+        let delegate = ObjcMsg::send_0(
+            ObjcMsg::send_class_0(class, Sel::register("alloc")),
+            Sel::register("init"),
+        );
+        delegate.0 as usize
+    });
+    Id(*DELEGATE as *mut c_void)
+}
+
 /// Creates an NSString object from a UTF-8 string on macOS
 #[cfg(target_os = "macos")]
 pub fn nsstring_from_str(s: &str) -> Id {

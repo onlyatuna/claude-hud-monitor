@@ -251,15 +251,14 @@ jobs:
 
       # qtrs-platform AppKit checks (windows, status items, menus, screens, cursor, theme) on the
       # OS main thread, one child process per check, reporting ok/FAILED/ENV/CRASH per check.
-      # Known open (rust/qtrs/PYTHON_QT_SEMANTIC_CONTRACT.md C11.13): window_key_status (G11.13.l,
-      # needs the NSApp launch of G7.6.h), status_item_message (ENV: no app bundle). Any other
-      # check not ok, or a listed one passing, fails the step.
+      # Known open (rust/qtrs/PYTHON_QT_SEMANTIC_CONTRACT.md C11.13): status_item_message (ENV: no
+      # app bundle). Any other check not ok, or a listed one passing, fails the step.
       - name: macOS main-thread AppKit checks (qtrs-platform)
         if: ${{ runner.os == 'macOS' && !cancelled() }}
         working-directory: rust/qtrs
         run: >-
           cargo run -j 1 -q -p qtrs-platform --example appkit_main_thread --
-          --known-open=window_key_status,status_item_message
+          --known-open=status_item_message
 
       - name: Run qtrs doc tests
         if: ${{ !cancelled() }}
