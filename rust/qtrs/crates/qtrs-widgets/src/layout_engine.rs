@@ -459,24 +459,43 @@ pub fn item_set_geometry(widget: &dyn Widget, rect: Rect, align: ItemAlignment) 
 }
 
 /// The size limits `item_set_geometry` applies: the item's `qSmartMaxSize`
-/// (`QWidgetItem::maximumSize`) and the widget's own minimum and maximum size, which
-/// `QWidget::setGeometry` bounds the result by (qwidget.cpp:7286, 7300-7305).
+/// (`QWidgetItem::maximumSize`), the widget's own minimum and maximum size, which
+/// `QWidget::setGeometry` bounds the result by (qwidget.cpp:7286, 7300-7305), and, for an aligned
+/// item, the size it is cut to on an aligned axis (`QWidgetItem::setGeometry`,
+/// qlayoutitem.cpp:432-447).
 ///
 /// They depend only on the widget's size metrics, so a layout computes them with the rest of its
-/// metric cache and reuses them for every geometry pass until it is invalidated.
+/// metric cache and reuses them for every geometry pass until it is invalidated, as
+/// `QWidgetItemV2` caches the item's size hint (qlayoutitem.cpp:778-789).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ItemLimits {
     pub item_max: Size,
     pub widget_min: Size,
     pub widget_max: Size,
+    /// The preferred size an aligned axis is cut to; unused (zero) without alignment.
+    pub aligned_pref: Size,
 }
 
 impl ItemLimits {
     pub fn of(widget: &dyn Widget, align: ItemAlignment) -> Self {
+        let aligned_pref = if align.horizontal() || align.vertical() {
+            let policy = widget.size_policy();
+            let mut pref = item_size_hint(widget);
+            if policy.horizontal == Policy::Ignored {
+                pref.width = widget.size_hint().width.max(widget.minimum_size().width);
+            }
+            if policy.vertical == Policy::Ignored {
+                pref.height = widget.size_hint().height.max(widget.minimum_size().height);
+            }
+            pref
+        } else {
+            Size::new(0, 0)
+        };
         Self {
             item_max: item_maximum_size(widget, align),
             widget_min: widget.minimum_size(),
             widget_max: widget.maximum_size(),
+            aligned_pref,
         }
     }
 }
@@ -495,21 +514,11 @@ pub fn item_set_geometry_with(
     let max = limits.item_max;
     let mut width = rect.width.min(max.width);
     let mut height = rect.height.min(max.height);
-    if align.horizontal() || align.vertical() {
-        let policy = widget.size_policy();
-        let mut pref = item_size_hint(widget);
-        if policy.horizontal == Policy::Ignored {
-            pref.width = widget.size_hint().width.max(widget.minimum_size().width);
-        }
-        if policy.vertical == Policy::Ignored {
-            pref.height = widget.size_hint().height.max(widget.minimum_size().height);
-        }
-        if align.horizontal() {
-            width = width.min(pref.width);
-        }
-        if align.vertical() {
-            height = height.min(pref.height);
-        }
+    if align.horizontal() {
+        width = width.min(limits.aligned_pref.width);
+    }
+    if align.vertical() {
+        height = height.min(limits.aligned_pref.height);
     }
     let mut x = rect.x;
     let mut y = rect.y;

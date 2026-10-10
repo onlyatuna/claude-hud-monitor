@@ -611,7 +611,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.1.a [P1, READ]** **show／hide 不自動重排**（**已修復：RC-26**：`WidgetBase::set_visible` 改呼叫 `update_geometry`，與 Qt 一樣只在可見性真的改變時請求 parent 重排；`Menu` 為彈出視窗不在此列）；HUD 以手動 `update_layout()` 補（`provider_card.rs:347-348,406-420,435`、`hud_window.rs:254,590,608,636`）。
   - **G8.1.b [P2, READ]** 隱藏 item 的 geometry 被設為 (0,0,0,0)（Qt 不動它）。
   - **G8.1.c [P1, READ]** 無 Show/Hide 事件；依賴 `showEvent` 的子類別無法實作；`Window::show/hide` 不通知 widget 樹。
-  - **G8.1.d [P1, READ；已修復：RC-63、RC-63b、RC-63c]** Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件：`BoxLayout` 與 `GridLayout` 在 `set_geometry` 時無條件標記 dirty，`size_hint`／`minimum_size` 未快取已算出的 layout struct / minSize / sizeHint，每次查詢或尺寸改變皆重新走訪所有子元件詢問尺寸提示；Qt 以 `dirty`／`needRecalc` 與 `geomArray` 快取尺寸指標，resize 僅呼叫 `qGeomCalc` 重新分配空間，不重新詢問子元件（`qboxlayout.cpp:219-361,590-625,735-775`、`qgridlayout.cpp:719-745,880-928,1181-1205,1320-1328`）。
+  - **G8.1.d [P1, READ；已修復：RC-63、RC-63b、RC-63c、RC-63d]** Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件：`BoxLayout` 與 `GridLayout` 在 `set_geometry` 時無條件標記 dirty，`size_hint`／`minimum_size` 未快取已算出的 layout struct / minSize / sizeHint，每次查詢或尺寸改變皆重新走訪所有子元件詢問尺寸提示；Qt 以 `dirty`／`needRecalc` 與 `geomArray` 快取尺寸指標，resize 僅呼叫 `qGeomCalc` 重新分配空間，不重新詢問子元件（`qboxlayout.cpp:219-361,590-625,735-775`、`qgridlayout.cpp:719-745,880-928,1181-1205,1320-1328`）。
 - **Test**：既有無（probe 只涵蓋建構時 hidden）。必要：`hide_child_relayouts_parent_without_manual_call`；`show_hide_events_delivered`。
 - **HUD usage**：Python `setVisible`（`hud_window.py:156,292,306,520,671`、`provider_card.py:50,139-193`）；Rust 同位置。
 
@@ -1419,7 +1419,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.a | P1, READ | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
-| G8.1.d | P1, READ；已修復：RC-63、RC-63b、RC-63c | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
+| G8.1.d | P1, READ；已修復：RC-63、RC-63b、RC-63c、RC-63d | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
 | G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；`Widget::set_enabled` 不送事件的入口已移除：RC-43 | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
@@ -2388,6 +2388,27 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Status**：**已修復**。
   - `activate_pending` 只在 layout 執行前是 dirty（指標已失效、這一輪重建）時才 `update_geometry()`；只因尺寸改變而執行的一輪相當於 `doResize`，不通知上層。
   - `flush_layouts` 重複處理，直到某一輪沒有新的 `RequestLayout`：layout 重建指標後送出的上層請求在同一次繪製前送達，對應 Qt 在繪製前送達 posted `LayoutRequest`。仍被借用的目標留在佇列，不會無限循環。
+- **Residual**：無新增。
+
+#### RC-63d 對齊的 item 每次排版都重新查詢尺寸提示
+
+- **Contract gaps**：G8.1.d（RC-63c 之後仍存在的部分）。總數不變（368），已修復不變（86）。
+- **Qt behavior** `[QT-SRC qlayoutitem.cpp:408-447, 778-789]`：對齊的 `QWidgetItem::setGeometry` 把對齊的軸切到 `sizeHint()`；layout 用的 `QWidgetItemV2::sizeHint()` 回傳快取值，`updateGeometry()` 時才失效。`Ignored` 的軸改用 `wid->sizeHint().expandedTo(wid->minimumSize())`，Qt 每次直接查詢，但結果只取決於同一組尺寸指標。
+- **qtrs root**：RC-63b 的 `ItemLimits` 只快取 smart max 與 widget 最小／最大尺寸；`item_set_geometry_with` 在有對齊時每次呼叫 `item_size_hint(widget)`（以及 `Ignored` 軸的 `size_hint()`／`minimum_size()`），所以對齊的 item（例如 HUD 的 Label）在每次 resize 都重新計算尺寸提示。
+- **Evidence**：`RAN`（GitHub Actions 三平台；本機 Windows）。新增 `test_a_resize_does_not_requery_an_aligned_item`：`LEFT | TOP` 對齊的 probe，計數 `size_hint`／`minimum_size_hint`／`maximum_size`。
+  - 修改前 run 38038749637（與 RC-63c 同一個只加檢查的 commit，基於 develop `69624d3`）：三平台皆失敗；resize 後計數 `[6, 6, 7]`，預期 `[5, 5, 6]`（每次 resize 多查詢一輪）。
+  - 修改後 run 38039777788：success（三平台全部 job 通過）。RC-63c 的 develop run 38039774618：success。
+- **Status**：**已修復**。`ItemLimits` 增加 `aligned_pref`（對齊軸要切到的尺寸，含 `Ignored` 軸的計算），在 `ItemLimits::of` 與其餘尺寸指標一起計算、一起失效；無對齊時不計算（不多查詢）。`item_set_geometry_with` 只讀快取值。快取 `Ignored` 軸的值與 Qt 每次直接查詢在可觀察行為上相同，前提是 widget 的尺寸提示改變時有 `updateGeometry()`——qtrs 的 setter 都會呼叫。
+- **Measurement（RC-63c 與 RC-63d）**：同 RC-63b 的方法（Release、外部程序 `WM_ENTERSIZEMOVE` + 60 次 × 4 px `SetWindowPos`，不移動滑鼠）。每個 build 一次 60 幀的 drag，RC-63b 與 RC-63c 各跑兩次：
+
+| build | 每步往返 p50 ms | WM_SIZE handler p50／p90 ms | dispatch p50 ms | layout p50 ms | paint p50 ms（佔 handler） |
+|---|---|---|---|---|---|
+| RC-63b `69624d3` | 9.8；9.4 | 8.8／10.6；8.5／10.0 | 0.7；0.6 | 1.8；1.7 | 3.9（44%）；3.8（45%） |
+| RC-63c `bd93c8f` | 5.5；6.5 | 4.7／5.5；5.6／7.2 | 0.0；0.0 | 0.1；0.1 | 3.6（77%）；4.3（78%） |
+| RC-63d | 5.6；5.6 | 4.8／5.7；4.8／5.7 | 0.0；0.0 | 0.1；0.1 | 3.7（78%）；3.7（78%） |
+
+  - handler 時間約減半，來自 RC-63c：祖先 layout 不再每幀重建指標，layout 從約 1.8 ms 降到 0.1 ms，dispatch 從約 0.7 ms 降到 0。RC-63d 在這個情境沒有可量出的差異（HUD 對齊的 item 不多）；它的效果由計數測試證明。
+  - resize 時的剩餘成本主要是 paint（約 78%），屬 RC-64／RC-65 的範圍。仍只量合成的 `SetWindowPos`。
 - **Residual**：無新增。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）

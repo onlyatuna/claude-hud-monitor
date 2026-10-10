@@ -528,6 +528,7 @@ impl BoxLayout {
                         item_max: spacer.maximum_size(),
                         widget_min: Size::new(0, 0),
                         widget_max: spacer.maximum_size(),
+                        aligned_pref: Size::new(0, 0),
                     },
                 )
             } else {

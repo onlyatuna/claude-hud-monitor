@@ -692,3 +692,43 @@ fn test_a_resize_keeps_the_ancestor_metric_caches_of_a_nested_layout() {
         );
     }
 }
+
+/// An aligned item is cut to its size hint, which `QWidgetItemV2` caches with the other metrics
+/// [QT-SRC qlayoutitem.cpp:432-447, 778-789]: laying it out again at a new size asks the widget
+/// nothing.
+#[test]
+fn test_a_resize_does_not_requery_an_aligned_item() {
+    let (aligned, hint_q, min_q, max_q, _) = MetricCountingProbe::new(50, 30);
+    let mut layout = BoxLayout::vertical();
+    layout.add_widget_aligned(
+        Rc::clone(&aligned),
+        0,
+        ItemAlignment::LEFT | ItemAlignment::TOP,
+    );
+    let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
+    root.borrow_mut().set_layout(Box::new(layout));
+
+    let mut win = window::Window::new(
+        "AlignedResizeTest",
+        Rect::new(0, 0, 200, 200),
+        qtrs_platform::window::WindowFlags::FRAMELESS,
+    )
+    .unwrap();
+    win.set_root_widget(root);
+    win.render_and_present();
+    let counts = || [&hint_q, &min_q, &max_q].map(|c| c.load(Ordering::SeqCst));
+    let settled = counts();
+
+    win.set_geometry(Rect::new(0, 0, 300, 400));
+    win.render_and_present();
+    assert_eq!(
+        counts(),
+        settled,
+        "an aligned item's hint/min/max must come from the layout's cache"
+    );
+    assert_eq!(
+        aligned.borrow().geometry().size(),
+        Size::new(50, 30),
+        "aligned item cut to its hint"
+    );
+}
