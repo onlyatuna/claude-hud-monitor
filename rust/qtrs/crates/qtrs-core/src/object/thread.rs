@@ -271,7 +271,7 @@ pub fn move_to_thread(
             let mut i = 0;
             while i < q.events.len() {
                 if all_ids.contains(&q.events[i].receiver) {
-                    moved_events.push(q.events.remove(i));
+                    moved_events.push(q.remove_at(i));
                 } else {
                     i += 1;
                 }

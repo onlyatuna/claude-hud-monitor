@@ -319,11 +319,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **HUD usage**：Python 只在 smoke／tests 用 `processEvents`（`smoke_check.py:41`、`tests/*`）。Rust 在 `exec` 外用（`main.rs:111,204,215,229`），巢狀 bug 未觸發。
 
 ### C4.3 喚醒、跨執行緒 post、modal loop
-- **Qt behavior** `[QT-DOC]`：任何執行緒的 `postEvent` 追加到接收者執行緒佇列並喚醒其 dispatcher；Win32 `wakeUp` 合併成一個訊息。
-- **qtrs required**：MUST 跨執行緒 post 喚醒睡眠中的 `exec`；MUST 喚醒合併；MUST 原生 modal loop（Win32 resize、`TrackPopupMenu`）仍會 pump posted events 但**不重入**正在執行的 pump。
-- **Current implementation**：`IMPLEMENTED`：`wake_up` + pending 旗標（`dispatcher_win.rs`）、modal pump 的重入保護與輪次邊界（`loop.rs`）。測試 `dispatcher_win.rs::tests::{test_wakeup_message_is_deduplicated_and_pumped_by_wnd_proc, test_wnd_proc_pump_defers_events_posted_during_dispatch}`、`loop.rs::{test_modal_pump_*, test_cross_thread_wakeup}`。
-- **Known gap**：HUD 路徑上沒有；但 `Menu::exec_popup` 使用**自己的 `GetMessageW` 迴圈**而不是巢狀 `QEventLoop`（**G4.3.a [P1, READ]**）——選單開著時 posted events／計時器是否持續觸發，取決於 loop 如何喚醒該執行緒，**尚未實測**；Qt 的 `QMenu::exec` 是巢狀 `QEventLoop`（`[QT-DOC]`），期間所有計時器照常觸發。
-- **Test**：必要：`timer_and_posted_event_fire_while_popup_menu_is_open`（需 Windows 真機實測；HUD 有 1 s 倒數計時器與 3 s 輪詢，選單開著時 Python 預期會繼續更新，`[QT-DOC]` 未實測）。
+- **Qt behavior** `[QT-DOC; QT-SRC corelib/kernel/qcoreapplication.cpp:1796-1858, 1886-1902; corelib/thread/qthread.cpp:23-39; widgets/widgets/qmenu.cpp:2691-2697]`：任何執行緒的 `postEvent` 追加到接收者執行緒佇列並喚醒其 dispatcher；Win32 `wakeUp` 合併成一個訊息。`sendPostedEvents` 可重入（`recursion`）：每次呼叫把 `insertionOffset` 設為當下佇列長度，外層與巢狀共用 `startOffset`，超過 `insertionOffset` 的事件留到下一輪；`addEvent` 只在 `insertionOffset` 之後依 priority 插入；不能送的 DeferredDelete 以 `addEvent` 重新排入。`QMenu::exec` 是巢狀 `QEventLoop`。
+- **qtrs required**：MUST 跨執行緒 post 喚醒睡眠中的 `exec`；MUST 喚醒合併；MUST 原生 modal loop（Win32 resize、選單的 `GetMessageW` 迴圈）仍會 pump posted events，包括在正在執行的 pump 的 callback 裡（巢狀 pump，對應巢狀 `QEventLoop`）。每個事件 MUST 只送一次；巢狀 pump 開始時已在佇列裡的事件由它送出；巢狀 pump 期間新 post 的事件等下一輪，外層 pump 本輪 MUST NOT 送出它們。
+- **Current implementation**：`IMPLEMENTED`：`wake_up` + pending 旗標（`dispatcher_win.rs`）。輪次邊界（RC-68）：`EventQueue::insertion_offset` 是本輪尚未送出、位於佇列前端的事件數；每次 pump（含巢狀）進入時設為佇列長度，`remove_at` 取走本輪事件時遞減，pump 在它歸零時結束，所以巢狀 pump 取走的事件也縮短外層的本輪；`insert_posted` 只在它之後依 priority 插入（對應 Qt `startOffset`／`insertionOffset`／`addEvent`）。modal pump 留下事件時（DeferredDelete 一律保留）設 `MODAL_PUMP_LEFT_QUEUED`，最外層一般 pump 結束時若有本 loop level 可送的事件就重新喚醒。測試 `dispatcher_win.rs::tests::{test_wakeup_message_is_deduplicated_and_pumped_by_wnd_proc, test_wnd_proc_pump_defers_events_posted_during_dispatch, test_modal_pump_keeping_a_*}`、`loop.rs::{test_modal_pump_*, test_a_nested_pump_*, test_a_deferred_delete_from_the_outer_loop_waits_out_a_nested_pump, test_posts_made_during_a_nested_pump_wait_for_the_next_turn_in_priority_order, test_a_priority_post_between_turns_overtakes_a_lower_priority_leftover, test_cross_thread_wakeup}`。
+- **Known gap**：
+  - **G4.3.a [P1, RAN；已修復：RC-68]** （修改前：）在 HUD 路徑上：HUD 以 `Timer::single_shot(0)`（posted `MetaCall`）開啟選單（`main.rs:425,457`），所以 `exec_popup` 在 posted pump 裡執行；選單迴圈把 `WM_QTRS_WAKEUP` 交給 `pump_posted_events_modal`，後者因重入保護（`POSTED_PUMP_ACTIVE`）直接返回，熱鍵、主題切換、refresh 結果（`main.rs:473,534,543`）與延後重繪（`window.rs:319-322`）都要等選單關閉才送出。計時器不受影響（`WM_TIMER` 直接分派，修改前實測已在選單內觸發）。RC-68 改為允許巢狀 pump 並保留 Qt 輪次邊界。
+  - **G4.3.b [P2, READ]** modal pump 一律保留 DeferredDelete（`pump_posted_events` 的 `modal` 分支），Qt 會刪除由更深一層 loop 要求的 DeferredDelete（`qcoreapplication.cpp:1877-1885`）；qtrs 的原生 modal loop 也不提高 loop level。HUD 影響未查。
+- **Test**：`qtrs-widgets/tests/test_menu_popup_posted_events.rs::events_posted_while_a_menu_is_open_are_delivered_before_it_closes`（Windows；HUD 的開法：`single_shot(0)` 開選單，另一執行緒 300 ms 後 post；50 ms 計時器與 posted event 都要在選單關閉前送出）。HUD 真機（熱鍵、主題切換、refresh 在選單開著時巢狀執行）未實測。
 - **HUD usage**：Rust worker 喚醒主 loop（`main.rs:525-537`）；Python 以輪詢避開。
 
 ---
@@ -1266,7 +1268,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 371 項：D 12、P0 35、P1 168、P2 151、test gap 5（計數含已修復項；標籤含「已修復」者共 91 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.5.c、G10.7.a、G10.7.e、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 372 項：D 12、P0 35、P1 168、P2 152、test gap 5（計數含已修復項；標籤含「已修復」者共 92 項：G2.1.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.5.c、G10.7.a、G10.7.e、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1335,7 +1337,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G4.2.b | P2, READ | 只觸發計時器的一輪回傳 false |
 | G4.2.c | P2 | 無 `ExcludeUserInputEvents`／`WaitForMoreEvents`／`maxTime` |
 | G4.2.d | P2, READ | `WM_QUIT` 以 `PostQuitMessage(n)` 的 n 為 code |
-| G4.3.a | P1, READ | ）——選單開著時 posted events／計時器是否持續觸發，取決於 loop 如何喚醒該執行緒，**尚未實測** |
+| G4.3.a | P1, RAN；已修復：RC-68 | 選單開著時 posted events 要等選單關閉才送出（posted pump 內的 modal pump 被重入保護擋下） |
+| G4.3.b | P2, READ | modal pump 一律保留 DeferredDelete，不依 loop level 判斷 |
 | G5.1.a | P1, RAN | `set_interval` 對啟動中的計時器無效 |
 | G5.1.b | P1, READ | `set_single_shot` 啟動中無效 |
 | G5.1.c | P1, READ | `Timer::start` 是 `unsafe` 並以原始位址註冊 |
@@ -1700,7 +1703,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - 六份稽核由子代理唯讀完成；§3–§5 與 §8–§9 的 Qt 行為引用了 repo 內的 `qtbase/` 原始碼，其他章節多為 `[QT-DOC]`。行號會漂移。
 - 本文件沒有對 PySide6 做新的行為實測，**除了**第 C9.7 的 layout harness；所有其他「Qt behavior」都是引用，不是本次量測。
 - macOS／Linux 後端完全未驗證。
-- 最需要先實測的項目：`G10.7.a`（非主螢幕 DPR，需異 DPI 雙螢幕）、`G4.3.a`（選單開著時計時器，P1）。`G11.5.a` 已在本機實測：選到 Layered，非 DComp（見 G11.5.c）。`G7.9.a` 已由讀碼降為 P2，仍待驗證。
+- 最需要先實測的項目：`G10.7.a`（非主螢幕 DPR，需異 DPI 雙螢幕）。`G4.3.a` 已由 RC-68 以 widget 測試實測（HUD 真機仍未測）。`G11.5.a` 已在本機實測：選到 Layered，非 DComp（見 G11.5.c）。`G7.9.a` 已由讀碼降為 P2，仍待驗證。
 
 ---
 
@@ -2510,6 +2513,29 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 托盤以主螢幕 DPR 換算游標位置（`tray_icon.rs:281-287`，G11.8.a），只在異 DPI 多螢幕下可見；需要每螢幕 DPR，屬多螢幕座標系（G11.4.c、G10.7.d），未改。
   - 垂直夾限的算式與 Qt 不完全相同（Qt 以 `snapToMouse` 決定往上翻時是否扣 `desktopFrame`，`qmenu.cpp:2494-2499`；qtrs 用 `Rect::bottom()` = `y+h`），本 RC 未改，測試只驗水平夾限。
   - 沒有實機多螢幕驗證；fake platform 的螢幕 DPR 皆為 1.0。
+
+#### RC-68 原生 modal loop 在 posted callback 裡不送 posted events
+
+- **Contract gaps**：G4.3.a（已修復）。新增 G4.3.b（P2，modal pump 的 DeferredDelete 規則，未修）。總數 371 → 372，P2 151 → 152，已修復 91 → 92。
+- **為何選這一項**：P1 清單第二名；在 HUD 路徑上（選單一律由 posted `MetaCall` 開啟），有明確的 regression test。
+- **Qt behavior** `[QT-SRC widgets/widgets/qmenu.cpp:2691-2697; corelib/kernel/qcoreapplication.cpp:1796-1858, 1886-1902; corelib/thread/qthread.cpp:23-39]`：`QMenu::exec` 跑巢狀 `QEventLoop`；`sendPostedEvents` 可重入，每次進入把 `insertionOffset` 設為佇列長度，外層與巢狀共用 `startOffset`，所以巢狀呼叫送掉的事件外層不會再送，巢狀期間新 post 的事件位於 `insertionOffset` 之後、留到下一輪；`CleanUp` 以 `insertionOffset -= startOffset` 收尾，pump 結束後新 post 的事件依 priority 排入整個佇列。
+- **qtrs root**：`pump_posted_events_modal` 在 `POSTED_PUMP_ACTIVE` 時直接返回（`loop.rs` 原 480-483）。只拿掉這個檢查不夠：外層 pump 以區域 `max_index` 計數，巢狀 pump 從前端取走事件後，外層會把剩下的名額用在巢狀期間新 post 的事件上（本機實驗：`["b","c","outer returns","d"]`，`d` 被提早送出）。
+- **修正**（`loop.rs`、`object/thread.rs`）：
+  - `insertion_offset` 改為「本輪尚未送出、位於前端的事件數」：pump（含巢狀）進入時設為長度；`EventQueue::remove_at` 取走本輪事件時遞減；pump 在它歸零時結束。巢狀 pump 送掉的事件因此同時縮短外層的本輪。`move_to_thread` 搬出事件也改用 `remove_at`。
+  - 三處 priority 插入合併成 `insert_posted`；被保留的 DeferredDelete 也用它重新排入（原本直接 push 到尾端），對應 Qt 以 `addEvent` 重新排入。
+  - 移除重入保護與 `MODAL_PUMP_SKIPPED`。新增 `MODAL_PUMP_LEFT_QUEUED`：modal pump 留下事件（DeferredDelete）時，最外層一般 pump 結束時若有本 loop level 可送的事件就重新喚醒，避免它卡到下一個訊息；只對 loop level 擋住的 DeferredDelete 不喚醒，避免空轉。
+- **Evidence**：`RAN`（GitHub Actions 三平台；本機 Windows）。
+  - 修改前 run 38072695595（只加檢查，基於 `73a035c`）：三平台 `test_modal_pump_inside_a_posted_callback_delivers_events_before_it_returns`、`test_modal_pump_inside_a_modal_pump_delivers_events_before_it_returns`（`Some(None)`，預期 `Some(Some(1))`）、`test_a_nested_pump_delivers_each_event_once_and_leaves_its_own_posts_for_the_next_turn`（`["outer returns","b","c"]`）失敗；Windows 另有 `test_menu_popup_posted_events`（`["timer","menu closed","posted"]`，選單靠 3 s watchdog 才關）。`test_a_deferred_delete_from_the_outer_loop_waits_out_a_nested_pump` 修改前後都通過（保護性）。
+  - 改寫的舊測試：`test_modal_pump_is_blocked_inside_normal_pump`／`…_inside_modal_pump` 斷言的是與 Qt 不同的行為，換成上面兩項。
+  - 修改後新增（以 `d4448dd` 的舊實作另跑，本機 Windows，四項都失敗）：`test_posts_made_during_a_nested_pump_wait_for_the_next_turn_in_priority_order`（外層一輪送出 3 個，預期 1）、`test_a_priority_post_between_turns_overtakes_a_lower_priority_leftover`（`[x, y]`，預期 `[y, x]`：pump 結束後 `insertion_offset` 停在舊長度，priority 插入失效）、`dispatcher_win.rs` 的 `test_modal_pump_keeping_a_deferred_delete_rearms_the_wake_up`（喚醒 0 次，預期 1）、`test_modal_pump_keeping_a_loop_blocked_deferred_delete_does_not_rearm_the_wake_up`（喚醒 1 次，預期 0）。
+  - 修改後 run 38076892164：第 1 次只有 Windows 的 `test_tooltip` 兩項計時測試失敗（`real_windows::the_button_state_of_a_native_mouse_move_reaches_the_wake_up_gate`、`the_tip_falls_asleep_after_two_seconds`，已知會偶發失敗）；本機連跑 3 次 26/26 通過；重跑失敗 job（attempt 2）全部通過。
+- **Status**：**已修復**。
+- **行為差異（刻意）**：巢狀 modal pump 期間，原本會在同一輪由外層送出的 DeferredDelete 現在留到下一輪（巢狀 pump 把它重新排到本輪之後），與 Qt 的重新排入一致；刪除仍只在 loop level 允許時發生。
+- **Residual**：
+  - HUD 真機未測：熱鍵、主題切換、refresh 結果在選單開著時巢狀執行。讀碼：`show_hud_popup_menu` 在 `exec_popup` 返回前不借用 `MAIN_HUD`／`MAIN_TRAY`（`main.rs:391-414`），推論不會有 RefCell 衝突 `[INFERENCE]`。
+  - G4.3.b：modal pump 的 DeferredDelete 規則與 Qt 不同；原生 modal loop 不提高 loop level。
+  - callback panic 時 `insertion_offset` 不會復原（Qt 用 `CleanUp` RAII）；修改前同樣如此。
+  - `UpdateRequest` 的部分 post 路徑與 `EventSender::send` 不經壓縮與 priority（scout 指出，未驗證）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

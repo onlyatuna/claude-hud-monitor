@@ -179,14 +179,27 @@ impl EventQueue {
             return;
         }
 
-        let posted = PostedEvent::new(receiver, event, priority);
+        self.insert_posted(PostedEvent::new(receiver, event, priority));
+    }
+
+    /// Removes the event at `index`. Removing one from the current turn shrinks
+    /// `insertion_offset` with it (Qt `insertionOffset -= startOffset`, qcoreapplication.cpp:1847).
+    pub(crate) fn remove_at(&mut self, index: usize) -> PostedEvent {
+        if index < self.insertion_offset {
+            self.insertion_offset -= 1;
+        }
+        self.events.remove(index)
+    }
+
+    /// Inserts in priority order after the turn boundary, so an event posted during a turn waits
+    /// for the next one (qthread_p.h:65-86).
+    pub(crate) fn insert_posted(&mut self, posted: PostedEvent) {
         let start_search = self.insertion_offset.min(self.events.len());
         let relative_idx = self.events[start_search..]
             .iter()
-            .position(|e| e.priority < priority)
+            .position(|e| e.priority < posted.priority)
             .unwrap_or(self.events.len() - start_search);
-        let insert_idx = start_search + relative_idx;
-        self.events.insert(insert_idx, posted);
+        self.events.insert(start_search + relative_idx, posted);
     }
 }
 
@@ -320,14 +333,7 @@ impl EventLoop {
         if run_compress_event(&mut queue.events, receiver, &event, &*self.compressor) {
             return;
         }
-        let posted = PostedEvent::new(receiver, event, priority);
-        let start_search = queue.insertion_offset.min(queue.events.len());
-        let relative_idx = queue.events[start_search..]
-            .iter()
-            .position(|e| e.priority < priority)
-            .unwrap_or(queue.events.len() - start_search);
-        let insert_idx = start_search + relative_idx;
-        queue.events.insert(insert_idx, posted);
+        queue.insert_posted(PostedEvent::new(receiver, event, priority));
         self.dispatcher.wake_up();
     }
     pub fn set_compressor(&mut self, compressor: Arc<dyn EventCompressor>) {
@@ -420,9 +426,9 @@ impl EventLoop {
 thread_local! {
     /// True while this thread is inside the posted-event pump (normal or modal).
     static POSTED_PUMP_ACTIVE: Cell<bool> = const { Cell::new(false) };
-    /// Set when a modal wake-up was ignored because a pump was already running, so the
-    /// outermost pump can re-arm the wake-up for events it left behind.
-    static MODAL_PUMP_SKIPPED: Cell<bool> = const { Cell::new(false) };
+    /// Set when a modal pump left events queued (kept deferred deletes), so the outermost normal
+    /// pump can re-arm the wake-up for them.
+    static MODAL_PUMP_LEFT_QUEUED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// RAII marker for "a posted-event pump is running on this thread".
@@ -444,8 +450,8 @@ impl Drop for PostedPumpGuard {
     }
 }
 
-/// Normal event-loop pump. Nested event loops (`loop_level`) may still pump re-entrantly;
-/// only the modal wake-up path (`pump_posted_events_modal`) honours the guard.
+/// Normal event-loop pump. A callback may re-enter it (nested event loops) and each call runs its
+/// own turn; `outermost` only decides which call re-arms the wake-up left by a modal pump.
 pub fn send_posted_events_for_queue(
     queue: &Arc<Mutex<EventQueue>>,
     loop_level: usize,
@@ -455,11 +461,16 @@ pub fn send_posted_events_for_queue(
     let result = pump_posted_events(queue, loop_level, false);
     drop(guard);
 
-    if outermost && MODAL_PUMP_SKIPPED.with(|f| f.replace(false)) {
-        // A modal wake-up message was consumed while we were dispatching; its events may
-        // still be queued with no wake-up in flight. Re-arm it.
-        let has_pending = !queue.lock().unwrap().events.is_empty();
-        if has_pending {
+    if outermost && MODAL_PUMP_LEFT_QUEUED.with(|f| f.replace(false)) {
+        // A native modal loop left events queued and consumed its wake-up. Re-arm it if this
+        // loop level can deliver them, so `process_events` returns instead of blocking on them.
+        let deliverable = queue
+            .lock()
+            .unwrap()
+            .events
+            .iter()
+            .any(|e| deliverable_at_loop_level(&e.event, loop_level));
+        if deliverable {
             if let Some(handle) = get_thread_event_sender(ThreadId::current()) {
                 handle.wake_up();
             }
@@ -471,16 +482,12 @@ pub fn send_posted_events_for_queue(
 /// Pumps the current thread's posted-event queue from a native modal loop
 /// (e.g. `WM_QTRS_WAKEUP` reaching `internal_wnd_proc` during a Win32 sizing loop).
 ///
-/// Returns `None` if no event loop is registered for this thread, or if a pump is already
-/// running (reentrancy guard); otherwise the number of delivered events. Operates on the
-/// same queue as `EventLoop`, and keeps the `insertion_offset` turn boundary: events posted
-/// by callbacks during this pump wait for the next one. `DeferredDelete` events are always
+/// Returns `None` if no event loop is registered for this thread; otherwise the number of
+/// delivered events. Nested calls are allowed: a callback of an outer pump may open a native
+/// modal loop, and this pump then runs its own turn, so its posted events are delivered before
+/// the callback returns (Qt re-enters `sendPostedEvents`). `DeferredDelete` events are always
 /// left queued, since a modal loop runs inside an arbitrary native callback stack.
 pub fn pump_posted_events_modal() -> Option<usize> {
-    if POSTED_PUMP_ACTIVE.with(|f| f.get()) {
-        MODAL_PUMP_SKIPPED.with(|f| f.set(true));
-        return None;
-    }
     let handle = get_thread_event_sender(ThreadId::current())?;
     let _guard = PostedPumpGuard::enter();
     let (delivered, quit_code) = pump_posted_events(&handle.queue, usize::MAX, true);
@@ -488,7 +495,21 @@ pub fn pump_posted_events_modal() -> Option<usize> {
         handle.exit_requested.store(true, Ordering::SeqCst);
         handle.return_code.store(code, Ordering::SeqCst);
     }
+    if !handle.queue.lock().unwrap().is_empty() {
+        MODAL_PUMP_LEFT_QUEUED.with(|f| f.set(true));
+    }
     Some(delivered)
+}
+
+/// Whether a normal pump at `loop_level` delivers `event` now. A `DeferredDelete` requested by a
+/// deeper loop waits (see `pump_posted_events`).
+fn deliverable_at_loop_level(event: &Event, loop_level: usize) -> bool {
+    match event.kind {
+        EventKind::DeferredDelete {
+            loop_level: event_loop_level,
+        } => event_loop_level == 0 || loop_level <= event_loop_level,
+        _ => true,
+    }
 }
 
 fn pump_posted_events(
@@ -496,24 +517,21 @@ fn pump_posted_events(
     loop_level: usize,
     modal: bool,
 ) -> (usize, Option<i32>) {
-    let max_index = {
+    {
         let mut q = queue.lock().unwrap();
         q.insertion_offset = q.events.len();
-        q.insertion_offset
-    };
-
-    if max_index == 0 {
-        return (0, None);
     }
 
-    let mut processed_count = 0;
     let mut delivered_count = 0;
     let mut quit_code = None;
 
-    while processed_count < max_index {
-        let (receiver, mut event, should_deliver) = {
+    // `insertion_offset` counts this turn's undelivered events at the front of the queue. It
+    // shrinks as they leave, so a nested pump that drains them also ends the outer turn (Qt
+    // `startOffset`, qcoreapplication.cpp:1815-1858).
+    loop {
+        let (receiver, mut event) = {
             let mut q = queue.lock().unwrap();
-            if q.events.is_empty() {
+            if q.insertion_offset == 0 {
                 break;
             }
 
@@ -522,38 +540,35 @@ fn pump_posted_events(
             } = q.events[0].event.kind
             {
                 if modal || (event_loop_level > 0 && loop_level > event_loop_level) {
-                    let deferred = q.events.remove(0);
-                    q.events.push(deferred);
-                    processed_count += 1;
+                    // Kept for a later turn: rotate it behind the turn boundary.
+                    let deferred = q.remove_at(0);
+                    q.insert_posted(deferred);
                     continue;
                 }
             }
 
-            let posted = q.events.remove(0);
-            processed_count += 1;
-            (posted.receiver, posted.event, true)
+            let posted = q.remove_at(0);
+            (posted.receiver, posted.event)
         };
 
-        if should_deliver {
-            if let EventKind::Quit { exit_code } = event.kind {
-                quit_code = Some(exit_code);
-            }
-
-            send_event(receiver, &mut event);
-
-            if let EventKind::DeferredDelete {
-                loop_level: event_loop_level,
-            } = event.kind
-            {
-                if event_loop_level == 0 || loop_level <= event_loop_level {
-                    // SAFETY: delivery returned, so the callback borrow has ended; deferred
-                    // deletion is processed on the object's registration thread.
-                    unsafe { crate::object::unregister_qobject(receiver) };
-                }
-            }
-
-            delivered_count += 1;
+        if let EventKind::Quit { exit_code } = event.kind {
+            quit_code = Some(exit_code);
         }
+
+        send_event(receiver, &mut event);
+
+        if let EventKind::DeferredDelete {
+            loop_level: event_loop_level,
+        } = event.kind
+        {
+            if event_loop_level == 0 || loop_level <= event_loop_level {
+                // SAFETY: delivery returned, so the callback borrow has ended; deferred
+                // deletion is processed on the object's registration thread.
+                unsafe { crate::object::unregister_qobject(receiver) };
+            }
+        }
+
+        delivered_count += 1;
     }
 
     (delivered_count, quit_code)
@@ -577,14 +592,7 @@ impl EventLoopHandle {
         if run_compress_event(&mut queue.events, receiver, &event, &*self.compressor) {
             return;
         }
-        let posted = PostedEvent::new(receiver, event, priority);
-        let start_search = queue.insertion_offset.min(queue.events.len());
-        let relative_idx = queue.events[start_search..]
-            .iter()
-            .position(|e| e.priority < priority)
-            .unwrap_or(queue.events.len() - start_search);
-        let insert_idx = start_search + relative_idx;
-        queue.events.insert(insert_idx, posted);
+        queue.insert_posted(PostedEvent::new(receiver, event, priority));
         self.dispatcher.wake_up();
     }
 
@@ -1515,8 +1523,12 @@ mod tests {
         assert_eq!(pump_posted_events_modal(), None);
     }
 
+    /// A native modal loop opened from a posted callback (`Menu::exec_popup` from
+    /// `Timer::single_shot(0)`) is a nested event loop: Qt delivers posted events from it
+    /// before the callback returns (`QMenuPrivate::exec` runs a `QEventLoop`, qmenu.cpp:2691-2697;
+    /// `QCoreApplication::sendPostedEvents` re-enters, qcoreapplication.cpp:1796-1817).
     #[test]
-    fn test_modal_pump_is_blocked_inside_normal_pump() {
+    fn test_modal_pump_inside_a_posted_callback_delivers_events_before_it_returns() {
         let mut el = EventLoop::new();
         let nested = Arc::new(Mutex::new(None));
         let log = Arc::new(Mutex::new(Vec::new()));
@@ -1524,40 +1536,137 @@ mod tests {
             let nested = Arc::clone(&nested);
             let log = Arc::clone(&log);
             post_current(meta_call(move || {
-                // Callback posts more work, wakes the loop, then a modal wake-up arrives.
                 let log_late = Arc::clone(&log);
                 post_current(meta_call(move || log_late.lock().unwrap().push("late")));
-                get_thread_event_sender(ThreadId::current())
-                    .unwrap()
-                    .wake_up();
                 *nested.lock().unwrap() = Some(pump_posted_events_modal());
+                log.lock().unwrap().push("outer returns");
             }));
         }
 
         assert_eq!(el.send_posted_events(), 1);
-        assert_eq!(*nested.lock().unwrap(), Some(None), "no recursive pump");
-        assert!(log.lock().unwrap().is_empty(), "late event stays queued");
-        assert_eq!(el.queue().lock().unwrap().events.len(), 1);
-        assert!(!MODAL_PUMP_SKIPPED.with(|f| f.get()), "skip flag consumed");
-
-        // Guard released: the next modal pump works and drains the late event.
-        assert_eq!(pump_posted_events_modal(), Some(1));
-        assert_eq!(*log.lock().unwrap(), vec!["late"]);
+        assert_eq!(*nested.lock().unwrap(), Some(Some(1)));
+        assert_eq!(*log.lock().unwrap(), vec!["late", "outer returns"]);
+        assert!(el.queue().lock().unwrap().events.is_empty());
     }
 
     #[test]
-    fn test_modal_pump_is_blocked_inside_modal_pump() {
-        let _el = EventLoop::new();
+    fn test_modal_pump_inside_a_modal_pump_delivers_events_before_it_returns() {
+        let el = EventLoop::new();
         let nested = Arc::new(Mutex::new(None));
+        let log = Arc::new(Mutex::new(Vec::new()));
         {
             let nested = Arc::clone(&nested);
+            let log = Arc::clone(&log);
             post_current(meta_call(move || {
+                let log_late = Arc::clone(&log);
+                post_current(meta_call(move || log_late.lock().unwrap().push("late")));
                 *nested.lock().unwrap() = Some(pump_posted_events_modal());
+                log.lock().unwrap().push("outer returns");
             }));
         }
+
         assert_eq!(pump_posted_events_modal(), Some(1));
-        assert_eq!(*nested.lock().unwrap(), Some(None));
+        assert_eq!(*nested.lock().unwrap(), Some(Some(1)));
+        assert_eq!(*log.lock().unwrap(), vec!["late", "outer returns"]);
+        assert!(el.queue().lock().unwrap().events.is_empty());
         assert!(!POSTED_PUMP_ACTIVE.with(|f| f.get()));
+    }
+
+    /// The nested pump takes every event queued when it starts (Qt resets `insertionOffset` to
+    /// the list size, qcoreapplication.cpp:1817) and delivers each once; the outer pump resumes
+    /// from the shared `startOffset` (1815-1816), so it neither repeats them nor runs events
+    /// posted during the nested pump, which wait for the next turn (1856-1858).
+    #[test]
+    fn test_a_nested_pump_delivers_each_event_once_and_leaves_its_own_posts_for_the_next_turn() {
+        let mut el = EventLoop::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        {
+            let log = Arc::clone(&log);
+            post_current(meta_call(move || {
+                let _ = pump_posted_events_modal();
+                log.lock().unwrap().push("outer returns");
+            }));
+        }
+        {
+            let log_b = Arc::clone(&log);
+            let log_d = Arc::clone(&log);
+            post_current(meta_call(move || {
+                log_b.lock().unwrap().push("b");
+                post_current(meta_call(move || log_d.lock().unwrap().push("d")));
+            }));
+        }
+        {
+            let log = Arc::clone(&log);
+            post_current(meta_call(move || log.lock().unwrap().push("c")));
+        }
+
+        el.send_posted_events();
+        assert_eq!(*log.lock().unwrap(), vec!["b", "c", "outer returns"]);
+        assert_eq!(
+            el.queue().lock().unwrap().events.len(),
+            1,
+            "d waits for the next turn"
+        );
+
+        el.send_posted_events();
+        assert_eq!(*log.lock().unwrap(), vec!["b", "c", "outer returns", "d"]);
+        assert!(el.queue().lock().unwrap().events.is_empty());
+    }
+
+    /// An object deleted later from the outer loop survives a nested loop and is deleted once
+    /// control is back in the loop that requested it (qcoreapplication.cpp:1877-1890).
+    #[test]
+    fn test_a_deferred_delete_from_the_outer_loop_waits_out_a_nested_pump() {
+        struct Deletable {
+            data: ObjectData,
+            deleted: Arc<AtomicBool>,
+        }
+        impl QObject for Deletable {
+            fn object_data(&self) -> &ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut ObjectData {
+                &mut self.data
+            }
+            fn event(&mut self, event: &mut Event) -> bool {
+                if matches!(event.kind, EventKind::DeferredDelete { .. }) {
+                    self.deleted.store(true, Ordering::SeqCst);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+
+        let mut el = EventLoop::new();
+        el.set_loop_level(1);
+        let deleted = Arc::new(AtomicBool::new(false));
+        let mut object = Deletable {
+            data: ObjectData::new(ObjectId::next()),
+            deleted: Arc::clone(&deleted),
+        };
+        // SAFETY: the object stays on this thread and alive until the pump unregisters it after
+        // delivering its deferred delete.
+        unsafe { register_qobject(&mut object) };
+        let id = object.data.id;
+        let delete_event = delete_later(object.object_data_mut(), 1).expect("delete event");
+
+        let deleted_during_nested = Arc::new(Mutex::new(None));
+        {
+            let deleted = Arc::clone(&deleted);
+            let deleted_during_nested = Arc::clone(&deleted_during_nested);
+            post_current(meta_call(move || {
+                post_event_to_thread(ThreadId::current(), id, delete_event);
+                let _ = pump_posted_events_modal();
+                *deleted_during_nested.lock().unwrap() = Some(deleted.load(Ordering::SeqCst));
+            }));
+        }
+
+        el.send_posted_events();
+        assert_eq!(*deleted_during_nested.lock().unwrap(), Some(false));
+        el.send_posted_events();
+        assert!(deleted.load(Ordering::SeqCst));
+        assert!(el.queue().lock().unwrap().events.is_empty());
     }
 
     #[test]
@@ -1568,5 +1677,72 @@ mod tests {
         post_current(meta_call(move || ran_clone.store(true, Ordering::SeqCst)));
         assert_eq!(pump_posted_events_modal(), Some(1));
         assert!(ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_posts_made_during_a_nested_pump_wait_for_the_next_turn_in_priority_order() {
+        let mut el = EventLoop::new();
+        let log = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+
+        let log_outer = Arc::clone(&log);
+        post_current(meta_call(move || {
+            let _ = pump_posted_events_modal();
+            log_outer.lock().unwrap().push("outer returns");
+        }));
+        let log_x = Arc::clone(&log);
+        post_current(meta_call(move || {
+            log_x.lock().unwrap().push("x");
+            for (priority, name) in [(0, "p0"), (5, "p5")] {
+                let log_p = Arc::clone(&log_x);
+                post_event_to_thread_with_priority(
+                    ThreadId::current(),
+                    ObjectId(900_001),
+                    meta_call(move || log_p.lock().unwrap().push(name)),
+                    priority,
+                );
+            }
+        }));
+        let log_y = Arc::clone(&log);
+        post_current(meta_call(move || log_y.lock().unwrap().push("y")));
+
+        // `x` and `y` run inside the nested pump, before the outer callback returns.
+        assert_eq!(el.send_posted_events(), 1);
+        assert_eq!(*log.lock().unwrap(), vec!["x", "y", "outer returns"]);
+
+        // Posts made during the nested turn wait for the next turn, highest priority first.
+        assert_eq!(el.send_posted_events(), 2);
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["x", "y", "outer returns", "p5", "p0"]
+        );
+    }
+
+    #[test]
+    fn test_a_priority_post_between_turns_overtakes_a_lower_priority_leftover() {
+        let mut el = EventLoop::new();
+        let log = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+
+        let log_outer = Arc::clone(&log);
+        post_current(meta_call(move || {
+            // Posted during the turn, so it stays queued for the next turn at priority 0.
+            let log_x = Arc::clone(&log_outer);
+            post_event_to_thread_with_priority(
+                ThreadId::current(),
+                ObjectId(900_001),
+                meta_call(move || log_x.lock().unwrap().push("x")),
+                0,
+            );
+        }));
+        assert_eq!(el.send_posted_events(), 1);
+
+        let log_y = Arc::clone(&log);
+        post_event_to_thread_with_priority(
+            ThreadId::current(),
+            ObjectId(900_001),
+            meta_call(move || log_y.lock().unwrap().push("y")),
+            5,
+        );
+        assert_eq!(el.send_posted_events(), 2);
+        assert_eq!(*log.lock().unwrap(), vec!["y", "x"]);
     }
 }

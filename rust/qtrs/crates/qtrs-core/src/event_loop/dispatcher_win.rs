@@ -783,4 +783,61 @@ mod tests {
         }
         assert_eq!(delivered.load(Ordering::SeqCst), 1);
     }
+
+    #[test]
+    fn test_modal_pump_keeping_a_deferred_delete_rearms_the_wake_up() {
+        let mut el = crate::event_loop::EventLoop::new();
+        let hwnd = el.dispatcher.internal_hwnd;
+
+        // A callback of the normal pump opens a native modal loop, as a menu popup does.
+        el.post_event(
+            ObjectId(900_004),
+            crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(|_| {
+                let _ = crate::event_loop::pump_posted_events_modal();
+            }))),
+        );
+        // Owned by this loop level: the modal pump keeps it queued for the next turn.
+        el.post_event(
+            ObjectId(900_004),
+            crate::event::Event::new(crate::event::EventKind::DeferredDelete { loop_level: 0 }),
+        );
+        // Consume the wake-up (clears `wakeup_pending`) without running the window procedure.
+        let _ = el.dispatcher.process_events(false, None);
+        assert_eq!(take_wakeup_messages(hwnd).0, 0);
+
+        el.send_posted_events();
+        assert_eq!(
+            take_wakeup_messages(hwnd).0,
+            1,
+            "the kept deferred delete re-arms the wake-up"
+        );
+    }
+
+    #[test]
+    fn test_modal_pump_keeping_a_loop_blocked_deferred_delete_does_not_rearm_the_wake_up() {
+        let mut el = crate::event_loop::EventLoop::new();
+        let hwnd = el.dispatcher.internal_hwnd;
+        el.set_loop_level(2);
+
+        el.post_event(
+            ObjectId(900_004),
+            crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(|_| {
+                let _ = crate::event_loop::pump_posted_events_modal();
+            }))),
+        );
+        // Requested by an outer loop level: this loop level (2) cannot deliver it.
+        el.post_event(
+            ObjectId(900_004),
+            crate::event::Event::new(crate::event::EventKind::DeferredDelete { loop_level: 1 }),
+        );
+        let _ = el.dispatcher.process_events(false, None);
+        assert_eq!(take_wakeup_messages(hwnd).0, 0);
+
+        el.send_posted_events();
+        assert_eq!(
+            take_wakeup_messages(hwnd).0,
+            0,
+            "a loop-blocked deferred delete must not re-arm the wake-up (no busy spin)"
+        );
+    }
 }
