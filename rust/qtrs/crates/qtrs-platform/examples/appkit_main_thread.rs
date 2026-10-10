@@ -22,8 +22,8 @@
 //!   prints its name, reason and call stack first.
 //! - `PANIC` (exit 101), `TIMEOUT`, `ERROR` (any other exit).
 //!
-//! Not covered: native event delivery. The Cocoa event dispatcher does not dispatch `NSEvent`s or
-//! run the CFRunLoop (Contract G7.6.h), and no check here relies on it.
+//! Not covered: native event delivery. No check here runs the event loop; the Cocoa event loop is
+//! checked by qtrs-gui's `main_thread_entry` example.
 //!
 //! Usage: cargo run -p qtrs-platform --example appkit_main_thread [CHECK | --known-open=A,B,...]
 //! (macOS only). `--known-open` names checks that are expected not to be `ok` because of an open
@@ -353,7 +353,6 @@ mod checks {
     use std::fmt::Debug;
     use std::sync::{Arc, Mutex};
 
-    use qtrs_core::event_loop::CocoaNativeEvent;
     use qtrs_gui::geometry::primitives::{Point, Rect};
     use qtrs_gui::paint::Pixmap;
     use qtrs_gui::tiny_skia::Color;
@@ -363,10 +362,10 @@ mod checks {
     use qtrs_platform::theme::PlatformTheme;
     use qtrs_platform::tray::{CocoaStatusItem, PlatformTrayIcon};
     use qtrs_platform::{
-        ClosureWindowEventHandler, CocoaCursor, CocoaNativeWindow, CocoaPlatformIntegration,
-        CocoaScreen, CocoaTheme, ColorScheme, CursorShape, PlatformCursor, PlatformIntegration,
-        PlatformScreen, PlatformWindow, TrayMessageIcon, WindowEdges, WindowFlags,
-        WindowSystemEvent,
+        ClosureWindowEventHandler, CocoaCursor, CocoaNativeEvent, CocoaNativeWindow,
+        CocoaPlatformIntegration, CocoaScreen, CocoaTheme, ColorScheme, CursorShape,
+        PlatformCursor, PlatformIntegration, PlatformScreen, PlatformWindow, TrayMessageIcon,
+        WindowEdges, WindowFlags, WindowSystemEvent,
     };
 
     use super::cg;

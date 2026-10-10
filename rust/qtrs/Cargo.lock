@@ -281,6 +281,7 @@ dependencies = [
  "ab_glyph_rasterizer",
  "fontdue",
  "memmap2",
+ "parking_lot",
  "png",
  "qtrs-core",
  "rustybuzz",

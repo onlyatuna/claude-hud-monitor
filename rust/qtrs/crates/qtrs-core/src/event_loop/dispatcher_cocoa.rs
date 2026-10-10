@@ -1,279 +1,332 @@
-use std::collections::HashMap;
+//! `QCocoaEventDispatcher` (qcocoaeventdispatcher.mm): the GUI event loop's dispatcher on macOS.
+//!
+//! qtrs's `EventLoop` sends posted events and timer events itself, around each `process_events`
+//! call (loop.rs), so every call takes Qt's path for a `processEvents` that is not `exec`
+//! (qcocoaeventdispatcher.mm:378-466): make sure `NSApp` has launched, send every queued `NSEvent`
+//! through the native event filters and `[NSApp sendEvent:]`, and if nothing was sent and the
+//! caller may wait, wait in `[NSApp nextEventMatchingMask:untilDate:…]` (which runs the main run
+//! loop) until an event arrives or the next qtrs timer is due (:273-285, :479-487). `wake_up`, from
+//! any thread, signals a run loop source whose callback posts an application-defined `NSEvent`
+//! that ends the wait (:525-531, :877-916).
+
+use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use crate::event::{NativeEventFilter, NativeEventFilterChain, NativeMessage};
 use crate::event_loop::dispatcher::{DispatchResult, EventDispatcher, EventDispatcherHandle};
-use crate::timer::{TimerEntry, TimerId, TimerRegistry};
+use crate::timer::{TimerEntry, TimerRegistry};
 
-pub const K_CF_RUN_LOOP_RUN_FINISHED: i32 = 1;
-pub const K_CF_RUN_LOOP_RUN_STOPPED: i32 = 2;
-pub const K_CF_RUN_LOOP_RUN_TIMED_OUT: i32 = 3;
-pub const K_CF_RUN_LOOP_RUN_HANDLED_SOURCE: i32 = 4;
+mod ffi {
+    use std::ffi::{c_char, c_void};
 
-#[cfg(target_os = "macos")]
-#[allow(dead_code)]
-mod macos_cf {
-    use std::ffi::c_void;
+    pub type Id = *mut c_void;
+    pub type Sel = *const c_void;
+    pub type CFTypeRef = *mut c_void;
 
-    pub type CFRunLoopRef = *mut c_void;
-    pub type CFStringRef = *const c_void;
-    pub type CFTimeInterval = f64;
+    #[repr(C)]
+    pub struct NSPoint {
+        pub x: f64,
+        pub y: f64,
+    }
+
+    /// `CFRunLoopSourceContext` (version 0).
+    #[repr(C)]
+    pub struct CFRunLoopSourceContext {
+        pub version: isize,
+        pub info: *mut c_void,
+        pub retain: Option<extern "C" fn(*const c_void) -> *const c_void>,
+        pub release: Option<extern "C" fn(*const c_void)>,
+        pub copy_description: Option<extern "C" fn(*const c_void) -> *const c_void>,
+        pub equal: Option<extern "C" fn(*const c_void, *const c_void) -> u8>,
+        pub hash: Option<extern "C" fn(*const c_void) -> usize>,
+        pub schedule: Option<extern "C" fn(*mut c_void, CFTypeRef, *const c_void)>,
+        pub cancel: Option<extern "C" fn(*mut c_void, CFTypeRef, *const c_void)>,
+        pub perform: Option<extern "C" fn(*mut c_void)>,
+    }
+
+    pub type TimerCallback = extern "C" fn(CFTypeRef, *mut c_void);
 
     #[link(name = "CoreFoundation", kind = "framework")]
     extern "C" {
-        pub fn CFRunLoopGetMain() -> CFRunLoopRef;
-        pub fn CFRunLoopGetCurrent() -> CFRunLoopRef;
-        pub fn CFRunLoopRunInMode(
-            mode: CFStringRef,
-            seconds: CFTimeInterval,
-            returnAfterSourceHandled: u8,
-        ) -> i32;
-        pub fn CFRunLoopWakeUp(rl: CFRunLoopRef);
-    }
-}
-pub struct CFRunLoopSource {
-    signaled: AtomicBool,
-}
-
-impl Default for CFRunLoopSource {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl CFRunLoopSource {
-    pub fn new() -> Self {
-        Self {
-            signaled: AtomicBool::new(false),
-        }
-    }
-
-    pub fn signal(&self) {
-        self.signaled.store(true, Ordering::SeqCst);
+        pub static kCFRunLoopCommonModes: *const c_void;
+        pub fn CFRunLoopGetMain() -> CFTypeRef;
+        pub fn CFRunLoopWakeUp(run_loop: CFTypeRef);
+        pub fn CFRunLoopSourceCreate(
+            allocator: *const c_void,
+            order: isize,
+            context: *mut CFRunLoopSourceContext,
+        ) -> CFTypeRef;
+        pub fn CFRunLoopAddSource(run_loop: CFTypeRef, source: CFTypeRef, mode: *const c_void);
+        pub fn CFRunLoopSourceSignal(source: CFTypeRef);
+        pub fn CFRunLoopSourceInvalidate(source: CFTypeRef);
+        pub fn CFAbsoluteTimeGetCurrent() -> f64;
+        pub fn CFRunLoopTimerCreate(
+            allocator: *const c_void,
+            fire_date: f64,
+            interval: f64,
+            flags: usize,
+            order: isize,
+            callout: TimerCallback,
+            context: *mut c_void,
+        ) -> CFTypeRef;
+        pub fn CFRunLoopAddTimer(run_loop: CFTypeRef, timer: CFTypeRef, mode: *const c_void);
+        pub fn CFRunLoopTimerInvalidate(timer: CFTypeRef);
+        pub fn CFRelease(object: CFTypeRef);
     }
 
-    pub fn take_signal(&self) -> bool {
-        self.signaled.swap(false, Ordering::SeqCst)
-    }
-}
-
-pub struct CFRunLoopTimer {
-    pub id: TimerId,
-    pub interval: Duration,
-    pub single_shot: bool,
-    pub next_fire: Mutex<Option<Instant>>,
-}
-
-impl CFRunLoopTimer {
-    pub fn new(id: TimerId, interval: Duration, single_shot: bool) -> Self {
-        Self {
-            id,
-            interval,
-            single_shot,
-            next_fire: Mutex::new(Some(Instant::now() + interval)),
-        }
+    #[link(name = "Foundation", kind = "framework")]
+    extern "C" {
+        pub static NSDefaultRunLoopMode: Id;
     }
 
-    pub fn check_and_fire(&self, now: Instant) -> bool {
-        let mut next = self.next_fire.lock().unwrap();
-        if let Some(target) = *next {
-            if now >= target {
-                if self.single_shot {
-                    *next = None;
-                } else {
-                    *next = Some(now + self.interval);
-                }
-                return true;
-            }
-        }
-        false
+    #[link(name = "AppKit", kind = "framework")]
+    extern "C" {}
+
+    #[link(name = "objc")]
+    extern "C" {
+        pub fn objc_getClass(name: *const c_char) -> Id;
+        pub fn sel_registerName(name: *const c_char) -> Sel;
+        pub fn objc_msgSend();
+        pub fn objc_autoreleasePoolPush() -> *mut c_void;
+        pub fn objc_autoreleasePoolPop(pool: *mut c_void);
     }
 }
 
-pub struct CFRunLoopEngine {
-    source: Arc<CFRunLoopSource>,
-    timers: Mutex<HashMap<TimerId, Arc<CFRunLoopTimer>>>,
-    cond: Condvar,
-    lock: Mutex<bool>,
+use ffi::{CFTypeRef, Id, Sel};
+
+/// `NSEventTypeApplicationDefined`.
+const NS_EVENT_TYPE_APPLICATION_DEFINED: usize = 15;
+/// `NSEventMaskAny`.
+const NS_EVENT_MASK_ANY: usize = usize::MAX;
+/// `QtCocoaEventSubTypeWakeup` (qcocoahelpers.h:89-92).
+const WAKEUP_SUBTYPE: i16 = i16::MAX;
+
+/// The classes and selectors the dispatcher sends to, looked up once.
+struct Runtime {
+    ns_application: Id,
+    ns_event: Id,
+    ns_date: Id,
+    shared_application: Sel,
+    is_running: Sel,
+    run: Sel,
+    stop: Sel,
+    next_event: Sel,
+    send_event: Sel,
+    post_event: Sel,
+    other_event: Sel,
+    distant_future: Sel,
+    date_from_now: Sel,
 }
 
-impl Default for CFRunLoopEngine {
-    fn default() -> Self {
-        Self::new()
+// Class and selector pointers are process-wide constants.
+unsafe impl Send for Runtime {}
+unsafe impl Sync for Runtime {}
+
+static RUNTIME: LazyLock<Runtime> = LazyLock::new(|| unsafe {
+    use ffi::{objc_getClass, sel_registerName};
+    Runtime {
+        ns_application: objc_getClass(c"NSApplication".as_ptr()),
+        ns_event: objc_getClass(c"NSEvent".as_ptr()),
+        ns_date: objc_getClass(c"NSDate".as_ptr()),
+        shared_application: sel_registerName(c"sharedApplication".as_ptr()),
+        is_running: sel_registerName(c"isRunning".as_ptr()),
+        run: sel_registerName(c"run".as_ptr()),
+        stop: sel_registerName(c"stop:".as_ptr()),
+        next_event: sel_registerName(c"nextEventMatchingMask:untilDate:inMode:dequeue:".as_ptr()),
+        send_event: sel_registerName(c"sendEvent:".as_ptr()),
+        post_event: sel_registerName(c"postEvent:atStart:".as_ptr()),
+        other_event: sel_registerName(
+            c"otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"
+                .as_ptr(),
+        ),
+        distant_future: sel_registerName(c"distantFuture".as_ptr()),
+        date_from_now: sel_registerName(c"dateWithTimeIntervalSinceNow:".as_ptr()),
+    }
+});
+
+unsafe fn send0<R>(receiver: Id, sel: Sel) -> R {
+    let f: unsafe extern "C" fn(Id, Sel) -> R = std::mem::transmute(ffi::objc_msgSend as *const ());
+    f(receiver, sel)
+}
+
+unsafe fn send1<A, R>(receiver: Id, sel: Sel, a: A) -> R {
+    let f: unsafe extern "C" fn(Id, Sel, A) -> R =
+        std::mem::transmute(ffi::objc_msgSend as *const ());
+    f(receiver, sel, a)
+}
+
+unsafe fn send2<A, B, R>(receiver: Id, sel: Sel, a: A, b: B) -> R {
+    let f: unsafe extern "C" fn(Id, Sel, A, B) -> R =
+        std::mem::transmute(ffi::objc_msgSend as *const ());
+    f(receiver, sel, a, b)
+}
+
+/// An Objective-C autorelease pool for the scope (Qt's `QMacAutoReleasePool`).
+struct AutoreleasePool(*mut c_void);
+
+impl AutoreleasePool {
+    fn new() -> Self {
+        Self(unsafe { ffi::objc_autoreleasePoolPush() })
     }
 }
 
-impl CFRunLoopEngine {
-    pub fn new() -> Self {
-        Self {
-            source: Arc::new(CFRunLoopSource::new()),
-            timers: Mutex::new(HashMap::new()),
-            cond: Condvar::new(),
-            lock: Mutex::new(false),
-        }
+impl Drop for AutoreleasePool {
+    fn drop(&mut self) {
+        unsafe { ffi::objc_autoreleasePoolPop(self.0) }
     }
-    pub fn wake_up(&self) {
-        self.source.signal();
-        let _guard = self.lock.lock().unwrap();
-        self.cond.notify_all();
+}
 
-        #[cfg(target_os = "macos")]
-        unsafe {
-            let rl = macos_cf::CFRunLoopGetMain();
-            if !rl.is_null() {
-                macos_cf::CFRunLoopWakeUp(rl);
-            }
-        }
+fn ns_app() -> Id {
+    let rt = &*RUNTIME;
+    unsafe { send0(rt.ns_application, rt.shared_application) }
+}
+
+/// `[NSApp nextEventMatchingMask:NSEventMaskAny untilDate:until inMode:NSDefaultRunLoopMode
+/// dequeue:YES]`.
+fn next_event(app: Id, until: Id) -> Id {
+    let rt = &*RUNTIME;
+    unsafe {
+        let f: unsafe extern "C" fn(Id, Sel, usize, Id, Id, i8) -> Id =
+            std::mem::transmute(ffi::objc_msgSend as *const ());
+        f(
+            app,
+            rt.next_event,
+            NS_EVENT_MASK_ANY,
+            until,
+            ffi::NSDefaultRunLoopMode,
+            1,
+        )
     }
+}
 
-    pub fn add_timer(&self, id: TimerId, interval: Duration, single_shot: bool) {
-        let timer = Arc::new(CFRunLoopTimer::new(id, interval, single_shot));
-        self.timers.lock().unwrap().insert(id, timer);
-        let _guard = self.lock.lock().unwrap();
-        self.cond.notify_all();
+/// `cancelWaitForMoreEvents` (qcocoaeventdispatcher.mm:898-906): posts the application-defined
+/// wake-up event that ends a wait in `nextEventMatchingMask:`.
+fn post_wakeup_event() {
+    let _pool = AutoreleasePool::new();
+    let rt = &*RUNTIME;
+    unsafe {
+        let make: unsafe extern "C" fn(
+            Id,
+            Sel,
+            usize,
+            ffi::NSPoint,
+            usize,
+            f64,
+            isize,
+            Id,
+            i16,
+            isize,
+            isize,
+        ) -> Id = std::mem::transmute(ffi::objc_msgSend as *const ());
+        let event = make(
+            rt.ns_event,
+            rt.other_event,
+            NS_EVENT_TYPE_APPLICATION_DEFINED,
+            ffi::NSPoint { x: 0.0, y: 0.0 },
+            0,
+            0.0,
+            0,
+            std::ptr::null_mut(),
+            WAKEUP_SUBTYPE,
+            0,
+            0,
+        );
+        send2::<Id, i8, ()>(ns_app(), rt.post_event, event, 0);
     }
+}
 
-    pub fn remove_timer(&self, id: TimerId) {
-        self.timers.lock().unwrap().remove(&id);
+/// Qt's `nsAppRunCalledByQt`: `NSApp` was launched by `ensure_nsapp_initialized`.
+static NSAPP_RUN_CALLED: AtomicBool = AtomicBool::new(false);
+/// Qt's `initializingNSApplication`.
+static INITIALIZING_NSAPP: AtomicBool = AtomicBool::new(false);
+/// A wake-up source fired while `NSApp` was launching and must fire again afterwards.
+static WAKE_DEFERRED: AtomicBool = AtomicBool::new(false);
+/// The main thread is inside a `process_events` call that may wait (Qt's `processEventsFlags`
+/// with `WaitForMoreEvents` and without `EventLoopExec`, :908-916).
+static WAIT_FOR_MORE_EVENTS: AtomicBool = AtomicBool::new(false);
+
+/// The posted-events source's callback, on the main thread (:877-896). Posted and timer events
+/// are sent by the qtrs event loop, so the callback only ends a wait.
+extern "C" fn wake_source_perform(_info: *mut c_void) {
+    if INITIALIZING_NSAPP.load(Ordering::SeqCst) {
+        WAKE_DEFERRED.store(true, Ordering::SeqCst);
+        return;
     }
+    if WAIT_FOR_MORE_EVENTS.load(Ordering::SeqCst) {
+        post_wakeup_event();
+    }
+}
 
-    pub fn run_in_mode(&self, timeout: Option<Duration>) -> i32 {
-        let start = Instant::now();
-        let guard = self.lock.lock().unwrap();
+/// Runs once `[NSApp run]` has launched the application (:568-572).
+extern "C" fn stop_nsapp_after_launch(_timer: CFTypeRef, _info: *mut c_void) {
+    let app = ns_app();
+    unsafe { send1::<Id, ()>(app, RUNTIME.stop, app) };
+    post_wakeup_event();
+}
 
-        if self.source.take_signal() {
-            return K_CF_RUN_LOOP_RUN_HANDLED_SOURCE;
-        }
+/// The version-0 run loop source on the main run loop's common modes that `wake_up` signals
+/// (Qt's `postedEventsSource`, :786-801).
+struct WakeSource(CFTypeRef);
 
-        let expired = self.collect_expired(start);
-        if !expired.is_empty() {
-            return K_CF_RUN_LOOP_RUN_FINISHED;
-        }
+// CFRunLoopSourceSignal, CFRunLoopWakeUp and CFRunLoopSourceInvalidate are thread-safe.
+unsafe impl Send for WakeSource {}
+unsafe impl Sync for WakeSource {}
 
-        // 3. Calculate minimum wait time
-        let wait_time = match timeout {
-            Some(t) => {
-                let earliest = self.next_timer_delay(start);
-                match earliest {
-                    Some(et) => t.min(et),
-                    None => t,
-                }
-            }
-            None => self
-                .next_timer_delay(start)
-                .unwrap_or(Duration::from_secs(3600)),
+impl WakeSource {
+    fn new() -> Self {
+        let mut context = ffi::CFRunLoopSourceContext {
+            version: 0,
+            info: std::ptr::null_mut(),
+            retain: None,
+            release: None,
+            copy_description: None,
+            equal: None,
+            hash: None,
+            schedule: None,
+            cancel: None,
+            perform: Some(wake_source_perform),
         };
-
-        if wait_time.is_zero() {
-            return K_CF_RUN_LOOP_RUN_TIMED_OUT;
-        }
-
-        // Wait on condition variable
-        let (_new_guard, _res) = self.cond.wait_timeout(guard, wait_time).unwrap();
-
-        if self.source.take_signal() {
-            K_CF_RUN_LOOP_RUN_HANDLED_SOURCE
-        } else {
-            let now = Instant::now();
-            let exp = self.collect_expired(now);
-            if !exp.is_empty() {
-                K_CF_RUN_LOOP_RUN_FINISHED
-            } else {
-                K_CF_RUN_LOOP_RUN_TIMED_OUT
-            }
+        unsafe {
+            let source = ffi::CFRunLoopSourceCreate(std::ptr::null(), 0, &mut context);
+            assert!(!source.is_null(), "CFRunLoopSourceCreate");
+            ffi::CFRunLoopAddSource(ffi::CFRunLoopGetMain(), source, ffi::kCFRunLoopCommonModes);
+            Self(source)
         }
     }
 
-    fn next_timer_delay(&self, now: Instant) -> Option<Duration> {
-        let timers = self.timers.lock().unwrap();
-        let mut min_delay: Option<Duration> = None;
-        for t in timers.values() {
-            if let Some(target) = *t.next_fire.lock().unwrap() {
-                let delay = if target > now {
-                    target - now
-                } else {
-                    Duration::from_millis(0)
-                };
-                min_delay = Some(min_delay.map_or(delay, |m| m.min(delay)));
-            }
+    /// `QCocoaEventDispatcher::wakeUp` (:525-531).
+    fn signal(&self) {
+        unsafe {
+            ffi::CFRunLoopSourceSignal(self.0);
+            ffi::CFRunLoopWakeUp(ffi::CFRunLoopGetMain());
         }
-        min_delay
     }
+}
 
-    fn collect_expired(&self, now: Instant) -> Vec<TimerId> {
-        let timers = self.timers.lock().unwrap();
-        let mut expired = Vec::new();
-        for (id, t) in timers.iter() {
-            if t.check_and_fire(now) {
-                expired.push(*id);
-            }
+impl Drop for WakeSource {
+    fn drop(&mut self) {
+        unsafe {
+            ffi::CFRunLoopSourceInvalidate(self.0);
+            ffi::CFRelease(self.0);
         }
-        expired
     }
 }
 
 #[derive(Clone)]
 pub struct CocoaEventDispatcherHandle {
-    engine: Arc<CFRunLoopEngine>,
-    wakeup_pending: Arc<AtomicBool>,
+    wake: Arc<WakeSource>,
 }
 
 impl EventDispatcherHandle for CocoaEventDispatcherHandle {
     fn wake_up(&self) {
-        if !self.wakeup_pending.swap(true, Ordering::Release) {
-            self.engine.wake_up();
-        }
+        self.wake.signal();
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum CocoaNativeEvent {
-    MouseDown {
-        x: f64,
-        y: f64,
-        button: u16,
-        modifiers: u32,
-    },
-    MouseUp {
-        x: f64,
-        y: f64,
-        button: u16,
-        modifiers: u32,
-    },
-    MouseMoved {
-        x: f64,
-        y: f64,
-        modifiers: u32,
-    },
-    ScrollWheel {
-        x: f64,
-        y: f64,
-        delta_x: f64,
-        delta_y: f64,
-    },
-    KeyDown {
-        key_code: u16,
-        modifiers: u32,
-        is_repeat: bool,
-    },
-    KeyUp {
-        key_code: u16,
-        modifiers: u32,
-    },
-    WindowResized {
-        width: f64,
-        height: f64,
-    },
-    WindowCloseRequested,
-}
-
 pub struct CocoaEventDispatcher {
-    engine: Arc<CFRunLoopEngine>,
-    wakeup_pending: Arc<AtomicBool>,
-    pending_timers: Mutex<Vec<TimerId>>,
-    appkit_event_queue: Arc<Mutex<Vec<CocoaNativeEvent>>>,
+    wake: Arc<WakeSource>,
     native_filters: NativeEventFilterChain,
 }
 
@@ -286,48 +339,98 @@ impl Default for CocoaEventDispatcher {
 impl CocoaEventDispatcher {
     pub fn new() -> Self {
         Self {
-            engine: Arc::new(CFRunLoopEngine::new()),
-            wakeup_pending: Arc::new(AtomicBool::new(false)),
-            pending_timers: Mutex::new(Vec::new()),
-            appkit_event_queue: Arc::new(Mutex::new(Vec::new())),
+            wake: Arc::new(WakeSource::new()),
             native_filters: NativeEventFilterChain::new(),
         }
     }
 
     pub fn clone_handle(&self) -> CocoaEventDispatcherHandle {
         CocoaEventDispatcherHandle {
-            engine: Arc::clone(&self.engine),
-            wakeup_pending: Arc::clone(&self.wakeup_pending),
+            wake: Arc::clone(&self.wake),
         }
     }
 
-    pub fn post_appkit_event(&self, event: CocoaNativeEvent) {
-        self.appkit_event_queue.lock().unwrap().push(event);
-        self.engine.wake_up();
+    /// `ensureNSAppInitialized` (:537-575): launch `NSApp` with `[NSApp run]` and stop it as soon
+    /// as it runs, so AppKit does its launch work (`finishLaunching`) before events are processed.
+    fn ensure_nsapp_initialized(&self, app: Id) {
+        let rt = &*RUNTIME;
+        if NSAPP_RUN_CALLED.load(Ordering::SeqCst)
+            || unsafe { send0::<i8>(app, rt.is_running) } != 0
+        {
+            return;
+        }
+        NSAPP_RUN_CALLED.store(true, Ordering::SeqCst);
+        INITIALIZING_NSAPP.store(true, Ordering::SeqCst);
+        unsafe {
+            let main = ffi::CFRunLoopGetMain();
+            let now = ffi::CFAbsoluteTimeGetCurrent();
+            let timer = ffi::CFRunLoopTimerCreate(
+                std::ptr::null(),
+                now,
+                0.0,
+                0,
+                0,
+                stop_nsapp_after_launch,
+                std::ptr::null_mut(),
+            );
+            assert!(!timer.is_null(), "CFRunLoopTimerCreate");
+            ffi::CFRunLoopAddTimer(main, timer, ffi::kCFRunLoopCommonModes);
+            send0::<()>(app, rt.run);
+            ffi::CFRunLoopTimerInvalidate(timer);
+            ffi::CFRelease(timer);
+        }
+        INITIALIZING_NSAPP.store(false, Ordering::SeqCst);
+        if WAKE_DEFERRED.swap(false, Ordering::SeqCst) {
+            self.wake.signal();
+        }
     }
 
-    pub fn pump_appkit_events(&mut self) -> Vec<CocoaNativeEvent> {
-        let events = std::mem::take(&mut *self.appkit_event_queue.lock().unwrap());
-        let mut accepted = Vec::new();
-        for event in events {
+    /// Sends every queued `NSEvent` the native event filters do not consume to
+    /// `[NSApp sendEvent:]` (:426-451). Returns whether any was sent.
+    fn send_queued_events(&mut self, app: Id) -> bool {
+        let rt = &*RUNTIME;
+        let mut sent = false;
+        loop {
+            let _pool = AutoreleasePool::new();
+            let event = next_event(app, std::ptr::null_mut());
+            if event.is_null() {
+                return sent;
+            }
             let mut result = 0isize;
-            #[cfg(target_os = "macos")]
-            let msg = NativeMessage::Mac(std::ptr::null_mut());
-            #[cfg(not(target_os = "macos"))]
-            let msg = NativeMessage::Custom("NSEvent", std::ptr::null_mut());
-            if !self.filter_native_event("NSEvent", &msg, &mut result) {
-                accepted.push(event);
+            if !self.native_filters.filter_native(
+                "NSEvent",
+                &NativeMessage::Mac(event),
+                &mut result,
+            ) {
+                unsafe { send1::<Id, ()>(app, rt.send_event, event) };
+                sent = true;
             }
         }
-        accepted
+    }
+
+    /// `qt_mac_waitForMoreEvents` (:273-285), bounded by `timeout`: waits for an event, then puts
+    /// it back at the front of the queue. Returns whether one arrived.
+    fn wait_for_more_events(app: Id, timeout: Option<Duration>) -> bool {
+        let rt = &*RUNTIME;
+        let _pool = AutoreleasePool::new();
+        unsafe {
+            let until: Id = match timeout {
+                Some(timeout) => send1(rt.ns_date, rt.date_from_now, timeout.as_secs_f64()),
+                None => send0(rt.ns_date, rt.distant_future),
+            };
+            let event = next_event(app, until);
+            if event.is_null() {
+                return false;
+            }
+            send2::<Id, i8, ()>(app, rt.post_event, event, 1);
+        }
+        true
     }
 }
 
 impl EventDispatcher for CocoaEventDispatcher {
     fn wake_up(&self) {
-        if !self.wakeup_pending.swap(true, Ordering::Release) {
-            self.engine.wake_up();
-        }
+        self.wake.signal();
     }
 
     fn clone_handle(&self) -> Arc<dyn EventDispatcherHandle> {
@@ -347,6 +450,8 @@ impl EventDispatcher for CocoaEventDispatcher {
         self.native_filters.filter_native(event_type, msg, result)
     }
 
+    /// `QCocoaEventDispatcher::processEvents` without `EventLoopExec` (:287-510): `Normal` if an
+    /// event was sent (Qt's `true`), otherwise `Timeout`.
     fn process_events(
         &mut self,
         can_wait: bool,
@@ -354,65 +459,41 @@ impl EventDispatcher for CocoaEventDispatcher {
     ) -> DispatchResult {
         crate::object::ThreadContext::assert_main_thread("CocoaEventDispatcher::process_events");
 
-        let pumped = self.pump_appkit_events();
-        let had_pumped = !pumped.is_empty();
-        self.wakeup_pending.store(false, Ordering::Release);
+        let _pool = AutoreleasePool::new();
+        let app = ns_app();
+        let outer_wait = WAIT_FOR_MORE_EVENTS.swap(can_wait, Ordering::SeqCst);
+        self.ensure_nsapp_initialized(app);
 
-        if had_pumped {
-            return DispatchResult::Awoken;
-        }
-        let timeout = if can_wait {
-            next_timer_timeout
-        } else {
-            Some(Duration::from_millis(0))
+        let mut wait = can_wait;
+        let sent = loop {
+            if self.send_queued_events(app) {
+                break true;
+            }
+            if !wait || !Self::wait_for_more_events(app, next_timer_timeout) {
+                break false;
+            }
+            // Send the event that ended the wait, without waiting again (:483-487).
+            WAIT_FOR_MORE_EVENTS.store(false, Ordering::SeqCst);
+            wait = false;
         };
+        WAIT_FOR_MORE_EVENTS.store(outer_wait, Ordering::SeqCst);
 
-        let run_result = self.engine.run_in_mode(timeout);
-
-        match run_result {
-            K_CF_RUN_LOOP_RUN_HANDLED_SOURCE => DispatchResult::Awoken,
-            K_CF_RUN_LOOP_RUN_FINISHED => {
-                let now = Instant::now();
-                let exp = self.engine.collect_expired(now);
-                if !exp.is_empty() {
-                    self.pending_timers.lock().unwrap().extend(exp);
-                }
-                DispatchResult::Normal
-            }
-            K_CF_RUN_LOOP_RUN_TIMED_OUT => {
-                if can_wait && next_timer_timeout.is_some() {
-                    DispatchResult::Timeout
-                } else {
-                    DispatchResult::Normal
-                }
-            }
-            _ => DispatchResult::Normal,
+        if sent {
+            DispatchResult::Normal
+        } else {
+            DispatchResult::Timeout
         }
     }
-    fn register_timer(&mut self, entry: &TimerEntry) {
-        self.engine.add_timer(
-            entry.id,
-            Duration::from_millis(entry.interval_ms),
-            entry.single_shot,
-        );
-    }
 
-    fn unregister_timer(&mut self, entry: &TimerEntry) {
-        self.engine.remove_timer(entry.id);
-    }
+    /// Timers live in the event loop's `TimerRegistry`; `process_events` waits until the next one
+    /// is due.
+    fn register_timer(&mut self, _entry: &TimerEntry) {}
+
+    fn unregister_timer(&mut self, _entry: &TimerEntry) {}
 
     fn send_timer_events(&mut self, registry: &mut TimerRegistry) {
         let now_ms = crate::timer::current_time_ms();
-        let mut expired_ids = registry.expired_timers(now_ms);
-
-        let pending = std::mem::take(&mut *self.pending_timers.lock().unwrap());
-        for id in pending {
-            if !expired_ids.contains(&id) {
-                expired_ids.push(id);
-            }
-        }
-
-        for id in expired_ids {
+        for id in registry.expired_timers(now_ms) {
             let Some(entry) = registry.get(id) else {
                 continue;
             };
@@ -446,89 +527,16 @@ impl EventDispatcher for CocoaEventDispatcher {
 
             if single_shot {
                 registry.unregister(id);
-                self.engine.remove_timer(id);
             } else if let Some(entry) = registry.get_mut(id) {
                 entry.in_timer_event = false;
             }
         }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_cocoa_run_loop_source_signal() {
-        let source = CFRunLoopSource::new();
-        assert!(!source.take_signal());
-
-        source.signal();
-        assert!(source.take_signal());
-        assert!(!source.take_signal());
-    }
-
-    #[test]
-    fn test_cocoa_dispatcher_cross_thread_wakeup() {
-        crate::object::ThreadContext::init_current(true, None);
-        let mut dispatcher = CocoaEventDispatcher::new();
-        let handle = dispatcher.clone_handle();
-
-        let thread_handle = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(20));
-            handle.wake_up();
-        });
-
-        let result = dispatcher.process_events(true, Some(Duration::from_millis(500)));
-        assert_eq!(result, DispatchResult::Awoken);
-
-        thread_handle.join().unwrap();
-    }
-
-    #[test]
-    fn test_cocoa_dispatcher_timeout() {
-        crate::object::ThreadContext::init_current(true, None);
-        let mut dispatcher = CocoaEventDispatcher::new();
-        let start = Instant::now();
-        let result = dispatcher.process_events(true, Some(Duration::from_millis(30)));
-        assert_eq!(result, DispatchResult::Timeout);
-        assert!(start.elapsed() >= Duration::from_millis(25));
-    }
-
-    #[test]
-    fn test_cocoa_dispatcher_timer_integration() {
-        crate::object::ThreadContext::init_current(true, None);
-        let mut dispatcher = CocoaEventDispatcher::new();
-        let mut entry = TimerEntry::new(
-            TimerId(202),
-            20,
-            0,
-            crate::timer::TimerType::Precise,
-            crate::object::ObjectId::next(),
-        );
-        entry.single_shot = true;
-        dispatcher.register_timer(&entry);
-        std::thread::sleep(Duration::from_millis(30));
-
-        let result = dispatcher.process_events(false, None);
-        assert_eq!(result, DispatchResult::Normal);
-
-        dispatcher.unregister_timer(&entry);
-    }
-
-    #[test]
-    fn test_cocoa_dispatcher_appkit_event_pumping() {
-        crate::object::ThreadContext::init_current(true, None);
-        let mut dispatcher = CocoaEventDispatcher::new();
-        dispatcher.post_appkit_event(CocoaNativeEvent::MouseDown {
-            x: 100.0,
-            y: 200.0,
-            button: 0,
-            modifiers: 0,
-        });
-
-        let result = dispatcher.process_events(false, None);
-        assert_eq!(result, DispatchResult::Awoken);
-    }
 
     #[test]
     fn test_cocoa_dispatcher_main_thread_enforcement() {

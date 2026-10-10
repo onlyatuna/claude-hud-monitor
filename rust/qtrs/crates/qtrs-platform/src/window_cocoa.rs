@@ -1,4 +1,3 @@
-use qtrs_core::event_loop::CocoaNativeEvent;
 use qtrs_core::object::ThreadContext;
 use qtrs_gui::geometry::primitives::{Point, Rect, Size};
 use qtrs_gui::paint::Pixmap;
@@ -19,6 +18,48 @@ use crate::window_system_interface::{
     KeyboardModifiers, MouseButton, PressedButtons, WheelDelta, WindowSystemEvent,
     WindowSystemEventHandler,
 };
+
+/// An input or window event for `CocoaNativeWindow::dispatch_cocoa_event`, in view coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CocoaNativeEvent {
+    MouseDown {
+        x: f64,
+        y: f64,
+        button: u16,
+        modifiers: u32,
+    },
+    MouseUp {
+        x: f64,
+        y: f64,
+        button: u16,
+        modifiers: u32,
+    },
+    MouseMoved {
+        x: f64,
+        y: f64,
+        modifiers: u32,
+    },
+    ScrollWheel {
+        x: f64,
+        y: f64,
+        delta_x: f64,
+        delta_y: f64,
+    },
+    KeyDown {
+        key_code: u16,
+        modifiers: u32,
+        is_repeat: bool,
+    },
+    KeyUp {
+        key_code: u16,
+        modifiers: u32,
+    },
+    WindowResized {
+        width: f64,
+        height: f64,
+    },
+    WindowCloseRequested,
+}
 
 /// Visual effect materials for macOS translucent vibrancy backgrounds (`NSVisualEffectView`).
 #[repr(i64)]

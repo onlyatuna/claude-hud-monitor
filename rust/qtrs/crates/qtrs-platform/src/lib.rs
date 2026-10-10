@@ -112,7 +112,7 @@ pub use window::{
     unregister_window_event_binding, CustomFramelessConfig, NativeWindow, PlatformWindowStateFlags,
     SetGeometryGuard, WindowFlags,
 };
-pub use window_cocoa::{qt_mac_flip_point, qt_mac_flip_rect, CocoaNativeWindow};
+pub use window_cocoa::{qt_mac_flip_point, qt_mac_flip_rect, CocoaNativeEvent, CocoaNativeWindow};
 pub use window_system_interface::{
     ClosureWindowEventHandler, Delivery, KeyboardModifiers, MouseButton, PowerEvent, WheelDelta,
     WindowSystemEvent, WindowSystemEventHandler,

@@ -873,12 +873,11 @@ fn test_linux_dbus_status_notifier_item_with_socket_notifier() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn test_macos_objc_runtime_and_cocoa_window_lifecycle() {
-    use qtrs_core::event_loop::CocoaNativeEvent;
     use qtrs_core::object::ThreadContext;
     use qtrs_gui::geometry::primitives::Rect;
     use qtrs_platform::{
-        ClosureWindowEventHandler, CocoaNativeWindow, MockObjcRuntime, PlatformWindow, WindowFlags,
-        WindowSystemEvent, NS_MODAL_PANEL_WINDOW_LEVEL,
+        ClosureWindowEventHandler, CocoaNativeEvent, CocoaNativeWindow, MockObjcRuntime,
+        PlatformWindow, WindowFlags, WindowSystemEvent, NS_MODAL_PANEL_WINDOW_LEVEL,
     };
     use std::sync::{Arc, Mutex};
 
@@ -1120,8 +1119,7 @@ fn test_cross_platform_input_event_bridge_queuing_and_polling() {
     // the mock runtime. On macOS: examples/appkit_main_thread.rs (`window_event_bridge`).
     #[cfg(not(target_os = "macos"))]
     {
-        use qtrs_core::event_loop::CocoaNativeEvent;
-        use qtrs_platform::CocoaNativeWindow;
+        use qtrs_platform::{CocoaNativeEvent, CocoaNativeWindow};
         let mut cocoa_win = CocoaNativeWindow::new(
             "Cocoa Bridge Window",
             Rect::new(0, 0, 500, 400),

@@ -564,7 +564,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G7.6.e [P2]** `EventLoopThreadHandle` 無 Drop／join，丟棄即分離。
   - **G7.6.f [P1, RAN（macOS CI）；已修復：RC-44]** macOS 上每個執行緒的事件迴圈都用 `CocoaEventDispatcher`，它要求主執行緒，所以 `spawn_with_event_loop` 與任何非主執行緒的 `EventLoop::process_events`／`exec` 一定 panic。
   - **G7.6.g [P1, RAN（macOS CI）；已修復：RC-45]** dispatcher 依「是否主執行緒」選擇（RC-44），不是依事件迴圈的建立路徑：macOS 上只有 core 應用程式的主執行緒用 Cocoa（Qt 用 UNIX），而未呼叫 `init_current` 的 `std::thread` 若先搶到主執行緒判定也會拿到 Cocoa。
-  - **G7.6.h [P1, READ]** `CocoaEventDispatcher` 沒有接上 Cocoa：不派送 `NSEvent`、從不呼叫 `CFRunLoopRunInMode`（`dispatcher_cocoa.rs:28,140-188,312`），等待只靠 Rust Condvar；Qt 的 `QCocoaEventDispatcher` 整合 CFRunLoop、socket notifier、使用者輸入與 modal session。未修，需 macOS 真機驗證。
+  - **G7.6.h [P1, RAN（macOS CI）；已修復：RC-61]** `CocoaEventDispatcher` 是純 Rust 模擬：以 Condvar 等待（主 run loop 從不執行）、只處理 `post_appkit_event` 餵入的 Rust 列舉佇列，不從 AppKit 取出 `NSEvent`、不呼叫 `[NSApp sendEvent:]`、不 launch `NSApp`。Qt 在 AppKit 的事件佇列上等待與派送（`qcocoaeventdispatcher.mm:273-285,378-466,537-575`）。
+  - **G7.6.i [P1, RAN（macOS CI）；已修復：RC-61]** Cocoa 的喚醒閘門吞掉喚醒：`wakeup_pending` 在 dispatcher 的 `process_events` 開頭才重置，而 `EventLoop::process_events` 在那之前已取走 posted events（`loop.rs:355`）。另一執行緒的 post 喚醒一次等待後，到下次重置之前 post 的事件（例如前一事件的 handler post 的事件）不會觸發喚醒，要等下一個計時器或其他喚醒才執行。Qt 的 `wakeUp` 沒有閘門（`qcocoaeventdispatcher.mm:525-531`）。
+  - **G7.6.j [P1, READ]** Cocoa dispatcher 的 socket notifier 是靜默 no-op：`CocoaEventDispatcher` 沒有覆寫 `register_socket_notifier`，落到 `EventDispatcher` 的預設空實作（`dispatcher.rs:51-52`）。Qt 以 CFSocket 把 socket 加入主 run loop（`qcocoaeventdispatcher.mm:223-232`、`qcfsocketnotifier.cpp:48-56,92-160`）。
+  - **G7.6.k [P1, READ]** AppKit 的巢狀迴圈（選單追蹤、live resize、modal）期間 qtrs 的 posted events 與計時器不執行：兩者只由 qtrs `EventLoop::process_events` 處理，喚醒 source 的回呼只結束等待；`exec` 也不呼叫 `[NSApp run]`，exec 期間 `[NSApp isRunning]` 為 NO。Qt 的 posted-events source 與計時器在 common modes（`qcocoaeventdispatcher.mm:78-130,783-801`），不在 `processEvents` 內時由 source 回呼直接送出 posted events（`:888-896`），exec 走 `[NSApp run]`（`:372-376`）。
+  - **G7.6.l [P2, READ]** 沒有改寫 `-[NSApplication sendEvent:]`：AppKit 自己的迴圈（launch 時的 `[NSApp run]`、選單追蹤）派送的 NSEvent 不經過 qtrs 的 native event filter。Qt 在 `QCocoaIntegration` 建構時以 `qt_redirectNSApplicationSendEvent` 換掉實作，每個事件先過 `filterNativeEvent("mac_generic_NSEvent", …)`（`qcocoaintegration.mm:137-138`、`qcocoaapplication.mm:47-64,103-141`）。
+  - **G7.6.m [P2, READ]** 沒有 modal session：Qt 的 dispatcher 為 modal 視窗執行 `runModalSession:`，並把 `NSModalPanelRunLoopMode` 加為 common mode（`qcocoaeventdispatcher.mm:345-371,384-425,602-721,784`）；qtrs 沒有對應路徑。
 - **Test**：必要：`thread_handle_is_finished_true_after_thread_returns_without_join`；`quit_ends_event_loop_after_queued_events_run`。
 - **HUD usage**：Python 只用 `threading.Thread`；Rust 只用 `std::thread::Builder`（`refresh_controller.rs:132`、`hotkey.rs:126`、`config.rs:438`、`providers/agy.rs:259,265`）；`qtrs_core::thread::*` 在 `rust/src` 無任何使用。
 
@@ -1023,12 +1028,13 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.13.i [P2, RAN；已修復：RC-56]** 系統匣項目長度為 `NSVariableStatusItemLength`（−1）；Qt 用 `NSSquareStatusItemLength`（−2，`qcocoasystemtrayicon.mm:37`）。
   - **G11.13.j [P1, RAN；已修復：RC-57]** `set_tooltip` 設的是按鈕 `title`（文字直接顯示在選單列），`toolTip` 為 nil；Qt 設 `button.toolTip`（`qcocoasystemtrayicon.mm:195-200`）。
   - **G11.13.k [P1, RAN；已修復：RC-58]** `CocoaTheme` 在外觀為 Aqua 時回報 Dark：`query_color_scheme` 只要外觀名稱非 nil 就回 Dark（`theme.rs`）；Qt 取 `bestMatchFromAppearancesWithNames:@[Aqua, DarkAqua]`（`qcocoatheme.mm:507-509`）。
-  - **G11.13.l [P1, RAN；原因未定]** `show()`（`makeKeyAndOrderFront:`）後視窗不是 key window，`[NSApp isActive]` 為 NO。qtrs 沒有像 Qt 的 Cocoa 整合那樣設定與啟用 `NSApplication`；是否為 CI 環境（無使用者登入的 GUI session）造成，尚未區分 `[INFERENCE]`。Qt 在 `QCocoaIntegration` 建構時設定 Regular activation policy（`qcocoaintegration.mm:139-147`、`qcocoahelpers.mm:177-179`），實際啟用在 `applicationDidFinishLaunching:` 呼叫 `activateIgnoringOtherApps:`（`qcocoaapplicationdelegate.mm:164-178`），需要 NSApp 的啟動流程與事件迴圈，屬於延後的 G7.6.h 範圍；在 G7.6.h 之前不單獨處理。
+  - **G11.13.l [P1, RAN；原因未定]** `show()`（`makeKeyAndOrderFront:`）後視窗不是 key window，`[NSApp isActive]` 為 NO。qtrs 沒有像 Qt 的 Cocoa 整合那樣設定與啟用 `NSApplication`；是否為 CI 環境（無使用者登入的 GUI session）造成，尚未區分 `[INFERENCE]`。Qt 在 `QCocoaIntegration` 建構時設定 Regular activation policy（`qcocoaintegration.mm:139-147`、`qcocoahelpers.mm:177-179`），實際啟用在 `applicationDidFinishLaunching:` 呼叫 `activateIgnoringOtherApps:`（`qcocoaapplicationdelegate.mm:164-178`），需要 NSApp 的啟動流程與事件迴圈。RC-61 之後 `NSApp` 會在第一次 `process_events` 以 `[NSApp run]` launch，但 qtrs 仍未設定 activation policy，也不啟用應用程式。
   - **G11.13.m [P1, RAN；已修復：RC-50]** `present()` 顯示的顏色通道錯置：`commit_to_layer` 以 `kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host`（little-endian 即 BGRA）建立 CGImage，但資料是 tiny-skia 的 RGBA。實測（run 37977238590，RC-46 之後才可觀察）：紅色 pixmap 的 layer 影像中心像素讀回 RGBA `[0, 0, 255, 255]`。Qt 的 backing store 影像格式與 IOSurface 一致（`qcocoabackingstore.mm`）。
   - **G11.13.n [P1, RAN；已修復：RC-49]** `present(_, 0.85)` 後 `[layer opacity]` 讀回 2（`[window alphaValue]` 為 1），有效不透明度不是 0.85。`commit_to_layer` 以 `send_length`（`CGFloat`＝double）送 `setOpacity:`，而 `CALayer.opacity` 是 `float`；是否就是這個 ABI 不符造成，尚未證實 `[INFERENCE]`。Qt 把視窗不透明度放在 `[NSWindow alphaValue]`（`QCocoaWindow::setOpacity`，`qcocoawindow.mm:1206-1213`），不設 layer opacity。
   - **G11.13.o [P1, RAN；已修復：RC-48]** `commit_to_layer` 以 `CGDataProviderCreateWithData` 直接引用 `pixel_buffer`（不複製、無 release callback），layer 持有這個 CGImage；下一次 `present` 會覆寫同一塊記憶體，`resize` 會重新配置（舊指標懸空）。Qt 在 Core Animation 仍使用某個 IOSurface 時不重用它（`qcocoabackingstore.mm:141,163,347`）。未觀察到實際損毀 `[INFERENCE]`；RC-46 之前這條路徑在 macOS 上會先中止，無法到達。
   - **G11.13.p [P2, RAN；已修復：RC-55]** backdrop 開啟路徑每次都建立並加入新的 `NSVisualEffectView`，不看是否已有：`set_backdrop(Acrylic)` 後 `set_backdrop(Mica)`，內容視圖有 2 個 effect view（`backdrop_on_twice`，run 37979484145 與 37983110238）。RC-47 之後 slot 只記住最後一個，`set_backdrop(None)` 只移除最後一個。Qt 每個區域只有一個 effect view，已存在時就地更新 material／blendingMode／state（`qcocoawindow.mm:2258-2259,2278-2281`）。HUD 在主題切換時重新呼叫 `set_backdrop`（`rust/src/ui/hud_window.rs:793-794`）。
   - **G11.13.q [P2, RAN；與 Qt 相同，不修]** `set_cocoa_window_backdrop` 以 `alloc`／`init` 取得 effect view（+1），加入父視圖後未 release；`set_backdrop(None)` 只 `removeFromSuperview`，該 +1 永不釋放（`set_vibrancy` 同樣如此）。`CocoaNativeWindow` 也沒有 `Drop`。實測（run 38003919416，以 zeroing weak reference 在 autorelease pool 外觀察）：`set_backdrop(None)` 與 `set_vibrancy(None)` 移除的 effect view 都沒有被釋放。Qt 相同：cocoa 外掛為手動參照計數（例如 `qcocoasystemtrayicon.mm:95` 的 `autorelease`），`[NSVisualEffectView new]`（`qcocoawindow.mm:2266`）的 +1 在移除時（`:2260-2262`，只 `removeFromSuperview` 並自 `m_effectViews` 移除）也未 release。依 Qt 為 oracle，此項不構成與 Qt 的差異，不修；每次移除留下一個 effect view 的記憶體。
+  - **G11.13.r [P1, READ]** 真實輸入不會變成 qtrs 視窗事件：`QNSView` 只覆寫 `-isFlipped`，沒有滑鼠、鍵盤、滾輪處理方法，視窗也沒有 delegate；`CocoaNativeWindow::queue_cocoa_event`／`dispatch_cocoa_event` 只有測試與檢查程式呼叫。Qt 的 `QNSView` 在 `mouseDown:`、`keyDown:`、`scrollWheel:` 等方法把 NSEvent 轉給 `QWindowSystemInterface`（`qnsview_mouse.mm:372`、`qnsview_keys.mm:148`、`qnsview_mouse.mm:639`），`QNSWindowDelegate` 處理關閉等視窗事件（`qnswindowdelegate.mm:32-35`）。
 - **未判定的檢查**：`status_item_lifecycle` 原有的「drop 之後 `[statusItem statusBar]` 為 nil」預期不成立：對未經 qtrs 的 `NSStatusItem` 直接 `removeStatusItem:` 後 `statusBar` 仍非 nil（run 38001604009，RAN）；`isVisible` 在兩次執行中分別為 NO（run 38001604009）與 YES（run 38002053367），也不能當 oracle。目前沒有可靠的 AppKit 狀態能觀察移除，該斷言改為 INFO 紀錄，drop 的移除行為未驗證，不列為缺口。`status_item_message` 為 `ENV`：未打包成 app bundle 時 `[NSUserNotificationCenter defaultUserNotificationCenter]` 為 nil，通知遞送無法觀察；qtrs 端 `last_message` 斷言通過。
 - **Test**：`appkit_main_thread`（上述 20 項）；每項檢查註明取代的 libtest 測試。
 - **HUD usage**：macOS 上的 HUD 視窗、背景、系統匣、主題都走這些路徑；未在 macOS 執行 HUD。
@@ -1256,7 +1262,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 361 項：D 12、P0 35、P1 161、P2 148、test gap 5（計數含已修復項；標籤含「已修復」者共 82 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 367 項：D 12、P0 35、P1 165、P2 150、test gap 5（計數含已修復項；標籤含「已修復」者共 84 項：G2.1.a、G3.2.b、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.7.a、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1399,7 +1405,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.6.e | P2 | `EventLoopThreadHandle` 無 Drop／join，丟棄即分離 |
 | G7.6.f | P1, RAN（macOS CI）；已修復：RC-44 | macOS 非主執行緒的事件迴圈用 Cocoa dispatcher 而 panic |
 | G7.6.g | P1, RAN（macOS CI）；已修復：RC-45 | dispatcher 依主執行緒身分而非建立路徑選擇 |
-| G7.6.h | P1, READ | `CocoaEventDispatcher` 不派送 NSEvent、不跑 CFRunLoop |
+| G7.6.h | P1, RAN（macOS CI）；已修復：RC-61 | `CocoaEventDispatcher` 不派送 NSEvent、不跑 CFRunLoop |
+| G7.6.i | P1, RAN（macOS CI）；已修復：RC-61 | Cocoa 喚醒閘門在取走 posted events 之後才重置，期間的 post 不喚醒 |
+| G7.6.j | P1, READ | Cocoa dispatcher 的 socket notifier 是靜默 no-op |
+| G7.6.k | P1, READ | AppKit 巢狀迴圈期間 posted events／計時器不執行，exec 不走 `[NSApp run]` |
+| G7.6.l | P2, READ | 未改寫 `-[NSApplication sendEvent:]`，AppKit 自己派送的事件不經 native filter |
+| G7.6.m | P2, READ | 沒有 modal session |
 | G7.7.a | P2, READ | 靜默 no-op 取代警告 |
 | G7.7.b | P2, READ | 無擁有者檢查 |
 | G7.9.a | P2, READ；P0 主張已被讀碼推翻，待驗證 | 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new` |
@@ -1569,6 +1580,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.o | P1, RAN；已修復：RC-48 | CGImage 直接引用 `pixel_buffer`，之後覆寫或重新配置時 layer 仍持有該影像 |
 | G11.13.p | P2, RAN；已修復：RC-55 | 連續兩次開啟 backdrop 會疊加兩個 effect view |
 | G11.13.q | P2, RAN；與 Qt 相同，不修 | effect view 的 alloc/init 參照從未 release（Qt 亦同） |
+| G11.13.r | P1, READ | 視圖沒有輸入處理方法、視窗沒有 delegate，真實輸入不會變成 qtrs 視窗事件 |
 | G12.3.a | P1 | QMenu 規則被解析但不消費 |
 | G12.3.b | P0, READ；已修復：RC-15 | Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px` |
 | G12.3.c | P1, READ | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |
@@ -2248,7 +2260,43 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs root**：`CocoaNativeWindow::new` 找不到已註冊的 `QNSView` 類別，退回一般 `NSView`，`isFlipped` 為 NO。
 - **Evidence**：`RAN`（GitHub Actions macos-latest）。修改前（develop，run 38003379485）：`window_flipped` FAILED（`[contentView isFlipped]` NO）。只換成翻轉視圖的試驗（run 38001240101）讓 layer `contentsAreFlipped` 為 YES，`window_present_orientation` 讀回上下顛倒，故該版未出貨。修改後 run 38004296435：`window_flipped` ok（`isFlipped` YES、`is_flipped()` true），`window_present_orientation` 仍為上紅下藍，`window_present_pixels`、`window_present_frame_immutable` 仍 ok；整個 run 成功，AppKit 27 項中只剩 `window_key_status`（G11.13.l）與 ENV。
 - **Status**：**已修復**。`objc_runtime::qnsview_class()` 首次使用時以 `objc_allocateClassPair` 註冊 `NSView` 子類別 `QNSView`，`-isFlipped` 回傳 YES（型別編碼取自 `NSView` 的同名方法）；`commit_to_layer` 在 `[layer contentsAreFlipped]` 為 YES 時把每列反序寫入影像副本（RC-48 已逐幀複製，成本不變）。CI gate 的 `--known-open` 移除 `window_flipped`。
-- **Residual**：Qt 的 content layer 外包 container layer，contents 為 IOSurface（`qnsview_drawing.mm:139-178`），qtrs 直接設在視圖的 layer 上，且依 `contentsAreFlipped` 補償方向；合成後的螢幕畫面未擷取，方向證據來自 `renderInContext:`（[INFERENCE] 與螢幕合成一致）。翻轉座標下的事件座標轉換屬 G7.6.h（未接 NSEvent）。
+- **Residual**：Qt 的 content layer 外包 container layer，contents 為 IOSurface（`qnsview_drawing.mm:139-178`），qtrs 直接設在視圖的 layer 上，且依 `contentsAreFlipped` 補償方向；合成後的螢幕畫面未擷取，方向證據來自 `renderInContext:`（[INFERENCE] 與螢幕合成一致）。翻轉座標下的事件座標轉換屬 G11.13.r（視圖沒有輸入處理方法）。
+
+#### RC-61 Cocoa dispatcher 不在 AppKit 的事件佇列與主 run loop 上等待與派送
+
+- **Contract gaps**：G7.6.h（已修復）；另新增同一根因的喚醒症狀 G7.6.i（已修復），以及不同 root cause、不屬本 RC 的 G7.6.j、G7.6.k、G7.6.l、G7.6.m、G11.13.r（未修）。總數 361 → 367，已修復 82 → 84。
+- **Qt behavior** `[QT-SRC qcocoaeventdispatcher.mm:273-285,378-466,479-492,525-531,537-575,786-801,877-916; qcocoahelpers.h:89-92]`：`processEvents` 不在 exec 時，先以 `ensureNSAppInitialized`（`[NSApp run]` 加一次性的停止回呼）完成 launch；再以 `nextEventMatchingMask:NSEventMaskAny untilDate:nil inMode:NSDefaultRunLoopMode dequeue:YES` 取出每個佇列中的 NSEvent，`filterNativeEvent("NSEvent", …)` 沒有攔下的送 `[NSApp sendEvent:]`；沒有送出任何事件且可等待時，以 `untilDate:distantFuture` 等待（主 run loop 在等待期間執行），把收到的事件放回佇列前端，再派送一次。`wakeUp` 對加在 common modes 的 run loop source 呼叫 `CFRunLoopSourceSignal` 與 `CFRunLoopWakeUp`；source 回呼在可等待時 post 一個 `ApplicationDefined` 事件（subtype `QtCocoaEventSubTypeWakeup` = `SHRT_MAX`）結束等待；`wakeUp` 沒有去重閘門。
+- **qtrs root**：`CocoaEventDispatcher` 是純 Rust 模擬。`process_events` 以 Condvar `wait_timeout` 等待，主 run loop 從不執行；它只處理 `post_appkit_event` 餵入的 Rust 列舉佇列，不從 AppKit 取 NSEvent，也不呼叫 `sendEvent:`。喚醒是 `AtomicBool` 閘門加 Condvar；閘門在 `process_events` 開頭才重置，而 posted events 在那之前已被取走，兩者之間 post 的事件不觸發喚醒（G7.6.i）。
+- **Evidence**：`RAN`（GitHub Actions macos-latest，`crates/qtrs-gui/examples/main_thread_entry.rs` 新增 4 項主執行緒檢查）。
+  - 修改前 run 38024591421（job 114132646817，只加檢查）：
+    - `runloop` FAILED：主 run loop default mode 上 50 ms 的 `CFRunLoopTimer` 在 exec 期間沒有觸發。
+    - `nsevent` FAILED：程式注入的兩個 ApplicationDefined 事件，native filter 看到 `[]`，`[NSApp sendEvent:]` 看到 `[]`。
+    - `wake_chain` FAILED：另一執行緒 post 的事件執行了；它的 handler post 的事件直到 1.5 s 守衛計時器結束 exec 都沒有執行（exec 回傳 9）。
+    - `gui`、`core`、`exit_from_thread` ok。
+  - 修改後 run 38024975443（job 114133825979）：6 項全部 ok。
+    - `runloop`：計時器觸發。
+    - `nsevent`：filter 看到 `[1, 2]`；`sendEvent:` 只看到 filter 沒有攔下的 `[1]`。
+    - `wake_chain`：第二個事件在 253 µs 後執行。
+    - `exit_from_thread`：另一執行緒在 200 ms 時呼叫 `exit`，exec 在 208 ms 返回。
+    - AppKit 的 27 項結果不變，`window_key_status`、`status_item_message` 仍為 known-open。
+  - 注入的 NSEvent 由程式 post，不是使用者輸入。
+- **Status**：**已修復**。`dispatcher_cocoa.rs` 改為 macOS 專用並重寫：
+  - 每次 `process_events` 先執行 `ensure_nsapp_initialized`：`[NSApp run]`，加一個 common modes 的一次性 `CFRunLoopTimer` 呼叫 `stop:` 並 post 喚醒事件；launch 期間觸發的喚醒延到 launch 之後重發。
+  - 接著取出並派送所有佇列中的 NSEvent。native filter 收到事件型別 `"NSEvent"` 與 `NativeMessage::Mac(NSEvent*)`。
+  - 沒有派送任何事件且可等待時，以 `nextEventMatchingMask:untilDate:` 等待，期限為下一個 qtrs 計時器的到期時間，沒有計時器時為 `distantFuture`；收到的事件放回佇列前端。
+  - `wake_up`（任何執行緒）呼叫 `CFRunLoopSourceSignal` 與 `CFRunLoopWakeUp`。source 加在主 run loop 的 common modes；主執行緒在可等待的 `process_events` 內時，回呼 post subtype `i16::MAX` 的喚醒事件。
+  - 移除模擬引擎（Condvar、`AtomicBool` 閘門、自有計時器表與 `pending_timers`）與合成佇列 `post_appkit_event`／`pump_appkit_events`。計時器只由 `TimerRegistry` 決定：`register_timer` 為 no-op，等待期限來自 `next_timer_timeout`。
+  - `process_events` 的回傳值改為 Qt 的語意：有事件送出為 `Normal`，否則為 `Timeout`。
+  - dispatcher 已不使用的視窗層事件列舉 `CocoaNativeEvent` 移到 `qtrs_platform::window_cocoa`。
+  - 刪除在工作執行緒上跑模擬 dispatcher 的 4 個 lib 測試（AppKit 只能在主執行緒呼叫），改由 `main_thread_entry` 在主執行緒上覆蓋。
+- **Residual**：
+  - qtrs 的 `exec` 也走 Qt「非 exec」的路徑，不呼叫 `[NSApp run]`，exec 期間 `[NSApp isRunning]` 為 NO；posted events 與計時器只在 qtrs 的 `process_events` 中處理，AppKit 自己的巢狀迴圈期間不執行（G7.6.k）。
+  - `exit` 之後，佇列中已有的 NSEvent 仍會全部派送完才返回；Qt 以 `interrupt` 中止取出迴圈。
+  - AppKit 自己的迴圈呼叫 `sendEvent:` 時不經過 qtrs 的 native filter（G7.6.l）。
+  - 視圖沒有輸入處理方法，真實滑鼠與鍵盤事件不會變成 qtrs 視窗事件（G11.13.r）。
+  - Cocoa 的 socket notifier 仍是靜默 no-op（G7.6.j）；modal session 未實作（G7.6.m）。
+  - `ensure_nsapp_initialized` 只完成 launch，不設定 activation policy，也不啟用應用程式（G11.13.l）。
+  - HUD 未在 macOS 執行。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 

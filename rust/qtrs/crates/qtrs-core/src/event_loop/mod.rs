@@ -15,5 +15,7 @@ pub use dispatcher_win::*;
 pub mod dispatcher_unix;
 pub use dispatcher_unix::{EpollReactor, UnixEventDispatcher, UnixEventDispatcherHandle};
 
+#[cfg(target_os = "macos")]
 pub mod dispatcher_cocoa;
-pub use dispatcher_cocoa::{CocoaEventDispatcher, CocoaEventDispatcherHandle, CocoaNativeEvent};
+#[cfg(target_os = "macos")]
+pub use dispatcher_cocoa::{CocoaEventDispatcher, CocoaEventDispatcherHandle};
