@@ -2554,6 +2554,21 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Status**：**已修復（測試）**。
 - **Residual**：原生移動不來的系統層原因未查；本機沒有跑 `real_windows` 測試（會移動使用者的游標）。
 
+#### RC-70 fall-asleep 測試在計時器到期的那一刻檢查
+
+- **類別**：測試缺陷。qtrs 行為與 Qt 相同，Contract gap 數不變。
+- **症狀**：Windows CI 上 `the_tip_falls_asleep_after_two_seconds` 偶發失敗：「still awake: woke up in under 300 ms」。
+- **Qt behavior** `[QT-SRC widgets/kernel/qapplication.cpp:1729-1738; corelib/kernel/qbasictimer.cpp:146; corelib/kernel/qeventdispatcher_win.cpp:312-326, 374]`：tip 被接受時 `toolTipFallAsleep` 以 2000 ms 啟動。`QBasicTimer::start(msec, obj)` 是 coarse timer，Windows 上以 `SetCoalescableTimer` 註冊，容許延遲 interval/20（100 ms）。所以 Qt 不保證剛好 2000 ms 時的狀態。
+- **根因**（`RAN`）：測試從 tip 隱藏時起算，再 pump 1700 ms。隱藏本身是 300 ms 的計時器，所以檢查點約在出現後 2000 ms，正好是 fall-asleep 計時器到期的時間。
+  - CI 實測（run 38089952648，960 次）：fall-asleep 計時器在啟動後 1985.1–2015.4 ms 觸發。qtrs 用 `SetTimer`，誤差約一個 15.6 ms 的 tick。
+  - 結果是兩個計時器誰先到不一定。
+- **修正**（`test_tooltip.rs`）：從 tip 出現時起算，等到 `FALL_ASLEEP_DELAY_MS` 加上 5% 再加 50 ms（2150 ms）。
+- **Evidence**：`RAN`（GitHub Actions Windows，24 個 runner 各跑 40 次）。
+  - run 38088237821：同一個 binary 裡並排舊版測試的副本，舊版 6/960 失敗，新版 1/960 失敗。
+  - run 38089952648：新版 0/960 失敗；計時器最晚 2015.4 ms 觸發，檢查點在 2150 ms 以後。
+- **Status**：**已修復（測試）**。
+- **Residual**：run 38088237821 那 1 次新版失敗沒有追蹤資料，原因未查（`[INFERENCE]` CI VM 偶爾讓計時器延遲超過 150 ms）。qtrs 一律用 `SetTimer`，沒有照 Qt 依 timer type 選 `timeSetEvent`／`SetCoalescableTimer`。這是另一個差異，本項不處理。
+
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
 | RC | 對應 gap | 位置 | 閘門（動手前必須先做） |

@@ -22,7 +22,7 @@ use qtrs_core::event_loop::EventLoop;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Point, Rect, Size};
 use qtrs_platform::WindowFlags;
-use qtrs_widgets::tooltip::{expire_time_ms, place_tip, CURSOR_SIZE};
+use qtrs_widgets::tooltip::{expire_time_ms, place_tip, CURSOR_SIZE, FALL_ASLEEP_DELAY_MS};
 use qtrs_widgets::*;
 
 // ---- pure functions ------------------------------------------------------------------------
@@ -273,10 +273,14 @@ fn the_tip_falls_asleep_after_two_seconds() {
     let mut d = EventTreeDispatcher::new();
     hover(&mut d, &root, 10, 10);
     assert!(pump_until(&mut el, Duration::from_millis(2000), visible));
+    let shown_at = Instant::now();
     d.handle_mouse_leave();
     assert!(pump_until(&mut el, Duration::from_millis(1500), || !visible()));
-    // The fall-asleep timer (2 s from the tip's appearance) has run out.
-    pump_for(&mut el, 1700);
+    // The fall-asleep timer starts when the tip appears. Qt starts it as a coarse timer
+    // (qbasictimer.cpp:146), which on Windows may fire up to 5% late (qeventdispatcher_win.cpp:
+    // 312-326, 374); wait that long plus a timer tick past it.
+    let asleep = Duration::from_millis(FALL_ASLEEP_DELAY_MS + FALL_ASLEEP_DELAY_MS / 20 + 50);
+    pump_until(&mut el, asleep, || shown_at.elapsed() >= asleep);
 
     hover(&mut d, &root, 210, 10);
     assert!(!pump_until(&mut el, Duration::from_millis(300), visible), "still awake: woke up in under 300 ms");
