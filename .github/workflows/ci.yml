@@ -23,8 +23,9 @@ jobs:
         with:
           # A push is compared with the branch's commit before the push. Without this, a push to
           # any branch but the default one (main) was compared with main, so every develop push
-          # matched every filter. Pull requests ignore `base` and use the PR's changed files.
-          base: ${{ github.ref }}
+          # matched every filter. Pull requests ignore `base` and use the PR's changed files. A
+          # manual run has no commit before it (the action warns) and is compared with main.
+          base: ${{ github.event_name == 'push' && github.ref || '' }}
           # A file counts for a filter only if it matches every pattern of it, so the `!` lines
           # exclude. Markdown under rust/ is documentation: no Rust target reads it. The Python
           # tests check the encoding of python/*.md, so those still run the Python job.
