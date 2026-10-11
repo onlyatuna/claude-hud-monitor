@@ -1,5 +1,5 @@
 use crate::widget::{hide_children, show_children_first, EmptyWidget, WidgetRef};
-use qtrs_core::event::{Event, EventKind};
+use qtrs_core::event::{ContextMenuReason, Event, EventKind};
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
 use qtrs_gui::paint::{BackingStore, Painter};
@@ -695,7 +695,11 @@ impl Window {
             render_state,
             core,
         };
-        crate::application::Application::register_window(window_id);
+        let close_core = win.core.clone();
+        crate::application::Application::register_window(
+            window_id,
+            std::rc::Rc::new(move || close_core.close(false)),
+        );
         Ok(win)
     }
 
@@ -1378,8 +1382,21 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     }
                 }
                 if button == qtrs_platform::MouseButton::Right {
-                    if let Some(cb) = self.context_menu_cb.borrow().as_ref() {
-                        cb(global_pos);
+                    // qwidgetwindow.cpp:639-640 sends the context menu after a right-button release,
+                    // as a ContextMenu event to the widget under the cursor. Qt 6 has no acceptance
+                    // gate on that release (qwidgetwindow.cpp:696-702), so the window callback runs
+                    // only when no widget accepted the menu event.
+                    let mut menu = Event::new_spontaneous(EventKind::ContextMenu {
+                        x: pos.x,
+                        y: pos.y,
+                        global_x: global_pos.x,
+                        global_y: global_pos.y,
+                        reason: ContextMenuReason::Mouse,
+                    });
+                    if !self.dispatcher.dispatch_event(&root, &mut menu) {
+                        if let Some(cb) = self.context_menu_cb.borrow().as_ref() {
+                            cb(global_pos);
+                        }
                     }
                 }
             }

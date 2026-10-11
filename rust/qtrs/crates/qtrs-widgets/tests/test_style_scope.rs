@@ -235,3 +235,47 @@ fn a_menu_takes_the_sheet_of_the_window_it_hangs_under_and_not_another() {
     assert!(menu_b.widget_base().resolve_style(&qmenu_ctx()).background_color.is_none());
     assert!(orphan.widget_base().resolve_style(&qmenu_ctx()).background_color.is_none());
 }
+
+fn two_item_menu(parent: Option<&WidgetRef>) -> Menu {
+    let mut menu = Menu::new("m");
+    menu.add_new_action("Open");
+    menu.add_new_action("Close");
+    if let Some(p) = parent {
+        menu.set_parent_widget(Some(Rc::downgrade(p)));
+    }
+    menu
+}
+
+#[test]
+fn a_qmenu_padding_from_its_parent_window_sheet_changes_its_size() {
+    let _app = AppSheet::clean();
+    let a = fixture("menu padding");
+    let root = a.win.root_widget();
+    root.borrow().set_style_sheet("QMenu { padding: 4px 0px; }");
+    let menu = two_item_menu(Some(&root));
+    let before = menu.size_hint().height;
+
+    root.borrow().set_style_sheet("QMenu { padding: 9px 0px; }");
+
+    // The 9px padding replaces the 4px vertical padding on each side: 2 * (9 - 4) = 10 px.
+    assert_eq!(menu.size_hint().height, before + 10);
+}
+
+#[test]
+fn a_qmenu_item_font_size_from_its_parent_window_sheet_changes_its_row_height() {
+    let _app = AppSheet::clean();
+    let a = fixture("menu font");
+    let root = a.win.root_widget();
+    root.borrow()
+        .set_style_sheet("QMenu::item { font-size: 11px; }");
+    let menu = two_item_menu(Some(&root));
+    let before = menu.size_hint().height;
+
+    root.borrow()
+        .set_style_sheet("QMenu::item { font-size: 24px; }");
+
+    assert!(
+        menu.size_hint().height > before,
+        "a 24px item font left the menu height unchanged"
+    );
+}

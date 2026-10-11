@@ -223,6 +223,30 @@ pub fn get_cards_stylesheet(dark: bool) -> &'static str {
             min-height: 1px;
             max-height: 1px;
         }
+
+        QMenu {
+            background-color: #161920;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 6px;
+            padding: 4px 0px;
+        }
+
+        QMenu::item {
+            color: #e2e8f0;
+            padding: 6px 24px 6px 20px;
+            font-size: 11px;
+        }
+
+        QMenu::item:selected {
+            background-color: #272f3d;
+            color: #38bdf8;
+        }
+
+        QMenu::separator {
+            height: 1px;
+            background-color: rgba(255, 255, 255, 0.12);
+            margin: 4px 8px;
+        }
         "#
     } else {
         r#"
@@ -320,6 +344,30 @@ pub fn get_cards_stylesheet(dark: bool) -> &'static str {
             border: none;
             min-height: 1px;
             max-height: 1px;
+        }
+
+        QMenu {
+            background-color: #f8fafc;
+            border: 1px solid rgba(15, 23, 42, 0.18);
+            border-radius: 6px;
+            padding: 4px 0px;
+        }
+
+        QMenu::item {
+            color: #172033;
+            padding: 6px 24px 6px 20px;
+            font-size: 11px;
+        }
+
+        QMenu::item:selected {
+            background-color: #e2e8f0;
+            color: #0369a1;
+        }
+
+        QMenu::separator {
+            height: 1px;
+            background-color: rgba(15, 23, 42, 0.12);
+            margin: 4px 8px;
         }
         "#
     }

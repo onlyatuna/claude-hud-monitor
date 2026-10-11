@@ -63,6 +63,7 @@ impl QObject for Probe {
             EventKind::Show => ("Show".to_string(), false),
             EventKind::Hide => ("Hide".to_string(), false),
             EventKind::Move { x, y, .. } => (format!("Move({x},{y})"), false),
+            EventKind::ContextMenu { x, y, .. } => (format!("ContextMenu({x},{y})"), true),
             _ => return false,
         };
         self.log.borrow_mut().push(format!("{}:{desc}", self.name));
@@ -464,7 +465,7 @@ mod window_level {
     use qtrs_platform::WindowFlags;
     use windows_sys::Win32::Foundation::HWND;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        IsWindowVisible, SendMessageW, WM_CLOSE, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+        IsWindowVisible, SendMessageW, WM_CLOSE, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_RBUTTONUP,
     };
 
     fn window_with_root(root: WidgetRef) -> Window {
@@ -698,6 +699,59 @@ mod window_level {
         assert!(
             log.borrow().iter().any(|e| e == "leaf:DblClick(10,10)"),
             "the widget under the cursor is asked first: {:?}",
+            log.borrow()
+        );
+    }
+
+    /// `QWidgetWindow` sends the context menu after a right-button release (qwidgetwindow.cpp:639-640)
+    /// as a `ContextMenu` event to the widget under the cursor, which propagates like a mouse event.
+    /// A widget that accepts it takes the menu, so the window's context-menu callback must not run
+    /// (qwidgetwindow.cpp:696-702 has no release-acceptance gate in Qt 6).
+    #[test]
+    fn context_menu_callback_skipped_when_widget_accepts_the_menu_event() {
+        let log: Log = Default::default();
+        let (root, _m, _l) = tree(Resp::Accept, Resp::NotHandled, Resp::NotHandled, &log);
+        let mut win = window_with_root(root);
+        let menus: Rc<RefCell<Vec<Point>>> = Default::default();
+        let sink = Rc::clone(&menus);
+        win.set_context_menu_handler(move |p: Point| sink.borrow_mut().push(p));
+        win.show();
+        let pos = (60 & 0xffff) | ((40 & 0xffff) << 16);
+
+        unsafe { SendMessageW(hwnd(&win), WM_RBUTTONUP, 0, pos) };
+
+        assert_eq!(
+            menus.borrow().len(),
+            0,
+            "the leaf accepted the ContextMenu event, so the window callback must not run: {:?}",
+            log.borrow()
+        );
+        assert!(
+            log.borrow()
+                .iter()
+                .any(|e| e.starts_with("leaf:ContextMenu(")),
+            "the widget under the cursor is asked: {:?}",
+            log.borrow()
+        );
+    }
+
+    #[test]
+    fn context_menu_callback_runs_when_no_widget_accepts_the_menu_event() {
+        let log: Log = Default::default();
+        let (root, _m, _l) = tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+        let mut win = window_with_root(root);
+        let menus: Rc<RefCell<Vec<Point>>> = Default::default();
+        let sink = Rc::clone(&menus);
+        win.set_context_menu_handler(move |p: Point| sink.borrow_mut().push(p));
+        win.show();
+        let pos = (60 & 0xffff) | ((40 & 0xffff) << 16);
+
+        unsafe { SendMessageW(hwnd(&win), WM_RBUTTONUP, 0, pos) };
+
+        assert_eq!(
+            menus.borrow().len(),
+            1,
+            "no widget accepted the menu event, so the window callback runs: {:?}",
             log.borrow()
         );
     }

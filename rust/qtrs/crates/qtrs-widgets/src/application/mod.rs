@@ -1,4 +1,5 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::sync::{Arc, LazyLock, RwLock};
 
 use crate::style::stylesheet::QStyleSheetStyle;
@@ -13,11 +14,15 @@ use qtrs_gui::text::font::Font;
 
 use crate::widget::WidgetRef;
 
+/// Closes a top-level window (`QWidget::close`); returns false when the window refuses.
+type TopLevelCloser = Rc<dyn Fn() -> bool>;
+
 thread_local! {
-    static TOP_LEVEL_WINDOWS: RefCell<Vec<ObjectId>> = const { RefCell::new(Vec::new()) };
+    static TOP_LEVEL_WINDOWS: RefCell<Vec<(ObjectId, TopLevelCloser)>> = const { RefCell::new(Vec::new()) };
     static VISIBLE_WINDOWS: RefCell<Vec<ObjectId>> = const { RefCell::new(Vec::new()) };
     static ACTIVE_WINDOW_ID: RefCell<Option<ObjectId>> = const { RefCell::new(None) };
     static FOCUS_WIDGET: RefCell<Option<WidgetRef>> = const { RefCell::new(None) };
+    static QUITTING: Cell<bool> = const { Cell::new(false) };
 }
 
 static GLOBAL_DOUBLE_CLICK_INTERVAL_MS: RwLock<u32> = RwLock::new(400);
@@ -116,16 +121,63 @@ impl Application {
         GuiApplication::exit(return_code);
     }
 
-    /// Tells the application to quit cleanly.
+    /// Tells the application to quit cleanly (`QCoreApplication::quit`, qcoreapplication.cpp:2138-2147).
+    ///
+    /// As `QApplication::event(Quit)` does (qapplication.cpp:1675-1697), the visible top-level windows
+    /// are closed first, and a window that refuses its close vetoes the quit. `exit` is not gated.
+    /// This runs synchronously; Qt posts the Quit event (see residuals in the contract).
     pub fn quit() {
-        GuiApplication::quit();
+        if !CoreApplication::in_exec() {
+            return;
+        }
+        // Re-entrant calls (from a window's close handler, or from `maybe_last_window_closed` while
+        // this quit closes windows) return here; the outer call decides.
+        if QUITTING.try_with(|q| q.replace(true)).unwrap_or(true) {
+            return;
+        }
+        let closed = Self::try_close_all_top_level_windows();
+        let _ = QUITTING.try_with(|q| q.set(false));
+        if closed && !Self::any_window_visible() {
+            GuiApplication::quit();
+        }
     }
-    /// Registers a top-level window with the application.
-    pub fn register_window(window_id: ObjectId) {
+
+    /// Closes the visible top-level windows one by one, restarting the scan after each close since
+    /// closing can change the list (`QApplicationPrivate::tryCloseAllWidgetWindows`,
+    /// qapplication.cpp:1591-1617). Stops at the first refusal and returns false.
+    fn try_close_all_top_level_windows() -> bool {
+        let mut attempted: Vec<ObjectId> = Vec::new();
+        loop {
+            let registered = TOP_LEVEL_WINDOWS
+                .try_with(|wins| wins.borrow().clone())
+                .unwrap_or_default();
+            let next = registered
+                .into_iter()
+                .find(|(id, _)| !attempted.contains(id) && Self::is_window_visible(*id));
+            let Some((id, close)) = next else {
+                return true;
+            };
+            attempted.push(id);
+            if !close() {
+                return false;
+            }
+        }
+    }
+
+    /// Whether any top-level window is shown.
+    fn any_window_visible() -> bool {
+        VISIBLE_WINDOWS
+            .try_with(|vis| !vis.borrow().is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Registers a top-level window with the application, with the function that closes it
+    /// (`QWidget::close`, returning false when the window refuses). `quit` closes through it.
+    pub fn register_window(window_id: ObjectId, close: TopLevelCloser) {
         let _ = TOP_LEVEL_WINDOWS.try_with(|wins| {
             let mut list = wins.borrow_mut();
-            if !list.contains(&window_id) {
-                list.push(window_id);
+            if !list.iter().any(|(id, _)| *id == window_id) {
+                list.push((window_id, close));
             }
         });
     }
@@ -133,7 +185,16 @@ impl Application {
     /// Unregisters a top-level window when it is destroyed. Destroying a window is not closing it:
     /// Qt's `~QWindow` neither emits `lastWindowClosed` nor quits (`qwindow.cpp:175-208`).
     pub fn unregister_window(window_id: ObjectId) {
-        let _ = TOP_LEVEL_WINDOWS.try_with(|wins| wins.borrow_mut().retain(|&id| id != window_id));
+        let removed = TOP_LEVEL_WINDOWS
+            .try_with(|wins| {
+                let mut list = wins.borrow_mut();
+                list.iter()
+                    .position(|(id, _)| *id == window_id)
+                    .map(|i| list.remove(i))
+            })
+            .ok()
+            .flatten();
+        drop(removed);
         let _ = VISIBLE_WINDOWS.try_with(|vis| vis.borrow_mut().retain(|&id| id != window_id));
         let _ = ACTIVE_WINDOW_ID.try_with(|act| {
             let mut curr = act.borrow_mut();
@@ -167,10 +228,7 @@ impl Application {
     /// as `canQuitAutomatically` requires (qcoreapplication.cpp:2074-2089). The `lastWindowClosed`
     /// signal is not emitted here; see G11.2.f.
     pub(crate) fn maybe_last_window_closed() {
-        let any_visible = VISIBLE_WINDOWS
-            .try_with(|vis| !vis.borrow().is_empty())
-            .unwrap_or(false);
-        if !any_visible && GuiApplication::quit_on_last_window_closed() {
+        if !Self::any_window_visible() && GuiApplication::quit_on_last_window_closed() {
             Self::quit();
         }
     }
@@ -178,7 +236,7 @@ impl Application {
     /// Returns a list of all active top-level window object IDs.
     pub fn top_level_windows() -> Vec<ObjectId> {
         TOP_LEVEL_WINDOWS
-            .try_with(|wins| wins.borrow().clone())
+            .try_with(|wins| wins.borrow().iter().map(|(id, _)| *id).collect())
             .unwrap_or_default()
     }
 
@@ -291,7 +349,9 @@ impl Application {
     #[doc(hidden)]
     pub fn reset_for_test() {
         GuiApplication::reset_for_test();
-        TOP_LEVEL_WINDOWS.with(|wins| wins.borrow_mut().clear());
+        let removed = TOP_LEVEL_WINDOWS.with(|wins| std::mem::take(&mut *wins.borrow_mut()));
+        drop(removed);
+        QUITTING.with(|q| q.set(false));
         VISIBLE_WINDOWS.with(|vis| vis.borrow_mut().clear());
         ACTIVE_WINDOW_ID.with(|act| *act.borrow_mut() = None);
         FOCUS_WIDGET.with(|fw| *fw.borrow_mut() = None);

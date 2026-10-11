@@ -302,7 +302,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G4.1.b [P1, RAN；已修復：RC-79]** （修復前）`exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回。
   - **G4.1.c [P1, RAN；已修復：RC-106]** （修復前）worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op**（`get_thread_event_sender(ThreadId::current())` 找不到 loop，退回讀 worker 自己空的 `LOCAL_EVENT_LOOP`）。
   - **G4.1.d [P1, RAN；已修復：RC-79]** （修復前）`aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內；`exit` 無 `exec` 時不發。
-  - **G4.1.e [P1, READ]** `quit()` 不是 `Quit` 事件：不關視窗、不能被否決；pump 在遞送前就鎖定 `quit_code`，filter 否決不了 posted `Quit`。
+  - **G4.1.e [P1, RAN；部分修復：RC-115]** （修復前）`quit()` 不是 `Quit` 事件：不關視窗、不能被否決；pump 在遞送前就鎖定 `quit_code`，filter 否決不了 posted `Quit`。
   - **G4.1.f [P2, READ]** `CoreApplication::new` 文件寫會 panic，實際沒有第二個實例檢查。
   - **G4.1.g [P1, RAN；已修復：RC-104]** （修復前）無獨立的巢狀 `QEventLoop`（`isRunning`、自己的 `exit`、`QEventLoopLocker`）。`EventLoop::new` 取代該執行緒已註冊的 handle 與 timer context，`Drop` 取消註冊——**在同一執行緒建立並丟棄第二個 `EventLoop` 會破壞第一個**。
   - **G4.1.h [P2]** `ExitCode::from(exit_code as u8)` 截斷（`main.rs:620`）；HUD 以 0 退出。
@@ -651,7 +651,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.4.c [P1, RAN；已修復：RC-90]** （修復前）無隱式 grab。
   - **G8.4.d [P1, RAN；已修復：RC-91]** （修復前）Enter/Leave 非祖先鏈；既有 `test_hover_enter_leave_events_transition` 釘住「child→parent 送 Leave(child)+Enter(parent)」——**實作前先對照 `qapplication.cpp:2037-2123` 確認該序列是否為 Qt 行為，不是就改寫測試**。
   - **G8.4.e [P2]** 無 `WA_TransparentForMouseEvents`／`WA_NoMousePropagation`；視窗離開時 Leave 只送最後一個葉。
-  - **G8.4.f [P1]** 右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關。
+  - **G8.4.f [P1, RAN；已修復：RC-116]** （修復前）右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關。
   - **G8.4.g [P1；已修復：RC-06]** `Window` 沒有 release／double-click／move handler（見 C11.2、G12.5.f）。
   - **G8.4.h [P1, READ]** RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTracking`（`qapplication.cpp:2735-2740`），qtrs 兩者都沒有（G8.4.b、G8.4.c）；(2) 雙擊只有 Win32 平台層會產生（視窗類別 `CS_DBLCLKS`，`qwindowswindowclassdescription.cpp:67`）；X11／Wayland／Cocoa 的第二次點擊仍是一般 `MousePress`——Qt 是在通用層用 `mouseDoubleClickInterval`／`mouseDoubleClickDistance` 判斷（`qguiapplication.cpp:2401-2425`），qtrs 沒有這一層；(3) 沒有 `WA_NoMousePropagation`（G8.4.e）。
   - **G8.4.i [P2]** `Window::set_mouse_press_handler`／`set_mouse_move_handler`／`set_context_menu_handler` 與新的 `set_window_event_handler` 是兩套並存的視窗層 handler API；press 與 move 的語意（未被 widget 處理才呼叫）與 `set_window_event_handler` 一致，但沒有合併。
@@ -668,12 +668,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.5.c [P0, READ；已修復：RC-05]** **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty；`Label::set_text` 會 `request_layout`，但 `set_font`/`set_alignment`/style/property 不會，`Button::set_text/set_font` 也不會——需要手動 `update_layout`。
   - **G8.5.d [P0, READ；已修復：RC-10]** `Window::set_style_sheet` 是**整個 Application 的**（呼叫 `Application::set_style_sheet`），Python `HUDWindow.setStyleSheet` 只作用於該子樹（`hud_window.py:246,250`）；Rust HUD 兩者都呼叫（`hud_window.rs:231-232`）→ 影響其他頂層視窗與 popup。
   - **G8.5.e [P1, READ；`:disabled` 已修復：RC-34；`:focus` 已修復：RC-35；`:enabled` 已修復：RC-39；Label `:focus` 已修復：RC-40；Label focus policy 已修復：RC-41]** （修復前：） `:disabled`/`:focus` 不支援。 RC-34：Label、Frame、ProgressBar（groove／chunk）、Button 在停用時帶 `disabled` pseudo-state；Button 停用時不再帶 `hover`。RC-35：同四類 widget 在 `has_focus` 時帶 `focus` pseudo-state（由 `FocusManager` 設定）。RC-39：同四類 widget 啟用時帶 `enabled` pseudo-state，與 `disabled` 互斥。RC-40：Label 覆寫 `has_focus`／`set_has_focus`，`:focus` 生效；更正：ProgressBar 早已經由 `leaf_widget_common!` 儲存焦點旗標，RC-35 記為缺口有誤（修改前即通過）。RC-41：Label 覆寫 `focus_policy`／`set_focus_policy`，設定 StrongFocus 後可經 Tab 取得焦點（預設仍為 NoFocus，同 Qt）。
-  - **G8.5.f [P1, READ]** **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在；選單外觀來自寫死的 `MenuStyle`（`rust/src/ui/tray_icon.rs`），手動複製了 Python QSS 的數值；`QMenu::item:selected/:disabled` 不驅動 hover／停用色。
+  - **G8.5.f [P1, RAN；已修復：RC-117]** （修復前）**QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在；選單外觀來自寫死的 `MenuStyle`（`rust/src/ui/tray_icon.rs`），手動複製了 Python QSS 的數值；`QMenu::item:selected/:disabled` 不驅動 hover／停用色。
   - **G8.5.g [P2, READ]** `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄；`margin` 只有選單消費。
   - **G8.5.h [P2, READ]** 父 widget 的 `font` 繼承未實作（`[INFERENCE]`，未對照 `qstylesheetstyle.cpp`）。
   - **G8.5.i [P1, READ]** RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排（`LayoutScheduler::invalidate(parent)`）；parent 自己的 size hint 因此改變時，不會再往祖先傳（Qt 的 `QLayout::invalidate` 會一路到最上層 layout 並對它 post `LayoutRequest`）；(2) widget 自己的 layout 在 `style_changed` 時只標 dirty，要靠 parent 的 `BoxLayout::activate` 順手重排（`child_layout.is_dirty()`）；沒有 parent 的 root，或 parent 沒有 layout 時，不會被排程（**G8.5.i(2) 的 root 部分 = RC-05 residual prerequisite，由 RC-10 一併消化**：沒有 parent 的 root 在 render 前由 `LayoutScheduler::activate_if_dirty` 排程，沒有新增 layout 子系統；「parent 沒有 layout」的情形未驗證，仍開放）。(3) `Application::set_style_sheet` 不通知既有 widget（RC-10 已修復）；`Application::set_font` 見 G8.5.j。
   - **G8.5.j [P2, READ；實測]** `Application::set_font` 只寫 `GLOBAL_FONT`：沒有任何 widget 讀 `Application::font()`，也沒有 `FontChange`／`ApplicationFontChange`；各 widget 在建構時寫死字型（Label／Button 13、ProgressBar 12、Menu 12），也沒有「明確設定 vs. 沿用」的 resolve mask，所以新建的 widget 也不會用 app font。實測：既有 Label 的 size hint 在 `Application::set_font(40pt)` 後仍是 35→35；新建 Label 的字型為 13.0 而非 40.0。Qt：`QApplication::setFont` 對所有非 window 的 widget 送 `ApplicationFontChange`，`resolveFont()` 重新解析（`qapplication.cpp:1352-1386`、`qwidget.cpp:4763-4829, 9265`）。**HUD 不受影響**：Python 從未呼叫 `QApplication.setFont`（`grep` 全 `python/`），只用 widget 區域的 `setFont` 與 QSS。依使用者決定，**不在 RC-10 處理**。
-  - **G8.5.k [P2, READ]** HUD 的選單沒有 parent：Rust `Menu::new("")`（`tray_icon.rs:308`）；Python `QMenu(self.hud_window)`（`tray_icon.py:55`）、`QMenu(self)`（`hud_window.py:678`）。Qt 的 QMenu 沿 parent 鏈取得 sheet（`qstylesheetstyle.cpp:1654`）。qtrs 的 parent 鏈解析已可用（RC-10 的 `a_menu_takes_the_sheet_of_the_window_it_hangs_under_and_not_another`），但 `Menu` 不消費解析結果（G8.5.f），所以即使掛 parent 也沒有可見差異；兩者要一起處理。
+  - **G8.5.k [P2, RAN；已修復：RC-117]** （修復前）HUD 的選單沒有 parent：Rust `Menu::new("")`（`tray_icon.rs:308`）；Python `QMenu(self.hud_window)`（`tray_icon.py:55`）、`QMenu(self)`（`hud_window.py:678`）。Qt 的 QMenu 沿 parent 鏈取得 sheet（`qstylesheetstyle.cpp:1654`）。qtrs 的 parent 鏈解析已可用（RC-10 的 `a_menu_takes_the_sheet_of_the_window_it_hangs_under_and_not_another`），但 `Menu` 不消費解析結果（G8.5.f），所以即使掛 parent 也沒有可見差異；兩者要一起處理。
   - **G8.5.l [P2, READ]** `StyleChange` 通知以 `try_borrow` 走訪：`style_changed_below` 跳過目前被 mutably borrow 的 widget（正在被驅動的那個），`Application::set_style_sheet` 在某個 root 被借用時，整棵樹不會被通知。與 `resolve_style` 遇到被借用祖先就停止走訪同類（`widget.rs:463`）。未實測。
 - **Test**：既有 `test_stylesheet_style.rs::*`、`test_menu_style_box_model.rs`（測 `MenuStyle`，非 QSS）。必要：`qframe_rule_matches_qlabel`；`property_change_relayouts`；`window_stylesheet_is_scoped_to_subtree`；`attribute_selector_on_button_and_frame`；**樣式表字串逐項比對**（見 C12.3）。
 - **HUD usage**：Python `setStyleSheet`（`hud_window.py:149,246,250,457`、`provider_card.py:34-212`、`usage_table.py:330,368,381`）、`setProperty + polish`（`usage_table.py:258-260`）、`ui/styles.py` 全部規則；Rust `set_style_sheet`（`hud_window.rs:76,231,579,714`、`provider_card.rs:100,124`）、`set_property`（`usage_table.rs:879`）。
@@ -1143,7 +1143,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 **qtrs 支援**：解析器 `QCssProperty::from_name`（`text/qcssparser.rs`）涵蓋上列全部屬性並含 `margin-*`、pseudo-state、`::sub-control`、`[attr=val]`、逗號選擇器、註解；解析器 `QStyleSheetStyle`（`style/stylesheet.rs`）：app→祖先→自己，再 specificity，再順序；`apply_declaration` 消費上列全部屬性，**除了 `margin-*` 長手寫**（被丟棄）。
 
 **Gap**
-- **G12.3.a [P1]** QMenu 規則被解析但不消費（G8.5.f）；Rust 卡片樣式表**丟掉了** QMenu 規則，Python 卡片樣式表有（`rust/src/ui/styles.rs:128-327`）；表格模式的 QMenu 數值是從 `get_hud_stylesheet` 複製的數字（`rust/src/ui/tray_icon.rs:258-278`）。
+- **G12.3.a [P1, RAN；已修復：RC-117]** （修復前）QMenu 規則被解析但不消費（G8.5.f）；Rust 卡片樣式表**丟掉了** QMenu 規則，Python 卡片樣式表有（`rust/src/ui/styles.rs:128-327`）；表格模式的 QMenu 數值是從 `get_hud_stylesheet` 複製的數字（`rust/src/ui/tray_icon.rs:258-278`）。
 - **G12.3.b [P0, READ；已修復：RC-15]** Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px`（`styles.rs:192,291`），Python 沒有此屬性（`styles.py:116-124`）。
 - **G12.3.c [P1, RAN；已修復：RC-74（面板色依 `vibrant` 選擇；樣式表本身不畫面板）]** （修復前）表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_solid`；Rust 不接受 `vibrant`，一律以 `panel_bg_vibrant` 自繪（`styles.rs:371`、`hud_window.rs:88-92`）。
 - **G12.3.d [P1]** 型別比對無繼承；Label 的 `pseudo_states` 為空（`:hover/:disabled` 對 label 不成立）。
@@ -1190,9 +1190,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.j [P0, READ；= G11.9.a；已修復：RC-12] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
 | G12.5.k [P1] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 修復 |
 | G12.5.l [P0, READ；= G11.4.a；已修復：RC-13] | 螢幕選擇／脫離螢幕還原規則 | G11.4.a | 修復 |
-| G12.5.m [P1] | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu | `tray_icon.py:54-122` vs `rust/src/ui/tray_icon.rs:73-240` | 需決定 |
+| G12.5.m [P1, RAN；已修復：RC-114] | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu | `tray_icon.py:54-122` vs `rust/src/ui/tray_icon.rs:73-240` | 已依 Python 修正（RC-114） |
 | G12.5.n [P1；已修復：RC-12（hotkey 失敗）、RC-77（ghost 啟用、autostart 失敗）] | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 | `main.rs:503`、`main.rs:486-488`、`hud_window.rs:526-532`、`tray_icon.rs:686-690` | 修復 |
-| G12.5.o [P1] | QMenu 外觀為寫死數值，非 QSS | G8.5.f | 修復或核准 |
+| G12.5.o [P1, RAN；已修復：RC-117] | QMenu 外觀為寫死數值，非 QSS | G8.5.f | 已修復（RC-117） |
 | G12.5.p [P1] | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** | `usage_table.rs` vs `usage_table.py:88` | 已修復（`qtrs_gui::color::darker`，PySide6 逐位元比對；圖例像素與 PySide6 相同） |
 | G12.5.q [P1] | `UsageDial` 最小尺寸 0 vs 84。**已修復：RC-29** | G8.3.e | 已修復（`minimum_size()` 84×84；PySide6 oracle 比對擠壓後的 dial 尺寸） |
 | G12.5.r [P1] | 版面切換：`StackedWidget` vs 重建 | C9.6 | 決定 |
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 163 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 169 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.k、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1333,7 +1333,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G4.1.b | P1, RAN；已修復：RC-79 | `exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回 |
 | G4.1.c | P1, RAN；已修復：RC-106 | worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op** |
 | G4.1.d | P1, RAN；已修復：RC-79 | `aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內 |
-| G4.1.e | P1, READ | `quit()` 不是 `Quit` 事件：不關視窗、不能被否決 |
+| G4.1.e | P1, RAN；部分修復：RC-115 | `quit()` 不是 `Quit` 事件：不關視窗、不能被否決 |
 | G4.1.f | P2, READ | `CoreApplication::new` 文件寫會 panic，實際沒有第二個實例檢查 |
 | G4.1.g | P1, RAN；已修復：RC-104 | 無獨立的巢狀 `QEventLoop` |
 | G4.1.h | P2 | `ExitCode::from(exit_code as u8)` 截斷 |
@@ -1443,7 +1443,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.4.c | P1, RAN；已修復：RC-90 | 無隱式 grab |
 | G8.4.d | P1, RAN；已修復：RC-91 | Enter/Leave 非祖先鏈 |
 | G8.4.e | P2 | 無 `WA_TransparentForMouseEvents`／`WA_NoMousePropagation` |
-| G8.4.f | P1 | 右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關 |
+| G8.4.f | P1, RAN；已修復：RC-116 | 右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關 |
 | G8.4.g | P1；已修復：RC-06 | `Window` 沒有 release／double-click／move handler |
 | G8.4.h | P1, READ | RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTr |
 | G8.4.i | P2 | `Window::set_mouse_press_handler`／`set_mouse_move_handler`／`set_context_menu_handler` 與新的  |
@@ -1452,12 +1452,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.5.c | P0, READ；已修復：RC-05 | **樣式變更不重排**：`WidgetBase::set_style_sheet` 只標 dirty |
 | G8.5.d | P0, READ；已修復：RC-10 | `Window::set_style_sheet` 是**整個 Application 的** |
 | G8.5.e | P1, READ；`:disabled` 已修復：RC-34；`:focus` 已修復：RC-35；`:enabled` 已修復：RC-39；Label `:focus` 已修復：RC-40；Label focus policy 已修復：RC-41 | `:disabled`/`:focus` 不支援 |
-| G8.5.f | P1, READ | **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在 |
+| G8.5.f | P1, RAN；已修復：RC-117 | **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在 |
 | G8.5.g | P2, READ | `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄 |
 | G8.5.h | P2, READ | 父 widget 的 `font` 繼承未實作 |
 | G8.5.i | P1, READ | RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排 |
 | G8.5.j | P2, READ；實測 | `Application::set_font` 只寫 `GLOBAL_FONT`：沒有任何 widget 讀 `Application::font()`，也沒有 `FontChan |
-| G8.5.k | P2, READ | HUD 的選單沒有 parent：Rust `Menu::new("")` |
+| G8.5.k | P2, RAN；已修復：RC-117 | HUD 的選單沒有 parent：Rust `Menu::new("")` |
 | G8.5.l | P2, READ | `StyleChange` 通知以 `try_borrow` 走訪：`style_changed_below` 跳過目前被 mutably borrow 的 widget |
 | G8.6.a | P2 | 無 per-widget `WA_*` 屬性 |
 | G8.6.b | P1, READ | `set_stays_on_top` 執行期路徑沒有測試 |
@@ -1599,7 +1599,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.p | P2, RAN；已修復：RC-55 | 連續兩次開啟 backdrop 會疊加兩個 effect view |
 | G11.13.q | P2, RAN；與 Qt 相同，不修 | effect view 的 alloc/init 參照從未 release（Qt 亦同） |
 | G11.13.r | P1, READ | 視圖沒有輸入處理方法、視窗沒有 delegate，真實輸入不會變成 qtrs 視窗事件 |
-| G12.3.a | P1 | QMenu 規則被解析但不消費 |
+| G12.3.a | P1, RAN；已修復：RC-117 | QMenu 規則被解析但不消費 |
 | G12.3.b | P0, READ；已修復：RC-15 | Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px` |
 | G12.3.c | P1, RAN；已修復：RC-74 | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |
 | G12.3.d | P1 | 型別比對無繼承 |
@@ -1620,9 +1620,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.j | P0, READ；= G11.9.a；已修復：RC-12 | 熱鍵註冊失敗不被回報；鎖定防護失效 |
 | G12.5.k | P1 | `--smoke-test` 不檢查設定持久化 |
 | G12.5.l | P0, READ；= G11.4.a；已修復：RC-13 | 螢幕選擇／脫離螢幕還原規則 |
-| G12.5.m | P1 | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu |
+| G12.5.m | P1, RAN；已修復：RC-114 | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu |
 | G12.5.n | P1, RAN；已修復：RC-12、RC-77 | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 |
-| G12.5.o | P1 | QMenu 外觀為寫死數值，非 QSS |
+| G12.5.o | P1, RAN；已修復：RC-117 | QMenu 外觀為寫死數值，非 QSS |
 | G12.5.p | P1；已修復：RC-25 | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** |
 | G12.5.q | P1；已修復：RC-29 | `UsageDial` 最小尺寸 0 vs 84 |
 | G12.5.r | P1 | 版面切換：`StackedWidget` vs 重建 |
@@ -3128,3 +3128,32 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：`lastWindowClosed` 信號仍不發（G11.2.f）；quit 為直接呼叫，非可否決的 `Quit` 事件（G4.1.e）。
 - **CI 修正**：CI 38174902623 在 macOS 上 `dropping_a_window_while_running_does_not_quit` 以 SIGTRAP 終止（在測試執行緒的 `exec` 內建立視窗；推測為 AppKit 主執行緒要求，未查證 `[INFERENCE]`），改為 `#[cfg(not(target_os = "macos"))]`（Windows、Linux 仍執行）。順帶把 `qtrs-platform/src/window.rs` 只在 Windows 使用的 `Point` import 加上 `#[cfg(windows)]`（非 Windows 的 unused-import 警告，自 RC-72 起即存在）。
 - **共同驗證（RC-107..113）**：qtrs workspace（略過 `real_windows`）114 個 test binary 全 ok；HUD 123 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG 產出。
+
+#### RC-114 托盤選單與 Python 托盤選單相同；HUD 右鍵選單標籤依 Python（G12.5.m）
+- **Python 依據**：`python/ui/tray_icon.py:43-151`（托盤選單建立與 `update_menu_state`；`:79-80` Layout 子選單、`:102` 「📌 視窗永遠置頂」、`:108` 「🚀 開機自動啟動」無後綴）；`python/ui/hud_window.py:25-26`（`SCHEME_LABELS`「色階 (Scale)」「雙色 (Duo)」、`APPEARANCE_LABELS`「跟隨系統 (Auto)」「淺色 (Light)」「深色 (Dark)」）、`:677-795`（`contextMenuEvent`）。
+- **根因**：托盤右鍵沿用 HUD 本體的選單建立函式，兩者共用同一份項目；本體的配色／外觀標籤寫死為非 Python 字串。
+- **修正**：新增 `build_hud_tray_menu`（Python 托盤順序與項目，不含 Claude 帳號／鎖定／不透明度／間隔／重設／隱藏 HUD 等本體專屬項目），托盤 `on_context_menu_requested` 改用它；本體標籤改為 Python 字串；刪除未使用的 `build_tray_menu`；所有項目仍走 `handle_action`。
+- **驗證**：`tray_icon.rs` `menu_parity_tests`：`body_appearance_labels_match_python_appearance_labels`、`body_scheme_labels_match_python_scheme_labels` 修正前 FAIL（`:1120`、`:1106`，舊字串）；四個 `tray_menu_*` 以「托盤改回本體選單」突變時 FAIL（`:1073` 項目清單不同、`:1102`、`:1030` 找不到托盤項目）。改寫：`test_tray_and_hud_menu_unified_parity` → `tray_and_hud_menus_share_dark_mode`。標籤以 `grep -F` 與 Python 原始碼逐字比對（含 U+FE0F）。
+- **Residual**：托盤選單每次開啟重建（Python 建立一次、`update_menu_state` 更新），可見狀態相同；本體以 `set_visible` 隱藏 Colors／Layout（Python 不加入），畫面相同（快照確認）。
+
+#### RC-115 `quit()` 先關閉所有頂層視窗，任何視窗拒絕關閉就不結束（G4.1.e 部分）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qapplication.cpp:1675-1697]` `QApplication::event(Quit)` 呼叫 `closeAllWindows`（`1635-1639`）→ `tryCloseAllWidgetWindows`（`1591-1617`），仍有可見頂層視窗時忽略 Quit；`qcoreapplication.cpp:1522-1542` `exit` 無條件；`2138-2147` `quit` 在 exec 外為 no-op。（Contract 原文的 `QGuiApplicationPrivate::tryCloseAllWindows` 在此 Qt 版本不存在。）
+- **根因**：`qtrs-widgets::Application::quit` 直接呼叫 `GuiApplication::quit`，沒有關閉／否決步驟。
+- **修正**：每個 `Window` 註冊 closer；`quit` 依序 `close(false)` 所有頂層視窗，有任一拒絕（仍可見）就不結束；`QUITTING` 防重入；`CoreApplication::in_exec()`。`exit` 仍無條件。
+- **驗證**：`test_application_layers.rs` `close_quit::quit_refused_by_window_close_keeps_exec_running` 修正前 FAIL `:467:9 left: 0 right: 7`；`quit_closes_open_windows_before_exiting` FAIL `:490:9 assertion failed: !win.is_visible()`（Windows only）。
+- **Residual**：quit 為同步呼叫，Qt 是 post `Quit`；跨執行緒 `ThreadHandle::quit` 與 pump 中的 posted `Quit` 仍直接結束、不經否決；Popup／無 parent 的 Dialog 未排除（Qt 排除），`exec_popup` 的 TOOL 視窗也被當成頂層。
+
+#### RC-116 右鍵選單 callback 只在 ContextMenu 事件未被接受時執行（G8.4.f）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qwidgetwindow.cpp:639-640, 660-702]` 放開右鍵後送 `QContextMenuEvent(Mouse)` 給游標下的 widget；`[QT-SRC widgets/kernel/qapplication.cpp:2885-2906]` 未接受就往 parent 傳到視窗邊界為止。
+- **根因**：`window.rs` 放開右鍵時無條件呼叫 `context_menu_cb`。
+- **修正**：放開右鍵先把 `ContextMenu(Mouse)` 派送給 widget 樹，只有沒人接受時才呼叫 callback。HUD 的 `EmptyWidget`／`dispatch_input_event` 對 ContextMenu 回 false，本體右鍵選單照常開啟。
+- **驗證**：`test_event_propagation.rs` `context_menu_callback_skipped_when_widget_accepts_the_menu_event` 修正前 FAIL `:723:9 left: 1 right: 0`；`context_menu_callback_runs_when_no_widget_accepts_the_menu_event` 為防護。
+- **Residual**：鍵盤（Shift+F10／選單鍵）與標題列的 `WM_CONTEXTMENU` 不會到達 callback。
+
+#### RC-117 QMenu 依樣式表繪製；HUD 選單掛 parent 取得視窗樣式表（G8.5.f、G12.3.a、G12.5.o、G8.5.k）
+- **Qt 依據**：`[QT-SRC widgets/styles/qstylesheetstyle.cpp:5438-5456]` `CT_MenuItem` 尺寸取 base 與 item 字型文字矩形的較大者；QMenu 沿 parent 鏈取得樣式表（`qstylesheetstyle.cpp:1654`）。Python `python/ui/styles.py:157-196` 卡片主題的 QMenu 規則；`QMenu(self.hud_window)`／`QMenu(self)`。
+- **根因**：`menu.rs` 只讀明確的 `MenuStyle`，從不查詢樣式表的 `QMenu`／`QMenu::item[:selected|:disabled]`／`QMenu::separator`；HUD 選單沒有 parent；Rust 卡片樣式表缺 QMenu 規則；卡片模式停用色寫死為暗色（Python 卡片無 `:disabled` 規則，Qt 維持一般文字色）。
+- **修正**：`Menu::effective_style()` 以樣式表覆蓋明確或預設樣式（padding、列高、顏色、圓角），尺寸與繪製都用它；子選單沿用頂層 parent；HUD 本體與托盤選單建立時傳入視窗 root 作 parent；`styles.rs` 深／淺卡片樣式表加入 Python 的 QMenu 規則；卡片停用色改為一般文字色。
+- **驗證**：`test_style_scope.rs` `a_qmenu_padding_from_its_parent_window_sheet_changes_its_size` 修正前 FAIL `:260 left: 56 right: 66`；`a_qmenu_item_font_size_from_its_parent_window_sheet_changes_its_row_height` FAIL「a 24px row font left the menu height unchanged」；HUD `cards_disabled_menu_rows_keep_the_normal_text_colour` FAIL `tray_icon.rs:1019`（#64748b vs #e2e8f0）。改寫：兩個 style_scope 測試原本比較「無樣式選單 vs 有樣式選單」（兩條路徑列高公式不同，釘住實作基準），改為同一選單換樣式表前後比較。`--snapshot` 本體選單已目視。
+- **Residual**：邊框寬固定 1 px、separator 高度不讀 QSS、勾選色 `#38bdf8` 寫死；無 QSS 時的預設幾何為自訂數值；寬度以列字型量測（Qt 用 item 字型）；PySide6 offscreen 量到列高 26 px、Rust 27 px，差 1 px 原因未查（探針標籤與 HUD 不同）。
+- **共同驗證（RC-114..117）**：qtrs workspace（略過 `real_windows`）114 個 test binary 全 ok；HUD 130 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過（`cargo fmt` 整理了 `main.rs` 兩處）；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG。

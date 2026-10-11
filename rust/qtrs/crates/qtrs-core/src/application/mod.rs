@@ -254,6 +254,11 @@ impl CoreApplication {
         Self::exit(0);
     }
 
+    /// Whether `exec` is running. `QCoreApplication::quit` acts only then (qcoreapplication.cpp:2138-2147).
+    pub fn in_exec() -> bool {
+        IN_EXEC.load(Ordering::SeqCst)
+    }
+
     /// Posts an event to a receiver object with priority.
     pub fn post_event_with_priority(receiver: ObjectId, event: Event, priority: i32) {
         let target_thread = query_object_thread(receiver).unwrap_or_else(ThreadId::current);

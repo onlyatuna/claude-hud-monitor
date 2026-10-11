@@ -17,6 +17,7 @@ use crate::action::{keys, Action, ActionRef, ActionWeak};
 use crate::focus::FocusPolicy;
 use crate::layout::Layout;
 use crate::size_policy::{Policy, QSizePolicy};
+use crate::style::stylesheet::{ResolvedStyle, WidgetStyleContext};
 use crate::widget::{Widget, WidgetBase, WidgetRef, WidgetWeak};
 
 /// Shared handle to a [`Menu`]; sub-menus, menu bars and tool bar extensions hold menus this way.
@@ -290,12 +291,100 @@ impl Menu {
     }
 
     fn top_inset(&self) -> i32 {
-        self.style.as_ref().map_or(V_PADDING, |s| FRAME + s.padding_v)
+        self.effective_style()
+            .map_or(V_PADDING, |s| FRAME + s.padding_v)
+    }
+
+    /// `QMenu` rules for one sub-control and pseudo-state list, resolved like Qt's
+    /// `QStyleSheetStyle::renderRule`: every matching rule cascades and the more specific one
+    /// wins, so `QMenu::item:selected` without a `color` keeps the `QMenu::item` colour.
+    fn qss(&self, sub_control: Option<&'static str>, states: &[&'static str]) -> ResolvedStyle {
+        self.base.resolve_style(&WidgetStyleContext {
+            type_name: "QMenu",
+            object_name: "",
+            pseudo_states: states,
+            sub_control,
+            attributes: &[],
+        })
+    }
+
+    /// The base for a menu with no explicit `MenuStyle`: the `set_dark_mode` colours with the
+    /// unstyled metrics, so a `QMenu` rule alone still yields a complete styled menu.
+    fn hard_style(&self) -> MenuStyle {
+        MenuStyle {
+            font: self.font.clone(),
+            row_font: self.font.clone(),
+            background: self.background_color,
+            border: self.border_color,
+            text: self.text_color,
+            disabled_text: self.disabled_text_color,
+            hover_background: self.highlight_color,
+            hover_text: self.highlight_text_color,
+            separator: self.separator_color,
+            radius: 6.0,
+            padding_v: V_PADDING,
+            item_padding: [V_PADDING, RIGHT_PADDING, V_PADDING, CHECK_COLUMN - FRAME],
+            separator_margin: [4, 8],
+        }
+    }
+
+    /// The style the menu is laid out with: the explicit `MenuStyle` (or `hard_style`) with every
+    /// `QMenu` rule from the sheets above it applied on top. `None` when there is neither, which
+    /// keeps the unstyled path.
+    fn effective_style(&self) -> Option<MenuStyle> {
+        let menu = self.qss(None, &[]);
+        let item = self.qss(Some("item"), &[]);
+        let selected = self.qss(Some("item"), &["selected"]);
+        let disabled = self.qss(Some("item"), &["disabled"]);
+        let separator = self.qss(Some("separator"), &[]);
+        let declared = [&menu, &item, &selected, &disabled, &separator]
+            .iter()
+            .any(|rule| **rule != ResolvedStyle::default());
+        if self.style.is_none() && !declared {
+            return None;
+        }
+        let mut s = self.style.clone().unwrap_or_else(|| self.hard_style());
+        if let Some(c) = menu.background_color {
+            s.background = c;
+        }
+        if let Some(c) = menu.border_color {
+            s.border = c;
+        }
+        if let Some(r) = menu.border_radius {
+            s.radius = r;
+        }
+        if let Some(p) = menu.padding {
+            s.padding_v = p[0].round() as i32;
+        }
+        if let Some(p) = item.padding {
+            s.item_padding = p.map(|v| v.round() as i32);
+        }
+        if let Some(sz) = item.font_size {
+            s.font.size = sz.round();
+        }
+        if let Some(c) = item.color {
+            s.text = c;
+        }
+        if let Some(c) = disabled.color {
+            s.disabled_text = c;
+        }
+        if let Some(c) = selected.background_color {
+            s.hover_background = c;
+        }
+        if let Some(c) = selected.color {
+            s.hover_text = c;
+        }
+        if let Some(c) = separator.background_color {
+            s.separator = c;
+        }
+        if let Some(m) = separator.margin {
+            s.separator_margin = [m[0].round() as i32, m[1].round() as i32];
+        }
+        Some(s)
     }
 
     fn separator_height(&self) -> i32 {
-        self.style
-            .as_ref()
+        self.effective_style()
             .map_or(SEPARATOR_HEIGHT, |s| 1 + 2 * s.separator_margin[0])
     }
 
@@ -308,30 +397,42 @@ impl Menu {
 
     /// X of the item text in menu coordinates.
     fn text_x(&self) -> f32 {
-        match &self.style {
+        match self.effective_style() {
             Some(s) => {
-                (FRAME + s.item_padding[3] + if self.has_checkable() { check_indicator() } else { 0 }) as f32
+                (FRAME
+                    + s.item_padding[3]
+                    + if self.has_checkable() {
+                        check_indicator()
+                    } else {
+                        0
+                    }) as f32
             }
             None => CHECK_COLUMN as f32,
         }
     }
 
-    fn measure_font(&self) -> &Font {
-        self.style.as_ref().map_or(&self.font, |s| &s.row_font)
+    fn measure_font(&self) -> Font {
+        self.effective_style()
+            .map_or_else(|| self.font.clone(), |s| s.row_font)
     }
 
     fn width_for(&self, max_text: i32, shortcut_w: i32) -> i32 {
-        match &self.style {
+        match self.effective_style() {
             Some(s) => {
                 2 * FRAME
                     + s.item_padding[1]
                     + s.item_padding[3]
-                    + if self.has_checkable() { check_indicator() + CHECK_GAP } else { 0 }
+                    + if self.has_checkable() {
+                        check_indicator() + CHECK_GAP
+                    } else {
+                        0
+                    }
                     + max_text
                     + shortcut_w
             }
-            None => (CHECK_COLUMN + max_text + shortcut_w + ARROW_COLUMN + RIGHT_PADDING)
-                .max(MIN_WIDTH),
+            None => {
+                (CHECK_COLUMN + max_text + shortcut_w + ARROW_COLUMN + RIGHT_PADDING).max(MIN_WIDTH)
+            }
         }
     }
 
@@ -792,8 +893,8 @@ impl Menu {
     }
 
     fn item_height(&self) -> i32 {
-        if let Some(s) = &self.style {
-            let h = FontMetrics::from_font(&s.row_font).height.ceil() as i32;
+        if let Some(s) = self.effective_style() {
+            let h = FontMetrics::from_font(&s.row_font).height.max(FontMetrics::from_font(&s.font).height).ceil() as i32;
             return h + s.item_padding[0] + s.item_padding[2];
         }
         let metrics = FontMetrics::from_font(&self.font);
@@ -933,6 +1034,7 @@ impl Menu {
             sub.separator_color = self.separator_color;
             sub.font = self.font.clone();
             sub.style = self.style.clone();
+            sub.set_parent_widget(self.base.parent_widget());
             sub.about_to_show.emit(&());
             sub.popup_bounds = local_bounds;
             let size = sub.size_hint();
@@ -1292,10 +1394,13 @@ impl Menu {
     }
 
     fn paint_item(&self, painter: &mut Painter, action: &Action, rect: Rect, active: bool) {
-        let metrics = FontMetrics::from_font(&self.font);
+        let style = self.effective_style();
+        let colors = style.clone().unwrap_or_else(|| self.hard_style());
+        let font = colors.font.clone();
+        let metrics = FontMetrics::from_font(&font);
         let width = self.base.geometry().width;
         if action.is_separator() {
-            let (x0, x1, line_y) = match &self.style {
+            let (x0, x1, line_y) = match &style {
                 Some(s) => (
                     (FRAME + s.separator_margin[1]) as f32,
                     (width - FRAME - s.separator_margin[1]) as f32,
@@ -1307,15 +1412,15 @@ impl Menu {
                     rect.y as f32 + rect.height as f32 / 2.0,
                 ),
             };
-            painter.set_pen(Pen::new(self.separator_color, 1.0));
+            painter.set_pen(Pen::new(colors.separator, 1.0));
             painter.draw_line(PointF::new(x0, line_y), PointF::new(x1, line_y));
             return;
         }
         let enabled = action.is_enabled();
         if active && enabled {
-            painter.set_brush(Brush::Color(self.highlight_color));
+            painter.set_brush(Brush::Color(colors.hover_background));
             painter.set_pen(None);
-            let (hl, radius) = if self.style.is_some() {
+            let (hl, radius) = if style.is_some() {
                 (rect, 0.0)
             } else {
                 (Rect::new(rect.x + 3, rect.y, rect.width - 6, rect.height), 4.0)
@@ -1327,17 +1432,17 @@ impl Menu {
             );
         }
         let color = if !enabled {
-            self.disabled_text_color
+            colors.disabled_text
         } else if active {
-            self.highlight_text_color
+            colors.hover_text
         } else {
-            self.text_color
+            colors.text
         };
         let mid_y = rect.y as f32 + rect.height as f32 / 2.0;
         let text_x = self.text_x();
 
         if action.is_checkable() && action.is_checked() {
-            if self.style.is_some() && !action.is_exclusive_in_group() {
+            if style.is_some() && !action.is_exclusive_in_group() {
                 // `QStyleSheetStyle` draws the check through the base style's
                 // `PE_IndicatorMenuCheckMark`, in a box of `check_indicator()` px at the item's
                 // left edge (`positionRect`: AlignLeft | AlignVCenter, padding origin),
@@ -1353,7 +1458,7 @@ impl Menu {
                 );
             } else {
                 let check_color = if active {
-                    self.highlight_text_color
+                    colors.hover_text
                 } else {
                     Color::from_rgba8(56, 189, 248, 255)
                 };
@@ -1397,13 +1502,13 @@ impl Menu {
         painter.draw_text_colored(
             PointF::new(text_x, baseline),
             &text,
-            &self.font,
+            &font,
             color,
         );
         if let Some(offset) = keys::mnemonic_offset(action.text()) {
-            let prefix_w = metrics.horizontal_advance(&text[..offset], &self.font);
+            let prefix_w = metrics.horizontal_advance(&text[..offset], &font);
             let ch: String = text[offset..].chars().take(1).collect();
-            let ch_w = metrics.horizontal_advance(&ch, &self.font);
+            let ch_w = metrics.horizontal_advance(&ch, &font);
             let underline_y = baseline + 2.0;
             painter.set_pen(Pen::new(color, 1.0));
             painter.draw_line(
@@ -1415,13 +1520,13 @@ impl Menu {
         let shortcut = action.shortcut();
         if !shortcut.is_empty() {
             let sc_text = shortcut.to_string();
-            let sc_w = metrics.horizontal_advance(&sc_text, &self.font);
+            let sc_w = metrics.horizontal_advance(&sc_text, &font);
             let x = (width - ARROW_COLUMN) as f32 - sc_w;
-            painter.draw_text_colored(PointF::new(x, baseline), &sc_text, &self.font, color);
+            painter.draw_text_colored(PointF::new(x, baseline), &sc_text, &font, color);
         }
 
         if action.menu().is_some() {
-            if self.style.is_some() {
+            if style.is_some() {
                 paint_submenu_arrow(painter, rect, color);
             } else {
                 let ax = (width - 14) as f32;
@@ -1502,7 +1607,7 @@ impl Widget for Menu {
     }
 
     fn size_hint(&self) -> Size {
-        let measure = self.measure_font().clone();
+        let measure = self.measure_font();
         let metrics = FontMetrics::from_font(&measure);
         let item_h = self.item_height();
         let mut height = 2 * self.top_inset();
@@ -1668,8 +1773,9 @@ impl Widget for Menu {
             return;
         }
         let g = self.base.geometry();
-        painter.set_brush(Brush::Color(self.background_color));
-        painter.set_pen(Pen::new(self.border_color, 1.0));
+        let s = self.effective_style().unwrap_or_else(|| self.hard_style());
+        painter.set_brush(Brush::Color(s.background));
+        painter.set_pen(Pen::new(s.border, 1.0));
         painter.draw_rounded_rect(
             RectF::new(
                 0.5,
@@ -1677,8 +1783,8 @@ impl Widget for Menu {
                 g.width as f32 - 1.0,
                 g.height as f32 - 1.0,
             ),
-            self.style.as_ref().map_or(6.0, |s| s.radius),
-            self.style.as_ref().map_or(6.0, |s| s.radius),
+            s.radius,
+            s.radius,
         );
 
         let rects = self.item_rects();

@@ -443,4 +443,53 @@ mod close_quit {
             "quit_on_last_window_closed(false) keeps exec alive after the close"
         );
     }
+
+    /// Qt: `QApplication::event(Quit)` leaves the application running when a top-level window
+    /// ignores its close (`qapplication.cpp:1675-1697`), so exec does not return.
+    #[test]
+    fn quit_refused_by_window_close_keeps_exec_running() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        Application::reset_for_test();
+        let mut app = Application::new(vec!["quit_test".to_string()]);
+        GuiApplication::set_quit_on_last_window_closed(false);
+        let mut win =
+            Window::new("w", Rect::new(0, 0, 100, 100), WindowFlags::NORMAL).expect("window");
+        win.set_window_event_handler(|ev: &mut Event| {
+            if matches!(ev.kind, EventKind::Close) {
+                ev.ignore();
+            }
+        });
+        win.show();
+        qtrs_core::timer::Timer::single_shot(10, || Application::quit());
+        qtrs_core::timer::Timer::single_shot(500, || Application::exit(7)); // watchdog
+        let code = app.exec();
+        GuiApplication::set_quit_on_last_window_closed(true);
+        assert_eq!(
+            code, 7,
+            "a window that refuses its close vetoes quit, so exec keeps running"
+        );
+        assert!(win.is_visible(), "the refusing window stays visible");
+    }
+
+    /// Qt: `QApplication::event(Quit)` calls `closeAllWindows()` before quitting
+    /// (`qapplication.cpp:1675-1697`, `:1635-1639`), so an accepted close hides each open window.
+    #[test]
+    fn quit_closes_open_windows_before_exiting() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        Application::reset_for_test();
+        let mut app = Application::new(vec!["quit_test".to_string()]);
+        GuiApplication::set_quit_on_last_window_closed(false);
+        let mut win =
+            Window::new("w", Rect::new(0, 0, 100, 100), WindowFlags::NORMAL).expect("window");
+        win.show();
+        qtrs_core::timer::Timer::single_shot(10, || Application::quit());
+        qtrs_core::timer::Timer::single_shot(500, || Application::exit(9)); // watchdog
+        let code = app.exec();
+        GuiApplication::set_quit_on_last_window_closed(true);
+        assert_eq!(code, 0, "quit exits normally");
+        assert!(
+            !win.is_visible(),
+            "quit closes the open window before exiting"
+        );
+    }
 }

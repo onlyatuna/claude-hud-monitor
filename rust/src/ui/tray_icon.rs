@@ -4,11 +4,13 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use crate::autostart::{is_autostart_enabled, set_autostart};
+use qtrs_core::variant::Variant;
 use qtrs_gui::paint::pixmap::Pixmap;
 use qtrs_gui::tiny_skia::Color;
-use qtrs_platform::menu::{create_platform_menu, PlatformMenu};
 use qtrs_platform::platform_tray::TrayMessageIcon;
 use qtrs_platform::tray_icon::TrayIcon;
+use qtrs_widgets::action::Action;
+use qtrs_widgets::menu::{Menu, MenuRef};
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;
@@ -56,6 +58,19 @@ pub const ACTION_CLAUDE_PROFILE_AUTO: u32 = 100;
 pub const ACTION_CLAUDE_PROFILE_BASE: u32 = 1000;
 
 pub const ACTION_EXIT: u32 = 99;
+
+/// Python `SCHEME_LABELS` (`hud_window.py:25`) in `SCHEMES` order (`styles.py:20`).
+const SCHEME_CHOICES: [(&str, u32, &str); 2] = [
+    ("scale", ACTION_SCHEME_SCALE, "色階 (Scale)"),
+    ("duo", ACTION_SCHEME_DUO, "雙色 (Duo)"),
+];
+
+/// Python `APPEARANCE_LABELS` (`hud_window.py:26`) in `APPEARANCES` order (`styles.py:21`).
+const APPEARANCE_CHOICES: [(&str, u32, &str); 3] = [
+    ("auto", ACTION_APPEARANCE_AUTO, "跟隨系統 (Auto)"),
+    ("light", ACTION_APPEARANCE_LIGHT, "淺色 (Light)"),
+    ("dark", ACTION_APPEARANCE_DARK, "深色 (Dark)"),
+];
 pub fn create_default_tray_pixmap() -> Pixmap {
     const ICON_PNG_BYTES: &[u8] = include_bytes!("../../assets/app_icon.png");
     // `Pixmap::from_image` premultiplies alpha, as the pixmap format requires.
@@ -70,178 +85,6 @@ pub fn create_default_tray_pixmap() -> Pixmap {
     pm
 }
 
-#[allow(dead_code)]
-pub fn build_tray_menu(native_handle: isize, cfg: &Config) -> Box<dyn PlatformMenu> {
-    let mut menu = create_platform_menu(native_handle);
-
-    // 1. Refresh & Toggle
-    menu.add_action(ACTION_REFRESH_ALL, "🔄 立即重新整理所有 AI (Refresh All)");
-    menu.add_action(ACTION_TOGGLE_VISIBILITY, "👁️ 顯示 / 隱藏 HUD (Alt+C)");
-    menu.add_separator();
-
-    // 2. Claude Account Submenu
-    let mut claude_sub = create_platform_menu(native_handle);
-    let cur_profile = cfg.claude_profile.as_str();
-    let is_auto = cur_profile.is_empty() || cur_profile.eq_ignore_ascii_case("auto");
-    let (active_prof, _) = crate::providers::claude::resolve_active_profile(cur_profile);
-
-    let auto_title = if is_auto && active_prof.id != "default" {
-        format!("🎯 智慧自動追蹤 (目前: {})", active_prof.short_name)
-    } else {
-        "🎯 智慧自動追蹤 (最近活躍)".to_string()
-    };
-    claude_sub.add_checkable(ACTION_CLAUDE_PROFILE_AUTO, &auto_title, is_auto);
-    claude_sub.add_separator();
-
-    let profiles = crate::providers::claude::discover_profiles();
-    for (i, prof) in profiles.iter().take(40).enumerate() {
-        let is_selected = !is_auto
-            && (cur_profile.eq_ignore_ascii_case(&prof.id)
-                || (cur_profile == ".claude" && prof.id == "default"));
-        claude_sub.add_checkable(
-            ACTION_CLAUDE_PROFILE_BASE + i as u32,
-            &prof.display_name,
-            is_selected,
-        );
-    }
-    menu.add_submenu("✳️ Claude 帳號 (Claude Account)", claude_sub);
-    menu.add_separator();
-
-    // 3. UI Style submenu
-    let mut style_sub = create_platform_menu(native_handle);
-    style_sub.add_checkable(
-        ACTION_MODE_CARDS,
-        "🗂️ 傳統卡片 (Classic Cards)",
-        cfg.ui_mode == "cards",
-    );
-    style_sub.add_checkable(
-        ACTION_MODE_TABLE,
-        "📊 儀表表格 (Modern Table)",
-        cfg.ui_mode == "table",
-    );
-    menu.add_submenu("🎭 介面風格 (UI Style)", style_sub);
-
-    // 4. Layout submenu (only in cards mode)
-    if cfg.ui_mode == "cards" {
-        let mut layout_sub = create_platform_menu(native_handle);
-        layout_sub.add_checkable(
-            ACTION_LAYOUT_HORIZONTAL,
-            "💻 橫向三欄並排 (Horizontal Triple)",
-            cfg.layout_mode == "horizontal",
-        );
-        layout_sub.add_checkable(
-            ACTION_LAYOUT_VERTICAL,
-            "📱 直立三層堆疊 (Vertical Stack)",
-            cfg.layout_mode == "vertical",
-        );
-        menu.add_submenu("📐 顯示佈局 (Layout)", layout_sub);
-    }
-
-    // 5. Theme submenus
-    if cfg.ui_mode == "table" {
-        let mut scheme_sub = create_platform_menu(native_handle);
-        scheme_sub.add_checkable(
-            ACTION_SCHEME_SCALE,
-            "色階模式 (Scale)",
-            cfg.color_scheme == "scale",
-        );
-        scheme_sub.add_checkable(
-            ACTION_SCHEME_DUO,
-            "雙色模式 (Duo)",
-            cfg.color_scheme == "duo",
-        );
-        menu.add_submenu("🎨 配色 (Colors)", scheme_sub);
-    }
-
-    let mut app_sub = create_platform_menu(native_handle);
-    app_sub.add_checkable(
-        ACTION_APPEARANCE_AUTO,
-        "跟隨系統 (Auto)",
-        cfg.appearance == "auto",
-    );
-    app_sub.add_checkable(
-        ACTION_APPEARANCE_LIGHT,
-        "淺色模式 (Light)",
-        cfg.appearance == "light",
-    );
-    app_sub.add_checkable(
-        ACTION_APPEARANCE_DARK,
-        "深色模式 (Dark)",
-        cfg.appearance == "dark",
-    );
-    menu.add_submenu("🌓 外觀 (Appearance)", app_sub);
-    menu.add_separator();
-
-    // 6. Ghost Mode
-    menu.add_checkable(
-        ACTION_CLICK_THROUGH,
-        "👻 滑鼠點擊穿透 (Alt+Shift+C)",
-        cfg.click_through,
-    );
-
-    // 7. Always on top
-    menu.add_checkable(
-        ACTION_ALWAYS_ON_TOP,
-        "📌 視窗永遠置頂 (Always on Top)",
-        cfg.always_on_top,
-    );
-
-    // 8. Lock Drag
-    menu.add_checkable(ACTION_LOCK_DRAG, "🔒 鎖定視窗位置 (Lock Drag)", cfg.locked);
-
-    // 9. Opacity Submenu
-    let mut opacity_sub = create_platform_menu(native_handle);
-    let current_op = cfg.opacity;
-    for (id, pct, val) in [
-        (ACTION_OPACITY_100, 100, 1.00),
-        (ACTION_OPACITY_90, 90, 0.90),
-        (ACTION_OPACITY_80, 80, 0.80),
-        (ACTION_OPACITY_70, 70, 0.70),
-        (ACTION_OPACITY_50, 50, 0.50),
-        (ACTION_OPACITY_30, 30, 0.30),
-    ] {
-        let is_checked = (current_op - val as f32).abs() < 0.05;
-        opacity_sub.add_checkable(id, &format!("{}%", pct), is_checked);
-    }
-    menu.add_submenu("🌗 視窗透明度 (Opacity)", opacity_sub);
-
-    // 10. Interval Submenu
-    let mut interval_sub = create_platform_menu(native_handle);
-    let cur_int = cfg.refresh_interval_sec;
-    for (id, sec) in [
-        (ACTION_INTERVAL_30, 30),
-        (ACTION_INTERVAL_60, 60),
-        (ACTION_INTERVAL_120, 120),
-        (ACTION_INTERVAL_300, 300),
-    ] {
-        interval_sub.add_checkable(id, &format!("{} 秒", sec), cur_int == sec);
-    }
-    menu.add_submenu("⏱️ 更新頻率 (Interval)", interval_sub);
-
-    // 11. Autostart
-    menu.add_checkable(
-        ACTION_AUTOSTART,
-        "🚀 開機自動啟動 (Start on Boot)",
-        is_autostart_enabled(),
-    );
-    menu.add_separator();
-
-    // 12. Logs
-    menu.add_action(ACTION_OPEN_LOGS, "📂 開啟記錄檔目錄 (Open Logs)");
-
-    // 13. Reset Geometry
-    menu.add_action(ACTION_RESET_GEOMETRY, "📐 重設預設尺寸與位置");
-
-    // 14. Hide HUD
-    menu.add_action(ACTION_HIDE_HUD, "👁️ 隱藏 HUD (Alt+C 重新喚出)");
-
-    menu.add_separator();
-
-    // 15. Exit
-    menu.add_action(ACTION_EXIT, "❌ 結束程式 (Exit)");
-
-    menu
-}
 /// The `QMenu` rules of the Python HUD's active style sheet: the static cards sheet in cards
 /// mode, the theme sheet (`get_hud_stylesheet`) in table mode.
 fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
@@ -315,7 +158,7 @@ fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
             background,
             border,
             text,
-            disabled_text: rgba(100, 116, 139, 255),
+            disabled_text: text,
             hover_background: hover,
             hover_text,
             separator,
@@ -327,33 +170,20 @@ fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
     }
 }
 
-pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
-    use qtrs_core::variant::Variant;
-    use qtrs_widgets::action::Action;
-    use qtrs_widgets::menu::Menu;
+#[cfg(test)]
+fn test_hud_root() -> qtrs_widgets::widget::WidgetRef {
+    std::rc::Rc::new(std::cell::RefCell::new(Box::new(
+        qtrs_widgets::widget::EmptyWidget::new(),
+    )))
+}
 
+pub fn build_hud_context_menu(cfg: &Config, root: &qtrs_widgets::widget::WidgetRef) -> Menu {
     let mut menu = Menu::new("");
     menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
     menu.set_style(hud_menu_style(cfg));
+    qtrs_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
 
-    let add_item = |m: &mut Menu, id: u32, text: &str| {
-        let act = Action::new_ref(text);
-        act.borrow_mut().set_data(Variant::uint(id as u64));
-        m.add_action(act);
-    };
-
-    let add_check = |m: &mut Menu, id: u32, text: &str, checked: bool| {
-        let act = Action::new_ref(text);
-        {
-            let mut a = act.borrow_mut();
-            a.set_checkable(true);
-            a.set_checked(checked);
-            a.set_data(Variant::uint(id as u64));
-        }
-        m.add_action(act);
-    };
-
-    // 1. Refresh
+    // Refresh
     add_item(
         &mut menu,
         ACTION_REFRESH_ALL,
@@ -361,7 +191,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     );
     menu.add_separator();
 
-    // 2. Claude Account Submenu (PR 13)
+    // Claude Account Submenu (PR 13)
     let claude_sub = Menu::new_ref("✳️ Claude 帳號 (Claude Account)");
     {
         let mut cs = claude_sub.borrow_mut();
@@ -396,96 +226,12 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     menu.add_menu_ref(&claude_sub);
     menu.add_separator();
 
-    // 3. UI Mode Submenu
-    let style_sub = Menu::new_ref("🎭 介面風格 (UI Style)");
-    {
-        let mut s = style_sub.borrow_mut();
-        s.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
-        add_check(
-            &mut s,
-            ACTION_MODE_CARDS,
-            "🗂️ 傳統卡片 (Classic Cards)",
-            cfg.ui_mode == "cards",
-        );
-        add_check(
-            &mut s,
-            ACTION_MODE_TABLE,
-            "📊 儀表表格 (Modern Table)",
-            cfg.ui_mode == "table",
-        );
-    }
-    menu.add_menu_ref(&style_sub);
+    // UI Style, Layout, Colors/Appearance (shared with the tray menu)
+    add_ui_style_menu(&mut menu, cfg);
+    add_layout_menu(&mut menu, cfg);
+    add_theme_menus(&mut menu, cfg);
 
-    // 4. Layout Submenu (Cards mode only)
-    if cfg.ui_mode == "cards" {
-        let layout_sub = Menu::new_ref("📐 顯示佈局 (Layout)");
-        {
-            let mut l = layout_sub.borrow_mut();
-            l.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
-            add_check(
-                &mut l,
-                ACTION_LAYOUT_HORIZONTAL,
-                "💻 橫向三欄並排 (Horizontal Triple)",
-                cfg.layout_mode == "horizontal",
-            );
-            add_check(
-                &mut l,
-                ACTION_LAYOUT_VERTICAL,
-                "📱 直立三層堆疊 (Vertical Stack)",
-                cfg.layout_mode == "vertical",
-            );
-        }
-        menu.add_menu_ref(&layout_sub);
-    }
-
-    // 5. Themes (Colors if table, Appearance always)
-    if cfg.ui_mode == "table" {
-        let scheme_sub = Menu::new_ref("🎨 配色 (Colors)");
-        {
-            let mut sc = scheme_sub.borrow_mut();
-            sc.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
-            add_check(
-                &mut sc,
-                ACTION_SCHEME_SCALE,
-                "色階模式 (Scale)",
-                cfg.color_scheme == "scale",
-            );
-            add_check(
-                &mut sc,
-                ACTION_SCHEME_DUO,
-                "雙色模式 (Duo)",
-                cfg.color_scheme == "duo",
-            );
-        }
-        menu.add_menu_ref(&scheme_sub);
-    }
-
-    let app_sub = Menu::new_ref("🌓 外觀 (Appearance)");
-    {
-        let mut a = app_sub.borrow_mut();
-        a.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
-        add_check(
-            &mut a,
-            ACTION_APPEARANCE_AUTO,
-            "跟隨系統 (Auto)",
-            cfg.appearance == "auto",
-        );
-        add_check(
-            &mut a,
-            ACTION_APPEARANCE_LIGHT,
-            "淺色模式 (Light)",
-            cfg.appearance == "light",
-        );
-        add_check(
-            &mut a,
-            ACTION_APPEARANCE_DARK,
-            "深色模式 (Dark)",
-            cfg.appearance == "dark",
-        );
-    }
-    menu.add_menu_ref(&app_sub);
-
-    // 6. Ghost Mode
+    // Ghost Mode
     add_check(
         &mut menu,
         ACTION_CLICK_THROUGH,
@@ -493,7 +239,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
         cfg.click_through,
     );
 
-    // 7. Always on top
+    // Always on top
     add_check(
         &mut menu,
         ACTION_ALWAYS_ON_TOP,
@@ -501,7 +247,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
         cfg.always_on_top,
     );
 
-    // 8. Lock Drag
+    // Lock Drag
     add_check(
         &mut menu,
         ACTION_LOCK_DRAG,
@@ -509,7 +255,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
         cfg.locked,
     );
 
-    // 9. Opacity Submenu
+    // Opacity Submenu
     let opacity_sub = Menu::new_ref("🌗 視窗透明度 (Opacity)");
     {
         let mut op = opacity_sub.borrow_mut();
@@ -529,7 +275,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     }
     menu.add_menu_ref(&opacity_sub);
 
-    // 10. Interval Submenu
+    // Interval Submenu
     let interval_sub = Menu::new_ref("⏱️ 更新頻率 (Interval)");
     {
         let mut intv = interval_sub.borrow_mut();
@@ -546,7 +292,7 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     }
     menu.add_menu_ref(&interval_sub);
 
-    // 11. Autostart
+    // Autostart
     add_check(
         &mut menu,
         ACTION_AUTOSTART,
@@ -556,19 +302,156 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
 
     menu.add_separator();
 
-    // 12. Logs
+    // Logs, Reset Geometry, Hide HUD, Exit
     add_item(&mut menu, ACTION_OPEN_LOGS, "📂 開啟記錄檔目錄 (Open Logs)");
-
-    // 13. Reset Geometry
     add_item(&mut menu, ACTION_RESET_GEOMETRY, "📐 重設預設尺寸與位置");
-
-    // 14. Hide HUD
     add_item(&mut menu, ACTION_HIDE_HUD, "👁️ 隱藏 HUD (Alt+C 重新喚出)");
-
-    // 15. Exit
     add_item(&mut menu, ACTION_EXIT, "❌ 結束程式 (Exit)");
 
     menu
+}
+
+/// Python `HUDTrayIcon` right-click menu (`tray_icon.py:43-122`). The tray and the HUD body
+/// are different menus: this one never contains the body-only account, lock, opacity,
+/// interval, reset or hide items.
+pub fn build_hud_tray_menu(cfg: &Config, root: &qtrs_widgets::widget::WidgetRef) -> Menu {
+    let mut menu = Menu::new("");
+    menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
+    menu.set_style(hud_menu_style(cfg));
+    qtrs_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
+
+    add_item(
+        &mut menu,
+        ACTION_TOGGLE_VISIBILITY,
+        "👁️ 顯示 / 隱藏 HUD (Alt+C)",
+    );
+    add_item(
+        &mut menu,
+        ACTION_REFRESH_ALL,
+        "🔄 立即重新整理所有 AI (Refresh All)",
+    );
+    menu.add_separator();
+    add_ui_style_menu(&mut menu, cfg);
+    add_layout_menu(&mut menu, cfg);
+    add_theme_menus(&mut menu, cfg);
+    add_check(
+        &mut menu,
+        ACTION_CLICK_THROUGH,
+        "👻 滑鼠點擊穿透 (Alt+Shift+C)",
+        cfg.click_through,
+    );
+    add_check(
+        &mut menu,
+        ACTION_ALWAYS_ON_TOP,
+        "📌 視窗永遠置頂",
+        cfg.always_on_top,
+    );
+    add_check(
+        &mut menu,
+        ACTION_AUTOSTART,
+        "🚀 開機自動啟動",
+        is_autostart_enabled(),
+    );
+    add_item(&mut menu, ACTION_OPEN_LOGS, "📂 開啟記錄檔目錄 (Open Logs)");
+    menu.add_separator();
+    add_item(&mut menu, ACTION_EXIT, "❌ 結束程式 (Exit)");
+    menu
+}
+
+/// A submenu styled like its parent (dark or light appearance).
+fn new_submenu(title: &str, cfg: &Config) -> MenuRef {
+    let sub = Menu::new_ref(title);
+    sub.borrow_mut()
+        .set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
+    sub
+}
+
+/// Plain action whose data is `id`, the key `handle_action` dispatches on.
+fn add_item(menu: &mut Menu, id: u32, text: &str) {
+    let act = Action::new_ref(text);
+    act.borrow_mut().set_data(Variant::uint(id as u64));
+    menu.add_action(act);
+}
+
+/// Checkable action with its Python `setChecked` state.
+fn add_check(menu: &mut Menu, id: u32, text: &str, checked: bool) {
+    let act = Action::new_ref(text);
+    {
+        let mut a = act.borrow_mut();
+        a.set_checkable(true);
+        a.set_checked(checked);
+        a.set_data(Variant::uint(id as u64));
+    }
+    menu.add_action(act);
+}
+
+/// Python `ui_style_menu` (`tray_icon.py:66-77`, `hud_window.py:710-721`).
+fn add_ui_style_menu(menu: &mut Menu, cfg: &Config) {
+    let sub = new_submenu("🎭 介面風格 (UI Style)", cfg);
+    {
+        let mut s = sub.borrow_mut();
+        add_check(
+            &mut s,
+            ACTION_MODE_CARDS,
+            "🗂️ 傳統卡片 (Classic Cards)",
+            cfg.ui_mode == "cards",
+        );
+        add_check(
+            &mut s,
+            ACTION_MODE_TABLE,
+            "📊 儀表表格 (Modern Table)",
+            cfg.ui_mode == "table",
+        );
+    }
+    menu.add_menu_ref(&sub);
+}
+
+/// Python `layout_menu` (`tray_icon.py:79-90`). Visible only in cards mode, as
+/// `update_menu_state` sets it (`tray_icon.py:134`).
+fn add_layout_menu(menu: &mut Menu, cfg: &Config) {
+    let sub = new_submenu("📐 顯示佈局 (Layout)", cfg);
+    {
+        let mut l = sub.borrow_mut();
+        add_check(
+            &mut l,
+            ACTION_LAYOUT_HORIZONTAL,
+            "💻 橫向三欄並排 (Horizontal Triple)",
+            cfg.layout_mode == "horizontal",
+        );
+        add_check(
+            &mut l,
+            ACTION_LAYOUT_VERTICAL,
+            "📱 直立三層堆疊 (Vertical Stack)",
+            cfg.layout_mode == "vertical",
+        );
+    }
+    let action = menu.add_menu_ref(&sub);
+    action.borrow_mut().set_visible(cfg.ui_mode == "cards");
+}
+
+/// Python `add_theme_menus` (`hud_window.py:652-675`): Colors, visible only in table mode,
+/// then Appearance. The tray uses the same pair.
+fn add_theme_menus(menu: &mut Menu, cfg: &Config) {
+    let scheme_sub = new_submenu("🎨 配色 (Colors)", cfg);
+    {
+        let mut sc = scheme_sub.borrow_mut();
+        for (value, id, label) in SCHEME_CHOICES {
+            add_check(&mut sc, id, label, cfg.color_scheme == value);
+        }
+    }
+    let scheme_action = menu.add_menu_ref(&scheme_sub);
+    scheme_action
+        .borrow_mut()
+        .set_visible(cfg.ui_mode == "table");
+
+    let appearance_sub = new_submenu("🌓 外觀 (Appearance)", cfg);
+    {
+        let mut a = appearance_sub.borrow_mut();
+        for (value, id, label) in APPEARANCE_CHOICES {
+            add_check(&mut a, id, label, cfg.appearance == value);
+        }
+    }
+    menu.add_menu_ref(&appearance_sub);
 }
 
 /// Balloon sink: Python `tray_icon.showMessage(title, text, icon, msecs)`. The shell sink is
@@ -819,7 +702,7 @@ mod tests {
             ..Config::default()
         };
 
-        let menu_cards = build_hud_context_menu(&cfg_cards);
+        let menu_cards = build_hud_context_menu(&cfg_cards, &test_hud_root());
         let actions = menu_cards.actions();
         assert!(!actions.is_empty(), "Context menu must have actions");
         assert_eq!(
@@ -834,7 +717,7 @@ mod tests {
             ..Config::default()
         };
 
-        let menu_table = build_hud_context_menu(&cfg_table);
+        let menu_table = build_hud_context_menu(&cfg_table, &test_hud_root());
         let actions_table = menu_table.actions();
         assert!(!actions_table.is_empty());
 
@@ -865,19 +748,23 @@ mod tests {
     }
 
     #[test]
-    fn test_tray_and_hud_menu_unified_parity() {
-        let cfg = Arc::new(Mutex::new(Config::default()));
-        let mut tray = HUDTrayIcon::new(Arc::clone(&cfg));
-        tray.update_menu_state();
-
-        // Verify the menu used by the tray is the modern styled Menu, in the configured
-        // appearance. `auto` follows the operating system, so the test fixes the appearance.
+    fn tray_and_hud_menus_share_dark_mode() {
+        // `auto` follows the operating system, so the test fixes the appearance.
         for (appearance, dark) in [("dark", true), ("light", false)] {
-            let mut config = cfg.lock().clone();
-            config.appearance = appearance.to_string();
-            let menu = build_hud_context_menu(&config);
-            assert!(!menu.actions().is_empty());
-            assert_eq!(menu.is_dark_mode(), dark, "appearance {appearance}");
+            let config = Config {
+                appearance: appearance.to_string(),
+                ..Config::default()
+            };
+            assert_eq!(
+                build_hud_tray_menu(&config, &test_hud_root()).is_dark_mode(),
+                dark,
+                "tray {appearance}"
+            );
+            assert_eq!(
+                build_hud_context_menu(&config, &test_hud_root()).is_dark_mode(),
+                dark,
+                "body {appearance}"
+            );
         }
     }
 
@@ -900,7 +787,7 @@ mod tests {
         use qtrs_widgets::Widget;
         let _guard = DevicePixelRatioGuard;
         qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
-        let mut menu = build_hud_context_menu(&Config::default());
+        let mut menu = build_hud_context_menu(&Config::default(), &test_hud_root());
         menu.set_visible(true);
         let size = menu.size_hint();
         menu.set_geometry(qtrs_gui::geometry::primitives::Rect::new(
@@ -1067,5 +954,225 @@ mod tests {
             cfg.lock().autostart,
             "config.autostart must follow the new value"
         );
+    }
+}
+
+#[cfg(test)]
+mod menu_parity_tests {
+    use super::*;
+    use qtrs_widgets::action::ActionRef;
+    use qtrs_widgets::menu::Menu;
+
+    /// Visible labels of the submenu whose parent text contains `title_part`
+    /// (Qt skips hidden actions in the popup, `qmenu.cpp:374, 397`).
+    fn submenu_visible_labels(menu: &Menu, title_part: &str) -> Vec<String> {
+        let sub = menu
+            .actions()
+            .iter()
+            .find(|a| a.borrow().text().contains(title_part))
+            .and_then(|a| a.borrow().menu())
+            .expect("submenu must exist");
+        let labels: Vec<String> = sub
+            .borrow()
+            .actions()
+            .iter()
+            .filter(|a| a.borrow().is_visible())
+            .map(|a| a.borrow().text().to_string())
+            .collect();
+        labels
+    }
+
+    /// Python `SCHEME_LABELS` (`hud_window.py:25`) in the Colors submenu.
+    #[test]
+    fn body_scheme_labels_match_python_scheme_labels() {
+        let cfg = Config {
+            ui_mode: "table".to_string(),
+            color_scheme: "scale".to_string(),
+            ..Config::default()
+        };
+        let menu = build_hud_context_menu(&cfg, &test_hud_root());
+        assert_eq!(
+            submenu_visible_labels(&menu, "(Colors)"),
+            vec!["色階 (Scale)".to_string(), "雙色 (Duo)".to_string()]
+        );
+    }
+
+    /// Python `APPEARANCE_LABELS` (`hud_window.py:26`) in the Appearance submenu.
+    #[test]
+    fn body_appearance_labels_match_python_appearance_labels() {
+        let cfg = Config {
+            ui_mode: "table".to_string(),
+            ..Config::default()
+        };
+        let menu = build_hud_context_menu(&cfg, &test_hud_root());
+        assert_eq!(
+            submenu_visible_labels(&menu, "(Appearance)"),
+            vec![
+                "跟隨系統 (Auto)".to_string(),
+                "淺色 (Light)".to_string(),
+                "深色 (Dark)".to_string(),
+            ]
+        );
+    }
+
+    /// Python's cards sheet has no `QMenu::item:disabled` rule, so Qt keeps the normal item colour
+    /// on disabled rows (`qstylesheetstyle.cpp` configurePalette writes every group).
+    #[test]
+    fn cards_disabled_menu_rows_keep_the_normal_text_colour() {
+        let cfg = Config {
+            ui_mode: "cards".to_string(),
+            appearance: "dark".to_string(),
+            ..Config::default()
+        };
+        let style = hud_menu_style(&cfg);
+        assert_eq!(style.disabled_text, style.text);
+    }
+
+    /// Visible top-level items in popup order; `---` marks a separator.
+    fn visible_top_level(menu: &Menu) -> Vec<String> {
+        menu.actions()
+            .iter()
+            .filter(|a| a.borrow().is_visible())
+            .map(|a| {
+                if a.borrow().is_separator() {
+                    "---".to_string()
+                } else {
+                    a.borrow().text().to_string()
+                }
+            })
+            .collect()
+    }
+
+    fn action_with_text(menu: &Menu, text: &str) -> ActionRef {
+        menu.actions()
+            .iter()
+            .find(|a| a.borrow().text() == text)
+            .cloned()
+            .expect("top-level action must exist")
+    }
+
+    fn submenu_action(menu: &Menu, title_part: &str, text: &str) -> ActionRef {
+        let actions = menu.actions();
+        let sub = actions
+            .iter()
+            .find(|a| a.borrow().text().contains(title_part))
+            .and_then(|a| a.borrow().menu())
+            .expect("submenu must exist");
+        let children = sub.borrow().actions();
+        children
+            .iter()
+            .find(|a| a.borrow().text() == text)
+            .cloned()
+            .expect("submenu item must exist")
+    }
+
+    /// Python `tray_icon.py:43-122` item order in cards mode: Layout is shown, Colors is hidden.
+    #[test]
+    fn tray_menu_cards_mode_matches_python_tray_items() {
+        let cfg = Config {
+            ui_mode: "cards".to_string(),
+            ..Config::default()
+        };
+        let menu = build_hud_tray_menu(&cfg, &test_hud_root());
+        let expected: Vec<String> = [
+            "👁️ 顯示 / 隱藏 HUD (Alt+C)",
+            "🔄 立即重新整理所有 AI (Refresh All)",
+            "---",
+            "🎭 介面風格 (UI Style)",
+            "📐 顯示佈局 (Layout)",
+            "🌓 外觀 (Appearance)",
+            "👻 滑鼠點擊穿透 (Alt+Shift+C)",
+            "📌 視窗永遠置頂",
+            "🚀 開機自動啟動",
+            "📂 開啟記錄檔目錄 (Open Logs)",
+            "---",
+            "❌ 結束程式 (Exit)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(visible_top_level(&menu), expected);
+    }
+
+    /// Python `tray_icon.py` table mode: Colors is shown between UI Style and Appearance; Layout
+    /// is hidden, and the Colors children are the Python `SCHEME_LABELS`.
+    #[test]
+    fn tray_menu_table_mode_shows_colors_hides_layout() {
+        let cfg = Config {
+            ui_mode: "table".to_string(),
+            ..Config::default()
+        };
+        let menu = build_hud_tray_menu(&cfg, &test_hud_root());
+        let expected: Vec<String> = [
+            "👁️ 顯示 / 隱藏 HUD (Alt+C)",
+            "🔄 立即重新整理所有 AI (Refresh All)",
+            "---",
+            "🎭 介面風格 (UI Style)",
+            "🎨 配色 (Colors)",
+            "🌓 外觀 (Appearance)",
+            "👻 滑鼠點擊穿透 (Alt+Shift+C)",
+            "📌 視窗永遠置頂",
+            "🚀 開機自動啟動",
+            "📂 開啟記錄檔目錄 (Open Logs)",
+            "---",
+            "❌ 結束程式 (Exit)",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(visible_top_level(&menu), expected);
+        assert_eq!(
+            submenu_visible_labels(&menu, "(Colors)"),
+            vec!["色階 (Scale)".to_string(), "雙色 (Duo)".to_string()]
+        );
+    }
+
+    /// Checked state follows the config for the tray items (Python `update_menu_state`).
+    #[test]
+    fn tray_menu_checked_state_follows_config() {
+        let cfg = Config {
+            ui_mode: "cards".to_string(),
+            layout_mode: "vertical".to_string(),
+            appearance: "dark".to_string(),
+            click_through: true,
+            always_on_top: false,
+            ..Config::default()
+        };
+        let menu = build_hud_tray_menu(&cfg, &test_hud_root());
+        assert!(action_with_text(&menu, "👻 滑鼠點擊穿透 (Alt+Shift+C)")
+            .borrow()
+            .is_checked());
+        assert!(!action_with_text(&menu, "📌 視窗永遠置頂")
+            .borrow()
+            .is_checked());
+        assert!(
+            submenu_action(&menu, "(Layout)", "📱 直立三層堆疊 (Vertical Stack)")
+                .borrow()
+                .is_checked()
+        );
+        assert!(submenu_action(&menu, "(Appearance)", "深色 (Dark)")
+            .borrow()
+            .is_checked());
+        assert!(!submenu_action(&menu, "(Appearance)", "淺色 (Light)")
+            .borrow()
+            .is_checked());
+    }
+
+    /// Each tray item dispatches the id `handle_action` routes on.
+    #[test]
+    fn tray_menu_items_dispatch_their_handler_ids() {
+        let menu = build_hud_tray_menu(&Config::default(), &test_hud_root());
+        for (text, id) in [
+            ("👁️ 顯示 / 隱藏 HUD (Alt+C)", ACTION_TOGGLE_VISIBILITY),
+            ("🔄 立即重新整理所有 AI (Refresh All)", ACTION_REFRESH_ALL),
+            ("📂 開啟記錄檔目錄 (Open Logs)", ACTION_OPEN_LOGS),
+            ("❌ 結束程式 (Exit)", ACTION_EXIT),
+        ] {
+            assert_eq!(
+                action_with_text(&menu, text).borrow().data().to_u64(),
+                Some(id as u64),
+                "{text}"
+            );
+        }
     }
 }

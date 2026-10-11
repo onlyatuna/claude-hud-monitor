@@ -241,7 +241,8 @@ fn main() -> std::process::ExitCode {
         use qtrs_gui::tiny_skia::Color;
         use qtrs_widgets::Widget;
         let cfg = config.lock();
-        let mut context_menu = ui::tray_icon::build_hud_context_menu(&cfg);
+        let mut context_menu =
+            ui::tray_icon::build_hud_context_menu(&cfg, &hud.window.root_widget());
         context_menu.set_visible(true);
         let menu_size = context_menu.size_hint();
         context_menu.set_geometry(qtrs_gui::geometry::primitives::Rect::new(
@@ -392,9 +393,21 @@ fn main() -> std::process::ExitCode {
     }
 
     // Helper to pop up the modern, styled HUD context menu (used by both HUD body and system tray)
-    fn show_hud_popup_menu(global_pos: Point, config: &Arc<Mutex<Config>>) {
+    fn show_hud_popup_menu(
+        global_pos: Point,
+        config: &Arc<Mutex<Config>>,
+        build_menu: fn(&Config, &qtrs_widgets::widget::WidgetRef) -> qtrs_widgets::menu::Menu,
+    ) {
         let cfg = config.lock().clone();
-        let mut menu = ui::tray_icon::build_hud_context_menu(&cfg);
+        let Some(root) = MAIN_HUD.with(|h_cell| {
+            h_cell
+                .borrow()
+                .as_ref()
+                .map(|hud| hud.borrow().window.root_widget())
+        }) else {
+            return;
+        };
+        let mut menu = build_menu(&cfg, &root);
         if let Some(action) = menu.exec_popup(global_pos) {
             if let Some(id) = action.borrow().data().to_u64() {
                 let action_id = id as u32;
@@ -427,7 +440,7 @@ fn main() -> std::process::ExitCode {
             let global_pos = *pos;
             let cfg_clone = Arc::clone(&config_clone);
             Timer::single_shot(0, move || {
-                show_hud_popup_menu(global_pos, &cfg_clone);
+                show_hud_popup_menu(global_pos, &cfg_clone, ui::tray_icon::build_hud_tray_menu);
             });
         });
 
@@ -459,7 +472,11 @@ fn main() -> std::process::ExitCode {
         .set_context_menu_handler(move |global_pos| {
             let cfg_clone = Arc::clone(&config_clone2);
             Timer::single_shot(0, move || {
-                show_hud_popup_menu(global_pos, &cfg_clone);
+                show_hud_popup_menu(
+                    global_pos,
+                    &cfg_clone,
+                    ui::tray_icon::build_hud_context_menu,
+                );
             });
         });
 
