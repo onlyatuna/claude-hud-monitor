@@ -7,7 +7,9 @@ use crate::window_system_interface::{
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoopHandle;
 use qtrs_core::object::ObjectId;
-use qtrs_gui::geometry::primitives::{Point, Rect, Size};
+#[cfg(windows)]
+use qtrs_gui::geometry::primitives::Point;
+use qtrs_gui::geometry::primitives::{Rect, Size};
 #[allow(unused_imports)]
 use crate::presenter::SurfacePresenter;
 #[allow(unused_imports)]

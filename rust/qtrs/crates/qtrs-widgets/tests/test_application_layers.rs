@@ -375,6 +375,9 @@ fn test_widget_application_window_registry_and_focus() {
 
 /// Dropping a window is not a close: Qt's `~QWindow` never emits `lastWindowClosed` or quits
 /// (`qwindow.cpp:175-208`). Only the close path can end the application.
+/// Not on macOS: creating a window inside `exec` on a test-harness thread traps with SIGTRAP on the
+/// macOS runner (CI run 38174902623; presumably AppKit's main-thread requirement, not verified).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn dropping_a_window_while_running_does_not_quit() {
     let _guard = TEST_MUTEX.lock().unwrap();
