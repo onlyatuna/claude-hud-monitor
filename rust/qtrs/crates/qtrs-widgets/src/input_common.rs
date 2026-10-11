@@ -21,10 +21,7 @@ macro_rules! leaf_widget_common {
         }
 
         fn set_geometry(&self, rect: qtrs_gui::geometry::primitives::Rect) {
-            if self.base.geometry.get() != rect {
-                self.base.geometry.set(rect);
-                self.update();
-            }
+            self.base.set_geometry(rect);
         }
 
         fn is_visible(&self) -> bool {

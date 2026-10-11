@@ -71,8 +71,6 @@ impl ThreadId {
 /// Thread local context: ThreadContext. Modeled after Qt QThreadData.
 pub struct ThreadContext {
     pub id: ThreadId,
-    /// Loop recursion level matching QThreadData::loopLevel.
-    pub loop_level: Cell<usize>,
     /// Whether this thread is the main UI thread.
     pub is_main_thread: bool,
     /// Sends a posted event to the target thread queue and triggers wakeup.
@@ -81,6 +79,32 @@ pub struct ThreadContext {
 
 thread_local! {
     static CURRENT_THREAD_CONTEXT: RefCell<Option<ThreadContext>> = const { RefCell::new(None) };
+    /// Loop recursion depth of this thread, matching `QThreadData::loopLevel`.
+    static LOOP_LEVEL: Cell<usize> = const { Cell::new(0) };
+    /// Handler nesting depth of this thread, matching `QThreadData::scopeLevel` (qthread_p.h:400-409).
+    static SCOPE_LEVEL: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Marks one handler scope on the current thread (`QScopedScopeLevelCounter`, qthread_p.h:400-409).
+/// The guard is `!Send` because the counter is thread-local.
+pub struct ScopeLevelGuard {
+    _not_send: std::marker::PhantomData<*const ()>,
+}
+
+impl ScopeLevelGuard {
+    /// Enters a handler scope, incrementing the thread's `scopeLevel` until the guard drops.
+    pub fn enter() -> Self {
+        SCOPE_LEVEL.with(|level| level.set(level.get() + 1));
+        Self {
+            _not_send: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for ScopeLevelGuard {
+    fn drop(&mut self) {
+        SCOPE_LEVEL.with(|level| level.set(level.get() - 1));
+    }
 }
 static GLOBAL_MAIN_THREAD_ID: RwLock<Option<ThreadId>> = RwLock::new(None);
 static GLOBAL_THREAD_SENDERS: RwLock<Option<HashMap<ThreadId, EventSender>>> = RwLock::new(None);
@@ -123,7 +147,6 @@ impl ThreadContext {
         CURRENT_THREAD_CONTEXT.with(|ctx| {
             *ctx.borrow_mut() = Some(ThreadContext {
                 id: ThreadId::current(),
-                loop_level: Cell::new(0),
                 is_main_thread,
                 sender,
             });
@@ -140,23 +163,19 @@ impl ThreadContext {
         })
     }
 
-    /// Loop recursion level matching QThreadData::loopLevel.
+    /// Loop recursion depth of the current thread (`QThreadData::loopLevel`).
     pub fn current_loop_level() -> usize {
-        CURRENT_THREAD_CONTEXT.with(|ctx| {
-            ctx.borrow()
-                .as_ref()
-                .map(|c| c.loop_level.get())
-                .unwrap_or(0)
-        })
+        LOOP_LEVEL.with(|level| level.get())
     }
 
-    /// Loop recursion level matching QThreadData::loopLevel.
+    /// Sets the loop recursion depth of the current thread (`QThreadData::loopLevel`).
     pub fn set_current_loop_level(level: usize) {
-        CURRENT_THREAD_CONTEXT.with(|ctx| {
-            if let Some(c) = ctx.borrow().as_ref() {
-                c.loop_level.set(level);
-            }
-        });
+        LOOP_LEVEL.with(|cell| cell.set(level));
+    }
+
+    /// Handler nesting depth of the current thread (`QThreadData::scopeLevel`).
+    pub fn current_scope_level() -> usize {
+        SCOPE_LEVEL.with(|level| level.get())
     }
 
     pub fn is_current_main_thread() -> bool {

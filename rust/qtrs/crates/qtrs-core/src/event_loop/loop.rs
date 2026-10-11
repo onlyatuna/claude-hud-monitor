@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::object::ThreadId;
+use crate::object::{ScopeLevelGuard, ThreadContext, ThreadId};
 
 use crate::event::{
     compress_event as run_compress_event, CoreCompressor, Event, EventCompressor, EventKind,
@@ -104,6 +104,8 @@ pub fn deliver_timer_event(receiver: ObjectId, timer_id: u64) -> TimerDelivery {
 }
 
 pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
+    // QScopedScopeLevelCounter in QCoreApplication::notify (qcoreapplication.cpp:1118).
+    let _scope = ScopeLevelGuard::enter();
     if app_filters_consumed(receiver, event) {
         return false;
     }
@@ -325,7 +327,6 @@ pub struct EventLoop {
     pub(crate) queue: Arc<Mutex<EventQueue>>,
     pub(crate) timer_registry: Arc<Mutex<TimerRegistry>>,
     pub(crate) compressor: Arc<dyn EventCompressor>,
-    pub(crate) loop_level: usize,
     pub(crate) exit_requested: Arc<AtomicBool>,
     pub(crate) return_code: Arc<AtomicI32>,
     pub(crate) custom_timeout: Option<Duration>,
@@ -356,7 +357,6 @@ impl EventLoop {
             queue: Arc::new(Mutex::new(EventQueue::new())),
             timer_registry,
             compressor: Arc::new(CoreCompressor),
-            loop_level: 0,
             exit_requested: Arc::new(AtomicBool::new(false)),
             return_code: Arc::new(AtomicI32::new(0)),
             custom_timeout: None,
@@ -383,7 +383,6 @@ impl EventLoop {
             queue,
             timer_registry,
             compressor: Arc::new(CoreCompressor),
-            loop_level: 0,
             exit_requested: Arc::new(AtomicBool::new(false)),
             return_code: Arc::new(AtomicI32::new(0)),
             custom_timeout: None,
@@ -400,12 +399,9 @@ impl EventLoop {
         &self.timer_registry
     }
 
+    /// Loop recursion depth of the current thread (`QThreadData::loopLevel`).
     pub fn loop_level(&self) -> usize {
-        self.loop_level
-    }
-
-    pub fn set_loop_level(&mut self, loop_level: usize) {
-        self.loop_level = loop_level;
+        ThreadContext::current_loop_level()
     }
 
     pub fn is_exit_requested(&self) -> bool {
@@ -458,10 +454,49 @@ impl EventLoop {
     }
 
     pub fn send_posted_events(&mut self) -> usize {
-        let (delivered, quit_code) = send_posted_events_for_queue(&self.queue, self.loop_level);
+        let (delivered, quit_code) = send_posted_events_for_queue(&self.queue);
         if let Some(code) = quit_code {
             self.exit_requested.store(true, Ordering::SeqCst);
             self.return_code.store(code, Ordering::SeqCst);
+        }
+        delivered
+    }
+
+    /// Delivers the queued `DeferredDelete` events that the loop-exit flush allows, matching
+    /// `sendPostedEvents(nullptr, QEvent::DeferredDelete)` (qcoreapplication.cpp:1484-1489). Other
+    /// posted events stay queued. Returns the number delivered.
+    pub fn flush_deferred_deletes(&mut self) -> usize {
+        {
+            let mut q = self.queue.lock().unwrap();
+            q.insertion_offset = q.events.len();
+        }
+        let mut delivered = 0;
+        loop {
+            let (receiver, mut event) = {
+                let mut q = self.queue.lock().unwrap();
+                let end = q.insertion_offset;
+                let levels = current_levels();
+                let found = q.events.iter().take(end).position(|p| match p.event.kind {
+                    EventKind::DeferredDelete {
+                        loop_level,
+                        scope_level,
+                    } => deferred_delete_deliverable((loop_level, scope_level), levels, true),
+                    _ => false,
+                });
+                match found {
+                    Some(index) => {
+                        let posted = q.remove_at(index);
+                        (posted.receiver, posted.event)
+                    }
+                    None => {
+                        q.insertion_offset = 0;
+                        break;
+                    }
+                }
+            };
+            send_event(receiver, &mut event);
+            finish_deferred_delete(receiver);
+            delivered += 1;
         }
         delivered
     }
@@ -495,11 +530,12 @@ impl EventLoop {
         if let Some(app_id) = crate::application::app_object_on_current_thread() {
             self.queue.lock().unwrap().remove_posted_quits_for(app_id);
         }
-        self.loop_level += 1;
+        ThreadContext::set_current_loop_level(ThreadContext::current_loop_level() + 1);
         while !self.exit_requested.load(Ordering::SeqCst) {
             self.process_events(true);
         }
-        self.loop_level -= 1;
+        // qeventloop.cpp:161, 187: the loop itself moves `loopLevel`; `scopeLevel` is per handler.
+        ThreadContext::set_current_loop_level(ThreadContext::current_loop_level() - 1);
         self.return_code.load(Ordering::SeqCst)
     }
 
@@ -564,24 +600,22 @@ impl Drop for PostedPumpGuard {
 
 /// Normal event-loop pump. A callback may re-enter it (nested event loops) and each call runs its
 /// own turn; `outermost` only decides which call re-arms the wake-up left by a modal pump.
-pub fn send_posted_events_for_queue(
-    queue: &Arc<Mutex<EventQueue>>,
-    loop_level: usize,
-) -> (usize, Option<i32>) {
+pub fn send_posted_events_for_queue(queue: &Arc<Mutex<EventQueue>>) -> (usize, Option<i32>) {
     let guard = PostedPumpGuard::enter();
     let outermost = !guard.was_active;
-    let result = pump_posted_events(queue, loop_level, false);
+    let result = pump_posted_events(queue, false);
     drop(guard);
 
     if outermost && MODAL_PUMP_LEFT_QUEUED.with(|f| f.replace(false)) {
-        // A native modal loop left events queued and consumed its wake-up. Re-arm it if this
-        // loop level can deliver them, so `process_events` returns instead of blocking on them.
+        // A native modal loop left events queued and consumed its wake-up. Re-arm it if a normal
+        // pump at the current levels can deliver them, so `process_events` returns instead of
+        // blocking on them.
         let deliverable = queue
             .lock()
             .unwrap()
             .events
             .iter()
-            .any(|e| deliverable_at_loop_level(&e.event, loop_level));
+            .any(|e| deliverable_now(&e.event));
         if deliverable {
             if let Some(handle) = get_thread_event_sender(ThreadId::current()) {
                 handle.wake_up();
@@ -602,7 +636,7 @@ pub fn send_posted_events_for_queue(
 pub fn pump_posted_events_modal() -> Option<usize> {
     let handle = get_thread_event_sender(ThreadId::current())?;
     let _guard = PostedPumpGuard::enter();
-    let (delivered, quit_code) = pump_posted_events(&handle.queue, usize::MAX, true);
+    let (delivered, quit_code) = pump_posted_events(&handle.queue, true);
     if let Some(code) = quit_code {
         handle.exit_requested.store(true, Ordering::SeqCst);
         handle.return_code.store(code, Ordering::SeqCst);
@@ -613,22 +647,60 @@ pub fn pump_posted_events_modal() -> Option<usize> {
     Some(delivered)
 }
 
-/// Whether a normal pump at `loop_level` delivers `event` now. A `DeferredDelete` requested by a
-/// deeper loop waits (see `pump_posted_events`).
-fn deliverable_at_loop_level(event: &Event, loop_level: usize) -> bool {
+/// Current (loop level, scope level) of this thread, as `QThreadData::loopLevel` and `scopeLevel`.
+fn current_levels() -> (usize, usize) {
+    (
+        ThreadContext::current_loop_level(),
+        ThreadContext::current_scope_level(),
+    )
+}
+
+/// Event-level gate for a `DeferredDelete` (qcoreapplication.cpp:1870-1885). `stamp` and `current`
+/// are (loop level, scope level) pairs. Delivered when the stamp outranks the current levels, when
+/// it was posted before any loop ran and a loop is running now, or, for the loop-exit flush, when
+/// the levels are equal.
+fn deferred_delete_deliverable(
+    stamp: (usize, usize),
+    current: (usize, usize),
+    explicit_flush: bool,
+) -> bool {
+    let stamp_sum = stamp.0 + stamp.1;
+    let current_sum = current.0 + current.1;
+    stamp_sum > current_sum
+        || (stamp.0 == 0 && current.0 > 0)
+        || (explicit_flush && stamp_sum == current_sum)
+}
+
+/// Whether a normal pump running now delivers `event`. Other events are always delivered.
+fn deliverable_now(event: &Event) -> bool {
     match event.kind {
         EventKind::DeferredDelete {
-            loop_level: event_loop_level,
-        } => event_loop_level == 0 || loop_level <= event_loop_level,
+            loop_level,
+            scope_level,
+        } => deferred_delete_deliverable((loop_level, scope_level), current_levels(), false),
         _ => true,
     }
 }
 
-fn pump_posted_events(
-    queue: &Arc<Mutex<EventQueue>>,
-    loop_level: usize,
-    modal: bool,
-) -> (usize, Option<i32>) {
+static DEFERRED_DELETE_HOOK: std::sync::OnceLock<fn(ObjectId)> = std::sync::OnceLock::new();
+
+/// Installs the callback run after each delivered `DeferredDelete`. Widgets are not registered in
+/// the object registry, so they drop their parent link here instead of in `event()`.
+pub fn set_deferred_delete_hook(hook: fn(ObjectId)) {
+    let _ = DEFERRED_DELETE_HOOK.set(hook);
+}
+
+/// Finishes one delivered `DeferredDelete`: unregisters the receiver and runs the hook.
+fn finish_deferred_delete(receiver: ObjectId) {
+    // SAFETY: delivery returned, so the callback borrow has ended; deferred deletion is processed
+    // on the object's registration thread.
+    unsafe { crate::object::unregister_qobject(receiver) };
+    if let Some(hook) = DEFERRED_DELETE_HOOK.get() {
+        hook(receiver);
+    }
+}
+
+fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Option<i32>) {
     {
         let mut q = queue.lock().unwrap();
         q.insertion_offset = q.events.len();
@@ -648,11 +720,19 @@ fn pump_posted_events(
             }
 
             if let EventKind::DeferredDelete {
-                loop_level: event_loop_level,
+                loop_level,
+                scope_level,
             } = q.events[0].event.kind
             {
-                if modal || (event_loop_level > 0 && loop_level > event_loop_level) {
-                    // Kept for a later turn: rotate it behind the turn boundary.
+                // A modal pump keeps every DeferredDelete queued. A normal pump keeps the ones the
+                // gate refuses (qcoreapplication.cpp:1886-1903). Both rotate them behind the turn.
+                if modal
+                    || !deferred_delete_deliverable(
+                        (loop_level, scope_level),
+                        current_levels(),
+                        false,
+                    )
+                {
                     let deferred = q.remove_at(0);
                     q.insert_posted(deferred);
                     continue;
@@ -672,15 +752,8 @@ fn pump_posted_events(
 
         send_event(receiver, &mut event);
 
-        if let EventKind::DeferredDelete {
-            loop_level: event_loop_level,
-        } = event.kind
-        {
-            if event_loop_level == 0 || loop_level <= event_loop_level {
-                // SAFETY: delivery returned, so the callback borrow has ended; deferred
-                // deletion is processed on the object's registration thread.
-                unsafe { crate::object::unregister_qobject(receiver) };
-            }
+        if let EventKind::DeferredDelete { .. } = event.kind {
+            finish_deferred_delete(receiver);
         }
 
         delivered_count += 1;
@@ -854,7 +927,7 @@ impl Default for EventLoop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::{delete_later, register_qobject, unregister_qobject, ObjectData, QObject};
+    use crate::object::{register_qobject, unregister_qobject, ObjectData, QObject, ThreadContext};
 
     #[test]
     fn test_livelock_prevention() {
@@ -1014,20 +1087,21 @@ mod tests {
         // SAFETY: this test keeps the widget on this thread and alive through unregister.
         unsafe { register_qobject(&mut widget) };
 
-        event_loop.set_loop_level(1);
-        let del_ev = delete_later(widget.object_data_mut(), 1).expect("should create delete event");
-        event_loop.post_event(widget.object_data().id, del_ev);
+        // delete_later stamps (loop 1, scope 0), promoted to scope 1 (qobject.cpp:2558-2559).
+        ThreadContext::set_current_loop_level(1);
+        widget.delete_later();
 
-        event_loop.set_loop_level(2);
+        // Gate: stamp sum 2 is not greater than the current sum 2 (qcoreapplication.cpp:1880-1885).
+        ThreadContext::set_current_loop_level(2);
         event_loop.process_events(false);
-
         assert!(!widget.deleted);
         assert_eq!(event_loop.queue().lock().unwrap().len(), 1);
 
-        event_loop.set_loop_level(1);
+        ThreadContext::set_current_loop_level(1);
         event_loop.process_events(false);
         assert!(widget.deleted);
         assert_eq!(event_loop.queue().lock().unwrap().len(), 0);
+        ThreadContext::set_current_loop_level(0);
 
         // SAFETY: the deferred-delete callback has returned.
         unsafe { unregister_qobject(widget.object_data().id) };
@@ -2113,7 +2187,7 @@ mod tests {
         }
 
         let mut el = EventLoop::new();
-        el.set_loop_level(1);
+        ThreadContext::set_current_loop_level(1);
         let deleted = Arc::new(AtomicBool::new(false));
         let mut object = Deletable {
             data: ObjectData::new(ObjectId::next()),
@@ -2122,15 +2196,17 @@ mod tests {
         // SAFETY: the object stays on this thread and alive until the pump unregisters it after
         // delivering its deferred delete.
         unsafe { register_qobject(&mut object) };
-        let id = object.data.id;
-        let delete_event = delete_later(object.object_data_mut(), 1).expect("delete event");
+        let object_addr = &object as *const Deletable as usize;
 
         let deleted_during_nested = Arc::new(Mutex::new(None));
         {
             let deleted = Arc::clone(&deleted);
             let deleted_during_nested = Arc::clone(&deleted_during_nested);
             post_current(meta_call(move || {
-                post_event_to_thread(ThreadId::current(), id, delete_event);
+                // SAFETY: `object` is alive and not moved while this test's event pumps run.
+                let object = unsafe { &*(object_addr as *const Deletable) };
+                // Requested inside a handler: stamped at loop level 1, scope level 1 (qobject.cpp:2558-2559).
+                object.delete_later();
                 let _ = pump_posted_events_modal();
                 *deleted_during_nested.lock().unwrap() = Some(deleted.load(Ordering::SeqCst));
             }));
@@ -2141,6 +2217,122 @@ mod tests {
         el.send_posted_events();
         assert!(deleted.load(Ordering::SeqCst));
         assert!(el.queue().lock().unwrap().events.is_empty());
+        ThreadContext::set_current_loop_level(0);
+    }
+
+    /// A handler that calls `delete_later` and then runs a nested non-modal pump keeps the target
+    /// alive for that pump. `notify_helper` holds scope level 1 for the whole handler
+    /// (qcoreapplication.cpp:1118), so the DeferredDelete stamped (1, 1) is not deliverable at
+    /// (1, 0) (qcoreapplication.cpp:1881-1885). The outer loop delivers it once the handler returns.
+    #[test]
+    fn test_nested_pump_inside_a_handler_keeps_its_delete_later_target_alive() {
+        struct Victim {
+            data: ObjectData,
+        }
+        impl QObject for Victim {
+            fn object_data(&self) -> &ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut ObjectData {
+                &mut self.data
+            }
+            fn event(&mut self, _event: &mut Event) -> bool {
+                false
+            }
+        }
+
+        struct Driver {
+            data: ObjectData,
+            victim_data: usize,
+            victim_id: ObjectId,
+            survived_nested: Arc<Mutex<Option<bool>>>,
+            deleted_by_outer: Arc<Mutex<Option<bool>>>,
+        }
+        impl QObject for Driver {
+            fn object_data(&self) -> &ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut ObjectData {
+                &mut self.data
+            }
+            fn event(&mut self, event: &mut Event) -> bool {
+                match event.kind {
+                    EventKind::MouseButtonPress { .. } => {
+                        // SAFETY: the victim is boxed in the test and alive until the test ends;
+                        // only the outer delivery unregisters it.
+                        let victim = unsafe { &*(self.victim_data as *const ObjectData) };
+                        victim.delete_later();
+                        let handle =
+                            get_thread_event_sender(ThreadId::current()).expect("loop registered");
+                        let _ = pump_posted_events(&handle.queue, false);
+                        *self.survived_nested.lock().unwrap() =
+                            Some(crate::object::query_object_thread(self.victim_id).is_some());
+                        post_event_to_thread(
+                            ThreadId::current(),
+                            self.data.id,
+                            Event::new_spontaneous(EventKind::MouseButtonRelease {
+                                x: 0,
+                                y: 0,
+                                button: 1,
+                            }),
+                        );
+                        true
+                    }
+                    EventKind::MouseButtonRelease { .. } => {
+                        *self.deleted_by_outer.lock().unwrap() =
+                            Some(crate::object::query_object_thread(self.victim_id).is_none());
+                        if let Some(handle) = get_thread_event_sender(ThreadId::current()) {
+                            handle.quit();
+                        }
+                        true
+                    }
+                    _ => false,
+                }
+            }
+        }
+
+        let survived_nested = Arc::new(Mutex::new(None));
+        let deleted_by_outer = Arc::new(Mutex::new(None));
+        let mut el = EventLoop::new();
+        let mut victim = Box::new(Victim {
+            data: ObjectData::new(ObjectId::next()),
+        });
+        let victim_id = victim.data.id;
+        // SAFETY: the victim stays boxed and alive for the whole test.
+        unsafe { register_qobject(&mut *victim) };
+        let mut driver = Box::new(Driver {
+            data: ObjectData::new(ObjectId::next()),
+            victim_data: &victim.data as *const ObjectData as usize,
+            victim_id,
+            survived_nested: Arc::clone(&survived_nested),
+            deleted_by_outer: Arc::clone(&deleted_by_outer),
+        });
+        let driver_id = driver.data.id;
+        // SAFETY: the driver stays boxed and alive for the whole test.
+        unsafe { register_qobject(&mut *driver) };
+        post_event_to_thread(
+            ThreadId::current(),
+            driver_id,
+            Event::new_spontaneous(EventKind::MouseButtonPress {
+                x: 0,
+                y: 0,
+                button: 1,
+            }),
+        );
+
+        assert_eq!(el.exec(), 0);
+        assert_eq!(
+            *survived_nested.lock().unwrap(),
+            Some(true),
+            "delete_later target was deleted by a nested pump inside its requesting handler"
+        );
+        assert_eq!(
+            *deleted_by_outer.lock().unwrap(),
+            Some(true),
+            "delete_later target was not delivered by the outer loop after the handler returned"
+        );
+        // SAFETY: the driver is no longer delivered to once exec has returned.
+        unsafe { unregister_qobject(driver_id) };
     }
 
     #[test]

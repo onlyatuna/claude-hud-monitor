@@ -42,9 +42,11 @@ pub enum EventKind {
         timer_id: u64,
     },
 
-    /// Deferred deletion event (`QDeferredDeleteEvent`).
+    /// Deferred deletion event (`QDeferredDeleteEvent`). The levels are the requesting thread's
+    /// loop and handler-scope levels at request time (qobject.cpp:2539-2559).
     DeferredDelete {
         loop_level: usize,
+        scope_level: usize,
     },
 
     /// Widget layout recalculation request (`QEvent::LayoutRequest`, compressible).
@@ -361,9 +363,13 @@ impl fmt::Debug for EventKind {
                 .debug_struct("ZeroTimer")
                 .field("timer_id", timer_id)
                 .finish(),
-            EventKind::DeferredDelete { loop_level } => f
+            EventKind::DeferredDelete {
+                loop_level,
+                scope_level,
+            } => f
                 .debug_struct("DeferredDelete")
                 .field("loop_level", loop_level)
+                .field("scope_level", scope_level)
                 .finish(),
             EventKind::LayoutRequest => write!(f, "LayoutRequest"),
             EventKind::UpdateRequest => write!(f, "UpdateRequest"),

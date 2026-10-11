@@ -207,7 +207,13 @@ impl CoreApplication {
                 0
             }
         });
-        // qcoreapplication.cpp:1484-1486 (execCleanup)
+        // execCleanup: sendPostedEvents(nullptr, DeferredDelete) once the loop has returned
+        // (qcoreapplication.cpp:1472-1473, 1484-1489).
+        LOCAL_EVENT_LOOP.with(|el| {
+            if let Some(loop_ref) = el.borrow_mut().as_mut() {
+                loop_ref.flush_deferred_deletes();
+            }
+        });
         IN_EXEC.store(false, Ordering::SeqCst);
         code
     }

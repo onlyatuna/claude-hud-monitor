@@ -754,7 +754,7 @@ impl Widget for ScrollArea {
         // 1. Clip and render content widget
         if let Some(w) = &self.widget {
             painter.save();
-            painter.set_clip_rect(RectF::new(
+            painter.clip_to_rect(RectF::new(
                 viewport.x as f32,
                 viewport.y as f32,
                 viewport.width as f32,

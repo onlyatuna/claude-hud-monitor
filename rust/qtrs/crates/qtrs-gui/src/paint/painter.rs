@@ -267,6 +267,37 @@ impl<'a> Painter<'a> {
         self.state.clip_rect = tiny_r;
     }
 
+    // Intersects the clip with `rect` given in the current user space, like
+    // `QPainter::setClipRect(rect, Qt::IntersectClip)` (qpainter.cpp:2798-2816): the rect is taken
+    // through the current transform. The clip is stored in root logical coordinates
+    // (`update_clip_mask_if_needed` scales it by the device-pixel ratio only), so the mapped rect is
+    // divided by that ratio. An empty intersection clips everything.
+    pub fn clip_to_rect(&mut self, rect: RectF) {
+        let dpr = self.device.device_pixel_ratio();
+        let mapped = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+            .and_then(|r| r.transform(self.state.transform));
+        let logical = mapped.and_then(|m| {
+            tiny_skia::Rect::from_ltrb(
+                m.left() / dpr,
+                m.top() / dpr,
+                m.right() / dpr,
+                m.bottom() / dpr,
+            )
+        });
+        let clipped = match (self.state.clip_rect, logical) {
+            (Some(current), Some(new)) => current.intersect(&new),
+            (None, Some(new)) => Some(new),
+            (_, None) => None,
+        };
+        self.state.clip_rect = Some(clipped.unwrap_or_else(Self::empty_clip));
+    }
+
+    // A zero-area clip admits no pixels; it is the representation of an empty intersection.
+    fn empty_clip() -> tiny_skia::Rect {
+        tiny_skia::Rect::from_xywh(0.0, 0.0, 0.0, 0.0)
+            .expect("a zero-area rect at the origin is finite")
+    }
+
     // -------------------------------------------------------------------------
 
     // -------------------------------------------------------------------------

@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use qtrs_core::event_loop::set_deferred_delete_hook;
 use qtrs_core::object::ObjectId;
 
 use crate::widget::{WidgetRef, WidgetWeak};
@@ -14,17 +15,22 @@ use crate::widget::{WidgetRef, WidgetWeak};
 pub enum WidgetCommand {
     /// Request layout recalculation on a container widget.
     RequestLayout(WidgetWeak),
-    /// Deferred deletion: unlinks target from parent widget and drops it.
-    DeferredDelete {
-        parent: Option<WidgetWeak>,
-        target_id: ObjectId,
-    },
     /// Arbitrary deferred task executed once call frames return.
     Task(Box<dyn FnOnce() + 'static>),
 }
 
 thread_local! {
     static COMMAND_QUEUE: RefCell<Vec<WidgetCommand>> = const { RefCell::new(Vec::new()) };
+}
+
+thread_local! {
+    /// Widgets whose `DeferredDelete` is posted, each with the parent it leaves on delivery.
+    static PENDING_DELETES: RefCell<Vec<PendingDelete>> = const { RefCell::new(Vec::new()) };
+}
+
+struct PendingDelete {
+    id: ObjectId,
+    parent: Option<WidgetWeak>,
 }
 
 /// Thread-local command queue managing deferred operations.
@@ -44,11 +50,6 @@ impl WidgetCommandQueue {
     /// Enqueues a layout update for the given weak reference.
     pub fn post_layout_weak(widget: &WidgetWeak) {
         Self::post(WidgetCommand::RequestLayout(widget.clone()));
-    }
-
-    /// Enqueues deferred deletion of a widget by target ObjectId.
-    pub fn post_delete(parent: Option<WidgetWeak>, target_id: ObjectId) {
-        Self::post(WidgetCommand::DeferredDelete { parent, target_id });
     }
 
     /// Enqueues an arbitrary closure to be run when the queue is flushed.
@@ -111,18 +112,31 @@ impl WidgetCommandQueue {
         }
     }
 
-    /// Safely requests deferred deletion of a `WidgetRef`.
+    /// Safely requests deferred deletion of a `WidgetRef` (`QObject::deleteLater`).
     ///
-    /// If the widget's `RefCell` is currently borrowed (e.g. inside its own event callback),
-    /// the deletion is deferred to a queued task that executes as soon as the borrow is released.
+    /// The `DeferredDelete` is posted to the core loop (qobject.cpp:2511-2565), so the widget
+    /// lives until the loop reaches it. Its parent link is dropped in `on_deferred_delete`. If the
+    /// widget's `RefCell` is currently borrowed (e.g. inside its own event callback), the request
+    /// is deferred to a queued task that runs once the borrow is released.
     pub fn delete_later(widget: &WidgetRef) {
         if let Ok(w) = widget.try_borrow() {
+            set_deferred_delete_hook(on_deferred_delete);
+            let id = w.id();
+            PENDING_DELETES.with(|pending| {
+                let mut pending = pending.borrow_mut();
+                if !pending.iter().any(|e| e.id == id) {
+                    pending.push(PendingDelete {
+                        id,
+                        parent: w.parent_widget(),
+                    });
+                }
+            });
             w.delete_later();
         } else {
             let weak = Rc::downgrade(widget);
             Self::post_task(move || {
                 if let Some(w) = weak.upgrade() {
-                    w.borrow().delete_later();
+                    WidgetCommandQueue::delete_later(&w);
                 }
             });
         }
@@ -157,17 +171,6 @@ impl WidgetCommandQueue {
                             }
                         }
                     }
-                    WidgetCommand::DeferredDelete { parent, target_id } => {
-                        if let Some(parent_weak) = parent {
-                            if let Some(parent_widget) = parent_weak.upgrade() {
-                                parent_widget.borrow_mut().remove_child(target_id);
-                                let pid = parent_widget.borrow().id();
-                                if seen_layout_ids.insert(pid) {
-                                    layout_targets.push(parent_widget);
-                                }
-                            }
-                        }
-                    }
                     WidgetCommand::Task(task) => {
                         task();
                     }
@@ -190,6 +193,38 @@ impl WidgetCommandQueue {
     pub fn clear() {
         COMMAND_QUEUE.with(|q| q.borrow_mut().clear());
     }
+}
+
+/// Hook run after each delivered `DeferredDelete` (`set_deferred_delete_hook`). Removes the
+/// widget from its parent, since Qt drops a deleted child from its parent's children
+/// (qcoreapplication.cpp:1870-1909 delivers the event and then runs this hook).
+fn on_deferred_delete(id: ObjectId) {
+    let pending = PENDING_DELETES.with(|pending| -> Option<PendingDelete> {
+        let mut pending = pending.borrow_mut();
+        let index = pending.iter().position(|e| e.id == id)?;
+        Some(pending.swap_remove(index))
+    });
+    if let Some(parent) = pending.and_then(|e| e.parent).and_then(|w| w.upgrade()) {
+        remove_child_from(&parent, id);
+    }
+}
+
+/// Removes `id` from `parent`'s children and relayouts `parent`. If `parent` is borrowed, the
+/// removal is queued as a task and runs at the next flush.
+fn remove_child_from(parent: &WidgetRef, id: ObjectId) {
+    let Ok(mut w) = parent.try_borrow_mut() else {
+        let weak = Rc::downgrade(parent);
+        WidgetCommandQueue::post_task(move || {
+            if let Some(parent) = weak.upgrade() {
+                remove_child_from(&parent, id);
+            }
+        });
+        return;
+    };
+    w.remove_child(id);
+    drop(w);
+    crate::layout_scheduler::LayoutScheduler::invalidate(parent);
+    crate::layout_scheduler::LayoutScheduler::activate_pending();
 }
 
 /// Convenience function to request deferred deletion of a `WidgetRef`.

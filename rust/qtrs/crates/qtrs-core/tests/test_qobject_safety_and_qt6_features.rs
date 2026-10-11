@@ -5,7 +5,8 @@ use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoop;
 use qtrs_core::object::{
     add_owned_child, move_to_thread, query_object_thread, register_qobject, sender,
-    unregister_qobject, MoveError, ObjectData, ObjectId, QObject, ThreadContext, ThreadId,
+    unregister_qobject, MoveError, ObjectData, ObjectId, QObject, ScopeLevelGuard, ThreadContext,
+    ThreadId,
 };
 use qtrs_core::property::Property;
 use qtrs_core::signal::Signal;
@@ -228,31 +229,59 @@ fn test_qobject_start_and_kill_timer() {
 // -----------------------------------------------------------------------------
 
 #[test]
-fn test_safe_deferred_delete_integrated_with_event_loop() {
-    let mut event_loop = EventLoop::new();
-    let mut widget = Box::new(TestWidget::new("deferred_widget"));
+fn test_delete_later_posts_one_deferred_delete_and_debounces() {
+    let event_loop = EventLoop::new();
+    let mut widget = Box::new(TestWidget::new("self_post"));
     let wid = widget.data.id;
-    // SAFETY: widget remains boxed and unmoved until unregister below.
+    // SAFETY: widget stays boxed until unregister below.
     unsafe { register_qobject(&mut *widget) };
 
-    event_loop.set_loop_level(1);
-    let del_event = widget
-        .delete_later(1)
-        .expect("deferred delete event created");
-    event_loop.post_event(wid, del_event);
+    ThreadContext::set_current_loop_level(1);
+    {
+        let _scope = ScopeLevelGuard::enter();
+        widget.delete_later();
+        widget.delete_later(); // qobject.cpp:2531-2534: second call is a no-op
+    }
+    let queued = event_loop.queue().lock().unwrap().len();
+    assert_eq!(
+        queued, 1,
+        "deleteLater must post exactly one DeferredDelete"
+    );
 
-    // In inner loop (level 2), deferred delete is deferred
-    event_loop.set_loop_level(2);
-    event_loop.process_events(false);
-    assert_eq!(event_loop.queue().lock().unwrap().len(), 1);
+    ThreadContext::set_current_loop_level(0);
+    // SAFETY: test ends; no delivery happened.
+    unsafe { unregister_qobject(wid) };
+}
 
-    // Returning to level 1 processes deletion and unregisters object
-    event_loop.set_loop_level(1);
+#[test]
+fn test_delete_later_inside_handler_scope_survives_nested_pump() {
+    let mut event_loop = EventLoop::new();
+    let mut widget = Box::new(TestWidget::new("nested_pump"));
+    let wid = widget.data.id;
+    // SAFETY: widget stays boxed until delivery unregisters it.
+    unsafe { register_qobject(&mut *widget) };
+
+    ThreadContext::set_current_loop_level(1);
+    let scope = ScopeLevelGuard::enter();
+    // Stamped (1, 1). qcoreapplication.cpp:1882: E.L+E.S (2) > cur.L+cur.S (2) is false, so the
+    // DeferredDelete is not delivered by a nested pump.
+    widget.delete_later();
     event_loop.process_events(false);
+    assert!(
+        query_object_thread(wid).is_some(),
+        "object deleted inside its handler scope by a nested processEvents"
+    );
+
+    drop(scope); // cur = (1, 0): 2 > 1, deliverable
+    event_loop.process_events(false);
+    assert_eq!(
+        query_object_thread(wid),
+        None,
+        "not deleted after scope unwound"
+    );
     assert_eq!(event_loop.queue().lock().unwrap().len(), 0);
 
-    // Object is cleanly unregistered from global registry
-    assert_eq!(query_object_thread(wid), None);
+    ThreadContext::set_current_loop_level(0);
 }
 
 // -----------------------------------------------------------------------------

@@ -1,11 +1,11 @@
 use crate::event::EventFilterChain;
 use crate::variant::Variant;
 
-use super::thread::ThreadId;
+use super::thread::{ThreadContext, ThreadId};
 use crate::event::{Event, EventKind};
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 thread_local! {
@@ -24,8 +24,6 @@ pub struct ObjectRecord {
     pub parent: RwLock<Option<ObjectId>>,
     pub children: RwLock<Vec<ObjectId>>,
     pub signals_blocked: Arc<AtomicBool>,
-    pub delete_later_called: AtomicBool,
-    pub delete_later_loop_level: AtomicUsize,
     pub liveness: Arc<AtomicBool>,
     pub generation: AtomicU32,
     borrow_flag: Arc<AtomicBool>,
@@ -183,8 +181,6 @@ fn register_object_metadata(data: &ObjectData, ptr: *mut dyn QObject) {
         parent: RwLock::new(data.parent),
         children: RwLock::new(data.children.clone()),
         signals_blocked: Arc::clone(&data.signals_blocked),
-        delete_later_called: AtomicBool::new(data.delete_later_called),
-        delete_later_loop_level: AtomicUsize::new(0),
         liveness: Arc::clone(&data.liveness),
         generation: AtomicU32::new(data.generation),
         borrow_flag: Arc::new(AtomicBool::new(false)),
@@ -305,7 +301,7 @@ pub struct ObjectData {
     /// Thread affinity.
     pub thread_id: ThreadId,
 
-    pub delete_later_called: bool,
+    pub delete_later_called: AtomicBool,
 
     pub signals_blocked: Arc<AtomicBool>,
 
@@ -369,7 +365,7 @@ impl ObjectData {
             parent: None,
             children: Vec::new(),
             thread_id,
-            delete_later_called: false,
+            delete_later_called: AtomicBool::new(false),
             signals_blocked: Arc::new(AtomicBool::new(false)),
             event_filters: EventFilterChain::new(),
             dynamic_properties: HashMap::new(),
@@ -395,7 +391,7 @@ impl ObjectData {
             parent: None,
             children: Vec::new(),
             thread_id,
-            delete_later_called: false,
+            delete_later_called: AtomicBool::new(false),
             signals_blocked: Arc::new(AtomicBool::new(false)),
             event_filters: EventFilterChain::new(),
             dynamic_properties: HashMap::new(),
@@ -408,8 +404,9 @@ impl ObjectData {
         }
     }
 
-    pub fn delete_later(&mut self, loop_level: usize) -> Option<Event> {
-        delete_later(self, loop_level)
+    /// Schedules deferred deletion of this object (`QObject::deleteLater`).
+    pub fn delete_later(&self) {
+        delete_later(self)
     }
 
     pub fn install_event_filter(&mut self, filter: ObjectId) {
@@ -544,14 +541,38 @@ impl Drop for ObjectData {
     }
 }
 
-/// Marks object for deferred deletion (`QObject::deleteLater`).
-/// Marks object for deferred deletion (`QObject::deleteLater`).
-pub fn delete_later(obj: &mut ObjectData, loop_level: usize) -> Option<Event> {
-    if obj.delete_later_called {
-        return None;
+/// Marks an object for deferred deletion (`QObject::deleteLater`, qobject.cpp:2511-2565).
+///
+/// Debounced per object: the first request posts one `DeferredDelete` and later requests are
+/// ignored (qobject.cpp:2531-2534). A request from the owning thread is stamped with that
+/// thread's loop and handler-scope levels; scope 0 is promoted to 1 while a loop runs
+/// (qobject.cpp:2539-2559). A request from another thread is stamped (0, 0).
+pub fn delete_later(obj: &ObjectData) {
+    let Some(owner) = query_object_thread(obj.id) else {
+        return;
+    };
+    if obj.delete_later_called.swap(true, Ordering::SeqCst) {
+        return;
     }
-    obj.delete_later_called = true;
-    Some(Event::new(EventKind::DeferredDelete { loop_level }))
+    let (loop_level, scope_level) = if owner == ThreadContext::current_id() {
+        let loop_level = ThreadContext::current_loop_level();
+        let scope_level = ThreadContext::current_scope_level();
+        if scope_level == 0 && loop_level != 0 {
+            (loop_level, 1)
+        } else {
+            (loop_level, scope_level)
+        }
+    } else {
+        (0, 0)
+    };
+    crate::event_loop::post_event_to_thread(
+        owner,
+        obj.id,
+        Event::new(EventKind::DeferredDelete {
+            loop_level,
+            scope_level,
+        }),
+    );
 }
 
 /// Event filter callback (`QObject::eventFilter`).
@@ -1083,8 +1104,8 @@ pub trait QObject: std::any::Any {
     }
 
     /// Schedules this object for deferred deletion (`QObject::deleteLater`).
-    fn delete_later(&mut self, loop_level: usize) -> Option<Event> {
-        self.object_data_mut().delete_later(loop_level)
+    fn delete_later(&self) {
+        self.object_data().delete_later()
     }
 }
 
@@ -1273,6 +1294,7 @@ pub fn send_event(receiver: ObjectId, event: &mut Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
 
     /// Timer event handler (`QObject::timerEvent`).
     #[test]
@@ -1414,24 +1436,46 @@ mod tests {
         assert!(parent2.children.is_empty());
     }
 
-    /// Marks object for deferred deletion (`QObject::deleteLater`).
-    /// Marks object for deferred deletion (`QObject::deleteLater`).
+    /// Matches `QObject::deleteLater` (qobject.cpp:2511-2565): the first request posts one
+    /// stamped `DeferredDelete` to the owning thread and later requests are debounced.
     #[test]
     fn test_delete_later() {
-        let mut obj = ObjectData::new(ObjectId::next());
+        struct Probe {
+            data: ObjectData,
+        }
+        impl QObject for Probe {
+            fn object_data(&self) -> &ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut ObjectData {
+                &mut self.data
+            }
+        }
 
-        let event_opt = delete_later(&mut obj, 2);
+        let el = crate::event_loop::EventLoop::new();
+        let mut probe = Probe {
+            data: ObjectData::new(ObjectId::next()),
+        };
+        let id = probe.data.id;
+        // SAFETY: `probe` stays at this stack address and is unregistered below before it drops.
+        unsafe { register_qobject(&mut probe) };
 
-        assert!(obj.delete_later_called);
+        probe.delete_later();
+        probe.delete_later();
 
-        assert!(event_opt.is_some());
-        let event = event_opt.unwrap();
+        let queue = el.queue();
+        let queue = queue.lock().unwrap();
+        assert_eq!(queue.events.len(), 1);
         assert!(matches!(
-            event.kind,
-            EventKind::DeferredDelete { loop_level: 2 }
+            queue.events[0].event.kind,
+            EventKind::DeferredDelete {
+                loop_level: 0,
+                scope_level: 0
+            }
         ));
-
-        assert!(delete_later(&mut obj, 2).is_none());
+        drop(queue);
+        // SAFETY: the registry callback has completed on this thread.
+        unsafe { unregister_qobject(id) };
     }
 
     /// Core object metadata: ObjectData (`QObjectData` equivalent).

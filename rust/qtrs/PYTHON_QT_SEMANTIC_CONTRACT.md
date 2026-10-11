@@ -160,10 +160,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `PARTIAL`：core `delete_later(obj, loop_level)` 只設旗標並回傳 `Event`，**由呼叫者自己 post**，且 `loop_level` 要呼叫者提供（`qobject.rs` `delete_later`）。loop 端處理在 `event_loop/loop.rs` 的 `DeferredDelete` 分支，最後呼叫 `unregister_qobject`（清 liveness、解除連結、`disconnect_all_for_object`、`stop_timers_for_object`）——**不 drop 物件本體**。
   - widgets 層另有機制：`WidgetCommandQueue::post_delete`，在 `EventTreeDispatcher::dispatch_event` 結束時 flush（見 C3.5）。
 - **Known gap**
-  - **G2.2.a [P1, READ]** `delete_later` 不會自我 post、不會 drop；`delete_later_called`／`delete_later_loop_level` 為只寫的死欄位。
+  - **G2.2.a [P1, RAN；已修復：RC-92]** （修復前）`delete_later` 不會自我 post、不會 drop；`delete_later_called`／`delete_later_loop_level` 為只寫的死欄位。
   - **G2.2.b [P1, RAN；已修復：RC-88]** （修復前）不清除 posted events（見 G3.6.a）。
   - **G2.2.c [P2, READ]** 無 `destroyed` 信號（grep `destroyed` 於 `core/src` 為空）。
-  - **G2.2.d [P1, READ]** widgets 的 `delete_later` 在「當前 dispatch 回傳時」就刪，比 Qt 的「回到事件迴圈」早。
+  - **G2.2.d [P1, RAN；已修復：RC-92]** （修復前）widgets 的 `delete_later` 在「當前 dispatch 回傳時」就刪，比 Qt 的「回到事件迴圈」早。
 - **Test**：既有 `test_delete_later`、`test_safe_deferred_delete_integrated_with_event_loop`、`loop.rs::test_deferred_delete_loop_level`。必要：`deferred_delete_clears_queued_slots_timers_and_qpointer`；`delete_later_twice_posts_once`；`delete_later_on_parent_cascades_to_owned_child`。
 - **HUD usage**：Python `hud_window.py:189,193,266`（重建 layout／表格）。Rust：不呼叫 core `delete_later`。
 
@@ -262,7 +262,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qobject.cpp:2519-2564; qcoreapplication.cpp:1870-1904,1484-1489]`：`DeferredDelete` 帶 `(loopLevel, scopeLevel)`；只有在 loop level 降到低於戳記，或明確以 `sendPostedEvents(nullptr, DeferredDelete)` 同級時才送。**scope level**：`deleteLater(); processEvents();` **不會**刪。`exec()` 結束時要 flush 剩餘的 DeferredDelete。
 - **qtrs required**：MUST 不同步刪除；MUST 回到擁有它的 loop 後才銷毀，不在同一 handler 的巢狀 `processEvents` 內；MUST 最外層 `exec` 返回時 flush。
 - **Current implementation**：`PARTIAL`（見 C2.2）。pump 在 `modal || (lvl>0 && loop_level>lvl)` 時延後；widgets 層另一套（dispatch 結束即刪）。
-- **Known gap**：**G3.5.a [P1, READ]** 無 scope level：同 handler 內 `process_events` 會刪（`loop_level <= event_loop_level`）；**G3.5.b [P1, READ]** `EventLoop::exec` 結束沒有 cleanup flush；level 0 post 的事件只有之後在 level>0 的 pump 才會被 flush；**G3.5.c [P1, READ]** widgets 的 `delete_later` 時機比 Qt 早。
+- **Known gap**：**G3.5.a [P1, RAN；已修復：RC-93]** （修復前）無 scope level：同 handler 內 `process_events` 會刪（`loop_level <= event_loop_level`）；**G3.5.b [P1, RAN；已修復：RC-94]** （修復前）`EventLoop::exec` 結束沒有 cleanup flush；level 0 post 的事件只有之後在 level>0 的 pump 才會被 flush；**G3.5.c [P1, RAN；已修復：RC-92]** （修復前）widgets 的 `delete_later` 時機比 Qt 早。
 - **Test**：必要：`delete_later_not_delivered_by_process_events_in_same_handler`；`exec_exit_flushes_deferred_delete`。
 - **HUD usage**：Python `deleteLater`（`hud_window.py:189,193,266`）。Rust 不用 core 這條路徑。
 
@@ -815,8 +815,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：移動或隱藏 child MUST 重繪空出的區域；`paint_event` MUST 不畫到自己矩形外；children MUST 被裁剪到 parent。
 - **Current implementation**：`PARTIAL`。`do_render_and_present` 清除髒矩形、設一個 clip、遞迴、呈現實體髒區；`render_widget_recursive`：`save → translate(geom) → paint_event → children → restore`，跳過隱藏與髒區外 widget。
 - **Known gap**
-  - **G10.3.a [P1, READ]** 無 per-widget clip（`set_clip_rect` 只有 `window.rs`、`scroll.rs`、`backing_store.rs` 呼叫）。
-  - **G10.3.b [P1, READ]** `EmptyWidget::set_geometry` 只使新矩形失效：**移動不會使舊位置失效**。
+  - **G10.3.a [P1, READ]** 無 per-widget clip（`set_clip_rect` 只有 `window.rs`、`scroll.rs`、`backing_store.rs` 呼叫）。RC-95 期間已實作並驗證（`render_widget_recursive` 以 `Painter::clip_to_rect` 夾住每個 widget；修正前 FAIL：子 widget 畫到幾何外 `left (255,0,0,255) right (0,0,255,255)`），但 HUD 表格模式的週值 label 比欄寬長而被裁掉（Python 端 QLabel 的 minimumSizeHint 會撐大欄寬與視窗，qtrs 缺 G9.5.d／G8.6.c），故未合併；待 G9.5.d 修好後再開（`local://draft_N.md`）。
+  - **G10.3.b [P1, RAN；已修復：RC-95]** （修復前）`EmptyWidget::set_geometry` 只使新矩形失效：**移動不會使舊位置失效**。
   - **G10.3.c [P2]** `Painter::set_clip_rect` 取代而非相交，且忽略目前 transform（見 C10.4）。
 - **Test**：既有無（沒有測試在 child 移動後斷言像素）。必要：移動彩色 child 10 px 後，舊矩形被清除；child 比 parent 大時，parent 外的像素不被動。
 - **HUD usage**：兩個 HUD 都用 layout，不手動移動 child，故 gap 為潛在。
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 131 項：G2.1.a、G2.1.b、G2.2.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.6.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 137 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1283,10 +1283,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.1.e | P2, READ | 無自我 parent／環／跨執行緒檢查 |
 | G2.1.f | P2, READ | `set_parent` 跨 registry 鎖與物件借用，非原子 |
 | G2.1.g | D | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
-| G2.2.a | P1, READ | `delete_later` 不會自我 post、不會 drop |
+| G2.2.a | P1, RAN；已修復：RC-92 | `delete_later` 不會自我 post、不會 drop |
 | G2.2.b | P1, RAN；已修復：RC-88 | 不清除 posted events |
 | G2.2.c | P2, READ | 無 `destroyed` 信號 |
-| G2.2.d | P1, READ | widgets 的 `delete_later` 在「當前 dispatch 回傳時」就刪，比 Qt 的「回到事件迴圈」早 |
+| G2.2.d | P1, RAN；已修復：RC-92 | widgets 的 `delete_later` 在「當前 dispatch 回傳時」就刪，比 Qt 的「回到事件迴圈」早 |
 | G2.3.a | P2, READ | 型別為 exact `TypeId` |
 | G2.3.b | P2, READ | 深度優先逐 child，而非先掃完直接子物件 |
 | G2.3.c | P2, READ | 只搜 `owned_children` |
@@ -1324,9 +1324,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.4.d | D | 跨執行緒 `send_event` 回 false 且不做事 |
 | G3.4.e | P2, READ | `install_event_filter` 拒絕自己與直接環 |
 | G3.4.f | P2, READ | filter 吃掉事件時 `send_event` 回 false（Qt 回 true） |
-| G3.5.a | P1, READ | 無 scope level：同 handler 內 `process_events` 會刪 |
-| G3.5.b | P1, READ | `EventLoop::exec` 結束沒有 cleanup flush |
-| G3.5.c | P1, READ | widgets 的 `delete_later` 時機比 Qt 早 |
+| G3.5.a | P1, RAN；已修復：RC-93 | 無 scope level：同 handler 內 `process_events` 會刪 |
+| G3.5.b | P1, RAN；已修復：RC-94 | `EventLoop::exec` 結束沒有 cleanup flush |
+| G3.5.c | P1, RAN；已修復：RC-92 | widgets 的 `delete_later` 時機比 Qt 早 |
 | G3.6.a | P1, RAN；已修復：RC-88 | 對已銷毀接收者的 queued slot 仍會執行 |
 | G3.6.b | P2, READ | `unregister_qobject` → `stop_timers_for_object` 只刪 registry 項、不呼叫 Win32 `KillTimer`，孤兒 `WM |
 | G4.1.a | P1, RAN；已修復：RC-79 | `exit()` 先於 `exec()` 會**保留**並使 `exec` 立刻返回 |
@@ -1502,7 +1502,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.2.a | P2 | 無局部／立即重繪 API |
 | G10.2.b | P2 | 每個 widget 一個髒矩形，合併為一個外框 |
 | G10.3.a | P1, READ | 無 per-widget clip |
-| G10.3.b | P1, READ | `EmptyWidget::set_geometry` 只使新矩形失效：**移動不會使舊位置失效** |
+| G10.3.b | P1, RAN；已修復：RC-95 | `EmptyWidget::set_geometry` 只使新矩形失效：**移動不會使舊位置失效** |
 | G10.3.c | P2 | `Painter::set_clip_rect` 取代而非相交，且忽略目前 transform |
 | G10.4.a | P1, READ | `set_clip_rect` **不經 transform** |
 | G10.4.b | P2, READ | `set_clip_rect` 取代而非相交：`ScrollArea` 內失去 widget 層的髒區 clip |
@@ -2972,3 +2972,32 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：`update_hover` 以 `ancestors` 計算兩條鏈與共同祖先，依 Qt 順序送 Leave／Enter（座標換到各 widget）；滑鼠離開視窗時對整條舊鏈送 Leave。
 - **驗證**：`enter_leave_ancestor_chain_minus_common_ancestor`，修正前 `left: ["leaf:Enter(10,10)", "leaf:Move(10,10)"]`。既有 `test_hover_enter_leave_events_transition` 只記錄按鈕本身的 Enter／Move／Leave，不檢查 parent；按鈕的序列與 Qt 一致，期望不變（只加 tracking，見 RC-89）。
 - **共同驗證（RC-88..91）**：qtrs workspace（略過 `real_windows`）102 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`--snapshot` 產出四張 PNG；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；改動檔案的 rustfmt 差異數與基準相同。
+
+#### RC-92 `deleteLater` 自行 post 帶層級的 DeferredDelete；widget 在 DeferredDelete 送達時才移除（G2.2.a、G2.2.d、G3.5.c）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:2511-2565]` `deleteLater` 以 `deleteLaterCalled` 去重（2522-2524、2531-2534），記錄當下 loop／scope level（2539-2552），在 scope 0 且 loop>0 時提升 scope（2558-2559），再 `postEvent(this, QDeferredDeleteEvent)`（2563-2564）。物件在 DeferredDelete 被事件迴圈送達時才刪除。
+- **根因**：`qobject::delete_later` 回傳事件而不 post，去重與層級欄位為死欄位；widget 刪除排在 `WidgetCommandQueue`，於 `dispatch_event`／`dispatch_mouse_move` 回傳時就執行。
+- **修正**：
+  - `qobject.rs`：`ObjectData` 以 `AtomicBool` 去重；`QObject::delete_later(&self)` 依 Qt 規則蓋層級並 post `DeferredDelete { loop_level, scope_level }`；刪除 `ObjectRecord` 的死欄位。`thread.rs` 以 thread-local 記錄 loop／scope level。
+  - `command.rs`：移除 `WidgetCommand::DeferredDelete`／`post_delete`；`WidgetCommandQueue::delete_later` 記入 `PENDING_DELETES` 並 post DeferredDelete；`loop.rs` 的 `set_deferred_delete_hook` 在送達時呼叫 widgets 的 hook，由它自 parent 移除 widget。`WidgetCommandQueue::post_task` 照舊（HUD `main.rs` 使用）。
+- **驗證**：`test_delete_later_posts_one_deferred_delete_and_debounces`（修正前：`delete_later` 參數不符的編譯失敗）；`test_self_deletion_during_event_dispatch` 改寫後修正前 FAIL `test_reentrancy_and_deferred.rs:82:5 button removed before the event loop delivered DeferredDelete; left: 0, right: 1`。改寫（§0 規則 4）：`qobject.rs` `test_delete_later`、`loop.rs` `test_deferred_delete_loop_level` 與 `test_a_deferred_delete_from_the_outer_loop_waits_out_a_nested_pump`、`dispatcher_win.rs` 兩個 modal pump 測試（層級改由 Qt 規則產生）、`test_self_deletion_during_event_dispatch`（原本期望 loop level 0 的 `process_events` 送達 DeferredDelete；Qt 不會，`qcoreapplication.cpp:1881-1885`）。
+- **Residual**：G4.3.b（modal pump 仍輪轉所有 DeferredDelete）；`PENDING_DELETES` 以 id 去重，送達後若 widget 仍被 `Rc` 持有又再 `delete_later`，會留一筆不會送達的項目；跨執行緒 `delete_later` 不移除 parent 連結（widgets 僅主執行緒）；直接呼叫 `QObject::delete_later`（不經 `WidgetCommandQueue::delete_later`）不移除 parent 連結；`delete_later` 之後同一 dispatch 的後續事件仍送到該 widget（Qt 行為未查）。
+
+#### RC-93 scope level：handler 內的巢狀 pump 不刪除該 handler 要求刪除的物件（G3.5.a）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:1118]` `notify` 以 `QScopedScopeLevelCounter`（`corelib/thread/qthread_p.h:400-409`）提高 scope level；`[QT-SRC corelib/kernel/qcoreapplication.cpp:1870-1909]` DeferredDelete 只在 `E.loop+E.scope > cur.loop+cur.scope`（或 posted before outermost loop）時送達，否則重新 post。
+- **根因**：沒有 scope level，閘門只比 loop level。
+- **修正**：`ScopeLevelGuard` 於 `notify_helper` 進入；`deferred_delete_deliverable` 依 Qt 公式比較 loop+scope 並處理 `postedBeforeOutermostLoop`；`EventLoop::exec` 設定 loop level。
+- **驗證**：`loop.rs` `test_nested_pump_inside_a_handler_keeps_its_delete_later_target_alive`（真實遞送路徑：handler 內 `delete_later` 後跑巢狀 pump）；暫時拿掉 `notify_helper` 的 guard 時 FAIL `loop.rs:2324:9 left: Some(false) right: Some(true)`（巢狀 pump 送達了 DeferredDelete）。`test_delete_later_inside_handler_scope_survives_nested_pump` 以手動 guard 驗證閘門公式。
+- **Residual**：`CoreApplication::process_events` 在 `exec` 內呼叫為靜默 no-op（`exec` 持有 `LOCAL_EVENT_LOOP` 的可變借用，G4.2.a）。
+
+#### RC-94 `CoreApplication::exec` 結束時 flush DeferredDelete（G3.5.b）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:1466-1489]` `exec` 在事件迴圈返回後呼叫 `execCleanup`，其中 `sendPostedEvents(nullptr, QEvent::DeferredDelete)`。`QEventLoop::exec` 不做這件事（gap 原文寫 `EventLoop::exec`，依 Qt 改在 `CoreApplication::exec`）。
+- **修正**：`EventLoop::flush_deferred_deletes`；`CoreApplication::exec` 在迴圈返回後呼叫。
+- **驗證**：新 test binary `test_exec_cleanup_deferred_delete.rs` `test_exec_flushes_deferred_delete_requested_by_last_handler`；暫時停用 flush 時 FAIL `test_exec_cleanup_deferred_delete.rs:55:5 left: Some(ThreadId(ThreadId(2))) right: None`。
+
+#### RC-95 widget 移動／縮放使 parent 的舊矩形失效；dirty 區域累加（G10.3.b）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qwidget.cpp:7297-7410]` `setGeometry_sys` 對可見 widget 呼叫 `moveRect`（7380）或 `invalidateBackingStore_resizeHelper`（7382）；`[QT-SRC widgets/kernel/qwidgetrepaintmanager.cpp:382-430]` `moveRect` 令 parent 重繪舊位置（419）；`update()` 累加到既有 dirty region（`qwidgetrepaintmanager.cpp:115-148`）；`qwidget.cpp:11367-11368` 不可見或停用更新時不排程。
+- **根因**：`set_geometry` 只使新矩形失效；`update()` 會覆蓋 pending dirty rect。
+- **修正**：`WidgetBase::update_rect` 以聯集累加 pending dirty rect；`WidgetBase::set_geometry` 與 `EmptyWidget::set_geometry` 在矩形改變時以 `invalidate_vacated_rect(old)` 使 parent 的舊矩形失效（parent 正被可變借用時略過）；葉 widget 經 `leaf_widget_common!` 走同一路徑。另新增 `Painter::clip_to_rect`（經 transform 的交集 clip，`qpainter.cpp:2798-2816`），`ScrollArea::paint_event` 改用它（原 `set_clip_rect` 落在錯誤座標，G10.4.a 的 ScrollArea 部分）。
+- **驗證**：新 test binary `test_geometry_invalidation.rs`：`moved_child_leaves_no_stale_pixels_at_its_old_rect` 修正前 FAIL `test_geometry_invalidation.rs:88:5 'old rect shows the parent again' left (255,0,0,255) right (0,0,255,255)`；`pending_parent_update_survives_child_move`（聯集的回歸防護，修正前也通過）。
+- **Residual**：parent 失效整個舊矩形（Qt 扣掉新矩形，`qwidgetrepaintmanager.cpp:414`）；dirty 區域為外接矩形聯集，會多畫；ScrollArea 子 widget 移動與 `clip_to_rect` 改動未經測試；per-widget clip（G10.3.a／G8.7.a）見 G10.3.a 註記。
+- **共同驗證（RC-92..95）**：qtrs workspace（略過 `real_windows`）104 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 產出四張 PNG。表格模式快照的週值列在 mock 資料下「92 % · MONTHLY」與「5 % · BURST LIMIT」重疊／超出視窗，為既有版面問題（無 G9.5.d），非本次造成 `[INFERENCE]`（本波未改版面程式；改動前的快照已被覆寫，無法直接比對）。

@@ -1,0 +1,60 @@
+//! `QCoreApplication::exec` flushes DeferredDelete events when the loop returns
+//! (qcoreapplication.cpp:1472-1473 and 1484-1489, `execCleanup`).
+
+use qtrs_core::application::CoreApplication;
+use qtrs_core::event::{Event, EventKind};
+use qtrs_core::event_loop::post_event_to_thread;
+use qtrs_core::object::{
+    query_object_thread, register_qobject, ObjectData, ObjectId, QObject, ThreadId,
+};
+
+struct Victim {
+    data: ObjectData,
+}
+
+impl QObject for Victim {
+    fn object_data(&self) -> &ObjectData {
+        &self.data
+    }
+
+    fn object_data_mut(&mut self) -> &mut ObjectData {
+        &mut self.data
+    }
+
+    fn event(&mut self, event: &mut Event) -> bool {
+        if matches!(event.kind, EventKind::MouseButtonPress { .. }) {
+            // Requested from the last handler, then the loop is asked to quit.
+            self.delete_later();
+            CoreApplication::quit();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+#[test]
+fn test_exec_flushes_deferred_delete_requested_by_last_handler() {
+    let mut app = CoreApplication::new(vec!["test".to_string()]);
+    let mut victim = Box::new(Victim {
+        data: ObjectData::new(ObjectId::next()),
+    });
+    let wid = victim.data.id;
+    // SAFETY: victim stays boxed until exec returns and the flush unregisters it.
+    unsafe { register_qobject(&mut *victim) };
+
+    let ev = Event::new_spontaneous(EventKind::MouseButtonPress {
+        x: 0,
+        y: 0,
+        button: 1,
+    });
+    post_event_to_thread(ThreadId::current(), wid, ev);
+
+    app.exec();
+
+    assert_eq!(
+        query_object_thread(wid),
+        None,
+        "deleteLater requested by the last handler was not flushed when exec returned"
+    );
+}

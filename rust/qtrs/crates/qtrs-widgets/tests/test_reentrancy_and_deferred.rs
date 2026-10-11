@@ -1,12 +1,13 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use qtrs_core::event::{Event, EventKind};
+use qtrs_core::event_loop::EventLoopHandle;
 use qtrs_gui::geometry::primitives::Rect;
 use qtrs_widgets::button::Button;
-use qtrs_widgets::command::{WidgetCommand, WidgetCommandQueue};
+use qtrs_widgets::command::{delete_widget_later, WidgetCommand, WidgetCommandQueue};
 use qtrs_widgets::frame::Frame;
 use qtrs_widgets::hit_test::EventTreeDispatcher;
 use qtrs_widgets::layout::{BoxLayout, Direction, Layout};
@@ -14,6 +15,9 @@ use qtrs_widgets::widget::{set_widget_enabled, EmptyWidget, WidgetRef};
 
 thread_local! {
     static TEST1_BTN: RefCell<Option<WidgetRef>> = const { RefCell::new(None) };
+    static TEST1_PARENT: RefCell<Option<WidgetRef>> = const { RefCell::new(None) };
+    static TEST1_LOOP: RefCell<Option<EventLoopHandle>> = const { RefCell::new(None) };
+    static TEST1_CHILDREN_AFTER_DISPATCH: Cell<usize> = const { Cell::new(usize::MAX) };
     static TEST2_SIBLING: RefCell<Option<WidgetRef>> = const { RefCell::new(None) };
     static TEST2_PARENT: RefCell<Option<WidgetRef>> = const { RefCell::new(None) };
     static TEST3_SIBLING: RefCell<Option<WidgetRef>> = const { RefCell::new(None) };
@@ -21,16 +25,27 @@ thread_local! {
 
 #[test]
 fn test_self_deletion_during_event_dispatch() {
+    // QObject::deleteLater posts a DeferredDelete; the widget leaves its parent when the event
+    // loop delivers it, not when the dispatch that requested it returns (qobject.cpp:2563-2564).
+    // A click arrives inside the loop, so the dispatch runs from a posted callback inside
+    // `EventLoop::exec` (loop level 1, qeventloop.cpp:161). Outside a loop Qt does not deliver a
+    // DeferredDelete (qcoreapplication.cpp:1881-1885).
+    let mut event_loop = qtrs_core::event_loop::EventLoop::new();
+
     let parent: WidgetRef = Rc::new(RefCell::new(Box::new(Frame::new())));
     parent.borrow().set_geometry(Rect::new(0, 0, 200, 200));
 
     let button: WidgetRef = Rc::new(RefCell::new(Box::new(Button::new("Delete Me"))));
     button.borrow().set_geometry(Rect::new(10, 10, 80, 30));
     parent.borrow_mut().add_child(button.clone());
-    button.borrow().set_parent_widget(Some(Rc::downgrade(&parent)));
+    button
+        .borrow()
+        .set_parent_widget(Some(Rc::downgrade(&parent)));
     assert_eq!(parent.borrow().children().len(), 1);
 
     TEST1_BTN.with(|b| *b.borrow_mut() = Some(button.clone()));
+    TEST1_PARENT.with(|p| *p.borrow_mut() = Some(parent.clone()));
+    TEST1_LOOP.with(|l| *l.borrow_mut() = Some(event_loop.handle()));
 
     let clicked_count = Arc::new(AtomicUsize::new(0));
     let clicked_count_clone = clicked_count.clone();
@@ -46,40 +61,57 @@ fn test_self_deletion_during_event_dispatch() {
             clicked_count_clone.fetch_add(1, Ordering::SeqCst);
             TEST1_BTN.with(|b| {
                 if let Some(btn) = b.borrow().as_ref() {
-                    WidgetCommandQueue::delete_later(btn);
+                    delete_widget_later(btn);
                 }
             });
         });
     }
 
-    let mut dispatcher = EventTreeDispatcher::new();
+    qtrs_core::timer::Timer::single_shot(0, move || {
+        let parent = TEST1_PARENT
+            .with(|p| p.borrow().clone())
+            .expect("parent is set");
+        let mut dispatcher = EventTreeDispatcher::new();
 
-    // Simulate mouse press and release on the button
-    let mut press_ev = Event::new_spontaneous(EventKind::MouseButtonPress {
-        x: 20,
-        y: 20,
-        button: 1,
+        // Simulate mouse press and release on the button
+        let mut press_ev = Event::new_spontaneous(EventKind::MouseButtonPress {
+            x: 20,
+            y: 20,
+            button: 1,
+        });
+        dispatcher.dispatch_event(&parent, &mut press_ev);
+
+        let mut release_ev = Event::new_spontaneous(EventKind::MouseButtonRelease {
+            x: 20,
+            y: 20,
+            button: 1,
+        });
+        // This MUST NOT panic with BorrowMutError
+        let consumed = dispatcher.dispatch_event(&parent, &mut release_ev);
+        assert!(consumed);
+        assert_eq!(clicked_count.load(Ordering::SeqCst), 1);
+
+        // Dispatch has returned; the DeferredDelete is still queued, so the child is attached.
+        TEST1_CHILDREN_AFTER_DISPATCH.with(|c| c.set(parent.borrow().children().len()));
+
+        // Posted after the DeferredDelete, so the loop delivers that first and then quits.
+        qtrs_core::timer::Timer::single_shot(0, || {
+            TEST1_LOOP.with(|l| l.borrow().as_ref().expect("loop handle is set").quit());
+        });
     });
-    dispatcher.dispatch_event(&parent, &mut press_ev);
 
-    let mut release_ev = Event::new_spontaneous(EventKind::MouseButtonRelease {
-        x: 20,
-        y: 20,
-        button: 1,
-    });
-    // This MUST NOT panic with BorrowMutError and must flush the command queue at exit
-    let consumed = dispatcher.dispatch_event(&parent, &mut release_ev);
-    assert!(consumed);
+    assert_eq!(event_loop.exec(), 0);
 
-    // Signal was invoked
-    assert_eq!(clicked_count.load(Ordering::SeqCst), 1);
-
-    // After event dispatch returns, the deferred delete has run:
-    // the button should be removed from parent!
+    assert_eq!(
+        TEST1_CHILDREN_AFTER_DISPATCH.with(|c| c.get()),
+        1,
+        "button removed before the event loop delivered DeferredDelete"
+    );
     assert_eq!(parent.borrow().children().len(), 0);
-    assert_eq!(WidgetCommandQueue::pending_count(), 0);
 
     TEST1_BTN.with(|b| *b.borrow_mut() = None);
+    TEST1_PARENT.with(|p| *p.borrow_mut() = None);
+    TEST1_LOOP.with(|l| *l.borrow_mut() = None);
 }
 
 #[test]

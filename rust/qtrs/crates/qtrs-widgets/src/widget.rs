@@ -215,12 +215,6 @@ pub trait Widget: QObject + 'static {
         }
     }
 
-    /// Schedules this widget to be safely deleted and removed from its parent
-    /// after the current event dispatch stack unwinds (Qt `QObject::deleteLater` equivalent).
-    fn delete_later(&self) {
-        crate::command::WidgetCommandQueue::post_delete(self.parent_widget(), self.id());
-    }
-
     /// Virtual paint event handler (`QWidget::paintEvent` equivalent).
     ///
     /// Called when the widget needs to repaint its content.
@@ -417,9 +411,30 @@ impl WidgetBase {
     }
 
     pub fn set_geometry(&self, rect: Rect) {
-        if self.geometry.get() != rect {
+        let old = self.geometry.get();
+        if old != rect {
             self.geometry.set(rect);
+            self.invalidate_vacated_rect(old);
             self.update();
+        }
+    }
+
+    /// Repaints the vacated footprint `old` (parent coordinates) of a visible widget that moved or
+    /// resized: the parent's dirty region gets it. `QWidgetPrivate::setGeometry_sys`
+    /// (qwidget.cpp:7297-7410) calls `moveRect` (:7380) or `invalidateBackingStore_resizeHelper`
+    /// (:7382) on the old position; `moveRect` subtracts the new rect from the parent's region
+    /// (qwidgetrepaintmanager.cpp:411-419). Only the parent is invalidated. A parent that is
+    /// mutably borrowed on the current stack is skipped; its own layout or update pass repaints it.
+    pub fn invalidate_vacated_rect(&self, old: Rect) {
+        if old.is_empty() || !self.is_visible_in_tree() {
+            return;
+        }
+        let Some(parent) = self.parent_widget().and_then(|w| w.upgrade()) else {
+            return;
+        };
+        let parent_ref = parent.try_borrow();
+        if let Ok(p) = parent_ref {
+            p.widget_base().update_rect(old);
         }
     }
 
@@ -542,12 +557,22 @@ impl WidgetBase {
     }
 
     pub fn update(&self) {
+        let g = self.geometry.get();
+        self.update_rect(Rect::new(0, 0, g.width, g.height));
+    }
+
+    /// `QWidget::update(const QRect &)`: adds `rect` (widget coordinates) to the pending dirty
+    /// region. Pending dirt accumulates; a smaller rect never replaces a larger pending one.
+    pub fn update_rect(&self, rect: Rect) {
         // `QWidgetPrivate::update` ignores a widget that is not visible (qwidget.cpp:11367-11368).
         if !self.is_visible_in_tree() {
             return;
         }
-        let g = self.geometry.get();
-        self.dirty.set(Some(Rect::new(0, 0, g.width, g.height)));
+        let pending = match self.dirty.get() {
+            Some(d) => d.united(&rect),
+            None => rect,
+        };
+        self.dirty.set(Some(pending));
         let target_receiver = self.window_id.get().unwrap_or(self.object_data.id);
         // Direct path: the window's render state queues its deferred render without a QObject
         // dispatch. Falls back to `UpdateRequest` when this thread has no window render state.
@@ -642,13 +667,6 @@ impl WidgetBase {
         if let Some(parent) = self.parent.borrow().as_ref() {
             crate::command::WidgetCommandQueue::post_layout_weak(parent);
         }
-    }
-
-    pub fn delete_later(&self) {
-        crate::command::WidgetCommandQueue::post_delete(
-            self.parent.borrow().clone(),
-            self.object_data.id,
-        );
     }
 
     /// Sets this widget's own style sheet. As in Qt, a string without a rule block
@@ -918,6 +936,9 @@ impl Widget for EmptyWidget {
         let old_size = Size::new(old_rect.width, old_rect.height);
         let new_size = Size::new(rect.width, rect.height);
         self.base.geometry.set(rect);
+        if old_rect != rect {
+            self.base.invalidate_vacated_rect(old_rect);
+        }
         if size_changed {
             self.resize_event(new_size, old_size);
         }
