@@ -79,7 +79,12 @@ impl Button {
     }
 
     pub fn set_text(&mut self, text: impl Into<String>) {
-        self.text = text.into();
+        let text = text.into();
+        // QAbstractButton::setText returns early when the text is unchanged (qabstractbutton.cpp:496-497).
+        if text == self.text {
+            return;
+        }
+        self.text = text;
         self.update_geometry();
         self.update();
     }

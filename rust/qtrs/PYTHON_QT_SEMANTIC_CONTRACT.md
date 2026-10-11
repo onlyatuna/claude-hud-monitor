@@ -764,6 +764,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G9.5.b [P1, RAN；已修復：RC-05（字型／樣式）、RC-26（`set_visible`）]** （修復前）`Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_property`、`set_visible` 不請求 layout（→ G8.1.a、G8.5.c）。回歸測試 `qtrs-widgets/tests/test_widget_invalidation.rs::label_and_button_text_font_and_alignment_setters_request_a_parent_layout` 另涵蓋 `Label::set_alignment`、`Button::set_font`（通過）。
   - **G9.5.c [P2]** setter 立即重排與 Qt 壓縮不同（只有在 mutation 中讀取 geometry 的程式碼觀察得到）。
   - **G9.5.d [P1]** 頂層最小尺寸不從 layout 導出（Python HUD 明確設定 `hud_window.py:296,327,347`，所以不受影響）。
+  - **G9.5.e [P1, RAN；HUD 會走到，僅效能可觀察；已修復：RC-75]** （修復前）`Label::set_text`／`Button::set_text` 對相同文字仍 `update_geometry` + `update()`；Qt 相同文字直接返回（`[QT-SRC widgets/widgets/qlabel.cpp:244-245]`、`[QT-SRC widgets/widgets/qabstractbutton.cpp:496-497]`）。HUD 每秒的倒數 tick 對未變的文字也排 layout 與重繪。
 - **Test**：既有 `test_reentrant_layout_request_during_callback`、`test_multilevel_layout_traversal_with_cell`、`test_command_queue_deduplication`、`test_resize_event_observable_ordering_before_layout_activation`、`test_single_resize_pipeline`、`test_resize_deferred_render`。必要：`text_change_below_fixed_wrapper_resizes_wrapper`；`layout_min_size_sets_toplevel_min_when_not_explicit`；`button_set_text_requests_layout`。
 - **HUD usage**：Python 全靠 Qt 自動重排；Rust 手動 `update_layout`（見上）。
 
@@ -1269,7 +1270,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 373 項：D 12、P0 35、P1 168、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 102 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.6.a、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 374 項：D 12、P0 35、P1 169、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 103 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1487,6 +1488,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.5.b | P1, RAN；已修復：RC-05、RC-26 | `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_propert |
 | G9.5.c | P2 | setter 立即重排與 Qt 壓縮不同 |
 | G9.5.d | P1 | 頂層最小尺寸不從 layout 導出 |
+| G9.5.e | P1, RAN；已修復：RC-75 | `Label`／`Button::set_text` 相同文字仍排 layout 與重繪 |
 | G9.6.a | P1, READ；決議：不在 P0 階段修，不標 D；已修復：RC-24 | `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值 **已修復：RC-24**（見 C9.6） |
 | G9.6.b | P2 | `set_spacing` 為 no-op |
 | G9.7.a | P1 | harness 不在 CI、不是 `cargo test` |
@@ -2724,3 +2726,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - Python 在 `showEvent` 後下一輪才換色（`singleShot(0)`），Rust 在 `show()` 內同步重畫，首幀差異未量測 `[INFERENCE]`。
   - 視窗被外部（非 `HUDWindow::show`）顯示時不會重做；HUD 沒有這種路徑。
   - C11.7 的 qtrs 層測試需求（`GetWindowCompositionAttribute` 讀回 state 4 與 gradient）仍未做。
+
+#### RC-75 `set_text` 相同文字直接返回
+
+- **Contract gaps**：G9.5.e（新登錄）。
+- **Qt 行為**：`QLabel::setText` 與 `QAbstractButton::setText` 在文字相同時直接返回，不 `updateGeometry`、不重繪（`[QT-SRC widgets/widgets/qlabel.cpp:244-245]`、`[QT-SRC widgets/widgets/qabstractbutton.cpp:496-497]`）。
+- **修改前**：`qtrs-widgets/src/label.rs`、`button.rs` 的 `set_text` 一律存文字、`update_geometry()`（向 parent 排 layout）、`update()`。HUD 的 1 s 倒數（`update_clock` → 卡片／表格 `update_countdown` → `set_label_text`）對沒變的文字（以天為單位的倒數、`--`、`重設於: --`）每秒排一次 layout 並弄髒 label。
+- **修正**：兩個 setter 先轉成 `String`，與現值相等就返回。
+- **Evidence**：`RAN`（本機 Windows）。
+  - `qtrs-widgets/tests/test_widget_invalidation.rs::label_and_button_set_text_with_unchanged_text_requests_nothing`：修改前 FAIL（`Label::set_text with unchanged text requested a layout`，pending 1，預期 0）；修改後通過。同一測試也斷言文字改變時仍排 layout 並弄髒。
+  - qtrs workspace（略過 `real_windows`）730 passed、0 failed；HUD 118 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check`（`rust/`）通過。
+- **Residual**：這一條只去掉 label 端。HUD 在卡片模式下仍每秒 present 一次：隱藏的表格頁（`StackedWidget` 非當前頁）的 `UsageDial::set_values` 每 tick `update()`，而 `collect_dirty_region` 不看可見性（G10.1.b），見 RC-76。

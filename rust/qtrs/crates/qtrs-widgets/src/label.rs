@@ -64,7 +64,12 @@ impl Label {
     }
 
     pub fn set_text(&mut self, text: impl Into<String>) {
-        self.text = text.into();
+        let text = text.into();
+        // QLabel::setText returns early when the text is unchanged (qlabel.cpp:244-245).
+        if text == self.text {
+            return;
+        }
+        self.text = text;
         self.update_geometry();
         self.update();
     }

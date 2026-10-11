@@ -143,6 +143,41 @@ fn label_and_button_text_font_and_alignment_setters_request_a_parent_layout() {
     WidgetCommandQueue::clear();
 }
 
+/// `QLabel::setText` and `QPushButton::setText` return early when the text is unchanged
+/// (qlabel.cpp:244-245, qabstractbutton.cpp:496-497): no `updateGeometry`, no repaint.
+#[test]
+fn label_and_button_set_text_with_unchanged_text_requests_nothing() {
+    use qtrs_widgets::command::WidgetCommandQueue;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let parent: qtrs_widgets::WidgetRef = Rc::new(RefCell::new(Box::new(Frame::new())));
+    let mut label = Label::new("12天 3時 4分");
+    label.set_parent_widget(Some(Rc::downgrade(&parent)));
+    let mut button = Button::new("go");
+    button.set_parent_widget(Some(Rc::downgrade(&parent)));
+
+    label.clear_dirty();
+    button.clear_dirty();
+    WidgetCommandQueue::clear();
+    label.set_text("12天 3時 4分");
+    assert_eq!(WidgetCommandQueue::pending_count(), 0, "Label::set_text with unchanged text requested a layout");
+    assert!(label.dirty_rect().is_none(), "Label::set_text with unchanged text repainted");
+    button.set_text("go");
+    assert_eq!(WidgetCommandQueue::pending_count(), 0, "Button::set_text with unchanged text requested a layout");
+    assert!(button.dirty_rect().is_none(), "Button::set_text with unchanged text repainted");
+
+    label.set_text("13天 3時 4分");
+    assert!(WidgetCommandQueue::pending_count() > 0, "Label::set_text with new text did not request a layout");
+    assert!(label.dirty_rect().is_some(), "Label::set_text with new text did not repaint");
+    WidgetCommandQueue::clear();
+    button.set_text("stop");
+    assert!(WidgetCommandQueue::pending_count() > 0, "Button::set_text with new text did not request a layout");
+    assert!(button.dirty_rect().is_some(), "Button::set_text with new text did not repaint");
+    WidgetCommandQueue::clear();
+}
+
+
 #[test]
 fn set_visible_on_every_widget_type_requests_a_parent_layout_only_when_it_changes() {
     use qtrs_widgets::command::WidgetCommandQueue;
