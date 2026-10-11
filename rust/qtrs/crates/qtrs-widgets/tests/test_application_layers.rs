@@ -83,22 +83,74 @@ fn test_core_application_exec_quit_and_about_to_quit() {
 
     let mut app = CoreApplication::new(vec!["test_runner".to_string()]);
 
-    let quit_signal_received = Arc::new(AtomicBool::new(false));
-    let quit_signal_clone = Arc::clone(&quit_signal_received);
-
+    let about_to_quit_count = Arc::new(AtomicI32::new(0));
+    let count_clone = Arc::clone(&about_to_quit_count);
     app.about_to_quit().connect(move |_| {
-        quit_signal_clone.store(true, Ordering::SeqCst);
+        count_clone.fetch_add(1, Ordering::SeqCst);
     });
 
-    // Post an exit event to the event loop
+    // Qt: exit() before exec() emits aboutToQuit (qcoreapplication.cpp:1532-1535)
+    // but does not end the next exec (qeventloop.cpp:157-158).
     CoreApplication::exit(42);
+    assert_eq!(about_to_quit_count.load(Ordering::SeqCst), 1);
 
+    qtrs_core::timer::Timer::single_shot(10, || CoreApplication::exit(42));
     let code = app.exec();
     assert_eq!(code, 42);
-    assert!(quit_signal_received.load(Ordering::SeqCst));
+    // aboutToQuit flag reset on exec entry (qcoreapplication.cpp:1468), emitted again in exit().
+    assert_eq!(about_to_quit_count.load(Ordering::SeqCst), 2);
 
     // Process events test - ensure non-blocking call succeeds without panic
     let _ = CoreApplication::process_events(false);
+    drop(app);
+}
+
+#[test]
+fn about_to_quit_emitted_inside_exit_before_exec_returns() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    CoreApplication::reset_for_test();
+    let mut app = CoreApplication::new(vec!["test_runner".to_string()]);
+
+    let count = Arc::new(AtomicI32::new(0));
+    let count_clone = Arc::clone(&count);
+    app.about_to_quit().connect(move |_| {
+        count_clone.fetch_add(1, Ordering::SeqCst);
+    });
+
+    // Qt emits aboutToQuit from QCoreApplication::exit itself (qcoreapplication.cpp:1532-1535),
+    // not after exec() returns.
+    let seen_inside_exit = Arc::new(AtomicI32::new(-1));
+    let seen_clone = Arc::clone(&seen_inside_exit);
+    let count_for_timer = Arc::clone(&count);
+    qtrs_core::timer::Timer::single_shot(10, move || {
+        CoreApplication::exit(5);
+        seen_clone.store(count_for_timer.load(Ordering::SeqCst), Ordering::SeqCst);
+    });
+
+    assert_eq!(app.exec(), 5);
+    assert_eq!(seen_inside_exit.load(Ordering::SeqCst), 1);
+    assert_eq!(count.load(Ordering::SeqCst), 1);
+    drop(app);
+}
+
+#[test]
+fn quit_ignored_before_exec() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    CoreApplication::reset_for_test();
+    let mut app = CoreApplication::new(vec!["test_runner".to_string()]);
+
+    let count = Arc::new(AtomicI32::new(0));
+    let count_clone = Arc::clone(&count);
+    app.about_to_quit().connect(move |_| {
+        count_clone.fetch_add(1, Ordering::SeqCst);
+    });
+
+    // QCoreApplication::quit() is a no-op outside exec (qcoreapplication.cpp:2143-2144).
+    CoreApplication::quit();
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+
+    qtrs_core::timer::Timer::single_shot(10, || CoreApplication::exit(3));
+    assert_eq!(app.exec(), 3);
     drop(app);
 }
 

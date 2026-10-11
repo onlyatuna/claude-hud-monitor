@@ -209,6 +209,18 @@ impl EventQueue {
         self.events.remove(index)
     }
 
+    /// Removes posted `Quit` events addressed to `receiver` (qeventloop.cpp:192-195).
+    pub(crate) fn remove_posted_quits_for(&mut self, receiver: ObjectId) {
+        let mut index = self.events.len();
+        while index > 0 {
+            index -= 1;
+            let posted = &self.events[index];
+            if posted.receiver == receiver && matches!(posted.event.kind, EventKind::Quit { .. }) {
+                self.remove_at(index);
+            }
+        }
+    }
+
     /// Inserts in priority order after the turn boundary, so an event posted during a turn waits
     /// for the next one (qthread_p.h:65-86).
     pub(crate) fn insert_posted(&mut self, posted: PostedEvent) {
@@ -400,8 +412,14 @@ impl EventLoop {
     }
 
     pub fn exec(&mut self) -> i32 {
+        // qeventloop.cpp:157-158: entering a loop resets the exit flag, so exit() issued before
+        // exec() does not end this loop.
+        self.exit_requested.store(false, Ordering::SeqCst);
+        // qeventloop.cpp:192-195: entering the application's loop drops its stale posted Quit.
+        if let Some(app_id) = crate::application::app_object_on_current_thread() {
+            self.queue.lock().unwrap().remove_posted_quits_for(app_id);
+        }
         self.loop_level += 1;
-        // Note: Do not overwrite self.exit_requested to false if exit() was already invoked prior to exec()
         while !self.exit_requested.load(Ordering::SeqCst) {
             self.process_events(true);
         }
@@ -571,6 +589,9 @@ fn pump_posted_events(
 
         if let EventKind::Quit { exit_code } = event.kind {
             quit_code = Some(exit_code);
+            // A posted Quit exits the loop through QCoreApplication::exit, which emits aboutToQuit
+            // (qcoreapplication.cpp:2054-2056, 1532-1535).
+            crate::application::emit_about_to_quit_once();
         }
 
         send_event(receiver, &mut event);
@@ -989,6 +1010,27 @@ mod tests {
 
         // SAFETY: the event loop has finished all callbacks for this test object.
         unsafe { unregister_qobject(widget.object_data().id) };
+    }
+
+    #[test]
+    fn exit_before_exec_is_noop() {
+        let mut el = EventLoop::new();
+        el.handle().exit(7);
+        let h = el.handle();
+        crate::timer::Timer::single_shot(0, move || h.exit(3));
+        assert_eq!(el.exec(), 3);
+    }
+
+    #[test]
+    fn second_exec_is_fresh() {
+        let mut el = EventLoop::new();
+        let h1 = el.handle();
+        crate::timer::Timer::single_shot(0, move || h1.exit(7));
+        assert_eq!(el.exec(), 7);
+
+        let h2 = el.handle();
+        crate::timer::Timer::single_shot(0, move || h2.exit(0));
+        assert_eq!(el.exec(), 0);
     }
 
     #[test]

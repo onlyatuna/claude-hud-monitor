@@ -63,6 +63,48 @@ thread_local! {
     static LOCAL_EVENT_LOOP: RefCell<Option<EventLoop>> = const { RefCell::new(None) };
 }
 
+/// Shared handle to the application's `aboutToQuit` signal; clones share subscribers.
+static ABOUT_TO_QUIT: RwLock<Option<Signal<()>>> = RwLock::new(None);
+/// `QCoreApplicationPrivate::in_exec` (qcoreapplication.cpp:1467, 1484-1486).
+static IN_EXEC: AtomicBool = AtomicBool::new(false);
+/// `QCoreApplicationPrivate::aboutToQuitEmitted` (qcoreapplication.cpp:1468, 1532-1534).
+static ABOUT_TO_QUIT_EMITTED: AtomicBool = AtomicBool::new(false);
+/// Thread that owns the application; `aboutToQuit` is only emitted there.
+static APP_THREAD: RwLock<Option<ThreadId>> = RwLock::new(None);
+
+fn is_app_thread() -> bool {
+    APP_THREAD
+        .read()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|t| *t == ThreadId::current())
+}
+
+/// The application object's id when called on the application thread, for removing its posted
+/// `Quit` events on loop entry (qeventloop.cpp:192-195).
+pub(crate) fn app_object_on_current_thread() -> Option<ObjectId> {
+    if is_app_thread() {
+        *APP_OBJECT_ID.read().unwrap()
+    } else {
+        None
+    }
+}
+
+/// Emits `aboutToQuit` at most once per exec (qcoreapplication.cpp:1532-1535). The flag is set
+/// before emitting so a slot that calls `exit()` does not recurse.
+pub(crate) fn emit_about_to_quit_once() {
+    if !is_app_thread() {
+        return;
+    }
+    if ABOUT_TO_QUIT_EMITTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let signal = ABOUT_TO_QUIT.read().unwrap().clone();
+    if let Some(signal) = signal {
+        signal.emit(&());
+    }
+}
+
 /// Core application singleton equivalent to Qt's `QCoreApplication`.
 ///
 /// Manages the application-wide event loop, metadata, arguments, attributes,
@@ -91,9 +133,12 @@ impl CoreApplication {
         ThreadContext::init_current(true, None);
 
         let id = ObjectId::next();
+        let about_to_quit = Signal::new();
+        *ABOUT_TO_QUIT.write().unwrap() = Some(about_to_quit.clone());
+        *APP_THREAD.write().unwrap() = Some(ThreadId::current());
         let app = Self {
             data: ObjectData::new(id),
-            about_to_quit: Signal::new(),
+            about_to_quit,
         };
 
         // Initialize metadata if not already set
@@ -150,6 +195,10 @@ impl CoreApplication {
     /// Enters the main event loop and waits until `exit()` or `quit()` is called.
     /// Returns the exit code passed to `exit()`.
     pub fn exec(&mut self) -> i32 {
+        // qcoreapplication.cpp:1467-1470: a new exec starts with in_exec set and aboutToQuit
+        // re-armed, so an exit() issued before exec() does not end it.
+        ABOUT_TO_QUIT_EMITTED.store(false, Ordering::SeqCst);
+        IN_EXEC.store(true, Ordering::SeqCst);
         let code = LOCAL_EVENT_LOOP.with(|el| {
             if let Some(loop_ref) = el.borrow_mut().as_mut() {
                 loop_ref.exec()
@@ -157,9 +206,8 @@ impl CoreApplication {
                 0
             }
         });
-
-        // Emit about_to_quit signal on loop exit
-        self.about_to_quit.emit(&());
+        // qcoreapplication.cpp:1484-1486 (execCleanup)
+        IN_EXEC.store(false, Ordering::SeqCst);
         code
     }
 
@@ -187,6 +235,8 @@ impl CoreApplication {
 
     /// Tells the application to exit with a return code (`QCoreApplication::exit`).
     pub fn exit(return_code: i32) {
+        // qcoreapplication.cpp:1532-1535: aboutToQuit is emitted from exit() itself.
+        emit_about_to_quit_once();
         if let Some(handle) = crate::event_loop::get_thread_event_sender(ThreadId::current()) {
             handle.exit(return_code);
         } else {
@@ -202,6 +252,10 @@ impl CoreApplication {
 
     /// Tells the application to exit with return code 0 (`QCoreApplication::quit`).
     pub fn quit() {
+        // qcoreapplication.cpp:2143-2144: quit() does nothing outside exec.
+        if !IN_EXEC.load(Ordering::SeqCst) {
+            return;
+        }
         Self::exit(0);
     }
 
@@ -407,6 +461,10 @@ impl CoreApplication {
     pub fn reset_for_test() {
         APP_INSTANCE_EXISTS.store(false, Ordering::SeqCst);
         *APP_OBJECT_ID.write().unwrap() = None;
+        *ABOUT_TO_QUIT.write().unwrap() = None;
+        *APP_THREAD.write().unwrap() = None;
+        IN_EXEC.store(false, Ordering::SeqCst);
+        ABOUT_TO_QUIT_EMITTED.store(false, Ordering::SeqCst);
         *GLOBAL_METADATA.write().unwrap() = None;
         *GLOBAL_ATTRIBUTES.write().unwrap() = None;
         let _ = LOCAL_EVENT_LOOP.try_with(|el| {
@@ -420,6 +478,10 @@ impl Drop for CoreApplication {
     fn drop(&mut self) {
         APP_INSTANCE_EXISTS.store(false, Ordering::SeqCst);
         *APP_OBJECT_ID.write().unwrap() = None;
+        *ABOUT_TO_QUIT.write().unwrap() = None;
+        *APP_THREAD.write().unwrap() = None;
+        IN_EXEC.store(false, Ordering::SeqCst);
+        ABOUT_TO_QUIT_EMITTED.store(false, Ordering::SeqCst);
         // SAFETY: Drop is on the application object's owning thread after dispatch ends.
         unsafe { unregister_qobject(self.data.id) };
         let _ = LOCAL_EVENT_LOOP.try_with(|el| {

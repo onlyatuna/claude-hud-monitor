@@ -13,7 +13,7 @@
 1. **不得自行決定 semantic。** 實作依本文件；本文件沒寫的行為，先補一條（Qt behavior + 證據），再寫程式。
 2. **「HUD 目前沒用到 / 沒測到」不是「這個行為不重要」。** 每一項 gap 的嚴重度與「HUD 是否使用」分開記錄（見 Severity）。不得因為 HUD 沒用到就刪除、降級或不寫 gap。
 3. **不得把 gap 改寫成 by design。** 要標 `D`（unsupported by design）必須在該項寫出理由，並且 `qtrs` 在被誤用時要 **可見地失敗**（錯誤、panic 或明確回傳值），不得靜默丟棄。
-4. **測試釘住了非 Qt 行為，或根本沒有斷言 → 必須改寫測試，不得保留。** 已知案例：`test_application_layers.rs`（`exit()` 先於 `exec()` 被釘成「立刻返回」，見 C4.1）、`test_signal_sender_tracking_and_auto_disconnection`（drop 之後沒有任何 assertion，見 C6.4）、`test_zero_timer_immediate_dispatch`（不檢查 registry 是否殘留，見 C5.3）、`test_qobject_start_and_kill_timer`（只斷言記帳，不斷言觸發，見 C5.4）。
+4. **測試釘住了非 Qt 行為，或根本沒有斷言 → 必須改寫測試，不得保留。** 已知案例：`test_application_layers.rs`（`exit()` 先於 `exec()` 被釘成「立刻返回」，見 C4.1；已由 RC-79 改寫）、`test_signal_sender_tracking_and_auto_disconnection`（drop 之後沒有任何 assertion，見 C6.4）、`test_zero_timer_immediate_dispatch`（不檢查 registry 是否殘留，見 C5.3）、`test_qobject_start_and_kill_timer`（只斷言記帳，不斷言觸發，見 C5.4）。
 5. **修好一個 gap 的條件** = 該項「Required test」先在修改前失敗、修改後通過，且寫進 repo。只有「能編譯」或「舊測試仍過」不算。
 6. 同一個 gap 若要縮小範圍（只修一部分）→ 必須在該項保留剩餘部分的 gap 條目，不得整條關閉。
 7. **同一個 root cause 在多處登錄時，以附錄 D 的 RC 為修復單位**：一次變更只能宣稱修復一個 RC，並須重新檢查該 RC 對應的**所有** gap；不得把同一處修改分別宣稱為修了 N 個 gap。
@@ -296,11 +296,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**（`core/event_loop/loop.rs`、`core/application/mod.rs`）
   - `IMPLEMENTED`：旗標式 `exec`、`post_quit` 與 exit code。測試 `loop.rs::test_exec_and_exit`、`test_exec_exit_method`、`layered_tests.rs::test_level3_timer_and_event_loop_exit`。
   - `IMPLEMENTED-UNTESTED`：在 `exec` 期間由 slot 呼叫 `CoreApplication::exit/quit`。
+  - `IMPLEMENTED`（RC-79）：進入 `exec` 重置 exit 旗標並移除 app 的殘留 posted `Quit`；`exit()` 內發一次 `aboutToQuit`；`quit()` 在 exec 外不作用。測試 `loop.rs::exit_before_exec_is_noop`、`second_exec_is_fresh`，`test_application_layers.rs::test_core_application_exec_quit_and_about_to_quit`、`about_to_quit_emitted_inside_exit_before_exec_returns`、`quit_ignored_before_exec`。
 - **Known gap**
-  - **G4.1.a [P1, READ]** `exit()` 先於 `exec()` 會**保留**並使 `exec` 立刻返回（`loop.rs` 註解與 `test_application_layers.rs:80-98` 釘住此行為）。Qt 會遺失。**必須改寫該測試。**
-  - **G4.1.b [P1, READ]** `exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回。
+  - **G4.1.a [P1, RAN；已修復：RC-79]** （修復前）`exit()` 先於 `exec()` 會**保留**並使 `exec` 立刻返回（`loop.rs` 註解與 `test_application_layers.rs:80-98` 釘住此行為）。Qt 會遺失。**必須改寫該測試。**
+  - **G4.1.b [P1, RAN；已修復：RC-79]** （修復前）`exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回。
   - **G4.1.c [P1, READ]** worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op**（`get_thread_event_sender(ThreadId::current())` 找不到 loop，退回讀 worker 自己空的 `LOCAL_EVENT_LOOP`）。
-  - **G4.1.d [P1, READ]** `aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內；`exit` 無 `exec` 時不發。
+  - **G4.1.d [P1, RAN；已修復：RC-79]** （修復前）`aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內；`exit` 無 `exec` 時不發。
   - **G4.1.e [P1, READ]** `quit()` 不是 `Quit` 事件：不關視窗、不能被否決；pump 在遞送前就鎖定 `quit_code`，filter 否決不了 posted `Quit`。
   - **G4.1.f [P2, READ]** `CoreApplication::new` 文件寫會 panic，實際沒有第二個實例檢查。
   - **G4.1.g [P1, READ]** 無獨立的巢狀 `QEventLoop`（`isRunning`、自己的 `exit`、`QEventLoopLocker`）。`EventLoop::new` 取代該執行緒已註冊的 handle 與 timer context，`Drop` 取消註冊——**在同一執行緒建立並丟棄第二個 `EventLoop` 會破壞第一個**。
@@ -1060,7 +1061,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 |---|---|---|
 | `setHighDpiScaleFactorRoundingPolicy(PassThrough)`（`main.py:46`） | setter 存在、預設 PassThrough、**無人讀取**（G10.7.c） | 等價（碰巧） |
 | `setQuitOnLastWindowClosed(False)`（`:48`） | 從不設定；預設 true（G11.2.g） | **gap** |
-| `aboutToQuit.connect(on_exit)`（`:98`） | 不連；清理靠 `exec` 返回後 Drop 順序（G4.1.d） | **gap** |
+| `aboutToQuit.connect(on_exit)`（`:98`） | 不連；清理靠 `exec` 返回後 Drop 順序（`aboutToQuit` 時機已由 RC-79 對齊 Qt，HUD 仍未連接） | **gap** |
 | `qInstallMessageHandler`（`:19-29,43`） | `ABSENT` | 以 `log` 取代，需決定是否等價 |
 | `AppUserModelID`（`:36-41`） | `main.rs:621-631` 有 | OK |
 | `setWindowIcon`（`:51,59`） | `ABSENT`，exe 資源 | G11.12.a |
@@ -1271,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 106 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 109 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1328,10 +1329,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.5.c | P1, READ | widgets 的 `delete_later` 時機比 Qt 早 |
 | G3.6.a | P1, READ | 對已銷毀接收者的 queued slot 仍會執行 |
 | G3.6.b | P2, READ | `unregister_qobject` → `stop_timers_for_object` 只刪 registry 項、不呼叫 Win32 `KillTimer`，孤兒 `WM |
-| G4.1.a | P1, READ | `exit()` 先於 `exec()` 會**保留**並使 `exec` 立刻返回 |
-| G4.1.b | P1, READ | `exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回 |
+| G4.1.a | P1, RAN；已修復：RC-79 | `exit()` 先於 `exec()` 會**保留**並使 `exec` 立刻返回 |
+| G4.1.b | P1, RAN；已修復：RC-79 | `exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回 |
 | G4.1.c | P1, READ | worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op** |
-| G4.1.d | P1, READ | `aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內 |
+| G4.1.d | P1, RAN；已修復：RC-79 | `aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內 |
 | G4.1.e | P1, READ | `quit()` 不是 `Quit` 事件：不關視窗、不能被否決 |
 | G4.1.f | P2, READ | `CoreApplication::new` 文件寫會 panic，實際沒有第二個實例檢查 |
 | G4.1.g | P1, READ | 無獨立的巢狀 `QEventLoop` |
@@ -2792,3 +2793,28 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `filter_installed_during_dispatch_follows_qt_index_walk`、`app_filter_installed_during_dispatch_follows_qt_index_walk`：修改前 FAIL（`[first, target]`，預期 `[first, first, target]`；下一個事件 `[added, first, target]`）。
   - 修改後 4 項通過；qtrs workspace（略過 `real_windows`）0 failed；HUD 121 passed、5 ignored。
 - **Residual**：「遞送中安裝 → 正在跑的 filter 被再呼叫一次」是依原始碼推導的 Qt 行為，未對真實 Qt 執行比對 `[INFERENCE]`。G3.4.b（借用中的接收者使 object 鏈走訪提前結束）、G3.4.f（回傳值）未處理。
+
+#### RC-79 exec／exit／quit／aboutToQuit 依 Qt 時序
+
+- **Contract gaps**：G4.1.a、G4.1.b、G4.1.d。
+- **Qt 行為**：
+  - `QEventLoop::exec` 進入時 `d->exit.storeRelease(false)`（`[QT-SRC corelib/kernel/qeventloop.cpp:157-158]`），所以 `exec()` 之前的 `exit()` 不會結束它，第二次 `exec()` 是全新的 loop；app 執行緒上進入 loop 時 `removePostedEvents(app, QEvent::Quit)`（`:192-195`）。
+  - `QCoreApplication::exec` 設 `in_exec = true`、`aboutToQuitEmitted = false`（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1467-1468]`）；`exit()` 本身在未發過時發 `aboutToQuit`（`:1532-1535`），不檢查 `in_exec`。
+  - `quit()` 在 `!in_exec` 時直接返回（`:2143-2144`）。
+- **修改前**：`EventLoop::exec` 刻意保留 `exec` 前的 `exit_requested`（註解「Do not overwrite」），返回後也不重置，所以先 `exit()` 的 `exec()` 立刻返回、第二次 `exec()` 以舊 code 返回；`aboutToQuit` 在 `CoreApplication::exec` 返回後才發；`quit()` 在 exec 外也會 post `Quit`，使下一次 `exec` 結束。`test_application_layers.rs::test_core_application_exec_quit_and_about_to_quit` 釘住「先 exit 後 exec 立刻返回」（§0 規則 4）。
+- **修正**（`qtrs-core/src/application/mod.rs`、`qtrs-core/src/event_loop/loop.rs`）：
+  - `IN_EXEC`、`ABOUT_TO_QUIT_EMITTED`、共享的 `ABOUT_TO_QUIT` signal 與 `APP_THREAD`；`CoreApplication::exec` 進入時設旗標、離開時清 `IN_EXEC`；`exit()` 呼叫 `emit_about_to_quit_once()`（僅 app 執行緒）；`quit()` 在 exec 外返回。
+  - `EventLoop::exec` 進入時重置 `exit_requested`，並在 app 執行緒以 `EventQueue::remove_posted_quits_for(app_id)` 移除 app 的殘留 posted `Quit`。
+  - pump 遞送 posted `Quit` 時也呼叫 `emit_about_to_quit_once()`（Qt 的 `Quit` 事件經 `QCoreApplication::exit`，`:2054-2056`）。
+  - 改寫上述釘住非 Qt 行為的測試：改斷言 `exit()` 先於 `exec()` 時 `aboutToQuit` 立即發一次、`exec` 不被結束、`exec` 內的 `exit` 再發一次。
+- **Evidence**：`RAN`（本機 Windows）。修改前（停用修正）FAIL：
+  - `loop.rs::exit_before_exec_is_noop`：`left 7, right 3`。
+  - `loop.rs::second_exec_is_fresh`：`left 7, right 0`。
+  - `test_core_application_exec_quit_and_about_to_quit`：`left 0, right 1`（`exit()` 內未發 `aboutToQuit`）。
+  - `about_to_quit_emitted_inside_exit_before_exec_returns`：`left 0, right 1`。
+  - `quit_ignored_before_exec`：`left 0, right 3`（exec 外的 `quit()` 結束了下一次 exec）。
+  - 修改後 5 項通過；qtrs workspace（略過 `real_windows`）0 failed；HUD 測試、clippy `-D warnings`、`cargo fmt --check` 通過。
+- **Residual**：
+  - `ABOUT_TO_QUIT_EMITTED` 在發 signal **之前**設定（Qt 在之後），以免 slot 內再呼叫 `exit()` 重入；差別只在 slot 重入 `exit()` 時 Qt 會再發一次 `[INFERENCE]`。
+  - app 執行緒上遞送任何 posted `Quit`（即使接收者不是 app）都會發 `aboutToQuit`；既有 pump 對任何 `Quit` 都結束 loop，未改。
+  - G4.1.c（worker 執行緒 `exit()` 靜默 no-op，也不發 `aboutToQuit`）、G4.1.e 未處理。HUD 未連接 `aboutToQuit`（`main.rs` 只在 `exec` 內呼叫 `Application::exit(0)`），行為不受影響。
