@@ -14,19 +14,28 @@ jobs:
     permissions:
       pull-requests: read
     outputs:
-      python: ${{ steps.filter.outputs.python }}
-      rust: ${{ steps.filter.outputs.rust }}
+      python: ${{ steps.filter.outputs.python == 'true' || steps.filter.outputs.workflow == 'true' }}
+      rust: ${{ steps.filter.outputs.rust == 'true' || steps.filter.outputs.workflow == 'true' }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
         id: filter
         with:
+          # A push is compared with the branch's commit before the push. Without this, a push to
+          # any branch but the default one (main) was compared with main, so every develop push
+          # matched every filter. Pull requests ignore `base` and use the PR's changed files.
+          base: ${{ github.ref }}
+          # A file counts for a filter only if it matches every pattern of it, so the `!` lines
+          # exclude. Markdown under rust/ is documentation: no Rust target reads it. The Python
+          # tests check the encoding of python/*.md, so those still run the Python job.
+          predicate-quantifier: every
           filters: |
             python:
               - 'python/**'
-              - '.github/workflows/ci.yml'
             rust:
               - 'rust/**'
+              - '!rust/**/*.md'
+            workflow:
               - '.github/workflows/ci.yml'
 
   test-python:
@@ -75,8 +84,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      # The runner image's stable Rust (rustup, with clippy and rustfmt); installing the newest
+      # stable on every run took about 23 s on Windows.
+      - name: Rust version
+        run: rustc -V && cargo -V
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -154,10 +165,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
+      - name: Rust version
+        run: rustc -V && cargo -V && cargo clippy -V && cargo fmt --version
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
@@ -205,8 +214,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - name: Rust version
+        run: rustc -V && cargo -V
 
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
