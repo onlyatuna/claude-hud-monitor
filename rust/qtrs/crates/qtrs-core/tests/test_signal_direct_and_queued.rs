@@ -1,6 +1,6 @@
 use qtrs_core::event_loop::EventLoop;
 use qtrs_core::object::{ObjectData, ObjectId, QObject, ThreadId};
-use qtrs_core::signal::{QueuedSignal, Signal};
+use qtrs_core::signal::{ConnectionType, QueuedSignal, Signal};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -200,4 +200,21 @@ fn test_blocking_queued_signal_cross_thread_synchronization() {
     // Worker can now unblock and terminate
     worker.join().unwrap();
     assert!(worker_finished.load(Ordering::SeqCst));
+}
+
+// G6.1.f: `connect_with_type` stores no receiver thread, so a Queued or BlockingQueued
+// connection made through it could only run synchronously. Qt never does that
+// (qobject.cpp:4333-4350, 4354-4358). Reject visibly instead.
+#[test]
+#[should_panic(expected = "connect_queued")]
+fn connect_with_type_queued_is_deferred_or_rejected() {
+    let signal: Signal<i32> = Signal::new();
+    signal.connect_with_type(ConnectionType::Queued, |_| {});
+}
+
+#[test]
+#[should_panic(expected = "connect_blocking_queued")]
+fn connect_with_type_blocking_queued_is_rejected() {
+    let signal: Signal<i32> = Signal::new();
+    signal.connect_with_type(ConnectionType::BlockingQueued, |_| {});
 }

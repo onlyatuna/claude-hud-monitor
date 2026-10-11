@@ -340,10 +340,20 @@ impl<T> Signal<T> {
     }
 
     /// Connects a slot with an explicit direct connection type.
+    ///
+    /// Panics for `Queued` and `BlockingQueued`: this entry point stores no receiver thread, so a
+    /// queued slot could only run synchronously, which Qt's `QueuedConnection` never does
+    /// (`qobject.cpp:4333-4350`). Use `connect_queued` / `connect_blocking_queued` (which name the
+    /// thread) or `connect_object`.
     pub fn connect_with_type<F>(&self, conn_type: ConnectionType, slot: F) -> ConnectionId
     where
         F: Fn(&T) + Send + Sync + 'static,
     {
+        assert!(
+            !conn_type.is_queued() && !conn_type.is_blocking_queued(),
+            "connect_with_type cannot establish a queued connection (no receiver thread): \
+             use connect_queued, connect_blocking_queued, or connect_object"
+        );
         let mut inner = self.inner.lock().unwrap();
         let id = ConnectionId::next();
 
