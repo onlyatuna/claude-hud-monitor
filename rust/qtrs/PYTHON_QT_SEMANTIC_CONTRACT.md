@@ -246,15 +246,16 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### C3.4 sendEvent / notify / 事件過濾
 - **Qt behavior** `[QT-SRC qcoreapplication.cpp:1275-1300]`：順序為 application filters（僅主執行緒、LIFO、跳過 null／已移除）→ 接收者的 filters（LIFO、跳過已移除，因此在迭代中移除「尚未呼叫」的 filter 是安全的且該 filter 不會被呼叫）→ `receiver->event()`。`installEventFilter` 重新安裝會移到最前。Filter 看得到**所有**事件，含 `QTimerEvent`（計時器經 `sendEvent` 送出，`qeventdispatcher_win.cpp:414-415`）。
-- **qtrs required**：順序 MUST 為 app filters → object filters → `event()`；回傳 true 的 filter MUST 中止遞送且 `send_event` 回 false；迭代中移除尚未呼叫的 filter MUST 使其不被呼叫；Timer 事件 MUST 經過 filter。
+- **qtrs required**：順序 MUST 為 app filters → object filters → `event()`；回傳 true 的 filter MUST 中止遞送（Qt 的 `notify` 此時回 **true**，`[QT-SRC corelib/kernel/qcoreapplication.cpp:1285-1295]`；qtrs 目前回 false，見 G3.4.f）；迭代中移除尚未呼叫的 filter MUST 使其不被呼叫；Timer 事件 MUST 經過 filter。
 - **Current implementation**：`IMPLEMENTED`：`notify_helper`（`loop.rs`）、per-thread app filter、object filter 鏈（LIFO、去重、tombstone）、`NativeEventFilter`。測試：`loop.rs::test_notify_helper_pipeline_and_safe_removal`、`layered_tests.rs::test_level1_event_filter_lifo_intercept_and_tombstone`、`event_filter.rs::tests::*`、`dispatcher_win.rs::tests::test_native_event_filter_intercept_in_dispatcher`。
 - **Known gap**
-  - **G3.4.a [P1, READ]** `notify_helper` 迭代 filter id 的**快照**；被前一個 filter 移除的 filter 仍會被呼叫（Qt 跳過）。現有測試只測「在自己 callback 內移除自己」。
+  - **G3.4.a [P1, RAN；已修復：RC-78]** （修復前）`notify_helper` 迭代 filter id 的**快照**；被前一個 filter 移除的 filter 仍會被呼叫（Qt 跳過）。現有測試只測「在自己 callback 內移除自己」。
   - **G3.4.b [P2, READ]** filter 物件正被借用（例如 parent 在 `event()` 中對它過濾的 child 送事件）時，filter 被靜默跳過，事件無過濾遞送。
   - **G3.4.c [P1, READ]** Windows 計時器遞送不經 `notify_helper`／`event()`（見 C5.2）。
   - **G3.4.d [D]** 跨執行緒 `send_event` 回 false 且不做事（Qt 會在呼叫端執行緒遞送並警告）。理由：同 G2.7.b。
   - **G3.4.e [P2, READ]** `install_event_filter` 拒絕自己與直接環（Qt 允許）。
-- **Test**：必要：`filter_removed_by_earlier_filter_is_not_called`；`timer_event_passes_event_filter`。
+  - **G3.4.f [P2, READ]** filter 吃掉事件時 `send_event`／`notify_helper` 回 false；Qt `notify_helper` 回 `filtered = true`（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1285-1295]`），`sendEvent` 因而回 true。既有 `loop.rs::test_notify_helper_pipeline_and_safe_removal` 釘住 false。HUD 不裝 QObject filter。
+- **Test**：`loop.rs::tests::{filter_removed_by_earlier_filter_is_not_called, app_filter_removed_by_earlier_filter_is_not_called, filter_installed_during_dispatch_follows_qt_index_walk, app_filter_installed_during_dispatch_follows_qt_index_walk}`（RC-78）。必要：`timer_event_passes_event_filter`。
 - **HUD usage**：Python 無 `installEventFilter`；Rust 只裝 native filter（`WakeFilter`，`main.rs:57-83,322`）。
 
 ### C3.5 DeferredDelete 與輪次
@@ -1270,7 +1271,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 374 項：D 12、P0 35、P1 169、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 105 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 106 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1316,11 +1317,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.3.c | P2, READ | `Move`/`UpdateLater`/`LanguageChange` 壓縮不存在 |
 | G3.3.d | P2, READ | 每次 post 都 O(queue) 掃描 |
 | G3.3.e | D | `Quit{exit_code}` 是 qtrs 擴充 |
-| G3.4.a | P1, READ | `notify_helper` 迭代 filter id 的**快照** |
+| G3.4.a | P1, RAN；已修復：RC-78 | `notify_helper` 迭代 filter id 的**快照** |
 | G3.4.b | P2, READ | filter 物件正被借用 |
 | G3.4.c | P1, READ | Windows 計時器遞送不經 `notify_helper`／`event()` |
 | G3.4.d | D | 跨執行緒 `send_event` 回 false 且不做事 |
 | G3.4.e | P2, READ | `install_event_filter` 拒絕自己與直接環 |
+| G3.4.f | P2, READ | filter 吃掉事件時 `send_event` 回 false（Qt 回 true） |
 | G3.5.a | P1, READ | 無 scope level：同 handler 內 `process_events` 會刪 |
 | G3.5.b | P1, READ | `EventLoop::exec` 結束沒有 cleanup flush |
 | G3.5.c | P1, READ | widgets 的 `delete_later` 時機比 Qt 早 |
@@ -2778,3 +2780,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：
   - `HUDTrayIcon::new` 會建立真的 `Shell_NotifyIcon`，測試因此只走到共用函式，`ACTION_*` 分支與 `main.rs` 熱鍵閉包本身沒有被測試執行。
   - 既有 `test_tray_and_hud_menu_unified_parity` 會建立真的托盤圖示（未改）。
+
+#### RC-78 事件過濾鏈以即時索引走訪
+
+- **Contract gaps**：G3.4.a。
+- **Qt 行為**：`sendThroughApplicationEventFilters`／`sendThroughObjectEventFilters` 以 `for (i = 0; i < list.size(); ++i) { obj = list.at(i); if (!obj) continue; … }` 走訪**即時**清單（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1237-1247,1255-1265]`）；`removeEventFilter` 把位置設成 null（`[QT-SRC corelib/kernel/qobject.cpp:2442-2446]`），`installEventFilter` 先清掉 null 與重複再 prepend（`:2420-2422`）。所以前面的 filter 移除後面的 filter 時，後者本次不會被呼叫；遞送中安裝的新 filter 本次不被呼叫，正在跑的 filter 因位移被再呼叫一次，下一個事件新 filter 最先。
+- **修改前**：`notify_helper`（`qtrs-core/src/event_loop/loop.rs`）先取 app 與 object filter 鏈的 `snapshot()` 再走訪，被前面 filter 移除的 filter 仍被呼叫。
+- **修正**：`EventFilterChain::slot_at(index)`；`notify_helper` 以 `consumed_by_filter_chain` 每步讀一個即時位置，callback 執行時不持有鏈的 `RefCell` 或物件借用。回傳值語意不變（G3.4.f 另立）。刪除 `event_filter.rs::tests::test_tombstone_safe_removal_during_iteration`：它自己手寫迴圈走 `snapshot()`，沒有呼叫產品程式碼（§0 規則 4），由下列 4 項取代。
+- **Evidence**：`RAN`（本機 Windows）。`loop.rs::tests`：
+  - `filter_removed_by_earlier_filter_is_not_called`、`app_filter_removed_by_earlier_filter_is_not_called`：修改前 FAIL（trace `[earlier, later, target]`，預期 `[earlier, target]`）。
+  - `filter_installed_during_dispatch_follows_qt_index_walk`、`app_filter_installed_during_dispatch_follows_qt_index_walk`：修改前 FAIL（`[first, target]`，預期 `[first, first, target]`；下一個事件 `[added, first, target]`）。
+  - 修改後 4 項通過；qtrs workspace（略過 `real_windows`）0 failed；HUD 121 passed、5 ignored。
+- **Residual**：「遞送中安裝 → 正在跑的 filter 被再呼叫一次」是依原始碼推導的 Qt 行為，未對真實 Qt 執行比對 `[INFERENCE]`。G3.4.b（借用中的接收者使 object 鏈走訪提前結束）、G3.4.f（回傳值）未處理。

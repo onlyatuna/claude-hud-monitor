@@ -65,6 +65,13 @@ impl EventFilterChain {
         self.filters.iter().filter_map(|&f| f).collect()
     }
 
+    /// Raw slot `index` of the live chain: `None` past the end, `Some(None)` for a tombstone.
+    /// `notify_helper` reads one slot per step, mirroring Qt's `eventFilters.at(i)` walk
+    /// (qcoreapplication.cpp:1237-1238, 1255-1256).
+    pub fn slot_at(&self, index: usize) -> Option<Option<ObjectId>> {
+        self.filters.get(index).copied()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.filters.iter().all(|f| f.is_none())
     }
@@ -241,55 +248,6 @@ mod tests {
         chain.install(id_a);
 
         assert_eq!(chain.snapshot(), vec![id_a, id_b]);
-    }
-
-    #[test]
-    fn test_tombstone_safe_removal_during_iteration() {
-        let log = Rc::new(RefCell::new(Vec::new()));
-        let mut chain = EventFilterChain::new();
-
-        let id_a = ObjectId(1);
-        let id_b = ObjectId(2);
-
-        chain.install(id_b);
-        chain.install(id_a);
-
-        let mut filter_a = MockFilter {
-            name: "FilterA".into(),
-            should_intercept: false,
-            remove_self_on_event: true,
-            log: log.clone(),
-        };
-
-        let mut filter_b = MockFilter {
-            name: "FilterB".into(),
-            should_intercept: false,
-            remove_self_on_event: false,
-            log: log.clone(),
-        };
-
-        let snapshot = chain.snapshot();
-        let mut event = Event::new(EventKind::User(Box::new(42)));
-
-        for &fid in &snapshot {
-            if fid == id_a {
-                let res = filter_a.filter(&mut chain, fid, &mut event);
-                if res.is_filtered() {
-                    break;
-                }
-            } else if fid == id_b {
-                let res = filter_b.filter(&mut chain, fid, &mut event);
-                if res.is_filtered() {
-                    break;
-                }
-            }
-        }
-
-        assert_eq!(
-            *log.borrow(),
-            vec!["FilterA: filtered", "FilterB: filtered"]
-        );
-        assert_eq!(chain.snapshot(), vec![id_b]);
     }
 
     #[cfg(windows)]

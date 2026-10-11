@@ -37,28 +37,46 @@ pub fn clear_application_event_filters() {
     });
 }
 
-pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
-    let app_filter_ids = APPLICATION_EVENT_FILTERS.with(|filters| filters.borrow().snapshot());
-    for filter_id in app_filter_ids {
-        let filtered = crate::object::with_object_mut(filter_id, |filter_obj| {
+/// Qt's `for (i = 0; i < list.size(); ++i) { obj = list.at(i); if (!obj) continue; ... }`
+/// (`sendThroughApplicationEventFilters` qcoreapplication.cpp:1237-1247,
+/// `sendThroughObjectEventFilters` :1255-1265). `slot_at` is called once per step, so the chain is
+/// read live: a filter tombstoned by an earlier callback is skipped, and one installed during dispatch
+/// shifts the walk exactly as in Qt. No chain borrow is held while a filter runs.
+/// Returns true if a filter consumed the event.
+fn consumed_by_filter_chain(
+    slot_at: impl Fn(usize) -> Option<Option<ObjectId>>,
+    receiver: ObjectId,
+    event: &mut Event,
+) -> bool {
+    let mut index = 0;
+    while let Some(slot) = slot_at(index) {
+        index += 1;
+        let Some(filter_id) = slot else { continue };
+        let consumed = crate::object::with_object_mut(filter_id, |filter_obj| {
             filter_obj.event_filter(receiver, event)
         });
-        if filtered == Some(true) {
-            return false;
+        if consumed == Some(true) {
+            return true;
         }
     }
+    false
+}
 
-    let obj_filter_ids =
-        crate::object::with_object(receiver, |obj| obj.object_data().event_filters.snapshot())
-            .unwrap_or_default();
+pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
+    let app_slot =
+        |index: usize| APPLICATION_EVENT_FILTERS.with(|filters| filters.borrow().slot_at(index));
+    if consumed_by_filter_chain(app_slot, receiver, event) {
+        return false;
+    }
 
-    for filter_id in obj_filter_ids {
-        let filtered = crate::object::with_object_mut(filter_id, |filter_obj| {
-            filter_obj.event_filter(receiver, event)
-        });
-        if filtered == Some(true) {
-            return false;
-        }
+    let object_slot = |index: usize| {
+        crate::object::with_object(receiver, |obj| {
+            obj.object_data().event_filters.slot_at(index)
+        })
+        .flatten()
+    };
+    if consumed_by_filter_chain(object_slot, receiver, event) {
+        return false;
     }
 
     if matches!(&event.kind, EventKind::MetaCall(_)) {
@@ -1323,6 +1341,237 @@ mod tests {
             unregister_qobject(app_filter.data.id);
             unregister_qobject(obj_filter.data.id);
             unregister_qobject(target.data.id);
+        }
+    }
+
+    type Trace = Arc<Mutex<Vec<&'static str>>>;
+    /// Runs inside `ScriptedFilter::event_filter`; receives (watched object, this filter).
+    type FilterAction = Box<dyn FnMut(ObjectId, ObjectId)>;
+
+    struct ScriptedFilter {
+        data: ObjectData,
+        label: &'static str,
+        trace: Trace,
+        on_event: Option<FilterAction>,
+    }
+
+    impl ScriptedFilter {
+        fn new(label: &'static str, trace: Trace) -> Self {
+            Self {
+                data: ObjectData::new(ObjectId::next()),
+                label,
+                trace,
+                on_event: None,
+            }
+        }
+    }
+
+    impl QObject for ScriptedFilter {
+        fn object_data(&self) -> &ObjectData {
+            &self.data
+        }
+        fn object_data_mut(&mut self) -> &mut ObjectData {
+            &mut self.data
+        }
+        fn event_filter(&mut self, watched: ObjectId, _event: &mut Event) -> bool {
+            self.trace.lock().unwrap().push(self.label);
+            let me = self.data.id;
+            if let Some(action) = &mut self.on_event {
+                action(watched, me);
+            }
+            false
+        }
+    }
+
+    struct TraceTarget {
+        data: ObjectData,
+        trace: Trace,
+    }
+
+    impl TraceTarget {
+        fn new(trace: Trace) -> Self {
+            Self {
+                data: ObjectData::new(ObjectId::next()),
+                trace,
+            }
+        }
+    }
+
+    impl QObject for TraceTarget {
+        fn object_data(&self) -> &ObjectData {
+            &self.data
+        }
+        fn object_data_mut(&mut self) -> &mut ObjectData {
+            &mut self.data
+        }
+        fn event(&mut self, _event: &mut Event) -> bool {
+            self.trace.lock().unwrap().push("target");
+            true
+        }
+    }
+
+    #[test]
+    fn filter_removed_by_earlier_filter_is_not_called() {
+        // Qt: object filters are walked by live index; a removed slot is null and skipped
+        // (qcoreapplication.cpp:1255-1265; qobject.cpp:2441-2446).
+        let trace: Trace = Arc::new(Mutex::new(Vec::new()));
+        let mut target = TraceTarget::new(Arc::clone(&trace));
+        let mut earlier = ScriptedFilter::new("earlier", Arc::clone(&trace));
+        let mut later = ScriptedFilter::new("later", Arc::clone(&trace));
+        let target_id = target.data.id;
+        let earlier_id = earlier.data.id;
+        let later_id = later.data.id;
+        // SAFETY: all three stay on this thread and unmoved until unregistered below.
+        unsafe {
+            register_qobject(&mut target);
+            register_qobject(&mut earlier);
+            register_qobject(&mut later);
+        }
+        target.object_data_mut().install_event_filter(later_id);
+        target.object_data_mut().install_event_filter(earlier_id);
+        earlier.on_event = Some(Box::new(move |watched: ObjectId, _: ObjectId| {
+            crate::object::with_object_mut(watched, |obj| {
+                obj.object_data_mut().remove_event_filter(later_id);
+            });
+        }));
+
+        let mut event = Event::new(EventKind::UpdateRequest);
+        assert!(send_event(target_id, &mut event));
+        assert_eq!(*trace.lock().unwrap(), vec!["earlier", "target"]);
+
+        // SAFETY: the dispatch above has returned; no callback is active.
+        unsafe {
+            unregister_qobject(target_id);
+            unregister_qobject(earlier_id);
+            unregister_qobject(later_id);
+        }
+    }
+
+    #[test]
+    fn app_filter_removed_by_earlier_filter_is_not_called() {
+        // Qt: application filters use the same live index walk (qcoreapplication.cpp:1237-1247).
+        clear_application_event_filters();
+        let trace: Trace = Arc::new(Mutex::new(Vec::new()));
+        let mut target = TraceTarget::new(Arc::clone(&trace));
+        let mut earlier = ScriptedFilter::new("earlier", Arc::clone(&trace));
+        let mut later = ScriptedFilter::new("later", Arc::clone(&trace));
+        let target_id = target.data.id;
+        let earlier_id = earlier.data.id;
+        let later_id = later.data.id;
+        // SAFETY: all three stay on this thread and unmoved until unregistered below.
+        unsafe {
+            register_qobject(&mut target);
+            register_qobject(&mut earlier);
+            register_qobject(&mut later);
+        }
+        install_application_event_filter(later_id);
+        install_application_event_filter(earlier_id);
+        earlier.on_event = Some(Box::new(move |_: ObjectId, _: ObjectId| {
+            remove_application_event_filter(later_id);
+        }));
+
+        let mut event = Event::new(EventKind::UpdateRequest);
+        assert!(send_event(target_id, &mut event));
+        assert_eq!(*trace.lock().unwrap(), vec!["earlier", "target"]);
+
+        clear_application_event_filters();
+        // SAFETY: the dispatch above has returned; no callback is active.
+        unsafe {
+            unregister_qobject(target_id);
+            unregister_qobject(earlier_id);
+            unregister_qobject(later_id);
+        }
+    }
+
+    #[test]
+    fn filter_installed_during_dispatch_follows_qt_index_walk() {
+        // Qt: installEventFilter prepends (qobject.cpp:2420-2422). The walk is already past index 0
+        // when the callback runs, so the new filter is NOT called for this event. The prepend shifts
+        // the running filter to index 1, and the `++i` step calls it once more for the same event
+        // (qcoreapplication.cpp:1255-1265). The next event sees the new filter first.
+        let trace: Trace = Arc::new(Mutex::new(Vec::new()));
+        let mut target = TraceTarget::new(Arc::clone(&trace));
+        let mut first = ScriptedFilter::new("first", Arc::clone(&trace));
+        let mut added = ScriptedFilter::new("added", Arc::clone(&trace));
+        let target_id = target.data.id;
+        let first_id = first.data.id;
+        let added_id = added.data.id;
+        // SAFETY: all three stay on this thread and unmoved until unregistered below.
+        unsafe {
+            register_qobject(&mut target);
+            register_qobject(&mut first);
+            register_qobject(&mut added);
+        }
+        target.object_data_mut().install_event_filter(first_id);
+        let mut installed = false;
+        first.on_event = Some(Box::new(move |watched: ObjectId, _: ObjectId| {
+            if !installed {
+                installed = true;
+                crate::object::with_object_mut(watched, |obj| {
+                    obj.object_data_mut().install_event_filter(added_id);
+                });
+            }
+        }));
+
+        let mut event = Event::new(EventKind::UpdateRequest);
+        assert!(send_event(target_id, &mut event));
+        assert_eq!(*trace.lock().unwrap(), vec!["first", "first", "target"]);
+
+        trace.lock().unwrap().clear();
+        let mut next_event = Event::new(EventKind::UpdateRequest);
+        assert!(send_event(target_id, &mut next_event));
+        assert_eq!(*trace.lock().unwrap(), vec!["added", "first", "target"]);
+
+        // SAFETY: the dispatches above have returned; no callback is active.
+        unsafe {
+            unregister_qobject(target_id);
+            unregister_qobject(first_id);
+            unregister_qobject(added_id);
+        }
+    }
+
+    #[test]
+    fn app_filter_installed_during_dispatch_follows_qt_index_walk() {
+        // Qt: same prepend + index walk as the object chain, on the application list
+        // (qcoreapplication.cpp:1237-1247; qobject.cpp:2420-2422).
+        clear_application_event_filters();
+        let trace: Trace = Arc::new(Mutex::new(Vec::new()));
+        let mut target = TraceTarget::new(Arc::clone(&trace));
+        let mut first = ScriptedFilter::new("first", Arc::clone(&trace));
+        let mut added = ScriptedFilter::new("added", Arc::clone(&trace));
+        let target_id = target.data.id;
+        let first_id = first.data.id;
+        let added_id = added.data.id;
+        // SAFETY: all three stay on this thread and unmoved until unregistered below.
+        unsafe {
+            register_qobject(&mut target);
+            register_qobject(&mut first);
+            register_qobject(&mut added);
+        }
+        install_application_event_filter(first_id);
+        let mut installed = false;
+        first.on_event = Some(Box::new(move |_: ObjectId, _: ObjectId| {
+            if !installed {
+                installed = true;
+                install_application_event_filter(added_id);
+            }
+        }));
+
+        let mut event = Event::new(EventKind::UpdateRequest);
+        assert!(send_event(target_id, &mut event));
+        assert_eq!(*trace.lock().unwrap(), vec!["first", "first", "target"]);
+
+        trace.lock().unwrap().clear();
+        let mut next_event = Event::new(EventKind::UpdateRequest);
+        assert!(send_event(target_id, &mut next_event));
+        assert_eq!(*trace.lock().unwrap(), vec!["added", "first", "target"]);
+
+        clear_application_event_filters();
+        // SAFETY: the dispatches above have returned; no callback is active.
+        unsafe {
+            unregister_qobject(target_id);
+            unregister_qobject(first_id);
+            unregister_qobject(added_id);
         }
     }
 
