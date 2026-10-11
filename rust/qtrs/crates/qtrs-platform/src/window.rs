@@ -25,7 +25,7 @@ pub use crate::HWND;
 use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
 #[cfg(windows)]
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    ClientToScreen, GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
 #[cfg(windows)]
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -271,6 +271,28 @@ thread_local! {
     /// not yet released (UI thread only).
     static APP_MOUSE_BUTTONS: std::cell::Cell<qtrs_core::event::MouseButtons> =
         const { std::cell::Cell::new(qtrs_core::event::MouseButtons::NO_BUTTON) };
+}
+
+thread_local! {
+    /// `lastMouseMovePos` in `QWindowsPointerHandler::translateMouseEvent`: the window and native
+    /// global position of the last `WM_MOUSEMOVE`; cleared when the window gets `WM_MOUSELEAVE`.
+    static LAST_MOUSE_MOVE: std::cell::Cell<Option<(isize, i32, i32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Qt discards a buttonless `WM_MOUSEMOVE` at the position of the previous one
+/// (qwindowspointerhandler.cpp:800-809): Windows sends such moves without the mouse moving, e.g.
+/// when the capture is released or a window appears under the cursor.
+#[cfg(windows)]
+fn is_repeated_buttonless_move(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> bool {
+    let mut pt = windows_sys::Win32::Foundation::POINT {
+        x: get_x_lparam(lparam),
+        y: get_y_lparam(lparam),
+    };
+    // SAFETY: `hwnd` is the window receiving this message; `pt` is a valid out pointer.
+    unsafe { ClientToScreen(hwnd, &mut pt) };
+    let current = Some((hwnd as isize, pt.x, pt.y));
+    let previous = LAST_MOUSE_MOVE.with(|last| last.replace(current));
+    wparam == 0 && previous == current
 }
 
 /// The button a `WM_{L,R,M}BUTTON{DOWN,UP,DBLCLK}` message is about (already the logical button:
@@ -1071,6 +1093,10 @@ unsafe fn native_window_proc_inner(
             };
             TrackMouseEvent(&mut tme);
 
+            if is_repeated_buttonless_move(hwnd, wparam, lparam) {
+                return 0;
+            }
+
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);
@@ -1151,6 +1177,11 @@ unsafe fn native_window_proc_inner(
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MOUSELEAVE => {
+            LAST_MOUSE_MOVE.with(|last| {
+                if matches!(last.get(), Some((h, ..)) if h == hwnd as isize) {
+                    last.set(None);
+                }
+            });
             dispatch_window_system_event(Delivery::Default, hwnd, WindowSystemEvent::MouseLeave);
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }

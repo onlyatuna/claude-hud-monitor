@@ -2964,6 +2964,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - buttonless move 會清掉 `held_buttons`／grab（漏掉 release 時自我修正）；Qt 保留 `qt_button_down`。
   - Qt 只釋放自己設的 capture（`AutoMouseCapture` 旗標）；qtrs 釋放本視窗持有的任何 capture。未處理 `WM_CAPTURECHANGED`。
   - 雙擊也設 grab／capture，是否與 Qt 一致未驗證。
+- **CI 修正**：CI 38158362812 的 Windows 實窗測試 `the_button_state_of_a_native_mouse_move_reaches_the_wake_up_gate` 失敗（「MK_LBUTTON move started a tip」）。推論 `[INFERENCE]`：測試 `settle` 的點擊放開後 `ReleaseCapture`，Windows 在游標未動的位置補送一個無按鍵 `WM_MOUSEMOVE`，重新啟動 tooltip wake-up。Qt 丟棄「無按鍵且與上一個 `WM_MOUSEMOVE` 同一全域位置」的移動（`[QT-SRC plugins/platforms/windows/qwindowspointerhandler.cpp:800-809]`）；qtrs 平台層加上同一規則（`is_repeated_buttonless_move`，以 `ClientToScreen` 換算全域位置；收到 `WM_MOUSELEAVE` 時清除記錄，使離開後在同一位置再進入仍會產生 Enter——Qt 以 `m_windowUnderPointer` 另行處理）。本機不能跑移動游標的實窗測試，以 CI 為準。
 
 #### RC-91 Enter／Leave 依共同祖先走整條鏈（G8.4.d）
 - **Qt 依據**：`[QT-SRC widgets/kernel/qapplication.cpp:2037-2123]` `dispatchEnterLeave`：找舊、新 receiver 的共同祖先（2058-2087），Leave 從舊葉往上送到共同祖先之前（2090-2101），Enter 由外而內送到新葉（2108-2123）；按鍵按住時不送（2316-2339）。
