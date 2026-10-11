@@ -111,15 +111,21 @@ fn set_status_dot_color(dot: &WidgetRef, color: qtrs_gui::tiny_skia::Color) {
 }
 
 /// Background, border colour and corner radius of the window panel. In cards mode they come from
-/// the application style sheet's `QWidget#CentralWidget` rule, as in the Python HUD; the table
-/// mode (and a sheet without that rule) uses the theme.
+/// the application style sheet's `QWidget#CentralWidget` rule, as in the Python HUD. Table mode
+/// uses the theme: the translucent panel only over an installed blur (Python
+/// `get_hud_stylesheet(theme, vibrant)`, `styles.py:205`), the solid one otherwise.
 fn panel_look(
     cards_mode: bool,
+    vibrant: bool,
     theme: &Theme,
 ) -> (qtrs_gui::tiny_skia::Color, qtrs_gui::tiny_skia::Color, f32) {
     if !cards_mode {
-        // Table mode uses vibrant panel on top of Acrylic backdrop blur, matching Python (radius 12.0)
-        return (theme.panel_bg_vibrant, theme.panel_border, 12.0);
+        let bg = if vibrant {
+            theme.panel_bg_vibrant
+        } else {
+            theme.panel_bg
+        };
+        return (bg, theme.panel_border, 12.0);
     }
     let themed = (theme.panel_bg, theme.panel_border, 10.0);
     let Some(sheet) = qtrs_widgets::application::Application::style_sheet() else {
@@ -139,11 +145,17 @@ fn panel_look(
     }
 }
 
-fn install_panel_painter(root: &WidgetRef, theme: &Theme, config: Arc<Mutex<Config>>) {
+fn install_panel_painter(
+    root: &WidgetRef,
+    theme: &Theme,
+    config: Arc<Mutex<Config>>,
+    vibrant: Rc<Cell<bool>>,
+) {
     let theme = theme.clone();
     if let Some(empty) = root.borrow_mut().as_any_mut().downcast_mut::<EmptyWidget>() {
         empty.set_paint_handler(move |painter| {
-            let (bg, border, radius) = panel_look(config.lock().ui_mode != "table", &theme);
+            let cards_mode = config.lock().ui_mode != "table";
+            let (bg, border, radius) = panel_look(cards_mode, vibrant.get(), &theme);
             let w = painter.device().width();
             let h = painter.device().height();
             let rect_f = RectF::new(0.5, 0.5, w - 1.0, h - 1.0);
@@ -179,6 +191,21 @@ fn schedule_trim(trim: &Rc<RefCell<TrimFn>>, delay_ms: u64) {
 /// The memory trim the HUD schedules (`crate::memory::trim_memory`; tests count calls instead).
 type TrimFn = Arc<dyn Fn() + Send + Sync>;
 
+/// What installs the window backdrop (`Window::set_backdrop`; tests substitute a failing one).
+type BackdropFn = fn(&mut Window, BackdropType, bool) -> bool;
+
+/// The backdrop half of Python `_apply_theme` (`hud_window.py:240-252`): table mode asks for the
+/// Acrylic blur only while the window is visible (`self.isVisible() and vibrancy.apply(...)`) and
+/// is vibrant only if that succeeded; cards mode clears the blur (`vibrancy.clear`).
+fn install_backdrop(window: &mut Window, set: BackdropFn, ui_mode: &str, dark: bool) -> bool {
+    if ui_mode == "table" {
+        window.is_visible() && set(window, BackdropType::Acrylic, dark)
+    } else {
+        set(window, BackdropType::None, dark);
+        false
+    }
+}
+
 pub struct HUDWindow {
     pub config: Arc<Mutex<Config>>,
     pub refresh_ctrl: Arc<Mutex<RefreshController>>,
@@ -208,6 +235,9 @@ pub struct HUDWindow {
     wake_refresh_seq: u64,
     /// What the trim timers call; shared with the window event handler.
     trim: Rc<RefCell<TrimFn>>,
+    /// The table panel sits on an installed blur (Python `vibrant`); read by the panel painter.
+    vibrant: Rc<Cell<bool>>,
+    set_backdrop: BackdropFn,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -315,12 +345,15 @@ impl HUDWindow {
         let geom = Rect::new(init_x, init_y, init_w, init_h);
         let mut window = Window::new("Claude HUD Monitor", geom, flags)?;
         window.set_opacity(opacity);
-        let backdrop = if ui_mode == "table" {
-            BackdropType::Acrylic
-        } else {
-            BackdropType::None
-        };
-        window.set_backdrop(backdrop, dark);
+        // The window is not shown yet, so table mode starts on the solid panel; `show` installs the
+        // blur (Python: `showEvent` -> `_apply_theme`).
+        let set_backdrop: BackdropFn = Window::set_backdrop;
+        let vibrant = Rc::new(Cell::new(install_backdrop(
+            &mut window,
+            set_backdrop,
+            &ui_mode,
+            dark,
+        )));
         let sheet = style_sheet_for(&ui_mode, dark);
         window.set_style_sheet(sheet);
         qtrs_widgets::application::Application::set_style_sheet(sheet);
@@ -411,7 +444,7 @@ impl HUDWindow {
         root_layout.add_widget(header_widget);
         root_layout.add_widget(stack.clone());
         let root = window.root_widget();
-        install_panel_painter(&root, &theme, Arc::clone(&config));
+        install_panel_painter(&root, &theme, Arc::clone(&config), Rc::clone(&vibrant));
         root.borrow_mut().set_layout(Box::new(root_layout));
         // Connect frameless window dragging and edge resizing
         let hwnd = window.native_handle();
@@ -532,6 +565,8 @@ impl HUDWindow {
             debouncer: Arc::clone(&debouncer),
             busy: false,
             trim,
+            vibrant,
+            set_backdrop,
         };
         debouncer.set_restoring(false);
 
@@ -598,6 +633,19 @@ impl HUDWindow {
 
     pub fn show(&mut self) {
         self.window.show();
+        // Python `showEvent` -> `_apply_theme`: the blur can only be installed on a shown window.
+        let was_vibrant = self.vibrant.get();
+        let mode = self.config.lock().ui_mode.clone();
+        self.refresh_backdrop(&mode);
+        if self.vibrant.get() != was_vibrant {
+            self.window.render_and_present();
+        }
+    }
+
+    /// Installs or clears the blur for `ui_mode` and records whether the panel sits on it.
+    fn refresh_backdrop(&mut self, ui_mode: &str) {
+        let vibrant = install_backdrop(&mut self.window, self.set_backdrop, ui_mode, self.is_dark);
+        self.vibrant.set(vibrant);
     }
 
     pub fn hide(&mut self) {
@@ -617,6 +665,12 @@ impl HUDWindow {
     #[cfg(test)]
     fn set_trim(&self, trim: TrimFn) {
         *self.trim.borrow_mut() = trim;
+    }
+
+    /// Replaces what installs the backdrop, so tests can make it fail.
+    #[cfg(test)]
+    fn set_backdrop_fn(&mut self, set: BackdropFn) {
+        self.set_backdrop = set;
     }
 
     /// A worker finished (the controller's notify callback): apply its results.
@@ -769,12 +823,7 @@ impl HUDWindow {
                 )
             }
         };
-        let backdrop = if mode == "table" {
-            BackdropType::Acrylic
-        } else {
-            BackdropType::None
-        };
-        self.window.set_backdrop(backdrop, self.is_dark);
+        self.refresh_backdrop(mode);
 
         // `_ensure_within_screen(w, h)` runs after the resize, so the screen is picked from the
         // centre of the window at its new size.
@@ -836,12 +885,7 @@ impl HUDWindow {
         self.is_dark = dark;
         self.theme = get_theme(dark);
         let ui_mode = { self.config.lock().ui_mode.clone() };
-        let backdrop = if ui_mode == "table" {
-            BackdropType::Acrylic
-        } else {
-            BackdropType::None
-        };
-        self.window.set_backdrop(backdrop, dark);
+        self.refresh_backdrop(&ui_mode);
         let sheet = style_sheet_for(&ui_mode, dark);
         self.window.set_style_sheet(sheet);
         qtrs_widgets::application::Application::set_style_sheet(sheet);
@@ -853,7 +897,12 @@ impl HUDWindow {
         let scheme = { self.config.lock().color_scheme.clone() };
         self.table.set_theme(self.theme.clone(), &scheme);
         let root = self.window.root_widget();
-        install_panel_painter(&root, &self.theme, Arc::clone(&self.config));
+        install_panel_painter(
+            &root,
+            &self.theme,
+            Arc::clone(&self.config),
+            Rc::clone(&self.vibrant),
+        );
         self.window.render_and_present();
     }
 
@@ -1650,5 +1699,68 @@ mod tests {
             colours[0], colours[1],
             "the two sheets must style the title differently"
         );
+    }
+
+    fn blur_installs(_: &mut Window, _: BackdropType, _: bool) -> bool {
+        true
+    }
+
+    fn blur_fails(_: &mut Window, _: BackdropType, _: bool) -> bool {
+        false
+    }
+
+    /// A shown table-mode HUD whose blur install succeeds or fails as `set` says.
+    fn shown_table_hud(set: BackdropFn) -> HUDWindow {
+        let mut cfg = Config::default();
+        cfg.ui_mode = "table".into();
+        let cfg = Arc::new(Mutex::new(cfg));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let mut hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        hud.set_backdrop_fn(set);
+        hud.show();
+        hud
+    }
+
+    /// Alpha of the panel at its centre, as the window's root paints it.
+    fn panel_alpha(hud: &HUDWindow) -> u8 {
+        let mut pixmap = qtrs_gui::paint::pixmap::Pixmap::new(40, 40).unwrap();
+        {
+            let mut painter = qtrs_gui::paint::Painter::begin(&mut pixmap);
+            hud.window
+                .root_widget()
+                .borrow_mut()
+                .paint_event(&mut painter);
+        }
+        pixmap.pixel(20, 20).unwrap().alpha()
+    }
+
+    fn alpha(c: qtrs_gui::tiny_skia::Color) -> u8 {
+        c.to_color_u8().alpha()
+    }
+
+    /// G12.5.c: Python paints the solid panel when `vibrancy.apply` fails (`hud_window.py:245-246`,
+    /// `styles.py:205`), so the panel never becomes see-through without a blur behind it.
+    #[test]
+    fn table_panel_is_solid_when_the_blur_cannot_be_installed() {
+        let hud = shown_table_hud(blur_fails);
+        assert_eq!(panel_alpha(&hud), alpha(hud.theme.panel_bg));
+    }
+
+    #[test]
+    fn table_panel_is_translucent_over_an_installed_blur() {
+        let hud = shown_table_hud(blur_installs);
+        assert_eq!(panel_alpha(&hud), alpha(hud.theme.panel_bg_vibrant));
+    }
+
+    /// `_apply_theme` runs again on a theme change; a blur that no longer installs drops the panel
+    /// to solid there too.
+    #[test]
+    fn theme_change_whose_blur_fails_switches_to_the_solid_panel() {
+        let mut hud = shown_table_hud(blur_installs);
+        hud.set_backdrop_fn(blur_fails);
+        let dark = !hud.is_dark;
+        hud.set_theme(dark);
+        assert_eq!(panel_alpha(&hud), alpha(hud.theme.panel_bg));
     }
 }
