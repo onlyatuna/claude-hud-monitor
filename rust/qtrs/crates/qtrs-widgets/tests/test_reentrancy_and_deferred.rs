@@ -101,6 +101,7 @@ fn test_reentrant_layout_request_during_callback() {
     parent.borrow_mut().set_layout(layout);
     parent.borrow_mut().add_child(btn1.clone());
     parent.borrow_mut().add_child(btn2.clone());
+    qtrs_widgets::widget::adopt_tree(&parent);
 
     // Initially layout positions them
     parent.borrow().update_layout();

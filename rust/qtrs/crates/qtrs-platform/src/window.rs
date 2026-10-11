@@ -33,7 +33,8 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
 #[cfg(windows)]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    GetCapture, GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE,
+    VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 #[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -294,6 +295,32 @@ fn track_button_press(msg: u32) {
 fn track_button_release(msg: u32) {
     let bit = button_of_message(msg);
     let _ = APP_MOUSE_BUTTONS.try_with(|b| b.set(qtrs_core::event::MouseButtons(b.get().0 & !bit.0)));
+}
+
+/// `QWindowsPointerHandler::handleCaptureRelease` (qwindowspointerhandler.cpp:336-340): the first
+/// button down captures the mouse, so moves and the release keep reaching this window outside it.
+#[cfg(windows)]
+fn capture_on_press(hwnd: HWND) {
+    // SAFETY: plain Win32 calls on a window handle of this process.
+    unsafe {
+        if GetCapture() != hwnd {
+            SetCapture(hwnd);
+        }
+    }
+}
+
+/// Release the capture once no button is held (qwindowspointerhandler.cpp:342-347).
+#[cfg(windows)]
+fn release_capture_when_idle(hwnd: HWND) {
+    let idle = APP_MOUSE_BUTTONS
+        .try_with(|b| b.get().is_empty())
+        .unwrap_or(true);
+    // SAFETY: as in `capture_on_press`.
+    unsafe {
+        if idle && GetCapture() == hwnd {
+            ReleaseCapture();
+        }
+    }
 }
 
 /// `QWindowsPointerHandler::queryMouseButtons`: the physical buttons, as logical buttons.
@@ -887,6 +914,7 @@ unsafe fn native_window_proc_inner(
         }
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
             track_button_press(msg);
+            capture_on_press(hwnd);
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);
@@ -936,6 +964,7 @@ unsafe fn native_window_proc_inner(
         }
         WM_LBUTTONDBLCLK | WM_RBUTTONDBLCLK | WM_MBUTTONDBLCLK => {
             track_button_press(msg);
+            capture_on_press(hwnd);
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);
@@ -985,6 +1014,7 @@ unsafe fn native_window_proc_inner(
         }
         WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP => {
             track_button_release(msg);
+            release_capture_when_idle(hwnd);
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);

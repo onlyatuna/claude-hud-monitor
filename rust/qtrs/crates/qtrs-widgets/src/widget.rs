@@ -374,6 +374,8 @@ pub struct WidgetBase {
     pub tool_tip: RefCell<String>,
     pub tool_tip_duration: Cell<i32>,
     pub always_show_tool_tips: Cell<bool>,
+    /// `WA_MouseTracking`: buttonless mouse moves are delivered to this widget.
+    pub mouse_tracking: Cell<bool>,
 }
 
 impl WidgetBase {
@@ -399,6 +401,7 @@ impl WidgetBase {
             tool_tip: RefCell::new(String::new()),
             tool_tip_duration: Cell::new(-1),
             always_show_tool_tips: Cell::new(false),
+            mouse_tracking: Cell::new(false),
         }
     }
 
@@ -460,6 +463,15 @@ impl WidgetBase {
 
     pub fn is_enabled(&self) -> bool {
         self.enabled.get()
+    }
+
+    /// `QWidget::setMouseTracking` (`WA_MouseTracking`).
+    pub fn set_mouse_tracking(&self, on: bool) {
+        self.mouse_tracking.set(on);
+    }
+
+    pub fn has_mouse_tracking(&self) -> bool {
+        self.mouse_tracking.get()
     }
 
     /// QSS pseudo-states of the widget's state, as `pseudoClass(QStyle::State)` derives them

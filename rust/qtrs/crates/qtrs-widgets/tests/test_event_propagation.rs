@@ -9,9 +9,9 @@
 //! delivered children-first on show and self-first on hide (`show_helper`/`hide_helper`,
 //! qwidget.cpp:8074-8130, 8238-8260).
 
-use qtrs_core::event::{Event, EventKind};
+use qtrs_core::event::{Event, EventKind, MouseButtons};
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
-use qtrs_gui::geometry::primitives::Rect;
+use qtrs_gui::geometry::primitives::{Point, Rect};
 use qtrs_widgets::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -675,4 +675,270 @@ mod window_level {
         assert_eq!(*seen.borrow(), vec!["Move(150,160) from (100,100)"]);
         assert_eq!(*log.borrow(), vec!["root:Move(150,160)"], "only the window widget is moved");
     }
+}
+
+struct Tracker {
+    base: WidgetBase,
+    name: &'static str,
+    resp: Resp,
+    log: Log,
+}
+
+impl Tracker {
+    fn new(name: &'static str, geometry: Rect, resp: Resp, log: &Log) -> Self {
+        Self {
+            base: WidgetBase::with_geometry(geometry),
+            name,
+            resp,
+            log: Rc::clone(log),
+        }
+    }
+}
+
+impl QObject for Tracker {
+    fn object_data(&self) -> &ObjectData {
+        &self.base.object_data
+    }
+    fn object_data_mut(&mut self) -> &mut ObjectData {
+        &mut self.base.object_data
+    }
+    fn event(&mut self, event: &mut Event) -> bool {
+        let (desc, uses_resp) = match &event.kind {
+            EventKind::MouseButtonPress { x, y, .. } => (format!("Press({x},{y})"), true),
+            EventKind::MouseButtonRelease { x, y, .. } => (format!("Release({x},{y})"), true),
+            EventKind::MouseMove { x, y } => (format!("Move({x},{y})"), false),
+            EventKind::Enter { x, y } => (format!("Enter({x},{y})"), false),
+            EventKind::Leave => ("Leave".to_string(), false),
+            _ => return false,
+        };
+        self.log.borrow_mut().push(format!("{}:{desc}", self.name));
+        if !uses_resp {
+            return true;
+        }
+        match self.resp {
+            Resp::Accept => {
+                event.accept();
+                true
+            }
+            Resp::Ignore => {
+                event.ignore();
+                true
+            }
+            Resp::NotHandled => false,
+        }
+    }
+}
+
+impl Widget for Tracker {
+    fn widget_base(&self) -> &WidgetBase {
+        &self.base
+    }
+    fn id(&self) -> ObjectId {
+        self.base.object_data.id
+    }
+    fn geometry(&self) -> Rect {
+        self.base.geometry()
+    }
+    fn set_geometry(&self, rect: Rect) {
+        self.base.set_geometry(rect);
+    }
+    fn is_visible(&self) -> bool {
+        self.base.is_visible()
+    }
+    fn set_visible(&self, visible: bool) {
+        self.base.set_visible(visible);
+    }
+    fn is_enabled(&self) -> bool {
+        self.base.is_enabled()
+    }
+    fn update(&self) {
+        self.base.update();
+    }
+    fn dirty_rect(&self) -> Option<Rect> {
+        self.base.dirty_rect()
+    }
+    fn clear_dirty(&self) {
+        self.base.clear_dirty();
+    }
+    fn layout(&self) -> Option<&dyn Layout> {
+        None
+    }
+    fn layout_mut(&mut self) -> Option<&mut Box<dyn Layout>> {
+        None
+    }
+    fn set_layout(&mut self, _layout: Box<dyn Layout>) {}
+    fn parent_widget(&self) -> Option<WidgetWeak> {
+        self.base.parent_widget()
+    }
+    fn set_parent_widget(&self, parent: Option<WidgetWeak>) {
+        self.base.set_parent_widget(parent);
+    }
+    fn window_id(&self) -> Option<ObjectId> {
+        self.base.window_id()
+    }
+    fn set_window_id(&self, window_id: Option<ObjectId>) {
+        self.base.set_window_id(window_id);
+    }
+    fn children(&self) -> Vec<WidgetRef> {
+        self.base.children()
+    }
+    fn add_child(&mut self, child: WidgetRef) {
+        self.base.children.borrow_mut().push(child);
+    }
+    fn remove_child(&mut self, child_id: ObjectId) {
+        self.base
+            .children
+            .borrow_mut()
+            .retain(|c| c.borrow().id() != child_id);
+    }
+    fn paint_event(&mut self, _painter: &mut qtrs_gui::paint::Painter) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+fn tracker_tree(leaf: Resp, mid: Resp, root: Resp, log: &Log) -> (WidgetRef, WidgetRef, WidgetRef) {
+    let root_w = widget(Tracker::new("root", Rect::new(0, 0, 400, 300), root, log));
+    let mid_w = widget(Tracker::new("mid", Rect::new(20, 10, 200, 150), mid, log));
+    let leaf_w = widget(Tracker::new("leaf", Rect::new(30, 20, 80, 40), leaf, log));
+    mid_w.borrow_mut().add_child(Rc::clone(&leaf_w));
+    root_w.borrow_mut().add_child(Rc::clone(&mid_w));
+    adopt_tree(&root_w);
+    (root_w, mid_w, leaf_w)
+}
+
+#[test]
+fn mousemove_without_tracking_is_swallowed() {
+    let log: Log = Default::default();
+    let root = widget(Tracker::new(
+        "root",
+        Rect::new(0, 0, 400, 300),
+        Resp::NotHandled,
+        &log,
+    ));
+    let leaf = widget(Tracker::new(
+        "leaf",
+        Rect::new(30, 20, 80, 40),
+        Resp::NotHandled,
+        &log,
+    ));
+    root.borrow_mut().add_child(Rc::clone(&leaf));
+    adopt_tree(&root);
+    let mut d = EventTreeDispatcher::new();
+
+    d.dispatch_mouse_move(
+        &root,
+        Point::new(60, 40),
+        Point::new(60, 40),
+        MouseButtons(0),
+    );
+
+    assert_eq!(
+        *log.borrow(),
+        vec!["root:Enter(60,40)", "leaf:Enter(30,20)"],
+        "Enter reaches the ancestor chain; a buttonless MouseMove to a non-tracking widget is swallowed"
+    );
+}
+
+#[test]
+fn enter_leave_ancestor_chain_minus_common_ancestor() {
+    let log: Log = Default::default();
+    let (root, _mid, _leaf) =
+        tracker_tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+    let mut d = EventTreeDispatcher::new();
+
+    d.dispatch_mouse_move(
+        &root,
+        Point::new(60, 40),
+        Point::new(60, 40),
+        MouseButtons(0),
+    );
+    assert_eq!(
+        *log.borrow(),
+        vec!["root:Enter(60,40)", "mid:Enter(40,30)", "leaf:Enter(10,10)"],
+        "Enter goes outermost-first down to the new leaf",
+    );
+
+    log.borrow_mut().clear();
+    d.dispatch_mouse_move(&root, Point::new(5, 5), Point::new(5, 5), MouseButtons(0));
+    assert_eq!(
+        *log.borrow(),
+        vec!["leaf:Leave", "mid:Leave"],
+        "Leave goes innermost-first up to, not including, the common ancestor (root)",
+    );
+
+    log.borrow_mut().clear();
+    d.dispatch_mouse_move(
+        &root,
+        Point::new(60, 40),
+        Point::new(60, 40),
+        MouseButtons(0),
+    );
+    assert_eq!(
+        *log.borrow(),
+        vec!["mid:Enter(40,30)", "leaf:Enter(10,10)"],
+        "re-entry: Enter below the common ancestor only",
+    );
+}
+
+#[test]
+fn press_grab_routes_move_and_release_outside_widget() {
+    let log: Log = Default::default();
+    let (root, _mid, _leaf) = tracker_tree(Resp::Accept, Resp::NotHandled, Resp::NotHandled, &log);
+    let mut d = EventTreeDispatcher::new();
+
+    let _ = d.dispatch_event(&root, &mut press(60, 40));
+    d.dispatch_mouse_move(&root, Point::new(5, 5), Point::new(5, 5), MouseButtons(1));
+    let mut rel = Event::new_spontaneous(EventKind::MouseButtonRelease {
+        x: 5,
+        y: 5,
+        button: 1,
+    });
+    let _ = d.dispatch_event(&root, &mut rel);
+
+    assert_eq!(
+        *log.borrow(),
+        vec![
+            "leaf:Press(10,10)",
+            "leaf:Move(-45,-25)",
+            "leaf:Release(-45,-25)"
+        ],
+        "press target keeps the move and release while the button is held",
+    );
+}
+
+#[test]
+fn mousemove_with_tracking_is_delivered() {
+    let log: Log = Default::default();
+    let root = widget(Tracker::new(
+        "root",
+        Rect::new(0, 0, 400, 300),
+        Resp::NotHandled,
+        &log,
+    ));
+    let leaf = widget(Tracker::new(
+        "leaf",
+        Rect::new(30, 20, 80, 40),
+        Resp::NotHandled,
+        &log,
+    ));
+    root.borrow_mut().add_child(Rc::clone(&leaf));
+    adopt_tree(&root);
+    leaf.borrow().widget_base().set_mouse_tracking(true);
+    let mut d = EventTreeDispatcher::new();
+
+    d.dispatch_mouse_move(
+        &root,
+        Point::new(60, 40),
+        Point::new(60, 40),
+        MouseButtons(0),
+    );
+
+    assert_eq!(
+        *log.borrow(),
+        vec!["root:Enter(60,40)", "leaf:Enter(30,20)", "leaf:Move(30,20)"],
+    );
 }

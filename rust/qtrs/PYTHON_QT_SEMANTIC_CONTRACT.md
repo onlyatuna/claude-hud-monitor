@@ -161,7 +161,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - widgets 層另有機制：`WidgetCommandQueue::post_delete`，在 `EventTreeDispatcher::dispatch_event` 結束時 flush（見 C3.5）。
 - **Known gap**
   - **G2.2.a [P1, READ]** `delete_later` 不會自我 post、不會 drop；`delete_later_called`／`delete_later_loop_level` 為只寫的死欄位。
-  - **G2.2.b [P1, READ]** 不清除 posted events（見 G3.6.a）。
+  - **G2.2.b [P1, RAN；已修復：RC-88]** （修復前）不清除 posted events（見 G3.6.a）。
   - **G2.2.c [P2, READ]** 無 `destroyed` 信號（grep `destroyed` 於 `core/src` 為空）。
   - **G2.2.d [P1, READ]** widgets 的 `delete_later` 在「當前 dispatch 回傳時」就刪，比 Qt 的「回到事件迴圈」早。
 - **Test**：既有 `test_delete_later`、`test_safe_deferred_delete_integrated_with_event_loop`、`loop.rs::test_deferred_delete_loop_level`。必要：`deferred_delete_clears_queued_slots_timers_and_qpointer`；`delete_later_twice_posts_once`；`delete_later_on_parent_cascades_to_owned_child`。
@@ -271,7 +271,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 對已 unregister／銷毀的接收者之事件被丟棄，**含 MetaCall**；同時 MUST 保留 `ObjectId(0)` 的「fire-and-forget、無接收者」哨兵語意——**兩者必須可區分**。
 - **Current implementation**：`ABSENT` 清除佇列（grep `remove_posted|removePosted|purge` 為空；`unregister_qobject` 不碰任何佇列）。`MetaCall` 若接收者查不到（未註冊／已死／**註冊在別的執行緒**）就在 `NullObj` 替身上**照樣執行閉包**（`loop.rs` `notify_helper`，程式碼註解自己承認這偏離 Qt）。
 - **Known gap**
-  - **G3.6.a [P1, READ]** 對已銷毀接收者的 queued slot 仍會執行；無法區分「哨兵」與「真的死掉」。
+  - **G3.6.a [P1, RAN；已修復：RC-88]** （修復前）對已銷毀接收者的 queued slot 仍會執行；無法區分「哨兵」與「真的死掉」。
   - **G3.6.b [P2, READ]** `unregister_qobject` → `stop_timers_for_object` 只刪 registry 項、不呼叫 Win32 `KillTimer`，孤兒 `WM_TIMER` 持續到達（被忽略，洩漏）。
 - **Test**：必要：`queued_slot_not_run_after_receiver_unregistered`（註冊、排入 MetaCall、unregister、pump → 不執行）；`object_id_zero_metacall_still_runs`。
 - **HUD usage**：Rust `ObjectId(0)` MetaCall（`main.rs:44-55`）、`Timer::single_shot(0)`（`main.rs:425,457`）。Python 沒有跨執行緒 queued 信號（以 `QTimer` 輪詢取代）。
@@ -453,7 +453,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`PARTIAL`。`unregister_qobject`（`Drop` 與 deferred delete 都會呼叫）執行 `disconnect_all_for_object(id)`，依 `sender_id` 或 `receiver_id` 比對。只適用於經 `connect_direct_object/_to/connect_to/connect_object/connect_queued/connect_blocking_queued` 建立的連線；`connect`、`connect_with_type`、`connect_scoped` **從不**註冊全域。
 - **Known gap**
   - **G6.4.a [P1, RAN；已修復：隨 RC-02]** 受 G6.1.b 影響。
-  - **G6.4.b [P1, READ]** 已排入的 `MetaCall` 不被清除（G3.6.a）。
+  - **G6.4.b [P1, RAN；已修復：RC-88]** （修復前）已排入的 `MetaCall` 不被清除（G3.6.a）。
   - **G6.4.c [P2]** 無 receiver 的閉包連線（HUD 的全部）永不自動移除。
   - **G6.4.d [test gap, 已修復：RC-02]** `test_signal_sender_tracking_and_auto_disconnection`（`test_qobject_safety_and_qt6_features.rs:214-228`）在 drop receiver 之後 `sig.emit(&2)` **沒有任何 assertion**，即使自動斷線壞了這個測試也會通過。
 - **Test**：必要：修好上述測試（斷言 `recv_count` 維持 1）；以 `drop` + `unregister_qobject` 銷毀（不手動呼叫 `disconnect_all_for_object`）；銷毀 emitter 後 receiver 不被呼叫。
@@ -464,7 +464,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 已銷毀 receiver 的 queued slot 不執行；SHOULD `invoke` 可指定連線類型；SHOULD invoke 一個 signal 即發射它。
 - **Current implementation**：`notify_helper` 對 `MetaCall` 先試註冊的 receiver，查不到就在 `NullObj` 上執行（故意偏離 Qt）。`invoke_method` 只有 direct。`MethodInvoker` 是普通 `fn` 指標。
 - **Known gap**
-  - **G6.5.a [P1, READ]** 見 G3.6.a。
+  - **G6.5.a [P1, RAN；已修復：RC-88]** （修復前）見 G3.6.a。
   - **G6.5.b [P1, READ]** HUD **依賴**這個 stub 路徑（`ObjectId(0)` 哨兵，見 C3.6）。
   - **G6.5.c [P1, READ]** `invoke_method` 無連線類型參數、無 queued 形式；signal 不可 invoke（invoker 為 `None`）；meta 層只驗參數個數不驗型別；`index_of_method` 取第一個符合者，overload 有歧義。
   - **G6.5.d [D]** 無字串式 `SIGNAL()/SLOT()`、無 `connectSlotsByName`。理由：qtrs 的連線是型別化閉包 API，沒有 moc 字串簽章；誤用在編譯期就不可能發生（不存在該 API）。
@@ -516,7 +516,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G7.2.a [P0, READ；已修復：RC-04]** 目標執行緒無已註冊 loop 時回 false／靜默丟（同 G3.2.b）。
   - **G7.2.b [P2, READ]** `EventSender::send` 直接推進 `q.events`，**不壓縮、無優先序、忽略 `insertion_offset`**（僅 `move_to_thread` 與 `EventLoopThreadHandle::quit/post_event` 用）。
   - **G7.2.c [P2]** 兩份登記表可能分歧。
-  - **G7.2.d [P1, READ]** 無 `removePostedEvents`（→ G3.6.a）。
+  - **G7.2.d [P1, RAN；已修復：RC-88]** （修復前）無 `removePostedEvents`（→ G3.6.a）。
   - **G7.2.e [P2, READ]** `Widget::update()` 以 `ThreadId::current()` 為目的地而非 widget 親和性（`widget.rs:296`、`input_common.rs:231`、`menu.rs:1567`）；worker 呼叫 `update()` 會 post 進錯誤／不存在的佇列。
 - **Test**：必要：`post_before_loop_exists_is_delivered_when_loop_starts`；`event_sender_send_applies_compression`；`destroyed_receiver_drops_pending_events`。
 - **HUD usage**：Rust `run_on_main_thread`（`main.rs:40-55`，用於 `:473` 熱鍵、`:518` 主題、`:527` 刷新結果）。Python 無。
@@ -536,7 +536,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G7.4.a [P1, READ]** foreign-thread `send_event` 對存活物件回 false 且**無診斷**。
   - **G7.4.b [D]** `move_to_thread` 之後事件被路由到目標佇列，但 `with_object_mut` 在那邊失敗（registration_thread 未變）→ 非 MetaCall 事件被丟、MetaCall 在替身上跑；被移動的物件**實質上無法遞送**。理由：物件以 thread-local 原始指標註冊；但誤用不得靜默（須回傳錯誤）。
-  - **G7.4.c [P1, READ]** stale MetaCall 對已銷毀 receiver 照跑（G3.6.a）。
+  - **G7.4.c [P1, RAN；已修復：RC-88]** （修復前）stale MetaCall 對已銷毀 receiver 照跑（G3.6.a）。
 - **Test**：必要：`send_event_from_foreign_thread_does_not_invoke_owner_callback`；`metacall_for_object_registered_on_other_thread_does_not_run_on_caller`（目前會失敗）。
 - **HUD usage**：Rust `run_on_main_thread` 用 `ObjectId(0)`，因此恆走替身，再經 thread-local `MAIN_HUD` 到 HUD（`main.rs:36-37,48-52`）。
 
@@ -647,15 +647,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`PARTIAL`。`EventTreeDispatcher::dispatch_event_internal`（`hit_test.rs`）只送給 hit-test 的**單一葉節點**並回傳其 `event()` 結果——**沒有 parent fallback**；MouseMove 一律送（無 tracking 概念）；Enter/Leave 只在連續葉目標之間；grab 只存在於 popup（`PopupManager::mouse_grabber`），且只用於 press／release；無隱式 press grab；`ScrollBar` 拖曳離開 bar 後就不再跟隨；modifiers 對 press／release 恆為 0；`Button` 按下後移出再移回不會 click。`Window` 在派送的 press 回 `false` 時才退回 `mouse_press_cb`——只對 press 模擬「冒泡到頂層」。
 - **Known gap**
   - **G8.4.a [P0, READ；已修復：RC-06]** 無 parent 傳遞（只對 press 模擬）；HUD 的拖曳／縮放是 Python 依賴子 label／button 冒泡到視窗，Rust 靠 fallback 模擬。
-  - **G8.4.b [P1]** 無 tracking 語意（Python HUD `setMouseTracking(True)`，`hud_window.py:129,140`；Rust 過度遞送，無害但不相等）。
-  - **G8.4.c [P1]** 無隱式 grab。
-  - **G8.4.d [P1]** Enter/Leave 非祖先鏈；既有 `test_hover_enter_leave_events_transition` 釘住「child→parent 送 Leave(child)+Enter(parent)」——**實作前先對照 `qapplication.cpp:2037-2123` 確認該序列是否為 Qt 行為，不是就改寫測試**。
+  - **G8.4.b [P1, RAN；已修復：RC-89]** （修復前）無 tracking 語意（Python HUD `setMouseTracking(True)`，`hud_window.py:129,140`；Rust 過度遞送，無害但不相等）。
+  - **G8.4.c [P1, RAN；已修復：RC-90]** （修復前）無隱式 grab。
+  - **G8.4.d [P1, RAN；已修復：RC-91]** （修復前）Enter/Leave 非祖先鏈；既有 `test_hover_enter_leave_events_transition` 釘住「child→parent 送 Leave(child)+Enter(parent)」——**實作前先對照 `qapplication.cpp:2037-2123` 確認該序列是否為 Qt 行為，不是就改寫測試**。
   - **G8.4.e [P2]** 無 `WA_TransparentForMouseEvents`／`WA_NoMousePropagation`；視窗離開時 Leave 只送最後一個葉。
   - **G8.4.f [P1]** 右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關。
   - **G8.4.g [P1；已修復：RC-06]** `Window` 沒有 release／double-click／move handler（見 C11.2、G12.5.f）。
   - **G8.4.h [P1, READ]** RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTracking`（`qapplication.cpp:2735-2740`），qtrs 兩者都沒有（G8.4.b、G8.4.c）；(2) 雙擊只有 Win32 平台層會產生（視窗類別 `CS_DBLCLKS`，`qwindowswindowclassdescription.cpp:67`）；X11／Wayland／Cocoa 的第二次點擊仍是一般 `MousePress`——Qt 是在通用層用 `mouseDoubleClickInterval`／`mouseDoubleClickDistance` 判斷（`qguiapplication.cpp:2401-2425`），qtrs 沒有這一層；(3) 沒有 `WA_NoMousePropagation`（G8.4.e）。
   - **G8.4.i [P2]** `Window::set_mouse_press_handler`／`set_mouse_move_handler`／`set_context_menu_handler` 與新的 `set_window_event_handler` 是兩套並存的視窗層 handler API；press 與 move 的語意（未被 widget 處理才呼叫）與 `set_window_event_handler` 一致，但沒有合併。
-- **Test**：既有 `test_widget_hit_test_and_event_dispatch`、`test_hover_enter_leave_events_transition`、`test_builtin_button_click_and_state_transition`。必要：`unaccepted_press_bubbles_to_parent`；`accepted_press_stops_bubbling`；`press_grab_routes_move_and_release_outside_widget`；`enter_leave_ancestor_chain_minus_common_ancestor`；`mousemove_without_tracking_is_swallowed`。
+- **Test**：既有 `test_widget_hit_test_and_event_dispatch`、`test_hover_enter_leave_events_transition`、`test_builtin_button_click_and_state_transition`。必要：`unaccepted_press_reaches_parent_widget`；`accepted_press_stops_at_child`（RC-06 已有，原文名稱誤植）；`press_grab_routes_move_and_release_outside_widget`；`enter_leave_ancestor_chain_minus_common_ancestor`；`mousemove_without_tracking_is_swallowed`。
 - **HUD usage**：Python `mousePressEvent/MoveEvent/ReleaseEvent/resizeEvent/moveEvent`（`hud_window.py:560-606`）；`enterEvent/leaveEvent/eventFilter` 無。Rust：`set_mouse_move_handler/set_mouse_press_handler/set_resize_handler`（`hud_window.rs:325,352,368`）。
 
 ### C8.5 樣式表、polish、動態屬性
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 122 項：G2.1.a、G2.1.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.d、G7.1.a、G7.1.c、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 131 項：G2.1.a、G2.1.b、G2.2.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.6.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1284,7 +1284,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.1.f | P2, READ | `set_parent` 跨 registry 鎖與物件借用，非原子 |
 | G2.1.g | D | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
 | G2.2.a | P1, READ | `delete_later` 不會自我 post、不會 drop |
-| G2.2.b | P1, READ | 不清除 posted events |
+| G2.2.b | P1, RAN；已修復：RC-88 | 不清除 posted events |
 | G2.2.c | P2, READ | 無 `destroyed` 信號 |
 | G2.2.d | P1, READ | widgets 的 `delete_later` 在「當前 dispatch 回傳時」就刪，比 Qt 的「回到事件迴圈」早 |
 | G2.3.a | P2, READ | 型別為 exact `TypeId` |
@@ -1327,7 +1327,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.5.a | P1, READ | 無 scope level：同 handler 內 `process_events` 會刪 |
 | G3.5.b | P1, READ | `EventLoop::exec` 結束沒有 cleanup flush |
 | G3.5.c | P1, READ | widgets 的 `delete_later` 時機比 Qt 早 |
-| G3.6.a | P1, READ | 對已銷毀接收者的 queued slot 仍會執行 |
+| G3.6.a | P1, RAN；已修復：RC-88 | 對已銷毀接收者的 queued slot 仍會執行 |
 | G3.6.b | P2, READ | `unregister_qobject` → `stop_timers_for_object` 只刪 registry 項、不呼叫 Win32 `KillTimer`，孤兒 `WM |
 | G4.1.a | P1, RAN；已修復：RC-79 | `exit()` 先於 `exec()` 會**保留**並使 `exec` 立刻返回 |
 | G4.1.b | P1, RAN；已修復：RC-79 | `exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回 |
@@ -1378,10 +1378,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.3.b | P2, READ | 無存活檢查 |
 | G6.3.c | P2 | queued 與巢狀路徑沒有測試 |
 | G6.4.a | P1, RAN；已修復：隨 RC-02 | 受 G6.1.b 影響 |
-| G6.4.b | P1, READ | 已排入的 `MetaCall` 不被清除 |
+| G6.4.b | P1, RAN；已修復：RC-88 | 已排入的 `MetaCall` 不被清除 |
 | G6.4.c | P2 | 無 receiver 的閉包連線 |
 | G6.4.d | test gap, 已修復：RC-02 | `test_signal_sender_tracking_and_auto_disconnection` |
-| G6.5.a | P1, READ | 見 G3.6.a |
+| G6.5.a | P1, RAN；已修復：RC-88 | 見 G3.6.a |
 | G6.5.b | P1, READ | HUD **依賴**這個 stub 路徑 |
 | G6.5.c | P1, READ | `invoke_method` 無連線類型參數、無 queued 形式 |
 | G6.5.d | D | 無字串式 `SIGNAL()/SLOT()`、無 `connectSlotsByName` |
@@ -1396,12 +1396,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.2.a | P0, READ；已修復：RC-04 | 目標執行緒無已註冊 loop 時回 false／靜默丟 |
 | G7.2.b | P2, READ | `EventSender::send` 直接推進 `q.events`，**不壓縮、無優先序、忽略 `insertion_offset`** |
 | G7.2.c | P2 | 兩份登記表可能分歧 |
-| G7.2.d | P1, READ | 無 `removePostedEvents` |
+| G7.2.d | P1, RAN；已修復：RC-88 | 無 `removePostedEvents` |
 | G7.2.e | P2, READ | `Widget::update()` 以 `ThreadId::current()` 為目的地而非 widget 親和性 |
 | G7.3.a | P1, READ | `FutureWatcher`／`Promise` 的信號在**生產者執行緒**以普通 `connect` |
 | G7.4.a | P1, READ | foreign-thread `send_event` 對存活物件回 false 且**無診斷** |
 | G7.4.b | D | `move_to_thread` 之後事件被路由到目標佇列，但 `with_object_mut` 在那邊失敗 |
-| G7.4.c | P1, READ | stale MetaCall 對已銷毀 receiver 照跑 |
+| G7.4.c | P1, RAN；已修復：RC-88 | stale MetaCall 對已銷毀 receiver 照跑 |
 | G7.5.a | P1, READ | **計時器被停止、不遷移** |
 | G7.5.b | P1, READ | **事件可能遺失**：從來源佇列移除後，只有 `query_thread_sender(target)` 有值才重送 |
 | G7.5.c | P2, READ | 轉移的事件繞過壓縮／優先序 |
@@ -1439,9 +1439,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.3.d | P2 | 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值 |
 | G8.3.e | P1, READ；已修復：RC-29 | `UsageDial`：Python `setMinimumSize(84,84)` |
 | G8.4.a | P0, READ；已修復：RC-06 | 無 parent 傳遞 |
-| G8.4.b | P1 | 無 tracking 語意 |
-| G8.4.c | P1 | 無隱式 grab |
-| G8.4.d | P1 | Enter/Leave 非祖先鏈 |
+| G8.4.b | P1, RAN；已修復：RC-89 | 無 tracking 語意 |
+| G8.4.c | P1, RAN；已修復：RC-90 | 無隱式 grab |
+| G8.4.d | P1, RAN；已修復：RC-91 | Enter/Leave 非祖先鏈 |
 | G8.4.e | P2 | 無 `WA_TransparentForMouseEvents`／`WA_NoMousePropagation` |
 | G8.4.f | P1 | 右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關 |
 | G8.4.g | P1；已修復：RC-06 | `Window` 沒有 release／double-click／move handler |
@@ -2930,3 +2930,44 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 借用中或未註冊物件的 tick 仍被丟棄（`with_object_mut` 回 `None` 時把兩種狀態合併為 `NotDeliverable`）。
   - application filter 看到的 `ZeroTimer` receiver 是計時器物件，Qt 是 dispatcher 物件。
   - G5.2.b（`dispatch_thread_timer` 內聯 guard）與 G3.4.f（filter 吃掉事件時的回傳值）未動。
+
+#### RC-88 銷毀物件的 posted events 被清除，不再以 stand-in 執行（G3.6.a、G2.2.b、G6.4.b、G6.5.a、G7.2.d、G7.4.c）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:206-207]` `~QObjectPrivate` 在有 posted events 時呼叫 `QCoreApplication::removePostedEvents(q_ptr, 0)`；`[QT-SRC corelib/kernel/qcoreapplication.cpp:1955-2002]` 把該 receiver 的事件從佇列移除，解鎖後才刪除（2000-2001）。Qt 不會把 queued call 交給已銷毀物件，也沒有替身物件。
+- **根因**：`unregister_qobject` 不碰事件佇列；`notify_helper` 對任何未註冊 receiver 的 `MetaCall` 都用 `NullObj` 替身執行，無法區分 `ObjectId(0)` 哨兵與已銷毀物件。
+- **修正**：
+  - `EventQueue::remove_posted_events(receiver) -> Vec<PostedEvent>`：移除該 receiver 的事件，`insertion_offset` 只扣掉本輪內被移除的項；被移除的事件回傳給呼叫端，在所有鎖釋放後才 drop。
+  - `purge_posted_events_for_receiver(id)`：鎖序 `THREAD_EVENT_HANDLES` → 各佇列；走過所有 live 佇列（`Arc::ptr_eq` 去重）與尚無事件迴圈的 pending 佇列；`ObjectId(0)` 不清。`unregister_qobject` 在 `disconnect_all_for_object` 前呼叫。
+  - `notify_helper` 的 `MetaCall`：非零 receiver 若未在本執行緒註冊就丟棄（`eprintln!` 診斷），作為跨執行緒 post 與 unregister 競態的後盾；`ObjectId(0)` 哨兵照舊執行。
+- **驗證**：
+  - 新增 `loop.rs` `test_metacall_to_receiver_unregistered_before_delivery_is_dropped`、`test_event_posted_to_unregistered_receiver_is_removed_from_queue`、`test_purge_keeps_the_current_turn_boundary`、`test_object_id_zero_metacall_still_runs`（哨兵，修改前後皆通過），`test_signal_direct_and_queued.rs` `test_queued_signal_to_unregistered_receiver_never_runs`。修正前 FAIL：`loop.rs` `assert_eq!(el.send_posted_events(), 0)`、`assert_eq!(queued_for_current_thread(), 0)`；`test_signal_direct_and_queued.rs:249` slot 被執行。
+  - 改寫（§0 規則 4，釘住 stand-in 執行）：`loop.rs` `post_current` 與 `ObjectId(900_001)` 改用 `ObjectId(0)`，`test_modal_pump_runs_metacall_for_unregistered_receiver` 改名 `test_modal_pump_runs_sentinel_metacall`；`dispatcher_win.rs` 的 `MetaCall` 由 `ObjectId(900_002..900_004)` 改為 `ObjectId(0)`（DeferredDelete 不受影響，維持）；`test_blocking_queued_signal_cross_thread_synchronization` 與 `signal.rs` `test_signal_emit_queued_dispatch` 改為註冊真實 receiver。
+- **Residual**：
+  - 已註冊但正被借用的 receiver，其 `MetaCall` 仍在替身上執行（既有退路）。
+  - `post_event_with_priority` 在佇列鎖內 drop 被壓縮掉的事件；若 payload 的 `Drop` 會 unregister 物件，現在會自鎖（以前也有同類風險，現在更容易觸發）。未重現。
+  - 被 `move_to_thread` 移走的物件，留在舊執行緒的 `MetaCall` 會被丟棄並印出診斷（Qt 會把事件搬到新執行緒；qtrs 的 `move_to_thread` 已搬移，此路徑只剩競態）。
+  - 沒有事件迴圈的執行緒結束時，pending 佇列不清（G3.2.f）。
+
+#### RC-89 buttonless `MouseMove` 受 mouse tracking 控制（G8.4.b）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qapplication.cpp:2746-2750]` 傳遞迴圈中，`!w->hasMouseTracking()` 且 `MouseMove` 無按鍵時，只跑 application filter 並視為已處理，不呼叫 `notify_helper`。`[QT-SRC widgets/widgets/qmenu.cpp:172]` `QMenu` 依 `SH_Menu_MouseTracking` 開啟 tracking，common／Windows style 皆為 true（`qcommonstyle.cpp:5411-5420`、`qwindowsstyle.cpp:463`）。
+- **根因**：`hit_test.rs` 的 MouseMove 分支無條件把 move 送給葉 widget；`WidgetBase` 沒有 tracking 狀態。
+- **修正**：`WidgetBase::mouse_tracking` 與 `set_mouse_tracking`／`has_mouse_tracking`；無按鍵且目標未開 tracking 時不遞送 `MouseMove`（Enter／Leave 不受影響）；`Menu::new` 開啟 tracking。
+- **驗證**：`test_event_propagation.rs` 新增 `mousemove_without_tracking_is_swallowed`（修正前 `left: ["leaf:Enter(30,20)", "leaf:Move(30,20)"]`）、`mousemove_with_tracking_is_delivered`（修正前因無 API 編譯失敗）。改寫：`test_hover_enter_leave_events_transition` 對按鈕開 tracking，期望不變。
+- **Residual**：無 tracking 的 widget 不會把 move 往 parent 傳（G8.4.h(1)）。HUD 頂層視窗的 `mouse_move_cb` 不經此閘門，對應 Python `HUDWindow.setMouseTracking(True)`（`hud_window.py:129`）；HUD 沒有 widget 覆寫 `mouse_move_event`，故未對 HUD widget 開 tracking。
+
+#### RC-90 隱式 press grab 與 Windows `SetCapture`（G8.4.c）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qwidgetwindow.cpp:666-671]` 初次按下時 `qt_button_down` 設為游標下的 child；`[QT-SRC widgets/kernel/qapplication.cpp:2255-2283]` `pickMouseReceiver` 在按鍵按住時把 move／release 交給 `qt_button_down`，座標換算到該 widget。`[QT-SRC plugins/platforms/windows/qwindowspointerhandler.cpp:327-358]` 第一個按鍵按下時 `setMouseGrabEnabled(true)`（`SetCapture`），全部放開後釋放（`qwindowswindow.cpp:3247-3270`）。
+- **根因**：`EventTreeDispatcher` 不記錄 press 目標，按住拖曳時 move／release 送給游標下的 widget；平台層從未 `SetCapture`，拖出 client 區就收不到 `WM_MOUSEMOVE`。
+- **修正**：`hit_test.rs` 新增 `press_grab` 與 `held_buttons`（每顆按鍵一個 bit），初次按下設 grab，最後一顆放開時結束；按住時的 move 與 release 經 `path_to(grab)` 送給 grab 目標。`qtrs-platform/src/window.rs` 在 `WM_?BUTTONDOWN`／`WM_?BUTTONDBLCLK` 呼叫 `capture_on_press`，`WM_?BUTTONUP` 在無按鍵時 `release_capture_when_idle`。
+- **驗證**：`press_grab_routes_move_and_release_outside_widget`，修正前 `left: ["leaf:Press(10,10)", "root:Enter(5,5)", "root:Move(5,5)", "root:Release(5,5)"]`。`test_builtin_button_click_and_state_transition`、`test_reentrant_layout_request_during_callback` 加 `adopt_tree`（grab 路徑走 parent 連結，`add_child` 不設 parent，`widget.rs:60-61`），期望不變。`SetCapture` 只經編譯與既有測試，未以真實輸入驗證。
+- **Residual**：
+  - 沒有 grab 的 release 與按住時的 move 仍退回 hit-test（Qt 丟棄，`qapplication.cpp:2263-2265`），既有測試依賴此行為。
+  - buttonless move 會清掉 `held_buttons`／grab（漏掉 release 時自我修正）；Qt 保留 `qt_button_down`。
+  - Qt 只釋放自己設的 capture（`AutoMouseCapture` 旗標）；qtrs 釋放本視窗持有的任何 capture。未處理 `WM_CAPTURECHANGED`。
+  - 雙擊也設 grab／capture，是否與 Qt 一致未驗證。
+
+#### RC-91 Enter／Leave 依共同祖先走整條鏈（G8.4.d）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qapplication.cpp:2037-2123]` `dispatchEnterLeave`：找舊、新 receiver 的共同祖先（2058-2087），Leave 從舊葉往上送到共同祖先之前（2090-2101），Enter 由外而內送到新葉（2108-2123）；按鍵按住時不送（2316-2339）。
+- **根因**：`hit_test.rs` 只對 `last_hovered` 的舊葉送 Leave、新葉送 Enter。
+- **修正**：`update_hover` 以 `ancestors` 計算兩條鏈與共同祖先，依 Qt 順序送 Leave／Enter（座標換到各 widget）；滑鼠離開視窗時對整條舊鏈送 Leave。
+- **驗證**：`enter_leave_ancestor_chain_minus_common_ancestor`，修正前 `left: ["leaf:Enter(10,10)", "leaf:Move(10,10)"]`。既有 `test_hover_enter_leave_events_transition` 只記錄按鈕本身的 Enter／Move／Leave，不檢查 parent；按鈕的序列與 Qt 一致，期望不變（只加 tracking，見 RC-89）。
+- **共同驗證（RC-88..91）**：qtrs workspace（略過 `real_windows`）102 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`--snapshot` 產出四張 PNG；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；改動檔案的 rustfmt 差異數與基準相同。

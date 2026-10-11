@@ -163,6 +163,9 @@ impl Menu {
         base.clear_dirty();
         base.set_focus_policy(FocusPolicy::StrongFocus);
         base.set_size_policy(QSizePolicy::new(Policy::Fixed, Policy::Fixed));
+        // QMenuPrivate::init: setMouseTracking(SH_Menu_MouseTracking), true in the common and
+        // Windows styles (qmenu.cpp:172, qcommonstyle.cpp:5411, qwindowsstyle.cpp:463).
+        base.set_mouse_tracking(true);
         base.set_geometry(Rect::new(0, 0, MIN_WIDTH, 2 * V_PADDING));
         Self {
             base,
