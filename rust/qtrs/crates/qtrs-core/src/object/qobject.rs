@@ -461,27 +461,6 @@ impl ObjectData {
         GenerationalId::new(self.id, self.generation)
     }
 
-    /// Adds an owned child and registers it for owner-thread dispatch.
-    ///
-    /// # Safety
-    /// The child must remain at its allocated address while owned and registered. Do not
-    /// access it through any alias during registry callbacks; all registration lifetime and
-    /// physical-thread requirements of [`register_qobject`] apply.
-    pub unsafe fn add_owned_child<T: QObject + 'static>(&mut self, mut child: Box<T>) -> ObjectId {
-        let child_id = child.object_data().id;
-        {
-            let data = child.object_data_mut();
-            data.parent = Some(self.id);
-            data.owned_by_parent = true;
-        }
-        self.add_child(child_id);
-
-        // SAFETY: delegated to this method's caller contract.
-        unsafe { register_qobject(&mut *child) };
-        self.owned_children.push(child);
-        child_id
-    }
-
     /// Recursively cascades deletion to all children matching Qt `QObjectPrivate::deleteChildren`.
     pub fn delete_children(&mut self) {
         for child in &mut self.owned_children {
@@ -778,6 +757,52 @@ pub fn reparent_owned(
         crate::event_loop::notify_helper(np, &mut added);
     }
     Ok(released)
+}
+
+/// Attaches `child` as an owned child of `parent_id` and sends `ChildAdded` to the parent
+/// (Qt `setParent_helper`, qobject.cpp:2346-2352).
+///
+/// Returns the child id. If the parent is not registered, returns `UnknownObject`; if the parent is
+/// borrowed (for example from inside its own callback), returns `Busy`. In both cases the `Box` is
+/// handed back, so nothing is dropped silently.
+///
+/// # Safety
+/// Same as [`register_qobject`]: the child must remain at its allocated address while owned and
+/// registered, and must be used on its registration thread.
+pub unsafe fn add_owned_child<T: QObject + 'static>(
+    parent_id: ObjectId,
+    child: Box<T>,
+) -> Result<ObjectId, (ReparentError, Box<T>)> {
+    if registered_ptr(parent_id).is_none() {
+        return Err((ReparentError::UnknownObject, child));
+    }
+    let child_id = child.object_data().id;
+    let mut pending = Some(child);
+    let attached = with_object_mut(parent_id, |parent| {
+        let mut child = pending.take().expect("closure runs at most once");
+        {
+            let data = child.object_data_mut();
+            data.parent = Some(parent_id);
+            data.owned_by_parent = true;
+        }
+        parent.object_data_mut().add_child(child_id);
+        // SAFETY: delegated to this function's caller contract.
+        unsafe { register_qobject(&mut *child) };
+        parent.object_data_mut().owned_children.push(child);
+    });
+    match attached {
+        Some(()) => {
+            let mut added = Event::new(EventKind::ChildAdded { child_id });
+            crate::event_loop::notify_helper(parent_id, &mut added);
+            Ok(child_id)
+        }
+        None => Err((
+            ReparentError::Busy,
+            pending
+                .take()
+                .expect("closure did not run, so the Box is still here"),
+        )),
+    }
 }
 
 pub fn reparent(

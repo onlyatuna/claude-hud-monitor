@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoop;
 use qtrs_core::object::{
-    move_to_thread, query_object_thread, register_qobject, sender, unregister_qobject, MoveError,
-    ObjectData, ObjectId, QObject, ThreadContext, ThreadId,
+    add_owned_child, move_to_thread, query_object_thread, register_qobject, sender,
+    unregister_qobject, MoveError, ObjectData, ObjectId, QObject, ThreadContext, ThreadId,
 };
 use qtrs_core::property::Property;
 use qtrs_core::signal::Signal;
@@ -89,7 +89,8 @@ fn test_move_to_thread_rejects_parented_and_migrates_subtree() {
 
     let child = Box::new(TestWidget::new("worker_child"));
     // SAFETY: child remains boxed and owned at a stable address by parent.
-    let child_id = unsafe { parent.data.add_owned_child(child) };
+    let child_id = unsafe { add_owned_child(parent.data.id, child) }
+        .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
 
     // Qt rule: Child with parent CANNOT be moved to another thread directly!
     let child_move_res = move_to_thread(

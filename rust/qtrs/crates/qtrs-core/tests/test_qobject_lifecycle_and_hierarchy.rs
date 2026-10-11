@@ -1,8 +1,8 @@
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventQueue;
 use qtrs_core::object::{
-    move_to_thread, register_boxed_qobject, register_qobject, unregister_qobject, ObjectData,
-    ObjectId, QObject, QObjectExt, QPointer, SignalBlocker, ThreadContext, ThreadId,
+    add_owned_child, move_to_thread, register_boxed_qobject, register_qobject, unregister_qobject,
+    ObjectData, ObjectId, QObject, QObjectExt, QPointer, SignalBlocker, ThreadContext, ThreadId,
 };
 use qtrs_core::signal::Signal;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -140,7 +140,7 @@ fn test_ownership_and_deletion_cascade() {
     let grandchild_liveness: Arc<AtomicBool>;
 
     {
-        let mut child = Box::new(MockContainer::new("child_1"));
+        let child = Box::new(MockContainer::new("child_1"));
         child_liveness = child.data.liveness();
         assert!(child_liveness.load(Ordering::SeqCst));
 
@@ -148,10 +148,13 @@ fn test_ownership_and_deletion_cascade() {
         grandchild_liveness = grandchild.data.liveness();
         assert!(grandchild_liveness.load(Ordering::SeqCst));
 
-        // SAFETY: both boxed children remain owned at stable addresses until cascade drop.
-        unsafe { child.data.add_owned_child(grandchild) };
-        // SAFETY: child remains boxed and owned by parent through its destruction.
-        unsafe { parent.data.add_owned_child(child) };
+        let child_id = child.data.id;
+        // SAFETY: parent is registered; the Box stays at a stable address until cascade drop.
+        let _ = unsafe { add_owned_child(parent_id, child) }
+            .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
+        // SAFETY: child was registered by the attach above and stays owned by parent.
+        let _ = unsafe { add_owned_child(child_id, grandchild) }
+            .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
     }
 
     assert_eq!(parent.data.owned_children.len(), 1);
@@ -208,19 +211,22 @@ fn test_object_hierarchy_search_find_child() {
     // SAFETY: root stays on this thread and alive through all hierarchy queries.
     unsafe { register_qobject(&mut root) };
 
-    let mut panel = Box::new(MockContainer::new("panel"));
+    let panel = Box::new(MockContainer::new("panel"));
+    let panel_id = panel.data.id;
     let btn1 = Box::new(MockButton::new("ok_button", "OK"));
     let btn2 = Box::new(MockButton::new("cancel_button", "Cancel"));
     let label = Box::new(MockLabel::new("status_label", "Ready"));
 
-    // SAFETY: all children remain boxed at stable addresses while parent owns them.
-    unsafe { panel.data.add_owned_child(btn1) };
-    // SAFETY: all children remain boxed at stable addresses while parent owns them.
-    unsafe { panel.data.add_owned_child(btn2) };
-    // SAFETY: all children remain boxed at stable addresses while parent owns them.
-    unsafe { panel.data.add_owned_child(label) };
-    // SAFETY: panel remains boxed at a stable address while root owns it.
-    unsafe { root.data.add_owned_child(panel) };
+    // SAFETY: panel stays boxed at a stable address while root owns it; the attach registers it.
+    let _ = unsafe { add_owned_child(root.data.id, panel) }
+        .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
+    // SAFETY: all children remain boxed at stable addresses while panel owns them.
+    let _ = unsafe { add_owned_child(panel_id, btn1) }
+        .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
+    let _ = unsafe { add_owned_child(panel_id, btn2) }
+        .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
+    let _ = unsafe { add_owned_child(panel_id, label) }
+        .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
 
     // Query by specific name and type
     let ok_btn = root.find_child::<MockButton>("ok_button");
@@ -280,7 +286,8 @@ fn test_move_to_thread_cascades_children_and_events() {
     let child = Box::new(MockContainer::new("worker_child"));
     let child_id = child.data.id;
     // SAFETY: child remains boxed and owned by parent at a stable address.
-    unsafe { parent.data.add_owned_child(child) };
+    let _ = unsafe { add_owned_child(parent.data.id, child) }
+        .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
     // Post an event to child in source thread queue
     {
         let mut q = source_queue.lock().unwrap();

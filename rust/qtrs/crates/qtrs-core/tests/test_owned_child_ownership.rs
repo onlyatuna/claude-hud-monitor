@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::notify_helper;
 use qtrs_core::object::{
-    register_qobject, reparent_owned, set_parent, unregister_qobject, with_object, ObjectData,
-    ObjectId, QObject, ReparentError,
+    add_owned_child, register_qobject, reparent_owned, set_parent, unregister_qobject, with_object,
+    ObjectData, ObjectId, QObject, ReparentError,
 };
 
 type Hook = Arc<Mutex<Option<Box<dyn FnMut(&mut Event) + Send>>>>;
@@ -87,7 +87,8 @@ fn adopt(parent: &mut Node) -> (ObjectId, Arc<std::sync::atomic::AtomicBool>) {
     let child = Node::boxed();
     let alive = child.data.liveness();
     // SAFETY: the child's Box is moved into `parent` and only moved again by reparent_owned.
-    let id = unsafe { parent.data.add_owned_child(child) };
+    let id = unsafe { add_owned_child(parent.data.id, child) }
+        .unwrap_or_else(|(err, _)| panic!("attach refused: {err:?}"));
     (id, alive)
 }
 
@@ -183,12 +184,16 @@ fn reparent_owned_notifies_both_parents_through_event_filters() {
     assert_eq!(
         *log.lock().unwrap(),
         vec![
+            format!("added {} on {}", child_id.0, a.data.id.0),
             format!("removed {} on {}", child_id.0, a.data.id.0),
             format!("added {} on {}", child_id.0, b.data.id.0),
         ],
-        "filters must see ChildRemoved then ChildAdded (G2.1.c: events go through notify)"
+        "filters must see ChildAdded on attach, then ChildRemoved and ChildAdded on reparent (G2.1.c)"
     );
-    assert_eq!(*a.seen.lock().unwrap(), vec![format!("removed {}", child_id.0)]);
+    assert_eq!(
+        *a.seen.lock().unwrap(),
+        vec![format!("added {}", child_id.0), format!("removed {}", child_id.0)]
+    );
     assert_eq!(*b.seen.lock().unwrap(), vec![format!("added {}", child_id.0)]);
 
     finish(a);
@@ -204,7 +209,7 @@ fn reparent_owned_rejects_self_and_descendant_parents_without_changes() {
     let mut top = Node::registered();
     let (mid_id, _) = adopt(&mut top);
     // Give `mid` a child of its own, reachable through the registry.
-    let grand_id = with_object_mut_node(mid_id);
+    let grand_id = attach_grandchild(mid_id);
 
     assert_eq!(refused(reparent_owned(mid_id, Some(mid_id))), Err(ReparentError::InvalidParent));
     assert_eq!(refused(reparent_owned(mid_id, Some(grand_id))), Err(ReparentError::InvalidParent));
@@ -215,13 +220,13 @@ fn reparent_owned_rejects_self_and_descendant_parents_without_changes() {
     finish(top);
 }
 
-fn with_object_mut_node(mid_id: ObjectId) -> ObjectId {
-    qtrs_core::object::with_object_mut(mid_id, |o| {
-        let grand = Node::boxed();
-        // SAFETY: the Box moves into `mid` and stays there.
-        unsafe { o.object_data_mut().add_owned_child(grand) }
-    })
-    .expect("mid is registered")
+/// Attaches a grandchild to `mid_id` from outside `mid`'s borrow. A borrowed parent refuses the
+/// attach (`Busy`), so this must not run inside `with_object_mut(mid_id, …)`.
+fn attach_grandchild(mid_id: ObjectId) -> ObjectId {
+    let grand = Node::boxed();
+    // SAFETY: the Box moves into `mid` and stays there until `top` is finished.
+    unsafe { add_owned_child(mid_id, grand) }
+        .unwrap_or_else(|(err, _)| panic!("attach refused: {err:?}"))
 }
 
 #[test]
@@ -286,4 +291,37 @@ fn reparent_owned_fails_visibly_when_a_party_is_borrowed_and_changes_nothing() {
 
     finish(a);
     finish(b);
+}
+
+// RC-B / G2.1.b: attaching an owned child must notify the parent with `ChildAdded`
+// (Qt `setParent_helper`, qobject.cpp:2346-2352).
+#[test]
+fn add_owned_child_sends_child_added() {
+    let parent = Node::registered();
+    let parent_id = parent.data.id;
+    let child = Node::boxed();
+    let child_id = child.data.id;
+    // SAFETY: the Box is owned by `parent` for the rest of the test.
+    let attached = unsafe { add_owned_child(parent_id, child) }
+        .unwrap_or_else(|(err, _)| panic!("attach refused: {err:?}"));
+    assert_eq!(attached, child_id);
+    assert_eq!(*parent.seen.lock().unwrap(), vec![format!("added {}", child_id.0)]);
+    finish(parent);
+}
+
+#[test]
+fn add_owned_child_fails_visibly_when_parent_is_borrowed() {
+    let parent = Node::registered();
+    let parent_id = parent.data.id;
+    let outcome = qtrs_core::object::with_object_mut(parent_id, |_| {
+        // SAFETY: the Box is returned in the error and never stored.
+        unsafe { add_owned_child(parent_id, Node::boxed()) }.map(|_| ())
+    })
+    .expect("parent is registered");
+    match outcome {
+        Err((err, _returned)) => assert_eq!(err, ReparentError::Busy),
+        Ok(()) => panic!("attach into a borrowed parent must not succeed"),
+    }
+    assert!(parent.data.owned_children.is_empty());
+    finish(parent);
 }
