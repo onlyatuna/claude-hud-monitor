@@ -387,7 +387,7 @@ impl CocoaEventDispatcher {
 
     /// Sends every queued `NSEvent` the native event filters do not consume to
     /// `[NSApp sendEvent:]` (:426-451). Returns whether any was sent.
-    fn send_queued_events(&mut self, app: Id) -> bool {
+    fn send_queued_events(&self, app: Id) -> bool {
         let rt = &*RUNTIME;
         let mut sent = false;
         loop {
@@ -437,12 +437,12 @@ impl EventDispatcher for CocoaEventDispatcher {
         Arc::new(self.clone_handle())
     }
 
-    fn install_native_event_filter(&mut self, filter: Box<dyn NativeEventFilter>) {
+    fn install_native_event_filter(&self, filter: Box<dyn NativeEventFilter>) {
         self.native_filters.install(filter);
     }
 
     fn filter_native_event(
-        &mut self,
+        &self,
         event_type: &str,
         msg: &NativeMessage,
         result: &mut isize,
@@ -453,7 +453,7 @@ impl EventDispatcher for CocoaEventDispatcher {
     /// `QCocoaEventDispatcher::processEvents` without `EventLoopExec` (:287-510): `Normal` if an
     /// event was sent (Qt's `true`), otherwise `Timeout`.
     fn process_events(
-        &mut self,
+        &self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
     ) -> DispatchResult {
@@ -487,11 +487,11 @@ impl EventDispatcher for CocoaEventDispatcher {
 
     /// Timers live in the event loop's `TimerRegistry`; `process_events` waits until the next one
     /// is due.
-    fn register_timer(&mut self, _entry: &TimerEntry) {}
+    fn register_timer(&self, _entry: &TimerEntry) {}
 
-    fn unregister_timer(&mut self, _entry: &TimerEntry) {}
+    fn unregister_timer(&self, _entry: &TimerEntry) {}
 
-    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
+    fn send_timer_events(&self, registry: &Mutex<TimerRegistry>) {
         let now_ms = crate::timer::current_time_ms();
         let expired_ids = registry.lock().unwrap().expired_timers(now_ms);
         for id in expired_ids {
@@ -526,7 +526,7 @@ mod tests {
     fn test_cocoa_dispatcher_main_thread_enforcement() {
         let handle = std::thread::spawn(|| {
             crate::object::ThreadContext::init_current(false, None);
-            let mut dispatcher = CocoaEventDispatcher::new();
+            let dispatcher = CocoaEventDispatcher::new();
             let _ = dispatcher.process_events(false, None);
         });
 

@@ -61,7 +61,7 @@ impl Thread {
                 // A spawned thread is never the main thread; its own context answers
                 // `is_main_thread()` before anything can consult the application's main-thread id.
                 ThreadContext::init_current(false, None);
-                let mut event_loop = EventLoop::new();
+                let event_loop = EventLoop::new();
                 let sender = event_loop.sender();
                 let thread_id = ThreadId::current();
 

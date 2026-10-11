@@ -905,7 +905,7 @@ mod tests {
         let received_msg = Arc::new(Mutex::new(String::new()));
         let msg_clone = Arc::clone(&received_msg);
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
 
         signal.connect_object(
             receiver_id,

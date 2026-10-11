@@ -56,7 +56,7 @@ struct Iter {
 }
 
 fn run(frame_flags: WindowFlags, n: i32) -> Vec<Iter> {
-    let mut el = EventLoop::new();
+    let el = EventLoop::new();
     let mut win = Box::new(
         Window::new(
             "Layered Geometry Sync",

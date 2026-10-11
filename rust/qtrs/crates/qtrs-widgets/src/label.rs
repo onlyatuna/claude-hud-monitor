@@ -2,7 +2,7 @@ use crate::layout::Layout;
 use crate::widget::{Widget, WidgetBase, WidgetRef, WidgetWeak};
 use qtrs_core::event::Event;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
-use qtrs_gui::geometry::primitives::{PointF, Rect, Size};
+use qtrs_gui::geometry::primitives::{PointF, Rect, RectF, Size};
 use qtrs_gui::paint::{Painter, Pen};
 use qtrs_gui::text::{Font, FontMetrics};
 use qtrs_gui::tiny_skia::Color;
@@ -388,28 +388,57 @@ impl Widget for Label {
         }
         let content_w = (geom.width as f32 - box_l - box_r).max(0.0);
         let content_h = (geom.height as f32 - box_t - box_b).max(0.0);
+        let content = RectF::new(box_l, box_t, content_w, content_h);
+        // The aligned offset is not clamped: centred and right text overflow symmetrically
+        // (qpainter.cpp:7426-7429). Overflow is clipped to the content rect (qpainter.cpp:7442-7446).
         let x_for = |text_w: f32| match self.alignment {
             Alignment::Left => box_l,
-            Alignment::Center => box_l + ((content_w - text_w) / 2.0).max(0.0),
-            Alignment::Right => (geom.width as f32 - box_r - text_w).max(box_l),
+            Alignment::Center => box_l + (content_w - text_w) / 2.0,
+            Alignment::Right => box_l + content_w - text_w,
+        };
+        let overflows = |x: f32, top: f32, w: f32, h: f32| {
+            x < box_l || top < box_t || x + w > box_l + content_w || top + h > box_t + content_h
         };
 
         if self.text.contains('\n') {
             let lines: Vec<&str> = self.text.split('\n').collect();
             let line_height = metrics.height;
             let total_text_h = line_height * lines.len() as f32;
-            let mut start_y = box_t + ((content_h - total_text_h) / 2.0).max(0.0) + metrics.ascent;
-
-            for line in lines {
-                let line_w = metrics.horizontal_advance_exact(line, &font);
-                painter.draw_text(PointF::new(x_for(line_w), start_y), line, &font);
+            let top = box_t + (content_h - total_text_h) / 2.0;
+            let line_ws: Vec<f32> = lines
+                .iter()
+                .map(|line| metrics.horizontal_advance_exact(line, &font))
+                .collect();
+            let clip = lines
+                .iter()
+                .zip(&line_ws)
+                .any(|(_, w)| overflows(x_for(*w), top, *w, total_text_h));
+            if clip {
+                painter.save();
+                painter.clip_to_rect(content);
+            }
+            let mut start_y = top + metrics.ascent;
+            for (line, w) in lines.iter().zip(&line_ws) {
+                painter.draw_text(PointF::new(x_for(*w), start_y), line, &font);
                 start_y += line_height;
+            }
+            if clip {
+                painter.restore();
             }
         } else {
             let text_w = metrics.horizontal_advance_exact(&self.text, &font);
             let text_h = metrics.height;
-            let baseline_y = box_t + ((content_h - text_h) / 2.0).max(0.0) + metrics.ascent;
-            painter.draw_text(PointF::new(x_for(text_w), baseline_y), &self.text, &font);
+            let top = box_t + (content_h - text_h) / 2.0;
+            let x = x_for(text_w);
+            let clip = overflows(x, top, text_w, text_h);
+            if clip {
+                painter.save();
+                painter.clip_to_rect(content);
+            }
+            painter.draw_text(PointF::new(x, top + metrics.ascent), &self.text, &font);
+            if clip {
+                painter.restore();
+            }
         }
     }
     fn as_any(&self) -> &dyn std::any::Any {

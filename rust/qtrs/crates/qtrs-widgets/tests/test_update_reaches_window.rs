@@ -36,7 +36,7 @@ fn fixture() -> Fixture {
 
 #[test]
 fn widget_update_schedules_window_render_without_register_or_direct_render() {
-    let mut fx = fixture();
+    let fx = fixture();
     let before = fx.win.render_stats();
 
     fx.probe.borrow().update();
@@ -52,7 +52,7 @@ fn widget_update_schedules_window_render_without_register_or_direct_render() {
 
 #[test]
 fn repeated_widget_updates_coalesce_into_one_render() {
-    let mut fx = fixture();
+    let fx = fixture();
     // Settle any construction-time work first.
     fx.el.process_events(false);
     let before = fx.win.render_stats().render_count;
@@ -71,7 +71,7 @@ fn repeated_widget_updates_coalesce_into_one_render() {
 
 #[test]
 fn hidden_widget_update_renders_nothing() {
-    let mut fx = fixture();
+    let fx = fixture();
     fx.el.process_events(false);
     fx.probe.borrow_mut().set_visible(false);
     fx.el.process_events(false);
@@ -85,10 +85,10 @@ fn hidden_widget_update_renders_nothing() {
 
 #[test]
 fn window_moved_after_construction_still_receives_updates() {
-    let mut fx = fixture();
+    let fx = fixture();
     fx.el.process_events(false);
     // Moving the window value is safe: nothing holds its address.
-    let Fixture { mut el, win, probe } = fx;
+    let Fixture { el, win, probe } = fx;
     let win: Window = *win;
     let before = win.render_stats().render_count;
 

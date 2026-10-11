@@ -248,12 +248,12 @@ impl Win32EventDispatcher {
         }
     }
 
-    pub fn install_native_event_filter(&mut self, filter: Box<dyn NativeEventFilter>) {
+    pub fn install_native_event_filter(&self, filter: Box<dyn NativeEventFilter>) {
         self.native_filters.install(filter);
     }
 
     pub fn filter_native_event(
-        &mut self,
+        &self,
         event_type: &str,
         msg: &NativeMessage,
         result: &mut isize,
@@ -262,7 +262,7 @@ impl Win32EventDispatcher {
     }
 
     pub fn process_events(
-        &mut self,
+        &self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
     ) -> DispatchResult {
@@ -340,7 +340,7 @@ impl Win32EventDispatcher {
     }
 
     pub fn process_events_with_timers(
-        &mut self,
+        &self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
         registry: &Mutex<TimerRegistry>,
@@ -350,7 +350,7 @@ impl Win32EventDispatcher {
         result
     }
 
-    pub fn register_timer(&mut self, entry: &TimerEntry) {
+    pub fn register_timer(&self, entry: &TimerEntry) {
         if entry.interval_ms == 0 {
             return;
         }
@@ -361,7 +361,7 @@ impl Win32EventDispatcher {
         }
     }
 
-    pub fn unregister_timer(&mut self, entry: &TimerEntry) {
+    pub fn unregister_timer(&self, entry: &TimerEntry) {
         if entry.interval_ms == 0 {
             return;
         }
@@ -375,7 +375,7 @@ impl Win32EventDispatcher {
         }
     }
 
-    pub fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
+    pub fn send_timer_events(&self, registry: &Mutex<TimerRegistry>) {
         let pending = PENDING_WM_TIMERS.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for raw_id in pending {
             let id = TimerId(raw_id);
@@ -451,12 +451,12 @@ impl EventDispatcher for Win32EventDispatcher {
         Arc::new(self.clone_handle())
     }
 
-    fn install_native_event_filter(&mut self, filter: Box<dyn NativeEventFilter>) {
+    fn install_native_event_filter(&self, filter: Box<dyn NativeEventFilter>) {
         self.install_native_event_filter(filter);
     }
 
     fn filter_native_event(
-        &mut self,
+        &self,
         event_type: &str,
         msg: &NativeMessage,
         result: &mut isize,
@@ -465,22 +465,22 @@ impl EventDispatcher for Win32EventDispatcher {
     }
 
     fn process_events(
-        &mut self,
+        &self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
     ) -> DispatchResult {
         self.process_events(can_wait, next_timer_timeout)
     }
 
-    fn register_timer(&mut self, entry: &TimerEntry) {
+    fn register_timer(&self, entry: &TimerEntry) {
         self.register_timer(entry);
     }
 
-    fn unregister_timer(&mut self, entry: &TimerEntry) {
+    fn unregister_timer(&self, entry: &TimerEntry) {
         self.unregister_timer(entry);
     }
 
-    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
+    fn send_timer_events(&self, registry: &Mutex<TimerRegistry>) {
         self.send_timer_events(registry);
     }
 }
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn test_cross_thread_wakeup() {
-        let mut dispatcher = Win32EventDispatcher::new();
+        let dispatcher = Win32EventDispatcher::new();
         let dispatcher_clone = dispatcher.clone_handle();
 
         let start = std::time::Instant::now();
@@ -528,7 +528,7 @@ mod tests {
 
     #[test]
     fn test_timeout_sleep() {
-        let mut dispatcher = Win32EventDispatcher::new();
+        let dispatcher = Win32EventDispatcher::new();
         let start = std::time::Instant::now();
 
         let result = dispatcher.process_events(true, Some(std::time::Duration::from_millis(50)));
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn test_quit_message() {
         std::thread::spawn(|| {
-            let mut dispatcher = Win32EventDispatcher::new();
+            let dispatcher = Win32EventDispatcher::new();
 
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::PostQuitMessage(42);
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_high_frequency_wakeup_dedup() {
-        let mut dispatcher = Win32EventDispatcher::new();
+        let dispatcher = Win32EventDispatcher::new();
         let mut handles = Vec::new();
 
         for _ in 0..10 {
@@ -614,7 +614,7 @@ mod tests {
             .register(ObjectId(7), 20, TimerType::Precise, true);
         let entry = registry.lock().unwrap().get(id).unwrap().clone();
 
-        let mut dispatcher = Win32EventDispatcher::new();
+        let dispatcher = Win32EventDispatcher::new();
         dispatcher.register_timer(&entry);
         unsafe { crate::object::register_qobject(&mut receiver) };
 
@@ -664,7 +664,7 @@ mod tests {
             }
         }
 
-        let mut dispatcher = Win32EventDispatcher::new();
+        let dispatcher = Win32EventDispatcher::new();
         let intercepted = Arc::new(AtomicBool::new(false));
 
         dispatcher.install_native_event_filter(Box::new(HotkeyFilter {
@@ -708,7 +708,7 @@ mod tests {
     #[test]
     fn test_wakeup_message_is_deduplicated_and_pumped_by_wnd_proc() {
         let el = crate::event_loop::EventLoop::new();
-        let hwnd = el.dispatcher.internal_hwnd;
+        let hwnd = el.dispatcher().internal_hwnd;
         let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         el.post_event(ObjectId(0), counting_metacall(&delivered));
@@ -716,7 +716,7 @@ mod tests {
 
         let (count, msg) = take_wakeup_messages(hwnd);
         assert_eq!(count, 1, "two posts share one wake-up message");
-        assert!(el.dispatcher.wakeup_pending.load(Ordering::Acquire));
+        assert!(el.dispatcher().wakeup_pending.load(Ordering::Acquire));
 
         // Simulate the native modal loop dispatching the wake-up message itself.
         unsafe {
@@ -724,7 +724,7 @@ mod tests {
         }
         assert_eq!(delivered.load(Ordering::SeqCst), 2);
         assert!(
-            !el.dispatcher.wakeup_pending.load(Ordering::Acquire),
+            !el.dispatcher().wakeup_pending.load(Ordering::Acquire),
             "wnd_proc must clear wakeup_pending"
         );
 
@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn test_wnd_proc_pump_defers_events_posted_during_dispatch() {
         let el = crate::event_loop::EventLoop::new();
-        let hwnd = el.dispatcher.internal_hwnd;
+        let hwnd = el.dispatcher().internal_hwnd;
         let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         let inner = Arc::clone(&delivered);
@@ -779,8 +779,8 @@ mod tests {
     fn test_modal_pump_keeping_a_deferred_delete_rearms_the_wake_up() {
         // Loop level 1 makes the stamp (0, 0) deliverable (qcoreapplication.cpp:1880-1885).
         crate::object::ThreadContext::set_current_loop_level(1);
-        let mut el = crate::event_loop::EventLoop::new();
-        let hwnd = el.dispatcher.internal_hwnd;
+        let el = crate::event_loop::EventLoop::new();
+        let hwnd = el.dispatcher().internal_hwnd;
 
         // A callback of the normal pump opens a native modal loop, as a menu popup does.
         el.post_event(
@@ -798,7 +798,7 @@ mod tests {
             }),
         );
         // Consume the wake-up (clears `wakeup_pending`) without running the window procedure.
-        let _ = el.dispatcher.process_events(false, None);
+        let _ = el.dispatcher().process_events(false, None);
         assert_eq!(take_wakeup_messages(hwnd).0, 0);
 
         el.send_posted_events();
@@ -812,8 +812,8 @@ mod tests {
 
     #[test]
     fn test_modal_pump_keeping_a_loop_blocked_deferred_delete_does_not_rearm_the_wake_up() {
-        let mut el = crate::event_loop::EventLoop::new();
-        let hwnd = el.dispatcher.internal_hwnd;
+        let el = crate::event_loop::EventLoop::new();
+        let hwnd = el.dispatcher().internal_hwnd;
         crate::object::ThreadContext::set_current_loop_level(2);
 
         el.post_event(
@@ -830,7 +830,7 @@ mod tests {
                 scope_level: 0,
             }),
         );
-        let _ = el.dispatcher.process_events(false, None);
+        let _ = el.dispatcher().process_events(false, None);
         assert_eq!(take_wakeup_messages(hwnd).0, 0);
 
         el.send_posted_events();

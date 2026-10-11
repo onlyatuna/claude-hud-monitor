@@ -136,7 +136,7 @@ fn test_top_level_window_rendering() {
 fn test_asynchronous_update_request_and_event_loop_compression() {
     use qtrs_core::object::register_boxed_qobject;
 
-    let mut el = EventLoop::new();
+    let el = EventLoop::new();
 
     let win = Window::new(
         "Async Update Test Window",

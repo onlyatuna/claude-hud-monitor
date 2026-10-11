@@ -35,7 +35,7 @@ mod probe {
         if std::env::var("SLTRACE").is_ok() {
             qtrs_platform::resize_trace::set_enabled(true);
         }
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let flags = WindowFlags::FRAMELESS | WindowFlags::LAYERED | WindowFlags::CUSTOM_FRAMELESS;
         let mut win =
             Box::new(Window::new("SLTEST", Rect::new(200, 150, 500, 400), flags).expect("window"));

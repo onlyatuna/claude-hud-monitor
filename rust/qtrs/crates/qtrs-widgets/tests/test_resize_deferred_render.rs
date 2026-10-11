@@ -386,7 +386,7 @@ fn destroyed_window_deferred_render_is_a_noop() {
     assert_eq!(fx.painted_widths.borrow().len(), 0);
 
     let Fixture {
-        mut el,
+        el,
         win,
         painted_widths,
         ..

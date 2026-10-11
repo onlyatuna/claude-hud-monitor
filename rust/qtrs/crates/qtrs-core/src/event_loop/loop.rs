@@ -2,7 +2,7 @@ use crate::event::EventFilterChain;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use crate::object::{ScopeLevelGuard, ThreadContext, ThreadId};
@@ -322,14 +322,109 @@ pub fn compress_event_with_queue(
     queue.compress_event(receiver, event)
 }
 
+/// One thread's loop state, shared by every `EventLoop` on that thread. Qt keeps one event
+/// dispatcher, one posted-event queue and one timer registry per thread (`QThreadData`). A nested
+/// `QEventLoop` only pushes itself onto the thread's stack of running loops, so an inner loop
+/// ending never tears down state the outer loop still uses (qeventloop.cpp:157-192).
+struct ThreadLoopState {
+    thread_id: ThreadId,
+    dispatcher: DefaultEventDispatcher,
+    queue: Arc<Mutex<EventQueue>>,
+    timer_registry: Arc<Mutex<TimerRegistry>>,
+    /// Exit flags of every loop running `exec` on this thread, innermost last.
+    running: Arc<parking_lot::Mutex<Vec<LoopExit>>>,
+}
+
+/// Exit flags of one running loop. `EventLoop::exit` affects only its own loop
+/// (qeventloop.cpp:260-273), while `EventLoopHandle::exit` ends every loop on the thread
+/// (qthread.cpp:754-767).
+#[derive(Clone)]
+struct LoopExit {
+    exit_requested: Arc<AtomicBool>,
+    return_code: Arc<AtomicI32>,
+}
+
+impl LoopExit {
+    fn new() -> Self {
+        Self {
+            exit_requested: Arc::new(AtomicBool::new(false)),
+            return_code: Arc::new(AtomicI32::new(0)),
+        }
+    }
+
+    fn request(&self, return_code: i32) {
+        self.return_code.store(return_code, Ordering::SeqCst);
+        self.exit_requested.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Pops a loop's entry from its thread's running-loop stack when `exec` returns.
+struct RunningLoop(Arc<parking_lot::Mutex<Vec<LoopExit>>>);
+
+impl Drop for RunningLoop {
+    fn drop(&mut self) {
+        self.0.lock().pop();
+    }
+}
+
+thread_local! {
+    /// The calling thread's live loop state. Weak, so the state (and its dispatcher) lives exactly
+    /// as long as some `EventLoop` on the thread.
+    static THREAD_LOOP_STATE: RefCell<Weak<ThreadLoopState>> = RefCell::new(Weak::new());
+}
+
+impl ThreadLoopState {
+    /// Returns the calling thread's live state, creating it (with its timer context and loop
+    /// handle) when the thread has none. As Qt creates a thread's dispatcher once, the first
+    /// creator's `kind` wins.
+    fn current_or_create(kind: DispatcherKind) -> Arc<Self> {
+        let existing = THREAD_LOOP_STATE.with(|slot| slot.borrow().upgrade());
+        if let Some(state) = existing {
+            return state;
+        }
+        let dispatcher = create_dispatcher(kind);
+        let timer_registry = Arc::new(Mutex::new(TimerRegistry::new()));
+        #[cfg(windows)]
+        crate::timer::register_thread_timer_context(
+            Arc::clone(&timer_registry),
+            dispatcher.internal_hwnd,
+        );
+        #[cfg(not(windows))]
+        crate::timer::register_thread_timer_context(Arc::clone(&timer_registry));
+
+        let thread_id = ThreadId::current();
+        let state = Arc::new(Self {
+            thread_id,
+            dispatcher,
+            queue: Arc::new(Mutex::new(EventQueue::new())),
+            timer_registry,
+            running: Arc::new(parking_lot::Mutex::new(Vec::new())),
+        });
+        register_thread_event_loop(thread_id, state.handle());
+        THREAD_LOOP_STATE.with(|slot| *slot.borrow_mut() = Arc::downgrade(&state));
+        state
+    }
+
+    fn handle(&self) -> EventLoopHandle {
+        EventLoopHandle {
+            dispatcher: Arc::new(self.dispatcher.clone_handle()),
+            queue: Arc::clone(&self.queue),
+            running: Arc::clone(&self.running),
+        }
+    }
+}
+
+impl Drop for ThreadLoopState {
+    fn drop(&mut self) {
+        crate::timer::unregister_thread_timer_context();
+        unregister_thread_event_loop(self.thread_id);
+    }
+}
+
 pub struct EventLoop {
-    pub(crate) dispatcher: DefaultEventDispatcher,
-    pub(crate) queue: Arc<Mutex<EventQueue>>,
-    pub(crate) timer_registry: Arc<Mutex<TimerRegistry>>,
-    pub(crate) compressor: Arc<dyn EventCompressor>,
-    pub(crate) exit_requested: Arc<AtomicBool>,
-    pub(crate) return_code: Arc<AtomicI32>,
-    pub(crate) custom_timeout: Option<Duration>,
+    state: Arc<ThreadLoopState>,
+    exit: LoopExit,
+    custom_timeout: Option<Duration>,
 }
 
 impl EventLoop {
@@ -339,64 +434,26 @@ impl EventLoop {
     }
 
     /// An event loop whose dispatcher comes from the `kind` creation path; `GuiApplication`
-    /// creates its loop with `DispatcherKind::Gui`.
+    /// creates its loop with `DispatcherKind::Gui`. Loops on one thread share one dispatcher, so
+    /// the first loop created on the thread decides its kind.
     pub fn with_dispatcher_kind(kind: DispatcherKind) -> Self {
-        let dispatcher = create_dispatcher(kind);
-        let timer_registry = Arc::new(Mutex::new(TimerRegistry::new()));
-
-        #[cfg(windows)]
-        crate::timer::register_thread_timer_context(
-            Arc::clone(&timer_registry),
-            dispatcher.internal_hwnd,
-        );
-        #[cfg(not(windows))]
-        crate::timer::register_thread_timer_context(Arc::clone(&timer_registry));
-
-        let el = Self {
-            dispatcher,
-            queue: Arc::new(Mutex::new(EventQueue::new())),
-            timer_registry,
-            compressor: Arc::new(CoreCompressor),
-            exit_requested: Arc::new(AtomicBool::new(false)),
-            return_code: Arc::new(AtomicI32::new(0)),
+        Self {
+            state: ThreadLoopState::current_or_create(kind),
+            exit: LoopExit::new(),
             custom_timeout: None,
-        };
-        register_thread_event_loop(ThreadId::current(), el.handle());
-        el
+        }
     }
 
-    /// Creates an event loop with a shared event queue.
-    pub fn with_queue(queue: Arc<Mutex<EventQueue>>) -> Self {
-        let dispatcher = create_dispatcher(DispatcherKind::Core);
-        let timer_registry = Arc::new(Mutex::new(TimerRegistry::new()));
-
-        #[cfg(windows)]
-        crate::timer::register_thread_timer_context(
-            Arc::clone(&timer_registry),
-            dispatcher.internal_hwnd,
-        );
-        #[cfg(not(windows))]
-        crate::timer::register_thread_timer_context(Arc::clone(&timer_registry));
-
-        let el = Self {
-            dispatcher,
-            queue,
-            timer_registry,
-            compressor: Arc::new(CoreCompressor),
-            exit_requested: Arc::new(AtomicBool::new(false)),
-            return_code: Arc::new(AtomicI32::new(0)),
-            custom_timeout: None,
-        };
-        register_thread_event_loop(ThreadId::current(), el.handle());
-        el
+    pub(crate) fn dispatcher(&self) -> &DefaultEventDispatcher {
+        &self.state.dispatcher
     }
 
     pub fn queue(&self) -> &Arc<Mutex<EventQueue>> {
-        &self.queue
+        &self.state.queue
     }
 
     pub fn timer_registry(&self) -> &Arc<Mutex<TimerRegistry>> {
-        &self.timer_registry
+        &self.state.timer_registry
     }
 
     /// Loop recursion depth of the current thread (`QThreadData::loopLevel`).
@@ -405,18 +462,18 @@ impl EventLoop {
     }
 
     pub fn is_exit_requested(&self) -> bool {
-        self.exit_requested.load(Ordering::SeqCst)
+        self.exit.exit_requested.load(Ordering::SeqCst)
     }
 
     pub fn return_code(&self) -> i32 {
-        self.return_code.load(Ordering::SeqCst)
+        self.exit.return_code.load(Ordering::SeqCst)
     }
 
     pub fn next_timeout(&self) -> Option<Duration> {
         if let Some(custom) = self.custom_timeout {
             return Some(custom);
         }
-        let deadline = self.timer_registry.lock().unwrap().next_deadline()?;
+        let deadline = self.state.timer_registry.lock().unwrap().next_deadline()?;
         let now = crate::timer::current_time_ms();
         if deadline > now {
             Some(Duration::from_millis(deadline - now))
@@ -434,30 +491,27 @@ impl EventLoop {
     }
 
     pub fn post_event_with_priority(&self, receiver: ObjectId, event: Event, priority: i32) {
-        let mut queue = self.queue.lock().unwrap();
-        if run_compress_event(&mut queue.events, receiver, &event, &*self.compressor) {
+        let mut queue = self.state.queue.lock().unwrap();
+        let q = &mut *queue;
+        if run_compress_event(&mut q.events, receiver, &event, &*q.compressor) {
             return;
         }
-        queue.insert_posted(PostedEvent::new(receiver, event, priority));
-        self.dispatcher.wake_up();
+        q.insert_posted(PostedEvent::new(receiver, event, priority));
+        self.state.dispatcher.wake_up();
     }
+
     pub fn set_compressor(&mut self, compressor: Arc<dyn EventCompressor>) {
-        self.compressor = Arc::clone(&compressor);
-        self.queue.lock().unwrap().compressor = compressor;
+        self.state.queue.lock().unwrap().compressor = compressor;
     }
 
-    pub fn install_native_event_filter(
-        &mut self,
-        filter: Box<dyn crate::event::NativeEventFilter>,
-    ) {
-        self.dispatcher.install_native_event_filter(filter);
+    pub fn install_native_event_filter(&self, filter: Box<dyn crate::event::NativeEventFilter>) {
+        self.state.dispatcher.install_native_event_filter(filter);
     }
 
-    pub fn send_posted_events(&mut self) -> usize {
-        let (delivered, quit_code) = send_posted_events_for_queue(&self.queue);
+    pub fn send_posted_events(&self) -> usize {
+        let (delivered, quit_code) = send_posted_events_for_queue(&self.state.queue);
         if let Some(code) = quit_code {
-            self.exit_requested.store(true, Ordering::SeqCst);
-            self.return_code.store(code, Ordering::SeqCst);
+            self.exit.request(code);
         }
         delivered
     }
@@ -465,15 +519,15 @@ impl EventLoop {
     /// Delivers the queued `DeferredDelete` events that the loop-exit flush allows, matching
     /// `sendPostedEvents(nullptr, QEvent::DeferredDelete)` (qcoreapplication.cpp:1484-1489). Other
     /// posted events stay queued. Returns the number delivered.
-    pub fn flush_deferred_deletes(&mut self) -> usize {
+    pub fn flush_deferred_deletes(&self) -> usize {
         {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.state.queue.lock().unwrap();
             q.insertion_offset = q.events.len();
         }
         let mut delivered = 0;
         loop {
             let (receiver, mut event) = {
-                let mut q = self.queue.lock().unwrap();
+                let mut q = self.state.queue.lock().unwrap();
                 let end = q.insertion_offset;
                 let levels = current_levels();
                 let found = q.events.iter().take(end).position(|p| match p.event.kind {
@@ -501,18 +555,22 @@ impl EventLoop {
         delivered
     }
 
-    pub fn process_events(&mut self, can_wait: bool) -> bool {
+    pub fn process_events(&self, can_wait: bool) -> bool {
         let delivered = self.send_posted_events();
         let had_posted = delivered > 0;
 
         let next_timeout = self.next_timeout();
-        let effective_wait = can_wait && !self.exit_requested.load(Ordering::SeqCst);
+        let effective_wait = can_wait && !self.exit.exit_requested.load(Ordering::SeqCst);
 
-        let res = self.dispatcher.process_events(effective_wait, next_timeout);
-        self.dispatcher.send_timer_events(&self.timer_registry);
+        let res = self
+            .state
+            .dispatcher
+            .process_events(effective_wait, next_timeout);
+        self.state
+            .dispatcher
+            .send_timer_events(&self.state.timer_registry);
         if let DispatchResult::Quit(code) = res {
-            self.exit_requested.store(true, Ordering::SeqCst);
-            self.return_code.store(code, Ordering::SeqCst);
+            self.exit.request(code);
         }
 
         let had_system_events = matches!(
@@ -522,27 +580,33 @@ impl EventLoop {
         had_posted || had_system_events
     }
 
-    pub fn exec(&mut self) -> i32 {
+    pub fn exec(&self) -> i32 {
         // qeventloop.cpp:157-158: entering a loop resets the exit flag, so exit() issued before
         // exec() does not end this loop.
-        self.exit_requested.store(false, Ordering::SeqCst);
+        self.exit.exit_requested.store(false, Ordering::SeqCst);
         // qeventloop.cpp:192-195: entering the application's loop drops its stale posted Quit.
         if let Some(app_id) = crate::application::app_object_on_current_thread() {
-            self.queue.lock().unwrap().remove_posted_quits_for(app_id);
+            self.state
+                .queue
+                .lock()
+                .unwrap()
+                .remove_posted_quits_for(app_id);
         }
+        self.state.running.lock().push(self.exit.clone());
+        let _running = RunningLoop(Arc::clone(&self.state.running));
         ThreadContext::set_current_loop_level(ThreadContext::current_loop_level() + 1);
-        while !self.exit_requested.load(Ordering::SeqCst) {
+        while !self.exit.exit_requested.load(Ordering::SeqCst) {
             self.process_events(true);
         }
         // qeventloop.cpp:161, 187: the loop itself moves `loopLevel`; `scopeLevel` is per handler.
         ThreadContext::set_current_loop_level(ThreadContext::current_loop_level() - 1);
-        self.return_code.load(Ordering::SeqCst)
+        self.exit.return_code.load(Ordering::SeqCst)
     }
 
+    /// Ends this loop only (`QEventLoop::exit`, qeventloop.cpp:260-273).
     pub fn exit(&self, return_code: i32) {
-        self.exit_requested.store(true, Ordering::SeqCst);
-        self.return_code.store(return_code, Ordering::SeqCst);
-        self.dispatcher.wake_up();
+        self.exit.request(return_code);
+        self.state.dispatcher.wake_up();
     }
 
     pub fn quit(&self) {
@@ -550,20 +614,14 @@ impl EventLoop {
     }
 
     pub fn handle(&self) -> EventLoopHandle {
-        EventLoopHandle {
-            dispatcher: Arc::new(self.dispatcher.clone_handle()),
-            queue: Arc::clone(&self.queue),
-            compressor: Arc::clone(&self.compressor),
-            exit_requested: Arc::clone(&self.exit_requested),
-            return_code: Arc::clone(&self.return_code),
-        }
+        self.state.handle()
     }
 
     pub fn sender(&self) -> EventSender {
-        let dispatcher_handle = self.dispatcher.clone_handle();
+        let dispatcher_handle = self.state.dispatcher.clone_handle();
         EventSender::new(
             ThreadId::current(),
-            Arc::clone(&self.queue),
+            Arc::clone(&self.state.queue),
             Arc::new(move || {
                 dispatcher_handle.wake_up();
             }),
@@ -638,8 +696,7 @@ pub fn pump_posted_events_modal() -> Option<usize> {
     let _guard = PostedPumpGuard::enter();
     let (delivered, quit_code) = pump_posted_events(&handle.queue, true);
     if let Some(code) = quit_code {
-        handle.exit_requested.store(true, Ordering::SeqCst);
-        handle.return_code.store(code, Ordering::SeqCst);
+        handle.exit(code);
     }
     if !handle.queue.lock().unwrap().is_empty() {
         MODAL_PUMP_LEFT_QUEUED.with(|f| f.set(true));
@@ -766,9 +823,7 @@ fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Op
 pub struct EventLoopHandle {
     pub dispatcher: Arc<dyn EventDispatcherHandle>,
     pub queue: Arc<Mutex<EventQueue>>,
-    pub compressor: Arc<dyn EventCompressor>,
-    pub exit_requested: Arc<AtomicBool>,
-    pub return_code: Arc<AtomicI32>,
+    running: Arc<parking_lot::Mutex<Vec<LoopExit>>>,
 }
 
 impl EventLoopHandle {
@@ -777,10 +832,11 @@ impl EventLoopHandle {
     }
     pub fn post_event_with_priority(&self, receiver: ObjectId, event: Event, priority: i32) {
         let mut queue = self.queue.lock().unwrap();
-        if run_compress_event(&mut queue.events, receiver, &event, &*self.compressor) {
+        let q = &mut *queue;
+        if run_compress_event(&mut q.events, receiver, &event, &*q.compressor) {
             return;
         }
-        queue.insert_posted(PostedEvent::new(receiver, event, priority));
+        q.insert_posted(PostedEvent::new(receiver, event, priority));
         self.dispatcher.wake_up();
     }
 
@@ -793,8 +849,10 @@ impl EventLoopHandle {
     }
 
     pub fn exit(&self, return_code: i32) {
-        self.exit_requested.store(true, Ordering::SeqCst);
-        self.return_code.store(return_code, Ordering::SeqCst);
+        // qthread.cpp:754-767: QThread::exit ends every loop running on the thread.
+        for running in self.running.lock().iter() {
+            running.request(return_code);
+        }
         self.dispatcher.wake_up();
     }
 
@@ -911,13 +969,6 @@ pub(crate) fn purge_posted_events_for_receiver(receiver: ObjectId) {
     drop(removed);
 }
 
-impl Drop for EventLoop {
-    fn drop(&mut self) {
-        crate::timer::unregister_thread_timer_context();
-        unregister_thread_event_loop(ThreadId::current());
-    }
-}
-
 impl Default for EventLoop {
     fn default() -> Self {
         Self::new()
@@ -966,7 +1017,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let q_clone = Arc::clone(event_loop.queue());
 
         let mut widget = LivelockWidget::new(ObjectId::next(), q_clone);
@@ -1028,7 +1079,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let q_clone = Arc::clone(event_loop.queue());
 
         let mut widget = ReentrantWidget::new(ObjectId::next(), q_clone);
@@ -1082,7 +1133,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let mut widget = DeleteWidget::new(ObjectId::next());
         // SAFETY: this test keeps the widget on this thread and alive through unregister.
         unsafe { register_qobject(&mut widget) };
@@ -1109,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_process_events_pumping() {
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
 
         let handled = event_loop.process_events(false);
         assert!(!handled);
@@ -1122,7 +1173,7 @@ mod tests {
 
     #[test]
     fn test_exec_and_exit() {
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let handle = event_loop.handle();
         let receiver_id = ObjectId::next();
 
@@ -1163,7 +1214,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let mut widget = ExitWidget {
             data: ObjectData::new(ObjectId::next()),
             call_count: 0,
@@ -1193,7 +1244,7 @@ mod tests {
 
     #[test]
     fn exit_before_exec_is_noop() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         el.handle().exit(7);
         let h = el.handle();
         crate::timer::Timer::single_shot(0, move || h.exit(3));
@@ -1202,7 +1253,7 @@ mod tests {
 
     #[test]
     fn second_exec_is_fresh() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let h1 = el.handle();
         crate::timer::Timer::single_shot(0, move || h1.exit(7));
         assert_eq!(el.exec(), 7);
@@ -1245,7 +1296,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let mut mock = MockObject::new(ObjectId::next());
         // SAFETY: this test keeps the object on this thread and alive through unregister.
         unsafe { register_qobject(&mut mock) };
@@ -1298,7 +1349,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let handle = event_loop.handle();
 
         let mut relay = RelayObject::new(ObjectId::next(), handle);
@@ -1353,7 +1404,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let mut widget = PaintWidget::new(ObjectId::next());
         // SAFETY: this test keeps the widget on this thread and alive through unregister.
         unsafe { register_qobject(&mut widget) };
@@ -1408,7 +1459,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let handle = event_loop.handle();
         let mut widget = WakeupWidget::new(ObjectId::next());
         // SAFETY: this test keeps the widget alive but event is posted cross-thread.
@@ -1879,7 +1930,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let mut relay = PriorityRelay {
             data: ObjectData::new(ObjectId::next()),
             order: Arc::clone(&execution_order),
@@ -1961,7 +2012,7 @@ mod tests {
             }
         }
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let mut relay = NestedRelay {
             data: ObjectData::new(ObjectId::next()),
             order: Arc::clone(&execution_order),
@@ -1999,7 +2050,7 @@ mod tests {
     fn test_generic_event_dispatcher_and_event_loop_abstraction() {
         use super::super::dispatcher::{EventDispatcher, GenericEventDispatcher};
 
-        let mut generic_dispatcher = GenericEventDispatcher::new();
+        let generic_dispatcher = GenericEventDispatcher::new();
         let handle = generic_dispatcher.clone_handle();
 
         let handle_clone = Arc::clone(&handle);
@@ -2026,7 +2077,7 @@ mod tests {
 
     #[test]
     fn test_normal_pump_delivers_posted_events() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let log = Arc::new(Mutex::new(Vec::new()));
         for name in ["a", "b"] {
             let log = Arc::clone(&log);
@@ -2077,7 +2128,7 @@ mod tests {
     /// `QCoreApplication::sendPostedEvents` re-enters, qcoreapplication.cpp:1796-1817).
     #[test]
     fn test_modal_pump_inside_a_posted_callback_delivers_events_before_it_returns() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let nested = Arc::new(Mutex::new(None));
         let log = Arc::new(Mutex::new(Vec::new()));
         {
@@ -2126,7 +2177,7 @@ mod tests {
     /// posted during the nested pump, which wait for the next turn (1856-1858).
     #[test]
     fn test_a_nested_pump_delivers_each_event_once_and_leaves_its_own_posts_for_the_next_turn() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let log = Arc::new(Mutex::new(Vec::new()));
         {
             let log = Arc::clone(&log);
@@ -2186,7 +2237,7 @@ mod tests {
             }
         }
 
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         ThreadContext::set_current_loop_level(1);
         let deleted = Arc::new(AtomicBool::new(false));
         let mut object = Deletable {
@@ -2293,7 +2344,7 @@ mod tests {
 
         let survived_nested = Arc::new(Mutex::new(None));
         let deleted_by_outer = Arc::new(Mutex::new(None));
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let mut victim = Box::new(Victim {
             data: ObjectData::new(ObjectId::next()),
         });
@@ -2347,7 +2398,7 @@ mod tests {
 
     #[test]
     fn test_posts_made_during_a_nested_pump_wait_for_the_next_turn_in_priority_order() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let log = Arc::new(Mutex::new(Vec::<&'static str>::new()));
 
         let log_outer = Arc::clone(&log);
@@ -2385,7 +2436,7 @@ mod tests {
 
     #[test]
     fn test_a_priority_post_between_turns_overtakes_a_lower_priority_leftover() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let log = Arc::new(Mutex::new(Vec::<&'static str>::new()));
 
         let log_outer = Arc::clone(&log);
@@ -2456,7 +2507,7 @@ mod tests {
 
     #[test]
     fn test_metacall_to_receiver_unregistered_before_delivery_is_dropped() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let mut probe = UnregisteredProbe {
             data: ObjectData::new(ObjectId::next()),
         };
@@ -2493,7 +2544,7 @@ mod tests {
 
     #[test]
     fn test_object_id_zero_metacall_still_runs() {
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let ran = Arc::new(AtomicBool::new(false));
         let ran_clone = Arc::clone(&ran);
         post_event_to_thread(
@@ -2503,5 +2554,114 @@ mod tests {
         );
         assert_eq!(el.send_posted_events(), 1);
         assert!(ran.load(Ordering::SeqCst));
+    }
+
+    /// Aborts the test process when a body hangs, so a regression fails instead of hanging CI.
+    /// Disarmed on drop, so a passing test leaves no live thread behind.
+    struct Watchdog {
+        done: Arc<AtomicBool>,
+    }
+
+    impl Watchdog {
+        fn arm(limit: Duration) -> Self {
+            let done = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&done);
+            std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + limit;
+                while std::time::Instant::now() < deadline {
+                    if flag.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                // Written to the raw stderr so libtest output capture cannot swallow it on exit.
+                let _ = std::io::Write::write_all(
+                    &mut std::io::stderr(),
+                    format!("watchdog: test body exceeded {limit:?}\n").as_bytes(),
+                );
+                std::process::exit(101);
+            });
+            Self { done }
+        }
+    }
+
+    impl Drop for Watchdog {
+        fn drop(&mut self) {
+            self.done.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// G4.1.g: an inner loop that returns must not disturb the outer loop's timers or exit.
+    #[test]
+    fn inner_loop_exit_returns_only_the_inner_exec_and_the_outer_loop_keeps_running() {
+        let _watchdog = Watchdog::arm(Duration::from_secs(10));
+        let outer = EventLoop::new();
+        let outer_handle = outer.handle();
+        let log = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+
+        let log_outer = Arc::clone(&log);
+        crate::timer::Timer::single_shot(0, move || {
+            // A nested loop entered from a posted callback of the outer loop.
+            let inner = EventLoop::new();
+            let inner_exit = inner.exit.clone();
+            crate::timer::Timer::single_shot(0, move || inner_exit.request(5));
+            let inner_code = inner.exec();
+            log_outer.lock().unwrap().push(if inner_code == 5 {
+                "inner-returned"
+            } else {
+                "inner-wrong-code"
+            });
+
+            drop(inner);
+
+            // Once the inner loop is gone, the outer loop must still run timers and accept exit.
+            let log_timer = Arc::clone(&log_outer);
+            crate::timer::Timer::single_shot(0, move || {
+                log_timer.lock().unwrap().push("outer-timer");
+                outer_handle.exit(0);
+            });
+        });
+
+        let outer_code = outer.exec();
+        assert_eq!(outer_code, 0);
+        assert_eq!(*log.lock().unwrap(), vec!["inner-returned", "outer-timer"]);
+    }
+
+    /// G4.1.c: a cross-thread exit ends every loop running on the target thread
+    /// (qthread.cpp:754-767).
+    #[test]
+    fn cross_thread_handle_exit_ends_every_loop_running_on_that_thread() {
+        let _watchdog = Watchdog::arm(Duration::from_secs(10));
+        let outer = EventLoop::new();
+        let handle = outer.handle();
+        let (inner_running_tx, inner_running_rx) = std::sync::mpsc::channel::<()>();
+        let log = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        // Another thread ends the loops only after the nested loop has started running.
+        let exiter = std::thread::spawn(move || {
+            inner_running_rx.recv().unwrap();
+            handle.exit(3);
+        });
+
+        let log_outer = Arc::clone(&log);
+        crate::timer::Timer::single_shot(0, move || {
+            let inner = EventLoop::new();
+            crate::timer::Timer::single_shot(0, move || {
+                let _ = inner_running_tx.send(());
+            });
+            let inner_code = inner.exec();
+            log_outer
+                .lock()
+                .unwrap()
+                .push(format!("inner-{inner_code}"));
+        });
+
+        let outer_code = outer.exec();
+        exiter.join().unwrap();
+        assert_eq!(
+            outer_code, 3,
+            "the outer loop must end with the cross-thread code"
+        );
+        assert_eq!(*log.lock().unwrap(), vec!["inner-3".to_string()]);
     }
 }

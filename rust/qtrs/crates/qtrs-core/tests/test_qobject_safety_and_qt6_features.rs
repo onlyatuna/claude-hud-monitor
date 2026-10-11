@@ -255,7 +255,7 @@ fn test_delete_later_posts_one_deferred_delete_and_debounces() {
 
 #[test]
 fn test_delete_later_inside_handler_scope_survives_nested_pump() {
-    let mut event_loop = EventLoop::new();
+    let event_loop = EventLoop::new();
     let mut widget = Box::new(TestWidget::new("nested_pump"));
     let wid = widget.data.id;
     // SAFETY: widget stays boxed until delivery unregisters it.

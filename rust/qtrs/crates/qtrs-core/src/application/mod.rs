@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
@@ -60,7 +61,7 @@ static APP_INSTANCE_EXISTS: AtomicBool = AtomicBool::new(false);
 static APP_OBJECT_ID: RwLock<Option<ObjectId>> = RwLock::new(None);
 
 thread_local! {
-    static LOCAL_EVENT_LOOP: RefCell<Option<EventLoop>> = const { RefCell::new(None) };
+    static LOCAL_EVENT_LOOP: RefCell<Option<Rc<EventLoop>>> = const { RefCell::new(None) };
 }
 
 /// Shared handle to the application's `aboutToQuit` signal; clones share subscribers.
@@ -78,6 +79,19 @@ fn is_app_thread() -> bool {
         .unwrap()
         .as_ref()
         .is_some_and(|t| *t == ThreadId::current())
+}
+
+/// The application's thread, if an application object exists.
+fn app_thread() -> Option<ThreadId> {
+    APP_THREAD.read().ok().and_then(|t| *t)
+}
+
+/// The calling thread's application event loop, cloned so no slot borrow is held while it runs.
+fn current_event_loop() -> Option<Rc<EventLoop>> {
+    LOCAL_EVENT_LOOP
+        .try_with(|el| el.borrow().clone())
+        .ok()
+        .flatten()
 }
 
 /// The application object's id when called on the application thread, for removing its posted
@@ -165,12 +179,9 @@ impl CoreApplication {
             *meta_guard = Some(meta);
         }
 
-        // Setup local thread event loop
+        // Setup local thread event loop; EventLoop registers the thread's handle itself.
         let _ = LOCAL_EVENT_LOOP.try_with(|el| {
-            let event_loop = EventLoop::with_dispatcher_kind(kind);
-            let handle = event_loop.handle();
-            crate::event_loop::register_thread_event_loop(ThreadId::current(), handle);
-            *el.borrow_mut() = Some(event_loop);
+            *el.borrow_mut() = Some(Rc::new(EventLoop::with_dispatcher_kind(kind)));
         });
 
         *APP_OBJECT_ID.write().unwrap() = Some(id);
@@ -200,60 +211,37 @@ impl CoreApplication {
         // re-armed, so an exit() issued before exec() does not end it.
         ABOUT_TO_QUIT_EMITTED.store(false, Ordering::SeqCst);
         IN_EXEC.store(true, Ordering::SeqCst);
-        let code = LOCAL_EVENT_LOOP.with(|el| {
-            if let Some(loop_ref) = el.borrow_mut().as_mut() {
-                loop_ref.exec()
-            } else {
-                0
-            }
-        });
+        let code = current_event_loop().map_or(0, |el| el.exec());
         // execCleanup: sendPostedEvents(nullptr, DeferredDelete) once the loop has returned
         // (qcoreapplication.cpp:1472-1473, 1484-1489).
-        LOCAL_EVENT_LOOP.with(|el| {
-            if let Some(loop_ref) = el.borrow_mut().as_mut() {
-                loop_ref.flush_deferred_deletes();
-            }
-        });
+        if let Some(el) = current_event_loop() {
+            el.flush_deferred_deletes();
+        }
         IN_EXEC.store(false, Ordering::SeqCst);
         code
     }
 
     /// Processes pending events for the calling thread (`QCoreApplication::processEvents`).
     pub fn process_events(can_wait: bool) -> bool {
-        LOCAL_EVENT_LOOP.with(|el| {
-            if let Ok(mut loop_ref) = el.try_borrow_mut() {
-                if let Some(loop_ref) = loop_ref.as_mut() {
-                    loop_ref.process_events(can_wait)
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        })
+        // Pumps even while exec() is on the stack: the loop is shared through a clone, not a borrow.
+        current_event_loop().is_some_and(|el| el.process_events(can_wait))
     }
 
     /// Type name of the calling thread's application event dispatcher, or `None` when this
     /// thread has no application event loop (`QCoreApplication::eventDispatcher()` class name).
     pub fn event_dispatcher_class_name() -> Option<&'static str> {
         use crate::event_loop::EventDispatcher;
-        LOCAL_EVENT_LOOP.with(|el| el.borrow().as_ref().map(|l| l.dispatcher.class_name()))
+        current_event_loop().map(|l| l.dispatcher().class_name())
     }
 
     /// Tells the application to exit with a return code (`QCoreApplication::exit`).
     pub fn exit(return_code: i32) {
         // qcoreapplication.cpp:1532-1535: aboutToQuit is emitted from exit() itself.
         emit_about_to_quit_once();
-        if let Some(handle) = crate::event_loop::get_thread_event_sender(ThreadId::current()) {
+        // qcoreapplication.cpp:1534-1540: exit() ends the loops of the application thread from any thread.
+        let target = app_thread().unwrap_or_else(ThreadId::current);
+        if let Some(handle) = crate::event_loop::get_thread_event_sender(target) {
             handle.exit(return_code);
-        } else {
-            let _ = LOCAL_EVENT_LOOP.try_with(|el| {
-                if let Ok(loop_ref) = el.try_borrow() {
-                    if let Some(l) = loop_ref.as_ref() {
-                        l.exit(return_code);
-                    }
-                }
-            });
         }
     }
 
@@ -298,11 +286,9 @@ impl CoreApplication {
 
     /// Installs a native event filter (`QCoreApplication::installNativeEventFilter`).
     pub fn install_native_event_filter(filter: Box<dyn crate::event::NativeEventFilter>) {
-        LOCAL_EVENT_LOOP.with(|el| {
-            if let Some(loop_ref) = el.borrow_mut().as_mut() {
-                loop_ref.install_native_event_filter(filter);
-            }
-        });
+        if let Some(loop_ref) = current_event_loop() {
+            loop_ref.install_native_event_filter(filter);
+        }
     }
 
     // --- Application Metadata ---

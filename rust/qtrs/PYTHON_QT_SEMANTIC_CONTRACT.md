@@ -300,11 +300,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G4.1.a [P1, RAN；已修復：RC-79]** （修復前）`exit()` 先於 `exec()` 會**保留**並使 `exec` 立刻返回（`loop.rs` 註解與 `test_application_layers.rs:80-98` 釘住此行為）。Qt 會遺失。**必須改寫該測試。**
   - **G4.1.b [P1, RAN；已修復：RC-79]** （修復前）`exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回。
-  - **G4.1.c [P1, READ]** worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op**（`get_thread_event_sender(ThreadId::current())` 找不到 loop，退回讀 worker 自己空的 `LOCAL_EVENT_LOOP`）。
+  - **G4.1.c [P1, RAN；已修復：RC-106]** （修復前）worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op**（`get_thread_event_sender(ThreadId::current())` 找不到 loop，退回讀 worker 自己空的 `LOCAL_EVENT_LOOP`）。
   - **G4.1.d [P1, RAN；已修復：RC-79]** （修復前）`aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內；`exit` 無 `exec` 時不發。
   - **G4.1.e [P1, READ]** `quit()` 不是 `Quit` 事件：不關視窗、不能被否決；pump 在遞送前就鎖定 `quit_code`，filter 否決不了 posted `Quit`。
   - **G4.1.f [P2, READ]** `CoreApplication::new` 文件寫會 panic，實際沒有第二個實例檢查。
-  - **G4.1.g [P1, READ]** 無獨立的巢狀 `QEventLoop`（`isRunning`、自己的 `exit`、`QEventLoopLocker`）。`EventLoop::new` 取代該執行緒已註冊的 handle 與 timer context，`Drop` 取消註冊——**在同一執行緒建立並丟棄第二個 `EventLoop` 會破壞第一個**。
+  - **G4.1.g [P1, RAN；已修復：RC-104]** （修復前）無獨立的巢狀 `QEventLoop`（`isRunning`、自己的 `exit`、`QEventLoopLocker`）。`EventLoop::new` 取代該執行緒已註冊的 handle 與 timer context，`Drop` 取消註冊——**在同一執行緒建立並丟棄第二個 `EventLoop` 會破壞第一個**。
   - **G4.1.h [P2]** `ExitCode::from(exit_code as u8)` 截斷（`main.rs:620`）；HUD 以 0 退出。
   - **G4.1.i [P1, READ]** `qtrs-widgets::Application` 在最後一個視窗被 `unregister_window`（drop）時直接 `quit()`，而不是在**關閉**時以可取消 `Quit`（見 C11.2）。
 - **Test**：既有如上。必要：`exit_before_exec_is_noop`（並改寫 `test_application_layers.rs:80-98`）；`second_exec_is_fresh`；`quit_from_worker_thread_stops_exec`；`about_to_quit_emitted_inside_exit_before_exec_returns`；`quit_ignored_before_exec`；`creating_second_event_loop_does_not_break_first`。
@@ -315,7 +315,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 一次呼叫送出進入時已存在的 posted events 加上待處理 OS 訊息與計時器，不阻塞；MUST 可在 `exec` 中的 slot 內巢狀呼叫。
 - **Current implementation**：`IMPLEMENTED`（posted pump → dispatcher 遍歷；`dispatcher_win.rs`）。測試 `loop.rs::test_process_events_pumping`、`dispatcher_win.rs::tests::*`、`test_resize_deferred_render.rs`。
 - **Known gap**
-  - **G4.2.a [P1, READ]** **巢狀 `process_events` 靜默失效**：`CoreApplication::exec` 整個 `exec` 期間持有 `LOCAL_EVENT_LOOP.borrow_mut()`，`CoreApplication::process_events` 用 `try_borrow_mut` 失敗就回 false。`exec` 中途 `install_native_event_filter` 會 panic。
+  - **G4.2.a [P1, RAN；已修復：RC-105]** （修復前）**巢狀 `process_events` 靜默失效**：`CoreApplication::exec` 整個 `exec` 期間持有 `LOCAL_EVENT_LOOP.borrow_mut()`，`CoreApplication::process_events` 用 `try_borrow_mut` 失敗就回 false。`exec` 中途 `install_native_event_filter` 會 panic。
   - **G4.2.b [P2, READ]** 只觸發計時器的一輪回傳 false（Qt 回 true）；**G4.2.c [P2]** 無 `ExcludeUserInputEvents`／`WaitForMoreEvents`／`maxTime`（沒有工程理由說明為何不提供；需要時須補，否則在 API 上明確拒絕這些旗標）；**G4.2.d [P2, READ]** `WM_QUIT` 以 `PostQuitMessage(n)` 的 n 為 code（Qt 呼叫 `quit()`，code 0）。
 - **Test**：必要：`process_events_inside_slot_during_exec_delivers`；`process_events_true_when_timer_fired`。
 - **HUD usage**：Python 只在 smoke／tests 用 `processEvents`（`smoke_check.py:41`、`tests/*`）。Rust 在 `exec` 外用（`main.rs:111,204,215,229`），巢狀 bug 未觸發。
@@ -817,7 +817,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G10.3.a [P1, RAN；已修復：RC-96]** （修復前）無 per-widget clip（`set_clip_rect` 只有 `window.rs`、`scroll.rs`、`backing_store.rs` 呼叫）。
   - **G10.3.b [P1, RAN；已修復：RC-95]** （修復前）`EmptyWidget::set_geometry` 只使新矩形失效：**移動不會使舊位置失效**。
-  - **G10.3.c [P2]** `Painter::set_clip_rect` 取代而非相交，且忽略目前 transform（見 C10.4）。
+  - **G10.3.c [P2, RAN；已修復：RC-103]** （修復前；「取代」本身與 Qt 預設 `ReplaceClip` 相同，缺口在 transform）`Painter::set_clip_rect` 取代而非相交，且忽略目前 transform（見 C10.4）。
 - **Test**：既有無（沒有測試在 child 移動後斷言像素）。必要：移動彩色 child 10 px 後，舊矩形被清除；child 比 parent 大時，parent 外的像素不被動。
 - **HUD usage**：兩個 HUD 都用 layout，不手動移動 child，故 gap 為潛在。
 
@@ -826,9 +826,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：transform MUST 作用於 clip、文字與 pixmap；SHOULD 有 hints。
 - **Current implementation**：`PARTIAL`。`save/restore`、`translate`、`scale`、`rotate`、opacity、composition 可用；初始 transform 為 DPR 縮放（`qtrs-gui/src/paint/painter.rs`）。`draw_text` 把每個字形放在 `round(transform · (pos + glyph))`，以 `font.size * dpr` 光柵化。
 - **Known gap**
-  - **G10.4.a [P1, READ]** `set_clip_rect` **不經 transform**（遮罩只用 DPR 縮放，文字 clip 用 `clip * dpr`）；`ScrollArea::paint_event` 在 widget translate 之後呼叫 `set_clip_rect(viewport)`，其 clip 落在視窗座標。
+  - **G10.4.a [P1, RAN；已修復：RC-103]** （修復前）`set_clip_rect` **不經 transform**（遮罩只用 DPR 縮放，文字 clip 用 `clip * dpr`）；`ScrollArea::paint_event` 在 widget translate 之後呼叫 `set_clip_rect(viewport)`，其 clip 落在視窗座標。
   - **G10.4.b [P2, READ]** `set_clip_rect` 取代而非相交：`ScrollArea` 內失去 widget 層的髒區 clip。
-  - **G10.4.c [P1, READ]** `draw_text` 忽略旋轉與縮放，只轉換原點；`ProgressBar` 垂直文字先 `rotate` 再 `draw_text`，**畫出來沒有旋轉**。
+  - **G10.4.c [P1, RAN；已修復：RC-102]** （修復前）`draw_text` 忽略旋轉與縮放，只轉換原點；`ProgressBar` 垂直文字先 `rotate` 再 `draw_text`，**畫出來沒有旋轉**。
   - **G10.4.d [P1, READ]** 無 render hints；`draw_pixmap` 恆為 `FilterQuality::Bilinear`，只有 hatched brush 用 Nearest。
   - **G10.4.e [P2, INFERENCE]** `Painter::begin` 只要 ClearType 開就啟用 LCD 文字，與目的地 alpha 無關；Python HUD 設 `WA_TranslucentBackground`；Qt 在 ARGB 目的地是否改用灰階，**待對照 golden**。
 - **Test**：既有 `painter.rs` 內聯測試（`test_painter_transforms_and_state_stack`、`test_painter_draw_pixmap_and_clip`、`test_painter_begin_dpr_transform`）、`qtrs-gui/tests/test_painter_advanced_features.rs`、`test_lcd_text_parity.rs`（`DIFF`：固定 Qt 輸出 fixture）。必要：translate (100,0) + clip (0,0,10,10) + fill → 像素在 x=100..110；旋轉的 `draw_text` 有垂直字形範圍；縮放的 `draw_pixmap` 與 Qt golden（nearest vs bilinear）一致。
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 144 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 150 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1331,14 +1331,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.6.b | P2, READ | `unregister_qobject` → `stop_timers_for_object` 只刪 registry 項、不呼叫 Win32 `KillTimer`，孤兒 `WM |
 | G4.1.a | P1, RAN；已修復：RC-79 | `exit()` 先於 `exec()` 會**保留**並使 `exec` 立刻返回 |
 | G4.1.b | P1, RAN；已修復：RC-79 | `exit_requested` 在 `exec` 返回後不重置，第二次 `exec()` 立刻以舊 code 返回 |
-| G4.1.c | P1, READ | worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op** |
+| G4.1.c | P1, RAN；已修復：RC-106 | worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op** |
 | G4.1.d | P1, RAN；已修復：RC-79 | `aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內 |
 | G4.1.e | P1, READ | `quit()` 不是 `Quit` 事件：不關視窗、不能被否決 |
 | G4.1.f | P2, READ | `CoreApplication::new` 文件寫會 panic，實際沒有第二個實例檢查 |
-| G4.1.g | P1, READ | 無獨立的巢狀 `QEventLoop` |
+| G4.1.g | P1, RAN；已修復：RC-104 | 無獨立的巢狀 `QEventLoop` |
 | G4.1.h | P2 | `ExitCode::from(exit_code as u8)` 截斷 |
 | G4.1.i | P1, READ | `qtrs-widgets::Application` 在最後一個視窗被 `unregister_window` |
-| G4.2.a | P1, READ | **巢狀 `process_events` 靜默失效**：`CoreApplication::exec` 整個 `exec` 期間持有 `LOCAL_EVENT_LOOP.borr |
+| G4.2.a | P1, RAN；已修復：RC-105 | **巢狀 `process_events` 靜默失效**：`CoreApplication::exec` 整個 `exec` 期間持有 `LOCAL_EVENT_LOOP.borr |
 | G4.2.b | P2, READ | 只觸發計時器的一輪回傳 false |
 | G4.2.c | P2 | 無 `ExcludeUserInputEvents`／`WaitForMoreEvents`／`maxTime` |
 | G4.2.d | P2, READ | `WM_QUIT` 以 `PostQuitMessage(n)` 的 n 為 code |
@@ -1503,10 +1503,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.2.b | P2 | 每個 widget 一個髒矩形，合併為一個外框 |
 | G10.3.a | P1, RAN；已修復：RC-96 | 無 per-widget clip |
 | G10.3.b | P1, RAN；已修復：RC-95 | `EmptyWidget::set_geometry` 只使新矩形失效：**移動不會使舊位置失效** |
-| G10.3.c | P2 | `Painter::set_clip_rect` 取代而非相交，且忽略目前 transform |
-| G10.4.a | P1, READ | `set_clip_rect` **不經 transform** |
+| G10.3.c | P2, RAN；已修復：RC-103 | `Painter::set_clip_rect` 取代而非相交，且忽略目前 transform |
+| G10.4.a | P1, RAN；已修復：RC-103 | `set_clip_rect` **不經 transform** |
 | G10.4.b | P2, READ | `set_clip_rect` 取代而非相交：`ScrollArea` 內失去 widget 層的髒區 clip |
-| G10.4.c | P1, READ | `draw_text` 忽略旋轉與縮放，只轉換原點 |
+| G10.4.c | P1, RAN；已修復：RC-102 | `draw_text` 忽略旋轉與縮放，只轉換原點 |
 | G10.4.d | P1, READ | 無 render hints |
 | G10.4.e | P2, INFERENCE | `Painter::begin` 只要 ClearType 開就啟用 LCD 文字，與目的地 alpha 無關 |
 | G10.5.a | P1, 注意 | 既有測試 `rust/src/ui/tray_icon.rs::test_menu_text_does_not_depend_on_window_offset` **只涵蓋 `tr |
@@ -2987,7 +2987,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **根因**：沒有 scope level，閘門只比 loop level。
 - **修正**：`ScopeLevelGuard` 於 `notify_helper` 進入；`deferred_delete_deliverable` 依 Qt 公式比較 loop+scope 並處理 `postedBeforeOutermostLoop`；`EventLoop::exec` 設定 loop level。
 - **驗證**：`loop.rs` `test_nested_pump_inside_a_handler_keeps_its_delete_later_target_alive`（真實遞送路徑：handler 內 `delete_later` 後跑巢狀 pump）；暫時拿掉 `notify_helper` 的 guard 時 FAIL `loop.rs:2324:9 left: Some(false) right: Some(true)`（巢狀 pump 送達了 DeferredDelete）。`test_delete_later_inside_handler_scope_survives_nested_pump` 以手動 guard 驗證閘門公式。
-- **Residual**：`CoreApplication::process_events` 在 `exec` 內呼叫為靜默 no-op（`exec` 持有 `LOCAL_EVENT_LOOP` 的可變借用，G4.2.a）。
+- **Residual**：`CoreApplication::process_events` 在 `exec` 內呼叫為靜默 no-op（`exec` 持有 `LOCAL_EVENT_LOOP` 的可變借用，G4.2.a）。已由 RC-105 修正。
 
 #### RC-94 `CoreApplication::exec` 結束時 flush DeferredDelete（G3.5.b）
 - **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:1466-1489]` `exec` 在事件迴圈返回後呼叫 `execCleanup`，其中 `sendPostedEvents(nullptr, QEvent::DeferredDelete)`。`QEventLoop::exec` 不做這件事（gap 原文寫 `EventLoop::exec`，依 Qt 改在 `CoreApplication::exec`）。
@@ -3008,7 +3008,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：`render_widget_recursive` 在 translate 後以 `Painter::clip_to_rect(0,0,w,h)`（RC-95 新增）與現有 clip 求交集。
 - **Python 對照**（m2 以 PySide6 6.11.2 offscreen `grab()`，HUD 表格模式 450×350、相同 mock 資料）：Codex 週值 label 108 px 寬、文字 advance 118（`minimumSizeHint` 122），Antigravity 109 px／129（133）；QGridLayout 因表格只有 426 px 而把欄壓到最小值以下，Python 畫面顯示「2 % · MONTHL」「% · BURST LIM」——文字被裁在 label 自己的矩形內。Python HUD 設了明確最小尺寸（`hud_window.py:296`），視窗不會因 label 變寬（DraftN 的推論，`qlayout.cpp:1079-1087`）。
 - **驗證**：`test_geometry_invalidation.rs` `child_paint_is_clipped_to_its_own_geometry`，修正前 FAIL `test_geometry_invalidation.rs:139:5 'child paint stays inside its geometry' left (255,0,0,255) right (0,0,255,255)`。`--snapshot` 表格模式：週值顯示「92 % · MONTH」「5 % · BURST LIM」，裁在 label 矩形內，與 Python 相同。
-- **Residual**：文字比 label 寬時，Qt 置中後兩側都被裁（「2 % · MONTHL」）；qtrs 從左緣開始畫，只裁右側（「92 % · MONTH」）。label 對齊在溢出時的行為未修。
+- **Residual**：文字比 label 寬時，Qt 置中後兩側都被裁（「2 % · MONTHL」）；qtrs 從左緣開始畫，只裁右側（「92 % · MONTH」）。已由 RC-101 修正。
 
 #### RC-97 封鎖狀態屬於物件本身，不靠 registry（G2.4.b；G2.4.c 部分）
 - **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:4273]` `doActivate` 直接讀發射者自己的 `blockSig` 旗標；`blockSignals` 只切換這個 per-object 旗標。
@@ -3035,3 +3035,45 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：`qtrs-derive` 解析 `notify`，檢查它指向 payload 型別相同的 `#[signal]` 欄位；寫入且值改變、owner 未封鎖時發射。未知的 `#[property(...)]` 選項改為編譯錯誤；`readonly` + `notify` 暫不允許（Qt 允許 READ+NOTIFY 無 WRITE，記為限制）。
 - **驗證**：`derived_property_write_emits_notify_once_per_change` 修正前 FAIL `test_signal_owner_binding.rs:162 'notify not emitted on change' left [] right [5]`；`derived_property_notify_honours_block_signals` `:187 left 0 right 1`。
 - **共同驗證（RC-96..100）**：qtrs workspace（略過 `real_windows`）106 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG 產出，表格模式已目視。
+
+#### RC-101 對齊文字溢出時不夾到左緣，並裁在文字矩形內（RC-96 殘餘；Label、ProgressBar）
+- **Qt 依據**：`[QT-SRC gui/painting/qpainter.cpp:7415-7470]` `qt_format_text` 依對齊計算偏移（置中為 `(r.width()-width)/2`、靠右為 `r.width()-width`），不夾為非負；文字超出矩形且未設 `TextDontClip` 時裁在矩形內（7442-7446）。`QStyle::drawItemText` 不帶 `TextDontClip`。
+- **根因**：`label.rs`、`progress_bar.rs` 把對齊後的 x 偏移夾在 ≥0（或框邊），置中／靠右的溢出文字被釘在左緣，且不裁切。
+- **修正**：移除夾值；溢出時以內容矩形裁切（label 為框內距後的內容矩形，未含 margin／indent）。ProgressBar 水平與垂直文字同樣處理。
+- **驗證**：新 test binary `qtrs-widgets/tests/test_label_overflow_alignment.rs`：`centred_overflow_text_shifts_left_by_half_the_overflow` 修正前 FAIL「Center overflow must start at x=-5；first differing column Some(1)」；`right_overflow_text_is_not_clamped_to_the_left_edge`「Right overflow must start at x=-10；Some(0)」；`overflowing_label_text_is_clipped_to_the_label_rect_on_both_sides`「overflow text drawn outside the label rect at x=95 y=8」。`--snapshot` 表格模式週值顯示「2 % · MONTHL」「% · BURST LIM」，與 PySide6 offscreen 參考相同。
+- **Residual**：起點取整可能與 Qt 差 ±0.5 px；label 裁切矩形未計 margin／indent（`qlabel.cpp` 未開）。
+
+#### RC-102 `draw_text` 在旋轉／縮放下畫出變換後的字形（G10.4.c）
+- **Qt 依據**：raster engine 對非平移 transform 畫變換後字形或以 path 填色（`qpaintengine_raster.cpp:3094-3128`、`qpaintengine.cpp:720-765`；由 draft 引用，執行者未開）。
+- **根因**：`draw_text` 只映射字形原點，字形本身直立點陣化。
+- **修正**：transform 非純平移時改走 `text_path` + `fill_path`。
+- **驗證**：新 test binary `qtrs-gui/tests/test_text_transform_parity.rs`：`rotated_draw_text_rotates_the_glyph` 修正前 FAIL「rotated 'I' must be wide and flat: w=5 h=28」；`scaled_draw_text_scales_the_glyph`「ref_h=14 scaled_h=14」。
+- **Residual**：path 路徑非 Qt 的變換字形快取，非逐像素相同，失去 LCD／hinting／彩色字形；`text_path` 回 None 時不畫。
+
+#### RC-103 `set_clip_rect` 經目前 transform（ReplaceClip）（G10.4.a、G10.3.c）
+- **Qt 依據**：`[QT-SRC gui/painting/qpainter.cpp:2743-2832]` `setClipRect` 在使用者座標，預設 `Qt::ReplaceClip`；空矩形裁掉全部。
+- **根因**：`set_clip_rect` 存原始邏輯矩形，不經 transform。
+- **修正**：`set_clip_rect` 經 `user_rect_to_root_clip` 映射後取代 clip；`clip_to_rect` 與映射後矩形求交集。現有呼叫端（`backing_store.rs:149`、`window.rs` 一處）都在基礎 transform，輸出不變。
+- **驗證**：`set_clip_rect_is_mapped_through_the_transform` 修正前 FAIL「clip (0,0,10,10) under translate(100,0) must cover x=105: red(105)=0」。
+- **Residual**：旋轉下的 clip 取外接矩形，Qt 用 path clip（`qpainter.cpp:2772-2788`）；空／負寬矩形現在裁掉全部（以前不裁），無生產呼叫端傳空矩形。
+
+#### RC-104 同一執行緒的巢狀 `EventLoop` 各自 `exec`／`exit`，丟棄內層不破壞外層（G4.1.g）
+- **Qt 依據**：`[QT-SRC corelib/thread/qthread_p.h:65-86]` `QThreadData` 持有 eventLoops 堆疊；`[QT-SRC corelib/kernel/qeventloop.cpp:157-195, 260-273]` 每個 `QEventLoop` 有自己的 exit 旗標，`exec` 推入／彈出堆疊。
+- **根因**：`EventLoop::Drop` 取消註冊該執行緒的 timer context 與事件迴圈 handle，丟棄巢狀 loop 會拆掉外層的註冊；dispatcher／loop 方法取 `&mut self`，巢狀 pump 無法重入。
+- **修正**：每執行緒共用 `ThreadLoopState`（佇列、dispatcher、timer）與 running 堆疊（`LoopExit`、`RunningLoop` guard）；移除 `EventLoop::Drop`；dispatcher trait 與 `EventLoop` 方法改 `&self` 加內部鎖（unix notifier 鎖在呼叫 `notify()` 前釋放）。qtrs-core 新增 `parking_lot`（workspace 其他 crate 已使用）。連帶移除全 workspace 的多餘 `mut`（含 HUD `provider_card.rs`）。
+- **驗證**：`loop.rs` `inner_loop_exit_returns_only_the_inner_exec_and_the_outer_loop_keeps_running`，放回原 `Drop` 時 FAIL（watchdog：測試超過 10 s）。
+- **Residual**：同執行緒第二個 `EventLoop::new()` 共用 dispatcher，第一個建立者的 `DispatcherKind` 生效（macOS Gui／Core）；native event filter 執行中被重入時略過該 filter（避免死鎖，Qt 允許重入）；`QEventLoopLocker`、`quitNow` 未實作。
+
+#### RC-105 `exec` 期間的 `CoreApplication::process_events` 會 pump（G4.2.a）
+- **Qt 依據**：`QCoreApplication::processEvents` 交給目前執行緒的 event dispatcher（`qcoreapplication.cpp`），可在 `exec` 內呼叫。
+- **根因**：`exec` 全程持有 `LOCAL_EVENT_LOOP` 可變借用，`process_events` `try_borrow_mut` 失敗回 false。
+- **修正**：`process_events` 委派給目前執行緒正在執行的 `EventLoop`（`current_event_loop()`），不再需要可變借用。
+- **驗證**：新 test binary `test_application_process_events_in_exec.rs` `process_events_inside_exec_delivers_posted_events_before_returning`，暫時放回 `IN_EXEC` 早退時 FAIL `:148:5 left: ["trigger", "not-processed"] right: ["trigger", "nested", "processed"]`。
+
+#### RC-106 worker 執行緒的 `CoreApplication::exit` 結束主執行緒的 `exec`（G4.1.c）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:1522-1541]` `exit` 對 app 執行緒的 `QThreadData` 中所有 event loop 呼叫 exit；`quit()` 從其他執行緒 post `Quit`（2153-2158）；`[QT-SRC corelib/thread/qthread.cpp:754-767]` `QThread::exit` 結束該執行緒全部 loop。
+- **根因**：`exit` 以 `ThreadId::current()` 找 handle，worker 上找不到；`EventLoopHandle::exit` 只結束一個 loop。
+- **修正**：`exit` 送到 app 執行緒的 handle；`EventLoopHandle::exit` 要求該執行緒所有 running loop 結束（modal pump 收到 posted Quit 也改走這條）。
+- **驗證**：新 test binary `test_application_exit_from_worker_thread.rs` `exit_from_worker_thread_ends_exec_with_requested_code`，暫時把目標改回 `ThreadId::current()` 時 FAIL `:70:5 "backstop fired: exit() from a worker thread did not end exec"`；`loop.rs` `cross_thread_handle_exit_ends_every_loop_running_on_that_thread`，只結束最上層 loop 時 FAIL（watchdog）。
+- **Residual**：worker 呼叫 `exit` 時不發 `aboutToQuit`（Qt 在 `exit` 內無執行緒檢查地發一次，`qcoreapplication.cpp:1532-1535`，但文件說 `exit` 非 thread-safe、應用 `quit`）；G4.1.e（`quit` 應為可否決的 `Quit` 事件）、G4.1.i 未處理。HUD `main.rs` 的 `Application::exit(0)` 現在結束該執行緒全部 loop（與 Qt 相同）。
+- **共同驗證（RC-101..106）**：qtrs workspace（略過 `real_windows`）109 個 test binary 全 ok（另加 RC-106 測試，單獨跑通過）；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG，表格模式已目視。

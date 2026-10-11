@@ -141,7 +141,7 @@ fn test_queued_signal_cross_thread_dispatch() {
     let received = Arc::new(Mutex::new(String::new()));
     let rec_clone = Arc::clone(&received);
 
-    let mut event_loop = EventLoop::new();
+    let event_loop = EventLoop::new();
 
     signal.connect_queued(receiver_thread, move |val| {
         *rec_clone.lock().unwrap() = val.clone();
@@ -177,7 +177,7 @@ fn test_blocking_queued_signal_cross_thread_synchronization() {
     let processed = Arc::new(AtomicBool::new(false));
     let proc_clone = Arc::clone(&processed);
 
-    let mut event_loop = EventLoop::new();
+    let event_loop = EventLoop::new();
 
     signal.connect_blocking_queued(receiver_id, main_thread, move |val| {
         assert_eq!(*val, 777);
@@ -251,7 +251,7 @@ fn test_queued_signal_to_unregistered_receiver_never_runs() {
         .unwrap();
     unsafe { unregister_qobject(receiver_id) };
 
-    let mut event_loop = EventLoop::new();
+    let event_loop = EventLoop::new();
     event_loop.send_posted_events();
     assert!(
         !ran.load(Ordering::SeqCst),

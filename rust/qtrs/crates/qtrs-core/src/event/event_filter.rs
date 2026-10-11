@@ -1,5 +1,7 @@
 use crate::event::Event;
 use crate::object::ObjectId;
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 /// Event filter result matching Qt event filter return semantics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,13 +102,15 @@ pub trait NativeEventFilter: Send + Sync + 'static {
 
 #[derive(Default)]
 pub struct NativeEventFilterChain {
-    filters: Vec<Option<Box<dyn NativeEventFilter>>>,
+    /// Shared (`&self` access) so a dispatcher can run filters while a nested loop on the same
+    /// thread re-enters `process_events`. The list lock is never held across a filter call.
+    filters: Mutex<Vec<Arc<Mutex<Box<dyn NativeEventFilter>>>>>,
 }
 
 impl std::fmt::Debug for NativeEventFilterChain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NativeEventFilterChain")
-            .field("filters_count", &self.filters.len())
+            .field("filters_count", &self.filters.lock().len())
             .finish()
     }
 }
@@ -114,24 +118,25 @@ impl std::fmt::Debug for NativeEventFilterChain {
 impl NativeEventFilterChain {
     pub fn new() -> Self {
         Self {
-            filters: Vec::new(),
+            filters: Mutex::new(Vec::new()),
         }
     }
 
-    pub fn install(&mut self, filter: Box<dyn NativeEventFilter>) {
-        self.filters.insert(0, Some(filter));
+    pub fn install(&self, filter: Box<dyn NativeEventFilter>) {
+        self.filters.lock().insert(0, Arc::new(Mutex::new(filter)));
     }
 
     /// Filters native messages (`QAbstractEventDispatcher::filterNativeEvent`).
-    pub fn filter_native(
-        &mut self,
-        event_type: &str,
-        msg: &NativeMessage,
-        result: &mut isize,
-    ) -> bool {
-        for filter in self.filters.iter_mut().flatten() {
-            if filter.native_event_filter(event_type, msg, result) {
-                return true;
+    pub fn filter_native(&self, event_type: &str, msg: &NativeMessage, result: &mut isize) -> bool {
+        // Iterate a snapshot: a filter installed during the call applies from the next message.
+        let snapshot: Vec<_> = self.filters.lock().clone();
+        for filter in &snapshot {
+            // A filter already running further up this thread's stack (a nested loop reached it
+            // from inside its own callback) is skipped rather than blocking on its lock.
+            if let Some(mut filter) = filter.try_lock() {
+                if filter.native_event_filter(event_type, msg, result) {
+                    return true;
+                }
             }
         }
         false
@@ -275,7 +280,7 @@ mod tests {
             }
         }
 
-        let mut chain = NativeEventFilterChain::default();
+        let chain = NativeEventFilterChain::default();
         chain.install(Box::new(HotkeyFilter));
 
         let hotkey_msg = MSG {

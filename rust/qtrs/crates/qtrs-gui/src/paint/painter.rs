@@ -261,41 +261,57 @@ impl<'a> Painter<'a> {
         self.state.opacity = opacity.clamp(0.0, 1.0);
     }
 
-    // Sets the clip rectangle.
+    // Replaces the clip with `rect` given in the current user space, like
+    // `QPainter::setClipRect(QRectF)` (qpainter.cpp:2816,2828; qpainter.h:187): the rect is taken
+    // through the current transform and the clip is replaced, not intersected. An empty or
+    // unmappable rect clips everything.
     pub fn set_clip_rect(&mut self, rect: RectF) {
-        let tiny_r = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height);
-        self.state.clip_rect = tiny_r;
+        self.state.clip_rect = Some(self.user_rect_to_root_clip(rect));
     }
 
     // Intersects the clip with `rect` given in the current user space, like
     // `QPainter::setClipRect(rect, Qt::IntersectClip)` (qpainter.cpp:2798-2816): the rect is taken
-    // through the current transform. The clip is stored in root logical coordinates
-    // (`update_clip_mask_if_needed` scales it by the device-pixel ratio only), so the mapped rect is
-    // divided by that ratio. An empty intersection clips everything.
+    // through the current transform. An empty intersection clips everything.
     pub fn clip_to_rect(&mut self, rect: RectF) {
-        let dpr = self.device.device_pixel_ratio();
-        let mapped = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
-            .and_then(|r| r.transform(self.state.transform));
-        let logical = mapped.and_then(|m| {
-            tiny_skia::Rect::from_ltrb(
-                m.left() / dpr,
-                m.top() / dpr,
-                m.right() / dpr,
-                m.bottom() / dpr,
-            )
-        });
-        let clipped = match (self.state.clip_rect, logical) {
-            (Some(current), Some(new)) => current.intersect(&new),
-            (None, Some(new)) => Some(new),
-            (_, None) => None,
+        let new = self.user_rect_to_root_clip(rect);
+        let clipped = match self.state.clip_rect {
+            Some(current) => current.intersect(&new),
+            None => Some(new),
         };
         self.state.clip_rect = Some(clipped.unwrap_or_else(Self::empty_clip));
+    }
+
+    // Maps a user-space rect through the current transform into the root logical coordinates in
+    // which the clip is stored (`update_clip_mask_if_needed` scales it by the device-pixel ratio
+    // only, so the mapped rect is divided by that ratio). Unmappable rects become the empty clip.
+    fn user_rect_to_root_clip(&self, rect: RectF) -> tiny_skia::Rect {
+        let dpr = self.device.device_pixel_ratio();
+        tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+            .and_then(|r| r.transform(self.state.transform))
+            .and_then(|m| {
+                tiny_skia::Rect::from_ltrb(
+                    m.left() / dpr,
+                    m.top() / dpr,
+                    m.right() / dpr,
+                    m.bottom() / dpr,
+                )
+            })
+            .unwrap_or_else(Self::empty_clip)
     }
 
     // A zero-area clip admits no pixels; it is the representation of an empty intersection.
     fn empty_clip() -> tiny_skia::Rect {
         tiny_skia::Rect::from_xywh(0.0, 0.0, 0.0, 0.0)
             .expect("a zero-area rect at the origin is finite")
+    }
+
+    // True when the transform is the device-pixel-ratio scale plus a translation, i.e. the glyph
+    // cache's per-glyph origin mapping is exact.
+    fn text_transform_is_translate_only(&self) -> bool {
+        let t = self.state.transform;
+        let dpr = self.device.device_pixel_ratio();
+        const EPS: f32 = 1e-6;
+        (t.sx - dpr).abs() < EPS && (t.sy - dpr).abs() < EPS && t.kx.abs() < EPS && t.ky.abs() < EPS
     }
 
     // -------------------------------------------------------------------------
@@ -701,6 +717,24 @@ impl<'a> Painter<'a> {
         }
         let engines = resolve_font_engines_for_text_global(font, text);
         if engines.is_empty() {
+            return;
+        }
+
+        // Under rotation, scale or skew the translate-only glyph path below cannot place the
+        // glyphs, but Qt draws the transformed glyphs (qpaintengine_raster.cpp:3094-3128). Fill the
+        // glyph outlines with the pen colour instead; this is not pixel-identical to Qt's glyph cache.
+        if !self.text_transform_is_translate_only() {
+            if let Some(path) = Self::text_path(pos, text, font) {
+                let color = self
+                    .state
+                    .pen
+                    .as_ref()
+                    .map(|p| p.color)
+                    .unwrap_or(Color::BLACK);
+                let brush = std::mem::replace(&mut self.state.brush, Brush::Color(color));
+                self.fill_path_with_rule(&path, tiny_skia::FillRule::Winding);
+                self.state.brush = brush;
+            }
             return;
         }
 

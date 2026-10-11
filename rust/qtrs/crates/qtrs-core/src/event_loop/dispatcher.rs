@@ -33,25 +33,25 @@ pub trait EventDispatcherHandle: Send + Sync {
 pub trait EventDispatcher: Send + Sync {
     fn wake_up(&self);
     fn clone_handle(&self) -> Arc<dyn EventDispatcherHandle>;
-    fn install_native_event_filter(&mut self, filter: Box<dyn NativeEventFilter>);
+    fn install_native_event_filter(&self, filter: Box<dyn NativeEventFilter>);
     fn filter_native_event(
-        &mut self,
+        &self,
         event_type: &str,
         msg: &NativeMessage,
         result: &mut isize,
     ) -> bool;
     fn process_events(
-        &mut self,
+        &self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
     ) -> DispatchResult;
-    fn register_timer(&mut self, entry: &TimerEntry);
-    fn unregister_timer(&mut self, entry: &TimerEntry);
+    fn register_timer(&self, entry: &TimerEntry);
+    fn unregister_timer(&self, entry: &TimerEntry);
     /// Delivers due timers. Implementations lock `registry` only around bookkeeping, never while
     /// the timer event is sent, so a slot may stop or restart timers.
-    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>);
-    fn register_socket_notifier(&mut self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
-    fn unregister_socket_notifier(&mut self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
+    fn send_timer_events(&self, registry: &Mutex<TimerRegistry>);
+    fn register_socket_notifier(&self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
+    fn unregister_socket_notifier(&self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
     /// The concrete dispatcher's type name, like Qt's
     /// `QAbstractEventDispatcher::instance()->metaObject()->className()`.
     fn class_name(&self) -> &'static str {
@@ -96,12 +96,12 @@ impl EventDispatcher for GenericEventDispatcher {
         })
     }
 
-    fn install_native_event_filter(&mut self, filter: Box<dyn NativeEventFilter>) {
+    fn install_native_event_filter(&self, filter: Box<dyn NativeEventFilter>) {
         self.native_filters.install(filter);
     }
 
     fn filter_native_event(
-        &mut self,
+        &self,
         event_type: &str,
         msg: &NativeMessage,
         result: &mut isize,
@@ -110,7 +110,7 @@ impl EventDispatcher for GenericEventDispatcher {
     }
 
     fn process_events(
-        &mut self,
+        &self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
     ) -> DispatchResult {
@@ -138,11 +138,11 @@ impl EventDispatcher for GenericEventDispatcher {
         }
     }
 
-    fn register_timer(&mut self, _entry: &TimerEntry) {}
+    fn register_timer(&self, _entry: &TimerEntry) {}
 
-    fn unregister_timer(&mut self, _entry: &TimerEntry) {}
+    fn unregister_timer(&self, _entry: &TimerEntry) {}
 
-    fn send_timer_events(&mut self, _registry: &Mutex<TimerRegistry>) {}
+    fn send_timer_events(&self, _registry: &Mutex<TimerRegistry>) {}
 }
 
 /// Which creation path an event loop comes from, which decides its dispatcher, as in Qt:
@@ -215,13 +215,6 @@ impl DarwinEventDispatcher {
             Self::Unix(d) => d,
         }
     }
-
-    fn inner_mut(&mut self) -> &mut dyn EventDispatcher {
-        match self {
-            Self::Cocoa(d) => d,
-            Self::Unix(d) => d,
-        }
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -232,40 +225,38 @@ impl EventDispatcher for DarwinEventDispatcher {
     fn clone_handle(&self) -> Arc<dyn EventDispatcherHandle> {
         Arc::new(DarwinEventDispatcher::clone_handle(self))
     }
-    fn install_native_event_filter(&mut self, filter: Box<dyn NativeEventFilter>) {
-        self.inner_mut().install_native_event_filter(filter);
+    fn install_native_event_filter(&self, filter: Box<dyn NativeEventFilter>) {
+        self.inner().install_native_event_filter(filter);
     }
     fn filter_native_event(
-        &mut self,
+        &self,
         event_type: &str,
         msg: &NativeMessage,
         result: &mut isize,
     ) -> bool {
-        self.inner_mut()
-            .filter_native_event(event_type, msg, result)
+        self.inner().filter_native_event(event_type, msg, result)
     }
     fn process_events(
-        &mut self,
+        &self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
     ) -> DispatchResult {
-        self.inner_mut()
-            .process_events(can_wait, next_timer_timeout)
+        self.inner().process_events(can_wait, next_timer_timeout)
     }
-    fn register_timer(&mut self, entry: &TimerEntry) {
-        self.inner_mut().register_timer(entry);
+    fn register_timer(&self, entry: &TimerEntry) {
+        self.inner().register_timer(entry);
     }
-    fn unregister_timer(&mut self, entry: &TimerEntry) {
-        self.inner_mut().unregister_timer(entry);
+    fn unregister_timer(&self, entry: &TimerEntry) {
+        self.inner().unregister_timer(entry);
     }
-    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
-        self.inner_mut().send_timer_events(registry);
+    fn send_timer_events(&self, registry: &Mutex<TimerRegistry>) {
+        self.inner().send_timer_events(registry);
     }
-    fn register_socket_notifier(&mut self, notifier: &Arc<crate::event_loop::SocketNotifier>) {
-        self.inner_mut().register_socket_notifier(notifier);
+    fn register_socket_notifier(&self, notifier: &Arc<crate::event_loop::SocketNotifier>) {
+        self.inner().register_socket_notifier(notifier);
     }
-    fn unregister_socket_notifier(&mut self, notifier: &Arc<crate::event_loop::SocketNotifier>) {
-        self.inner_mut().unregister_socket_notifier(notifier);
+    fn unregister_socket_notifier(&self, notifier: &Arc<crate::event_loop::SocketNotifier>) {
+        self.inner().unregister_socket_notifier(notifier);
     }
     fn class_name(&self) -> &'static str {
         self.inner().class_name()
@@ -300,7 +291,7 @@ mod darwin_tests {
     fn a_core_loop_on_the_main_thread_uses_the_unix_dispatcher() {
         ThreadContext::init_current(true, None);
         let el = EventLoop::new();
-        let unix = matches!(el.dispatcher, DarwinEventDispatcher::Unix(_));
+        let unix = matches!(el.dispatcher(), DarwinEventDispatcher::Unix(_));
         drop(el);
         ThreadContext::clear_current();
         assert!(
@@ -313,7 +304,7 @@ mod darwin_tests {
     fn a_worker_loop_uses_the_unix_dispatcher() {
         let unix = std::thread::spawn(|| {
             let el = EventLoop::new();
-            matches!(el.dispatcher, DarwinEventDispatcher::Unix(_))
+            matches!(el.dispatcher(), DarwinEventDispatcher::Unix(_))
         })
         .join()
         .unwrap();
@@ -323,6 +314,6 @@ mod darwin_tests {
     #[test]
     fn a_gui_loop_uses_the_cocoa_dispatcher() {
         let el = EventLoop::with_dispatcher_kind(DispatcherKind::Gui);
-        assert!(matches!(el.dispatcher, DarwinEventDispatcher::Cocoa(_)));
+        assert!(matches!(el.dispatcher(), DarwinEventDispatcher::Cocoa(_)));
     }
 }

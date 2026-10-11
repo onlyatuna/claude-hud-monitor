@@ -30,7 +30,7 @@ fn test_self_deletion_during_event_dispatch() {
     // A click arrives inside the loop, so the dispatch runs from a posted callback inside
     // `EventLoop::exec` (loop level 1, qeventloop.cpp:161). Outside a loop Qt does not deliver a
     // DeferredDelete (qcoreapplication.cpp:1881-1885).
-    let mut event_loop = qtrs_core::event_loop::EventLoop::new();
+    let event_loop = qtrs_core::event_loop::EventLoop::new();
 
     let parent: WidgetRef = Rc::new(RefCell::new(Box::new(Frame::new())));
     parent.borrow().set_geometry(Rect::new(0, 0, 200, 200));

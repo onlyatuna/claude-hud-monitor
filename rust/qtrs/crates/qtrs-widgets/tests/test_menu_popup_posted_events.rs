@@ -27,7 +27,7 @@ fn cancel_menu(thread_id: u32) {
 
 #[test]
 fn events_posted_while_a_menu_is_open_are_delivered_before_it_closes() {
-    let mut event_loop = EventLoop::new();
+    let event_loop = EventLoop::new();
     let main_thread = ThreadId::current();
     let native_thread = unsafe { GetCurrentThreadId() };
     let log = Arc::new(Mutex::new(Vec::new()));

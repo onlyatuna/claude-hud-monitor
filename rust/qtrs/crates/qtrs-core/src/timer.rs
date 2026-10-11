@@ -892,7 +892,7 @@ mod tests {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::time::Duration;
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let mut timer = Timer::new();
         timer.set_interval(10);
         timer.set_single_shot(true);
@@ -1013,7 +1013,7 @@ mod tests {
         use crate::event_loop::EventLoop;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
 
         let mut timer = Timer::new();
         timer.set_interval(0);
@@ -1052,7 +1052,7 @@ mod tests {
         use crate::event_loop::EventLoop;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let fired = Arc::new(AtomicBool::new(false));
         let f = Arc::clone(&fired);
         let mut timer = Timer::new();
@@ -1081,7 +1081,7 @@ mod tests {
         use crate::event_loop::EventLoop;
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let count = Arc::new(AtomicU32::new(0));
         let c = Arc::clone(&count);
         let mut timer = Timer::new();
@@ -1109,7 +1109,7 @@ mod tests {
         use crate::event_loop::EventLoop;
         use std::sync::atomic::{AtomicU32, Ordering};
 
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         let count = Arc::new(AtomicU32::new(0));
         let c = Arc::clone(&count);
         let mut timer = Timer::new();
@@ -1218,7 +1218,7 @@ mod tests {
         use crate::event_loop::EventLoop;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let mut event_loop = EventLoop::new();
+        let event_loop = EventLoop::new();
         let executed = Arc::new(AtomicBool::new(false));
         let ex_clone = Arc::clone(&executed);
 

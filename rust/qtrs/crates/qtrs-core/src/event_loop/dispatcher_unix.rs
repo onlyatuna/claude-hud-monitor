@@ -422,12 +422,12 @@ impl EventDispatcher for UnixEventDispatcher {
         Arc::new(self.clone_handle())
     }
 
-    fn install_native_event_filter(&mut self, filter: Box<dyn NativeEventFilter>) {
+    fn install_native_event_filter(&self, filter: Box<dyn NativeEventFilter>) {
         self.native_filters.install(filter);
     }
 
     fn filter_native_event(
-        &mut self,
+        &self,
         event_type: &str,
         msg: &NativeMessage,
         result: &mut isize,
@@ -436,7 +436,7 @@ impl EventDispatcher for UnixEventDispatcher {
     }
 
     fn process_events(
-        &mut self,
+        &self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
     ) -> DispatchResult {
@@ -450,11 +450,17 @@ impl EventDispatcher for UnixEventDispatcher {
         let (awoken, expired_timers, triggered_sockets) = self.reactor.epoll_wait(timeout);
 
         if !triggered_sockets.is_empty() {
-            let notifiers = self.reactor.socket_notifiers.lock().unwrap();
-            for &(fd, ev) in &triggered_sockets {
-                if let Some(notifier) = notifiers.get(&(fd, ev)) {
-                    notifier.notify();
-                }
+            // Collect under the lock, then notify without it: a notifier may run a nested event
+            // loop that registers or unregisters notifiers, which would deadlock on this lock.
+            let notifiers: Vec<Arc<SocketNotifier>> = {
+                let map = self.reactor.socket_notifiers.lock().unwrap();
+                triggered_sockets
+                    .iter()
+                    .filter_map(|key| map.get(key).cloned())
+                    .collect()
+            };
+            for notifier in notifiers {
+                notifier.notify();
             }
         }
 
@@ -477,7 +483,7 @@ impl EventDispatcher for UnixEventDispatcher {
         }
     }
 
-    fn register_timer(&mut self, entry: &TimerEntry) {
+    fn register_timer(&self, entry: &TimerEntry) {
         self.reactor.register_timer(
             entry.id,
             Duration::from_millis(entry.interval_ms),
@@ -485,19 +491,19 @@ impl EventDispatcher for UnixEventDispatcher {
         );
     }
 
-    fn unregister_timer(&mut self, entry: &TimerEntry) {
+    fn unregister_timer(&self, entry: &TimerEntry) {
         self.reactor.unregister_timer(entry.id);
     }
 
-    fn register_socket_notifier(&mut self, notifier: &Arc<SocketNotifier>) {
+    fn register_socket_notifier(&self, notifier: &Arc<SocketNotifier>) {
         self.reactor.register_socket_notifier(notifier);
     }
 
-    fn unregister_socket_notifier(&mut self, notifier: &Arc<SocketNotifier>) {
+    fn unregister_socket_notifier(&self, notifier: &Arc<SocketNotifier>) {
         self.reactor.unregister_socket_notifier(notifier);
     }
 
-    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
+    fn send_timer_events(&self, registry: &Mutex<TimerRegistry>) {
         let now_ms = crate::timer::current_time_ms();
         let mut expired_ids = registry.lock().unwrap().expired_timers(now_ms);
 
@@ -551,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_unix_dispatcher_cross_thread_wakeup() {
-        let mut dispatcher = UnixEventDispatcher::new();
+        let dispatcher = UnixEventDispatcher::new();
         let handle = dispatcher.clone_handle();
 
         let thread_handle = std::thread::spawn(move || {
@@ -567,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_unix_dispatcher_timeout() {
-        let mut dispatcher = UnixEventDispatcher::new();
+        let dispatcher = UnixEventDispatcher::new();
         let start = Instant::now();
         let result = dispatcher.process_events(true, Some(Duration::from_millis(30)));
         assert_eq!(result, DispatchResult::Timeout);
@@ -576,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_unix_dispatcher_timer_integration() {
-        let mut dispatcher = UnixEventDispatcher::new();
+        let dispatcher = UnixEventDispatcher::new();
         let mut entry = TimerEntry::new(
             TimerId(101),
             20,
@@ -596,7 +602,7 @@ mod tests {
 
     #[test]
     fn test_unix_dispatcher_socket_notifier_activation() {
-        let mut dispatcher = UnixEventDispatcher::new();
+        let dispatcher = UnixEventDispatcher::new();
         let fd = 42; // Simulated socket FD (e.g. X11 or D-Bus)
         let notifier = Arc::new(SocketNotifier::new(fd, SocketEvent::Read));
 

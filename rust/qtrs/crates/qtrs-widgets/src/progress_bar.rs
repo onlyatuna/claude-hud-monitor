@@ -521,13 +521,23 @@ impl Widget for ProgressBar {
         painter.set_pen(Pen::new(self.text_color, 1.0));
         match self.orientation {
             Orientation::Horizontal => {
+                // The aligned offset is not clamped (qpainter.cpp:7426-7429); overflow is clipped
+                // to the bar rect (qpainter.cpp:7442-7446).
                 let x = match self.alignment {
                     Alignment::Left => 4.0,
-                    Alignment::Center => ((w - text_w) / 2.0).max(0.0),
-                    Alignment::Right => (w - text_w - 4.0).max(0.0),
+                    Alignment::Center => (w - text_w) / 2.0,
+                    Alignment::Right => w - text_w - 4.0,
                 };
-                let baseline = ((h - metrics.height) / 2.0).max(0.0) + metrics.ascent;
-                painter.draw_text(PointF::new(x, baseline), &text, &self.font);
+                let top = (h - metrics.height) / 2.0;
+                let overflow = x < 0.0 || top < 0.0 || x + text_w > w || top + metrics.height > h;
+                if overflow {
+                    painter.save();
+                    painter.clip_to_rect(RectF::new(0.0, 0.0, w, h));
+                }
+                painter.draw_text(PointF::new(x, top + metrics.ascent), &text, &self.font);
+                if overflow {
+                    painter.restore();
+                }
             }
             Orientation::Vertical => {
                 // Rotate so the text runs along the bar.
@@ -538,9 +548,18 @@ impl Widget for ProgressBar {
                 };
                 painter.translate(tx, ty);
                 painter.rotate(angle);
-                let x = ((h - text_w) / 2.0).max(0.0);
-                let baseline = ((w - metrics.height) / 2.0).max(0.0) + metrics.ascent;
-                painter.draw_text(PointF::new(x, baseline), &text, &self.font);
+                // In the rotated space the bar is h wide and w high.
+                let x = (h - text_w) / 2.0;
+                let top = (w - metrics.height) / 2.0;
+                let overflow = x < 0.0 || top < 0.0 || x + text_w > h || top + metrics.height > w;
+                if overflow {
+                    painter.save();
+                    painter.clip_to_rect(RectF::new(0.0, 0.0, h, w));
+                }
+                painter.draw_text(PointF::new(x, top + metrics.ascent), &text, &self.font);
+                if overflow {
+                    painter.restore();
+                }
                 painter.restore();
             }
         }

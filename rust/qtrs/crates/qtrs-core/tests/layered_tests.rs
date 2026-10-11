@@ -219,7 +219,7 @@ fn test_level2_loop_livelock_protection() {
         }
     }
 
-    let mut event_loop = EventLoop::new();
+    let event_loop = EventLoop::new();
     let counter = Arc::new(AtomicUsize::new(0));
 
     let mut receiver = LivelockObject {
@@ -254,7 +254,7 @@ fn test_level2_loop_livelock_protection() {
 /// 1. Timer and event loop exit test (with watchdog timeout)
 #[test]
 fn test_level3_timer_and_event_loop_exit() {
-    let mut event_loop = EventLoop::new();
+    let event_loop = EventLoop::new();
     let triggered = Arc::new(AtomicBool::new(false));
     let triggered_clone = Arc::clone(&triggered);
 
@@ -294,7 +294,7 @@ fn test_level3_timer_and_event_loop_exit() {
 /// 2. Cross-thread queued connection test (Worker -> UI Thread)
 #[test]
 fn test_level3_cross_thread_queued_connection() {
-    let mut event_loop = EventLoop::new();
+    let event_loop = EventLoop::new();
     let loop_handle = event_loop.handle();
     let received_data = Arc::new(Mutex::new(None));
     let received_data_clone = Arc::clone(&received_data);

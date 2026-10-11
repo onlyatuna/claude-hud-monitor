@@ -39,7 +39,7 @@ where
     let handle = std::thread::spawn(move || {
         id_tx.send(ThreadId::current()).unwrap();
         go_rx.recv().unwrap();
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         el.process_events(false);
         after_loop();
     });
@@ -88,7 +88,7 @@ fn events_posted_after_loop_exists_follow_the_buffered_ones() {
     let join = std::thread::spawn(move || {
         id_tx.send(ThreadId::current()).unwrap();
         go_rx.recv().unwrap();
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         ready_tx.send(()).unwrap();
         pump_rx.recv().unwrap();
         el.process_events(false);
@@ -141,7 +141,7 @@ fn single_shot_zero_before_loop_runs_after_earlier_posted_events() {
         let cb_log = Arc::clone(&thread_log);
         Timer::single_shot(0, move || cb_log.lock().unwrap().push("single-shot"));
         go_rx.recv().unwrap();
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         el.process_events(false);
         assert_eq!(*seen.lock().unwrap(), vec!["earlier-post", "single-shot"]);
     });
@@ -191,7 +191,7 @@ fn core_application_post_event_before_receiver_thread_has_loop_is_delivered() {
         unsafe { register_qobject(&mut rcv) };
         reg_tx.send(id).unwrap();
         go_rx.recv().unwrap();
-        let mut el = EventLoop::new();
+        let el = EventLoop::new();
         el.process_events(false);
         let delivered = rcv.got.load(Ordering::SeqCst);
         unsafe { unregister_qobject(id) };

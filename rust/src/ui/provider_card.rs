@@ -906,7 +906,7 @@ mod tests {
 
     #[test]
     fn test_inspect_card_layout_with_data() {
-        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let el = qtrs_core::event_loop::EventLoop::new();
         let config =
             std::sync::Arc::new(parking_lot::Mutex::new(crate::config::ConfigManager::load()));
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
