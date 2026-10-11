@@ -216,6 +216,11 @@ fn test_cross_platform_backdrop_and_click_through() {
     #[cfg(not(target_os = "macos"))]
     {
         use qtrs_platform::window_cocoa::CocoaNativeWindow;
+        // Qt: native windows belong to the thread that constructed the application
+        // (qcoreapplication.cpp:475, 531-537), so the application comes first on this thread.
+        let _app = qtrs_gui::application::GuiApplication::new(vec![
+            "test_platform_modern_features".to_string(),
+        ]);
         let mut cocoa_win = CocoaNativeWindow::new("CocoaHUD", rect, WindowFlags::FRAMELESS)
             .expect("Cocoa window creation should succeed");
         assert!(cocoa_win.set_backdrop(BackdropType::Acrylic, true));

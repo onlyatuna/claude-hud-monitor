@@ -55,7 +55,6 @@ mod harness {
     use std::process::{Command, ExitStatus};
     use std::time::{Duration, Instant};
 
-    use qtrs_core::object::{ThreadContext, ThreadId};
     use qtrs_gui::application::GuiApplication;
 
     use super::checks::{Recorder, CHECKS};
@@ -180,7 +179,6 @@ mod harness {
         }
 
         // `QTEST_MAIN`: the application first, on this thread.
-        ThreadContext::set_main_thread_id(ThreadId::current());
         let _app = GuiApplication::new(vec!["appkit_main_thread".to_string()]);
         objc::log_exceptions_for(name);
 

@@ -58,8 +58,8 @@ impl Thread {
         let handle = StdThreadBuilder::new()
             .name("qtrs-event-thread".to_string())
             .spawn(move || {
-                // A spawned thread is never the main thread; say so before anything on it can
-                // claim the process-wide main-thread id.
+                // A spawned thread is never the main thread; its own context answers
+                // `is_main_thread()` before anything can consult the application's main-thread id.
                 ThreadContext::init_current(false, None);
                 let mut event_loop = EventLoop::new();
                 let sender = event_loop.sender();

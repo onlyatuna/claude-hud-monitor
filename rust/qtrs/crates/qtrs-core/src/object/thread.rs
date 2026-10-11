@@ -4,7 +4,7 @@ use crate::object::ObjectId;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread::ThreadId as StdThreadId;
 
 use crate::event_loop::{EventQueue, PostedEvent};
@@ -82,7 +82,7 @@ pub struct ThreadContext {
 thread_local! {
     static CURRENT_THREAD_CONTEXT: RefCell<Option<ThreadContext>> = const { RefCell::new(None) };
 }
-static GLOBAL_MAIN_THREAD_ID: OnceLock<ThreadId> = OnceLock::new();
+static GLOBAL_MAIN_THREAD_ID: RwLock<Option<ThreadId>> = RwLock::new(None);
 static GLOBAL_THREAD_SENDERS: RwLock<Option<HashMap<ThreadId, EventSender>>> = RwLock::new(None);
 
 /// Registers a thread's event sender in the global registry.
@@ -168,12 +168,17 @@ impl ThreadContext {
         })
     }
 
-    pub fn set_main_thread_id(id: ThreadId) {
-        let _ = GLOBAL_MAIN_THREAD_ID.set(id);
+    /// Records the thread that constructed the application as the main thread, matching
+    /// `QCoreApplicationPrivate::mainThread` (qcoreapplication.cpp:475, 531-537). Overwrites on
+    /// each call and is not cleared on drop.
+    pub(crate) fn set_main_thread_id(id: ThreadId) {
+        *GLOBAL_MAIN_THREAD_ID.write().unwrap() = Some(id);
     }
 
-    pub fn main_thread_id() -> ThreadId {
-        *GLOBAL_MAIN_THREAD_ID.get_or_init(ThreadId::current)
+    /// The application's main thread, or `None` before any application has been constructed.
+    /// Never inferred from whichever thread asks first.
+    pub fn main_thread_id() -> Option<ThreadId> {
+        *GLOBAL_MAIN_THREAD_ID.read().unwrap()
     }
 
     pub fn is_main_thread() -> bool {
@@ -182,7 +187,7 @@ impl ThreadContext {
         {
             return is_main;
         }
-        ThreadId::current() == Self::main_thread_id()
+        Self::main_thread_id() == Some(ThreadId::current())
     }
 
     /// Whether this thread is the main UI thread.

@@ -131,6 +131,7 @@ impl CoreApplication {
 
         // Initialize main thread context
         ThreadContext::init_current(true, None);
+        ThreadContext::set_main_thread_id(ThreadId::current());
 
         let id = ObjectId::next();
         let about_to_quit = Signal::new();

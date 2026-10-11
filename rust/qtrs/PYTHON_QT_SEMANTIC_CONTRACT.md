@@ -138,7 +138,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `IMPLEMENTED-UNTESTED`：`ObjectData::drop` 解除連結並通知 parent。（`remove_owned_child` 已於 RC-01 移除，由 `reparent_owned` 取代。）
 - **Known gap**
   - **G2.1.a [P0, RAN；已修復：RC-01]** `set_parent(owned_child, None)` **銷毀 child**。舊 parent 的 `Box` 被搬進區域變數 `transferred`，沒有新 parent 接手就在函式結尾 drop；回傳型別 `()`，呼叫者拿不回所有權。
-  - **G2.1.b [P1, READ]** `add_owned_child` 不送 `ChildAdded`（Qt 在建構時帶 parent 就會送）。
+  - **G2.1.b [P1, RAN；已修復：RC-81]** （修復前）`add_owned_child` 不送 `ChildAdded`（Qt 在建構時帶 parent 就會送）。
   - **G2.1.c [P2, READ]** `ChildAdded/Removed` 經 `dispatch_to_object`／`event()` 直送，不經 `notify_helper`；object filter 與 application filter 看不到。
   - **G2.1.d [P1, READ]** parent 正被借用（dispatch 中）時 `with_object_mut` 回 `None`：`ObjectData::drop` 的解除連結與 `set_parent` 的 child-list 更新被**靜默略過**，留下 stale children id，事件遺失。
   - **G2.1.e [P2, READ]** 無自我 parent／環／跨執行緒檢查。
@@ -419,7 +419,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G6.1.c [P2, READ]** `disconnect_receiver`／`disconnect_all` 不清 `GLOBAL_CONNECTIONS`（洩漏、stale 記錄）。RC-02 之後 id 全域唯一，stale 記錄只剩**洩漏**，不再造成錯誤斷線；仍未修。
   - **G6.1.d [P1, READ]** 無 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線（`thread/channel.rs` 的 `connect_to_signal` 是 channel 適配器，不是）。
   - **G6.1.e [D]** slot 需 `Fn(&T) + Send + Sync + 'static`（不能捕捉 `Rc`）；每個 signal 單一型別載荷（多參數用 tuple）；無 PySide 的「參數多於 slot 時截斷」。理由：Rust 型別系統；須在 `qtrs` 文件說明。
-  - **G6.1.f [P1, READ]** `connect_with_type(Queued, …)` 只儲存 direct dispatcher，`emit` 時被當 direct 呼叫——「Queued」連線若不是用知道 receiver 的 `connect_*` 建立，會**靜默同步**。
+  - **G6.1.f [P1, RAN；已修復：RC-80]** （修復前）`connect_with_type(Queued, …)` 只儲存 direct dispatcher，`emit` 時被當 direct 呼叫——「Queued」連線若不是用知道 receiver 的 `connect_*` 建立，會**靜默同步**。
 - **Test**：既有如上。必要：`slot_disconnected_during_emit_is_not_called`（RAN 重現失敗）；`two_signals_each_connected_to_receiver_both_cut_on_destroy`（RAN 重現失敗）；`disconnect_on_signal_a_does_not_touch_signal_b_record`；`connect_with_type_queued_is_deferred_or_rejected`。
 - **HUD usage**：Python `.connect` 用於選單 action、計時器、`colorSchemeChanged`（`hud_window.py:76,87,88,104,441,660-793`；`tray_icon.py:52-120`；`main.py:74-98`）。Rust：全部是無 receiver 的 `Signal::connect` 閉包（`main.rs:356,374,422,431,517,542,557,579`）——**所以 G6.1.b 與 C6.4 目前碰不到**；`RefreshController.updated` 有宣告有 emit 但沒有任何 connect（grep `\.updated\.connect` 為空）。
 
@@ -500,11 +500,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 ### C7.1 執行緒身分
 - **Qt behavior** `[QT-DOC]`：`QThread::currentThread()`、`QObject::thread()`、`QCoreApplication::instance()->thread()`；主執行緒 = 建構 `QCoreApplication` 的執行緒。
 - **qtrs required**：MUST 可取得目前／物件所屬執行緒；`is_main_thread()` MUST 在任何非建構 Application 的執行緒上回 false，**與呼叫先後無關**。
-- **Current implementation**：`ThreadId` 包 `std::thread::ThreadId`；`main_thread_id()` 是 `get_or_init(ThreadId::current)`，**先呼叫者勝**；`set_main_thread_id` 從未被呼叫；`CoreApplication::new` 只設 TLS 旗標。
+- **Current implementation**：`ThreadId` 包 `std::thread::ThreadId`。RC-82 起：`CoreApplication::with_dispatcher_kind` 以 `set_main_thread_id`（`pub(crate)`）記錄建構執行緒；`main_thread_id()` 回 `Option<ThreadId>`，Application 建構前為 `None`，查詢不佔位。（修復前：`get_or_init(ThreadId::current)`，先呼叫者勝；僅 macOS 範例 `appkit_main_thread.rs` 預先呼叫 `set_main_thread_id` 繞過。）測試 `test_main_thread_first_caller.rs::application_constructing_thread_is_main_and_pool_worker_is_not`、`test_pool_worker_not_main.rs::pool_worker_is_not_main_thread_when_queried_first`。
 - **Known gap**
-  - **G7.1.a [P1, READ]** 無 TLS context 的執行緒（pool worker、一般 `std::thread`、HUD 熱鍵執行緒）若在別人初始化之前呼叫 `is_main_thread()`，自己會變成「主執行緒」。
+  - **G7.1.a [P1, RAN；已修復：RC-82]** （修復前）無 TLS context 的執行緒（pool worker、一般 `std::thread`、HUD 熱鍵執行緒）若在別人初始化之前呼叫 `is_main_thread()`，自己會變成「主執行緒」。
   - **G7.1.b [P2]** 無 `QObject::thread()`（只有自由函式 `query_object_thread`）。
-  - **G7.1.c [P1]** `ThreadPool` worker 從不呼叫 `init_current`。
+  - **G7.1.c [P1, RAN；已修復：RC-82]** （修復前）`ThreadPool` worker 從不呼叫 `init_current`，因此會落到「先呼叫者勝」而成為主執行緒。RC-82 後 worker 仍無 TLS context，但 `is_main_thread()` 回 false。
 - **Test**：必要：`main_thread_id_is_app_thread_even_if_worker_asks_first`；`pool_worker_is_not_main`。
 - **HUD usage**：Rust 把 UI 執行緒的 `ThreadId::current()` 傳進 `run_on_main_thread`（`main.rs:324,40-55`），不呼叫 `is_main_thread`；Python 無。
 
@@ -1272,12 +1272,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 109 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 113 項：G2.1.a、G2.1.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.d、G7.1.a、G7.1.c、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
 | G2.1.a | P0, RAN；已修復：RC-01 | `set_parent(owned_child, None)` **銷毀 child** |
-| G2.1.b | P1, READ | `add_owned_child` 不送 `ChildAdded` |
+| G2.1.b | P1, RAN；已修復：RC-81 | `add_owned_child` 不送 `ChildAdded` |
 | G2.1.c | P2, READ | `ChildAdded/Removed` 經 `dispatch_to_object`／`event()` 直送，不經 `notify_helper` |
 | G2.1.d | P1, READ | parent 正被借用 |
 | G2.1.e | P2, READ | 無自我 parent／環／跨執行緒檢查 |
@@ -1368,7 +1368,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.1.c | P2, READ | `disconnect_receiver`／`disconnect_all` 不清 `GLOBAL_CONNECTIONS` |
 | G6.1.d | P1, READ | 無 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線 |
 | G6.1.e | D | slot 需 `Fn(&T) + Send + Sync + 'static` |
-| G6.1.f | P1, READ | `connect_with_type(Queued, …)` 只儲存 direct dispatcher，`emit` 時被當 direct 呼叫——「Queued」連線若不是用知 |
+| G6.1.f | P1, RAN；已修復：RC-80 | `connect_with_type(Queued, …)` 只儲存 direct dispatcher，`emit` 時被當 direct 呼叫——「Queued」連線若不是用知 |
 | G6.2.a | P1, READ | receiver 執行緒在**連線時**擷取，且優先於即時查詢 |
 | G6.2.b | P2, READ | 同執行緒 BlockingQueued 直接呼叫 |
 | G6.2.c | P0, READ；已修復：RC-04 | 目標執行緒無 loop 時 queued 閉包忽略 `post_event_to_thread` 回傳值 → **queued slot 靜默遺失** |
@@ -1390,9 +1390,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.6.c | P2 | signal／property 型別名稱是 Rust 名 |
 | G6.6.d | P2 | `index_of_signal` 以名稱或完整簽章比對，property 的 notify signal 不解析成索引 |
 | G6.7.a | D | 無法表達「Python 風格鬆散 slot」 |
-| G7.1.a | P1, READ | 無 TLS context 的執行緒 |
+| G7.1.a | P1, RAN；已修復：RC-82 | 無 TLS context 的執行緒 |
 | G7.1.b | P2 | 無 `QObject::thread()` |
-| G7.1.c | P1 | `ThreadPool` worker 從不呼叫 `init_current` |
+| G7.1.c | P1, RAN；已修復：RC-82 | `ThreadPool` worker 從不呼叫 `init_current` |
 | G7.2.a | P0, READ；已修復：RC-04 | 目標執行緒無已註冊 loop 時回 false／靜默丟 |
 | G7.2.b | P2, READ | `EventSender::send` 直接推進 `q.events`，**不壓縮、無優先序、忽略 `insertion_offset`** |
 | G7.2.c | P2 | 兩份登記表可能分歧 |
@@ -2818,3 +2818,40 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `ABOUT_TO_QUIT_EMITTED` 在發 signal **之前**設定（Qt 在之後），以免 slot 內再呼叫 `exit()` 重入；差別只在 slot 重入 `exit()` 時 Qt 會再發一次 `[INFERENCE]`。
   - app 執行緒上遞送任何 posted `Quit`（即使接收者不是 app）都會發 `aboutToQuit`；既有 pump 對任何 `Quit` 都結束 loop，未改。
   - G4.1.c（worker 執行緒 `exit()` 靜默 no-op，也不發 `aboutToQuit`）、G4.1.e 未處理。HUD 未連接 `aboutToQuit`（`main.rs` 只在 `exec` 內呼叫 `Application::exit(0)`），行為不受影響。
+
+#### RC-80 `connect_with_type` 拒絕 Queued／BlockingQueued
+
+- **Contract gaps**：G6.1.f。
+- **Qt 行為**：`QueuedConnection` 一律經 `queued_activate` post，即使同執行緒（`[QT-SRC corelib/kernel/qobject.cpp:4346-4350]`）；同執行緒的 `BlockingQueuedConnection` 是死結警告，不是直接呼叫（`:4351-4356`）。
+- **修改前**：`Signal::connect_with_type`（`qtrs-core/src/signal/signal.rs`）對任何 `ConnectionType` 都建 `SlotDispatcher::Direct`；`emit` 的 Queued 分支遇到 Direct dispatcher 同步呼叫 slot，「Queued」連線靜默變同步。
+- **修正**：`connect_with_type` 在取鎖前 `assert!` 拒絕 Queued 與 BlockingQueued，訊息指向 `connect_queued`、`connect_blocking_queued`、`connect_object`（這些入口帶 receiver 執行緒與 `T: Clone + Send` 界限）。此入口沒有 receiver 執行緒也沒有 `T: Clone + Send` 界限，無法建出 queued dispatcher。
+- **Evidence**：`RAN`（本機 Windows）。`test_signal_direct_and_queued.rs::connect_with_type_queued_is_deferred_or_rejected`、`connect_with_type_blocking_queued_is_rejected`：修改前 FAIL（`test did not panic as expected`）；修改後通過（該檔 7 passed）。HUD 只用無 receiver 的 `Signal::connect`（Direct），不受影響。
+- **Residual**：Qt 的 functor `QueuedConnection` 以 sender 為 context，會 post 到 sender 執行緒；qtrs 改為拒絕（刻意的 API 限制，C6.1 允許「deferred or rejected」）。
+
+#### RC-81 `add_owned_child` 送 `ChildAdded`
+
+- **Contract gaps**：G2.1.b。
+- **Qt 行為**：`QObjectPrivate::setParent_helper` 把 child 加入 `children` 後，對 parent `sendEvent(QChildEvent(ChildAdded))`（非 widget；`[QT-SRC corelib/kernel/qobject.cpp:2347-2352]`）；跨執行緒 parent 被拒（`:2341-2345`）。
+- **修改前**：`ObjectData::add_owned_child(&mut self, Box<T>)` 只設 parent、登記、推進 `owned_children`，不送事件；它拿的是 parent 的 `&mut ObjectData`，無法在 parent 借用期間派送。
+- **修正**（`qtrs-core/src/object/qobject.rs`）：刪除該方法（clean cutover），新增自由函式 `unsafe fn add_owned_child(parent_id, Box<T>) -> Result<ObjectId, (ReparentError, Box<T>)>`：在 `with_object_mut(parent_id, …)` 內掛上 child，借用釋放後以 `notify_helper` 送 `ChildAdded`（同 `reparent_owned` 模式，filter 看得到）；parent 未登記回 `UnknownObject`、被借用回 `Busy`，兩者都把 `Box` 還給呼叫者。
+- **Evidence**：`RAN`（本機 Windows）。
+  - 修改前：以舊方法寫的探針測試 FAIL（`left: [] right: ["added 2"]`，parent 沒收到 `ChildAdded`）。
+  - 修改後：`test_owned_child_ownership.rs::add_owned_child_sends_child_added`、`add_owned_child_fails_visibly_when_parent_is_borrowed` 通過；該檔 9 passed，`test_qobject_lifecycle_and_hierarchy` 7 passed，`test_qobject_safety_and_qt6_features` 6 passed。
+  - 改寫（§0 規則 4）：`with_object_mut_node` 在 parent 借用中掛 child（釘住 Qt 不會有的「借用中靜默掛上」），改為 `attach_grandchild` 在借用外掛上；`reparent_owned_notifies_both_parents_through_event_filters` 的預期加入掛上時的 `ChildAdded`；生命週期測試改為先登記中間 parent 再掛孫物件。
+- **Residual**：qtrs core 沒有 `sendChildEvents`／`receiveChildEvents` 旗標，所有掛上都送。G2.1.d（`ObjectData::drop`／`set_parent` 跳過被借用的 parent）未處理。
+
+#### RC-82 主執行緒由 Application 建構決定，查詢不佔位
+
+- **Contract gaps**：G7.1.a、G7.1.c。
+- **Qt 行為**：`QThread::isMainThread()` 只比對 `currentThreadId() == theMainThreadId`，不 adopt（`[QT-SRC corelib/thread/qthread.cpp:416-419]`）；`QCoreApplicationPrivate` 建構時呼叫 `QThread::currentThread()`，在 `theMainThreadId` 未設時由 `QAdoptedThread` 設成建構執行緒（`[QT-SRC corelib/kernel/qcoreapplication.cpp:475-477]`、`[QT-SRC corelib/thread/qthread.cpp:97-114]`）。
+- **修改前**：`ThreadContext::main_thread_id()` 是 `OnceLock::get_or_init(ThreadId::current)`，第一個查詢的無 TLS 執行緒（pool worker、一般 `std::thread`）會成為主執行緒；`CoreApplication` 只設 TLS 旗標。
+- **修正**（`qtrs-core/src/object/thread.rs`、`application/mod.rs`）：`GLOBAL_MAIN_THREAD_ID: RwLock<Option<ThreadId>>`；`CoreApplication::with_dispatcher_kind` 呼叫 `set_main_thread_id(ThreadId::current())`（改為 `pub(crate)`，覆寫語意，drop 不清除）；`main_thread_id()` 回 `Option<ThreadId>`；`is_main_thread()` 的退路改為 `main_thread_id() == Some(current)`。移除 macOS 範例 `appkit_main_thread.rs` 的預先 `set_main_thread_id` 繞法；更正 `thread/thread.rs` 過時註解。
+- **Evidence**：`RAN`（本機 Windows）。
+  - `test_main_thread_first_caller.rs::application_constructing_thread_is_main_and_pool_worker_is_not`：修改前 FAIL（`left: Ok(true) right: Ok(false)`，pool worker 成為主執行緒）；修改後通過。
+  - `test_pool_worker_not_main.rs::pool_worker_is_not_main_thread_when_queried_first`：修改前 FAIL（同上）；修改後通過。兩者各自獨立 binary（主執行緒 id 為行程全域）。
+  - 改寫：`qtrs-platform` `test_cross_platform_backdrop_and_click_through` 先前只因自己是第一個查詢者而被當主執行緒；改為先在測試執行緒建構 `GuiApplication`。
+  - qtrs workspace（略過 `real_windows`）與 HUD 測試、clippy `-D warnings`、`cargo fmt --check` 通過（m2 執行）。
+- **Residual**：
+  - 覆寫語意：第二個 Application 會取代主執行緒 id（Qt 斷言只有一個實例，G4.1.f）。
+  - Qt 中 worker 若先呼叫 `QThread::currentThread()` 會被 adopt 為主執行緒；qtrs 沒有對應的 adopt 機制 `[INFERENCE]` 差異只在 Application 建構前。
+  - pool worker 仍無 TLS context（不影響 `is_main_thread()`）。macOS 範例的 macOS 路徑未在本機執行。
