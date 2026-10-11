@@ -537,18 +537,9 @@ fn main() -> std::process::ExitCode {
         });
 
     // Connect worker thread results callback
-    let refresh_ctrl_clone = Arc::clone(&refresh_ctrl);
     refresh_ctrl.lock().set_notify_callback(move || {
-        let ctrl_clone = Arc::clone(&refresh_ctrl_clone);
-        run_on_main_thread(main_thread_id, move |hud| {
-            let updates = {
-                let mut ctrl = ctrl_clone.lock();
-                let providers = hud.borrow().providers.clone();
-                ctrl.drain_results(&providers)
-            };
-            for update in updates {
-                hud.borrow_mut().on_data_fetched(&update);
-            }
+        run_on_main_thread(main_thread_id, |hud| {
+            hud.borrow_mut().drain_refresh_results()
         });
     });
 
@@ -569,20 +560,10 @@ fn main() -> std::process::ExitCode {
 
     let mut poll_timer = Timer::new();
     poll_timer.set_interval(100);
-    let refresh_ctrl_poll = Arc::clone(&refresh_ctrl);
     poll_timer.timeout.connect(move |()| {
         MAIN_HUD.with(|cell| {
             if let Some(hud) = cell.borrow().as_ref() {
-                let providers = hud.borrow().providers.clone();
-                let updates = {
-                    let mut ctrl = refresh_ctrl_poll.lock();
-                    ctrl.poll(&providers)
-                };
-                for update in updates {
-                    hud.borrow_mut().on_data_fetched(&update);
-                }
-                let busy = refresh_ctrl_poll.lock().is_busy();
-                hud.borrow_mut().set_busy(busy);
+                hud.borrow_mut().poll_refresh();
             }
         });
     });

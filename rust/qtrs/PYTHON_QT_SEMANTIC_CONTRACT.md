@@ -388,10 +388,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G5.5.a [P2, READ]** 無 context 版本、無取消。
   - **G5.5.b [P1, READ]** 執行緒無 loop 時 `single_shot` 靜默丟 callback（0 ms 時 `post_event_to_thread` 回 false）。
-  - **G5.5.c [P2]** 類型恆為 `Coarse`（Qt <2 s 為 `Precise`）；在 20 ms < interval < 20 s 內排程數學相同，無可觀察差異。
+  - **G5.5.c [P2]** 類型恆為 `Coarse`（Qt <2 s 為 `Precise`，`[QT-SRC qtimer.h:176-183]` `defaultTypeFor`）。原本寫「在 20 ms < interval < 20 s 內排程數學相同，無可觀察差異」不成立：Qt 的 `Precise` 不會提早觸發，`Coarse` 可在 5% 容差內提早（C5.6）。RC-73 的 150／1000 ms trim 經此路徑；G12.5.h 稽核 probe 量到約 185／1020 ms，只證明 callback 有觸發，不證明與 Qt 等價。未修。
   - **G5.5.d [P2]** callback 必須 `Send + 'static` 且只在呼叫執行緒執行。
 - **Test**：必要：`single_shot_ms_fires_once_via_exec`（Windows，30 ms，斷言恰一次且 callback map 為空）；`single_shot_zero_runs_after_earlier_posted_events`（FIFO）。
-- **HUD usage**：Python `QTimer.singleShot(300|2500|0|1000|0|150, …)`（`hud_window.py:108,114,215,459,613,617`）。Rust 只用 `single_shot(0, …)`（`main.rs:425,457`）與 `single_shot(2500, trim_memory)`（`:594`）。**Python 的 300／1000／150 ms 單發在 Rust 沒有對應**（見 G12.5.h）。
+- **HUD usage**：Python `QTimer.singleShot(300|2500|0|1000|0|150, …)`（`hud_window.py:108,114,215,459,613,617`）。Rust：`single_shot(0, …)`（`main.rs:425,457`）；`single_shot(2500, trim_memory)`（`main.rs:573`，在視窗、托盤、熱鍵都建好之後才排程，Python 在 `HUDWindow.__init__` 結尾排程，起點不同、差距未量測）；RC-73 起 `single_shot(150|1000, trim)`（`hud_window.rs:168-177` `schedule_trim`）。**Python 的 300 ms 單發（啟動 click-through）在 Rust 仍沒有對應**（見 G12.5.h）。
 
 ### C5.6 計時器類型、精度、remainingTime
 - **Qt behavior** `[QT-SRC qeventdispatcher_win.cpp:302-343; qtimer.cpp:705-718]`：coarse 最長 20 s、5% 容差，低於 20 ms 轉 precise，高於 20 s 轉 very-coarse（**間隔**取整到秒）；precise 用 `timeSetEvent`，其餘 `SetCoalescableTimer`；`remainingTime` 為 `ceil`，非啟動 `-1`，逾期 `0`。
@@ -903,7 +903,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G11.2.a [P1, READ；已修復：RC-06]** 無 `Window::is_visible()`；Rust `HUDWindow.is_visible` 是自行追蹤的 bool（`hud_window.rs:131,518-523`）。
   - **G11.2.b [P0, READ；已修復：RC-06]** `CloseRequest` 在 `WindowEventHandler` 被 `_ => {}` 吞掉（grep `CloseRequest` 於 `rust/src`、`qtrs-widgets/src` 為空）。**Alt+F4 什麼也不做**；Python 會隱藏 HUD 並儲存幾何。
-  - **G11.2.c [P0, READ；已修復：RC-06]** 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust 對應（Rust 在 `hide()` 裡直接做，`hud_window.rs:479-485`）。
+  - **G11.2.c [P0, READ；已修復：RC-06]** 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust 對應（修復前 Rust 在 `hide()` 裡直接做）。RC-06 修的是框架：`Window::hide`／關閉要求會把 `Hide` 送到 `set_window_event_handler`。HUD 端的 hide→150 ms trim 直到 RC-73 才接上（`hud_window.rs:502`）；在那之前 `hide()` 同步 trim、Alt+F4 不 trim（G12.5.h）。
   - **G11.2.d [P2]** 無 `Expose` 重繪（分層 presenter 保留內容，非分層 `Win32DcPresenter` 視窗被遮蓋後不會重繪）。
   - **G11.2.e [P1, READ]** `Application::unregister_window` 在 drop 時、`quit_on_last_window_closed` 為 true 就呼叫 `quit`；Qt 在**關閉**時發 `lastWindowClosed`，不是銷毀時。
   - **G11.2.f [P2]** `GuiApplication::set_application_state`、`last_window_closed`、`focus_window_changed` 從不發射。
@@ -1124,7 +1124,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | `setStyleSheet`（widget 與 app 串接） | 見 C12.3 | OK（子集） | C8.5 |
 | ctypes `SetWindowCompositionAttribute` | `vibrancy.py:75-144` | OK | C11.7 |
 | ctypes `RegisterHotKey` 執行緒 | `hotkey.py:34-116` | OK（自有 FFI） | C11.9 |
-| ctypes `EmptyWorkingSet` | `memory.py:32-39` | OK（時機不同） | G12.5.h |
+| ctypes `EmptyWorkingSet` | `memory.py:32-39` | OK（hide 150 ms、閒置 1000 ms：RC-73；啟動 2500 ms 起點不同） | G12.5.h |
 | pynput（macOS）、`NSVisualEffectView`、ObjC click-through | `hotkey.py:118-149`、`vibrancy.py:38-72` | ABSENT／未驗證 | G11.9.b |
 | `QThread`、`QPropertyAnimation`、`QGraphicsEffect`、`QSettings` | **HUD 不使用** | qtrs 有 `Thread`、`PropertyAnimation`、`Settings`；`QGraphicsEffect` ABSENT | 範圍外（§1.2） |
 
@@ -1182,7 +1182,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.x [P2] | `Power::Resume`／`Suspend`（`WM_POWERBROADCAST`）目前沒有 toolkit consumer：`qtrs-widgets` `Window::handle_window_event` 的 `_ => {}` 丟棄 `WindowSystemEvent::Power`，HUD 也未連接 `TrayIcon::on_power_event`。Qt 本身沒有 suspend/resume 事件（`qwindowscontext.cpp` 只處理 `PBT_POWERSETTINGCHANGE`，顯示器喚醒時 `InvalidateRect`），所以這是 qtrs 擴充，與 RC-18 無關 | `window.rs:1126`、`window.rs`(widgets):1508；`qwindowscontext.cpp:271-298` | 待決策 |
 | G12.5.f [P0, READ；已修復：RC-06] | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 | `window.rs:1025`（platform 有發 release）；`window.rs:771-815` | 修復 |
 | G12.5.g [P0, READ；= G11.2.b；已修復：RC-06] | Alt+F4 / `CloseRequest` 被吞 | G11.2.b | 修復 |
-| G12.5.h [P1] | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms（啟動後 trim）；Rust 在 `hide()` 立即 trim，且只有 2500 ms | `hud_window.py:108,114,215,459,613,617` vs `hud_window.rs:484`、`main.rs:594` | 修復或核准 |
+| G12.5.h [P1；部分修復：RC-73] | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms（啟動後 trim）。修復前 Rust 在 `hide()` 立即 trim、Alt+F4 不 trim、busy→idle 不 trim，只有 2500 ms。RC-73 修了 150 與 1000 ms。**殘餘**：(1) 300 ms：Python 建構時視窗可互動，300 ms 後先檢查 click-through 熱鍵再套用穿透（`hud_window.py:106-108,426-437`）；Rust 建構時就依設定套用穿透，`main.rs` 的熱鍵檢查之後才可能撤銷（`main.rs:510-525`），影響啟動期間滑鼠是否作用於 HUD，持續時間未量測，嚴重度待定。(2) 2500 ms 的起點不同（Python `HUDWindow.__init__` 結尾，Rust `main.rs:573` 在托盤與熱鍵之後），差距未量測，不稱等價。 | `hud_window.py:108,114,459,617` vs `hud_window.rs:168-177,502,638-646`、`main.rs:510-525,573` | 300 ms 待量測後修復或核准；2500 ms 低優先 |
 | G12.5.i [P0, READ；= G8.8.a；已修復：HUD tooltip 接線] | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） | G8.8.a | 修復 |
 | G12.5.j [P0, READ；= G11.9.a；已修復：RC-12] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
 | G12.5.k [P1] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 修復 |
@@ -1526,7 +1526,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.1.d | P1, READ；已修復：RC-27 | `Application::active_window()` 從不被設定，無 `ActivationChange`／`isActiveWindow`（`is_active` 尚未接到 toolkit 層）。**已修復：RC-27**（`ActivationChange` 等見 C11.1） |
 | G11.2.a | P1, READ；已修復：RC-06 | 無 `Window::is_visible()` |
 | G11.2.b | P0, READ；已修復：RC-06 | `CloseRequest` 在 `WindowEventHandler` 被 `_ => {}` 吞掉 |
-| G11.2.c | P0, READ；已修復：RC-06 | 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust  |
+| G11.2.c | P0, READ；已修復：RC-06 | 無 `showEvent/hideEvent/closeEvent` hook：Python 的「show 時重新套用主題」「hide 時 trim_memory」沒有 Rust（HUD 端 trim：RC-73） |
 | G11.2.d | P2 | 無 `Expose` 重繪 |
 | G11.2.e | P1, READ | `Application::unregister_window` 在 drop 時、`quit_on_last_window_closed` 為 true 就呼叫 `quit` |
 | G11.2.f | P2 | `GuiApplication::set_application_state`、`last_window_closed`、`focus_window_changed` 從不發射 |
@@ -1610,7 +1610,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.x | P2 | `Power::Resume`／`Suspend` 目前沒有 toolkit consumer（Qt 本身亦無此事件；與 RC-18 獨立） |
 | G12.5.f | P0, READ；已修復：RC-06 | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 |
 | G12.5.g | P0, READ；= G11.2.b；已修復：RC-06 | Alt+F4 / `CloseRequest` 被吞 |
-| G12.5.h | P1 | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms |
+| G12.5.h | P1；部分修復：RC-73 | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms；殘餘 300 ms 與 2500 ms 起點 |
 | G12.5.i | P0, READ；= G8.8.a；已修復：HUD tooltip 接線 | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） |
 | G12.5.j | P0, READ；= G11.9.a；已修復：RC-12 | 熱鍵註冊失敗不被回報；鎖定防護失效 |
 | G12.5.k | P1 | `--smoke-test` 不檢查設定持久化 |
@@ -1832,7 +1832,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
     - `window.rs`：`WindowCore`（`show`／`hide`／`close` 與原生 `CloseRequest` 共用 `handleClose`、`show_helper`、`hide_helper` 的順序）；`Window::close`、`Window::is_visible`、`Window::set_window_event_handler`（收 `Close`／`Show`／`Hide`／`Move`，以及沒有 widget 處理的 `MouseButtonRelease`／`MouseButtonDblClick`；忽略雙擊則退回 press handler）。`Move` 送給 window widget（root）。順帶修正：`WindowEventHandler` 原本持有建構時的 root 副本，`set_root_widget` 後事件仍送舊 root；現在一律取 `render_state.root`。
     - 平台層：`WindowSystemEvent::MouseDoubleClick`；`WM_*DBLCLK` 改送它；視窗類別加 `CS_DBLCLKS`（Qt 同）。Qt 的 widget 層不會收到雙擊的第二次 press（`qwidgetwindow.cpp:570,680`），序列是 Press、Release、DblClick、Release，與此一致。
     - 內建 widget：`Button`／`ScrollBar` 忽略非左鍵 press／release；`EmptyWidget` 與 `ProgressBar` 的預設 wheel 不再吞掉（回 false），滾輪才能到達 `ScrollArea`。
-  - **行為改變（需注意）**：Alt+F4／關閉要求現在**隱藏視窗**（以前什麼都不做）。`Window::hide` 現在會讓 `is_visible()` 為 false，HUD 的 `toggle_visibility` 改用它取代自己追蹤的 bool（以前 `main.rs:405,441` 直接呼叫 `window.hide()` 時該 bool 會失真）。關閉路徑**不會**呼叫 HUD 的 `persist_geometry`／`trim_memory`——Python 在 `closeEvent`／`hideEvent` 做這兩件事，需要 HUD 以 `set_window_event_handler` 註冊（RC-17）。
+  - **行為改變（需注意）**：Alt+F4／關閉要求現在**隱藏視窗**（以前什麼都不做）。`Window::hide` 現在會讓 `is_visible()` 為 false，HUD 的 `toggle_visibility` 改用它取代自己追蹤的 bool（以前 `main.rs:405,441` 直接呼叫 `window.hide()` 時該 bool 會失真）。關閉路徑**不會**呼叫 HUD 的 `persist_geometry`／`trim_memory`——Python 在 `closeEvent`／`hideEvent` 做這兩件事，需要 HUD 以 `set_window_event_handler` 註冊（幾何：RC-17；trim：RC-73）。
   - **驗證**：`qtrs` workspace exit 0、68 個 test binary ok；主 crate 見提交說明。**未做** HUD 手動操作（Alt+F4、雙擊、拖曳、右鍵、滾輪）——只有上述測試與 `SendMessageW` 模擬的原生訊息；測試通過不等於真滑鼠行為已驗證。
   - **未涵蓋**：G8.4.h（`MouseMove` 傳遞、非 Win32 的雙擊偵測）、G8.4.i、G11.2.h；press grab、enter／leave 祖先鏈、tooltip（RC-11）、右鍵選單在 release 觸發（G8.4.f）。
   - **HUD workaround 未移除**：`hud_window.rs:352` 的 `set_mouse_press_handler` 拖曳／縮放仍在，且仍是唯一的拖曳來源；依本條規定須以 `mousePressEvent` 冒泡重寫後逐一移除，並重跑 HUD 快照與 layout harness。
@@ -2670,3 +2670,37 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.9.a | 降為 **P2，待驗證**（非 `D`） | 讀碼推翻 P0 主張：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於第一個 worker／熱鍵執行緒（`hud_window.rs:408`、`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`）在註冊前啟動，但只寫 atomic。**不等於所有 interleaving 皆安全**；它是 RC-04 的一個假設性表現，RC-04 修復後自然消除 |
 | G9.6.a | 降為 **P1**（非 `D`）；已修復：RC-24 | Python HUD 不使用 `QStackedLayout`（重建 layout）；Qt 的 `sizeHint`／`minimumSize` 取**所有頁面**的最大值 `[QT-SRC qstackedlayout.cpp:417-448]`，qtrs 只看當前頁（`stacked.rs:123-147`）。與 Qt 不同是事實，但目前 HUD 不依賴；**P0 階段不修**，待 qtrs 的 API 範圍擴大再處理。**已修復：RC-24** |
 | G12.5.d 的 timer 部分（已結案：沿用既有 `ResizeDebouncer`，未新增 timer） | 見 RC-17 | 不得為了 parity 而新增 timer／debounce，除非先證明它不是在補 qtrs 缺陷 |
+
+#### RC-73 HUD 記憶體 trim 生命週期：hide 與閒置完成
+
+- **Contract gaps**：G12.5.h（部分修復：150 ms、1000 ms 兩條鏈；300 ms 與 2500 ms 起點留作殘餘）。同時更正 G11.2.c、G5.5.c 與 C5.5 的描述。總數不變（373）；已修復數不變（94），G12.5.h 仍為開放的 P1。
+- **範圍**：只改 HUD 應用層。qtrs 的事件投遞（RC-04、RC-68）與計時器精度（G5.5.c）不在本條，未修改。
+- **Python 行為**：
+  - `hideEvent` → `QTimer.singleShot(150, trim_memory)`（`hud_window.py:615-617`）。`QWidget::hide` 經 `hide_helper` 送 `QHideEvent` `[QT-SRC widgets/kernel/qwidget.cpp:8238-8263]`；`closeEvent` 接受後同樣經此隱藏，所以 Alt+F4 也會 trim。
+  - `RefreshController._complete` 對每個有效結果先發 `updated`，再發 `busy_changed(any running)`（`refresh_controller.py:125-126`）；HUD `_on_busy_changed(False)` → `QTimer.singleShot(1000, trim_memory)`（`hud_window.py:455-459`）。完成事件由 25 ms 的結果計時器處理，啟動到期 provider 的是另一個 1000 ms 的 `poll` 計時器（`:35-41,53-58`），所以「完成後進入閒置」一定先於下一次啟動被觀察到；單發計時器排定後不會因為之後又變 busy 而取消。
+  - 單發計時器的類型：小於 2 s 為 `Precise` `[QT-SRC corelib/kernel/qtimer.h:176-183]`。
+- **修改前的 Rust**：
+  - `HUDWindow::hide()`／`close()` 在 `window.hide()` 之後同步呼叫 `trim_memory()`；關閉要求（RC-06 起會隱藏視窗）不經這兩個函式，所以完全不 trim。
+  - `set_busy()` 只更新狀態點，沒有任何閒置 trim。
+  - 兩條結果路徑（worker 的 notify callback 與 100 ms 的 poll 計時器）寫在 `main.rs` 的閉包裡。`RefreshController::poll` 在同一次呼叫裡先 drain 結果、再啟動到期的 provider，若在 `poll` 返回後才看 `is_busy()`，會漏掉 Python 會發出的 `busy_changed(False)`。
+- **修正**：
+  - `refresh_controller.rs:40-49,209-225`：`drain_results`／`poll` 改回傳 `Drained { updates, idle_completions }`；`idle_completions` 在**每個有效結果完成的當下**檢查是否已無 provider 在跑，與 Python 每次 `_complete` 發一次 `busy_changed` 對應。過期或 pending 的結果（Python 走 `_launch`、不發 `False`）不計。
+  - `hud_window.rs:168-177`：`schedule_trim(delay)` 以 `Timer::single_shot` 排程；trim 函式放在 HUD 的 `trim` 欄位（預設 `crate::memory::trim_memory`），測試可換成計數器。
+  - `hud_window.rs:502`：視窗事件處理器收到 `EventKind::Hide` 時排程 150 ms trim；`hide()`／`close()` 不再同步 trim。`hide()`、關閉要求都經 `WindowCore::hide` 送出 `Hide`，共用同一個觸發點。
+  - `hud_window.rs:623-646`：`drain_refresh_results`（notify 路徑）與 `poll_refresh`（poll 路徑）搬入 HUD，兩者都經 `apply_drained`：先套用結果，再為每個 `idle_completion` 排程 1000 ms trim。`main.rs` 的兩個閉包改為呼叫這兩個方法。
+- **Evidence**：`RAN`（本機 Windows，單一螢幕）。
+  - 新測試（`hud_window.rs` tests，以 `TrimLog` 換掉 trim 函式並記錄呼叫時間，實際跑 qtrs 事件迴圈）。修改前（seam 與方法搬移已就位、行為未改）4 項失敗、1 項通過：
+    - `hide_trims_150ms_later_not_during_the_hide`：失敗，「hide() trimmed synchronously」。
+    - `close_request_trims_150ms_after_the_hide`（`SendMessageW(WM_CLOSE)`，僅 Windows）：失敗，trims `[]`。
+    - `last_provider_finishing_trims_a_second_later`（真實 stub provider 完成、notify 路徑）：失敗，trims `[]`。
+    - `idle_completion_survives_a_due_provider_launched_in_the_same_poll`（claude 完成、codex 同一次 `poll` 到期被啟動，`poll` 後 `is_busy()` 為 true）：失敗，trims `[]`。
+    - `completion_while_another_provider_runs_does_not_trim`（反向條件：codex 仍在跑）：通過（修改前本來就不 trim）。
+  - 修改後 5 項通過。斷言：恰一次 trim；不早於延遲的 90%（qtrs 單發為 `Coarse`，可提早至 5%）；`hide()` 返回時尚未 trim。
+  - 回歸：主 crate `cargo test -j 1 -- --test-threads=1`：114 passed、5 ignored；`cargo clippy -- -D warnings`、`cargo fmt --check` 通過。qtrs 未修改，未重跑其 workspace。
+- **Status**：G12.5.h 的 150 ms 與 1000 ms 兩條鏈已修復；G12.5.h 仍開放（殘餘見下）。
+- **Residual**：
+  - 300 ms 啟動 click-through 與 2500 ms 啟動 trim 的起點差異（G12.5.h 殘餘），未量測、未修。
+  - 計時器精度（G5.5.c）：qtrs 單發恆為 `Coarse`，Qt 在 <2 s 用 `Precise`；本條的測試只以 90% 為下限，不證明兩者等價。
+  - 狀態點：notify 路徑只排程 trim，狀態點仍由 100 ms 的 poll 路徑更新（最多晚 100 ms）；Python 在 `_complete` 當下就更新。本條不改，未登記為 gap；差異是否肉眼可見未驗證 `[INFERENCE]`。
+  - 最小化等由系統發起的隱藏：Qt 會送 spontaneous `QHideEvent`（`qwidget.cpp:9306-9307`），qtrs 是否在此情況送 `Hide` 未驗證。
+  - 只用計數替身驗證排程；實際 `EmptyWorkingSet` 對工作集的效果沿用 G12.5.h 稽核 probe 的觀察，未納入永久測試（受 OS 記憶體管理與主機負載影響）。

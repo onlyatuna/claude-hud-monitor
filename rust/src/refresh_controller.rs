@@ -36,6 +36,18 @@ pub struct WorkerResult {
     pub generation: u64,
     pub metrics: UsageMetrics,
 }
+
+/// What one drain of the worker results produced.
+#[derive(Default)]
+pub struct Drained {
+    /// The results to show, in completion order (Python `updated`).
+    pub updates: Vec<UsageMetrics>,
+    /// Results after which no provider was running: Python `_complete` emits
+    /// `busy_changed(False)` for each. Counted at completion, so a provider that `poll` launches
+    /// right after the drain does not hide them.
+    pub idle_completions: usize,
+}
+
 type NotifyCallback = Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
 
 pub struct RefreshController {
@@ -76,8 +88,8 @@ impl RefreshController {
     pub fn poll(
         &mut self,
         providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
-    ) -> Vec<UsageMetrics> {
-        let updates = self.drain_results(providers);
+    ) -> Drained {
+        let drained = self.drain_results(providers);
         let now = Instant::now();
         let ids: Vec<String> = self.states.keys().cloned().collect();
         for id in ids {
@@ -89,7 +101,7 @@ impl RefreshController {
                 }
             }
         }
-        updates
+        drained
     }
 
     /// Manual refresh: invalidate in-flight or schedule immediately.
@@ -198,19 +210,21 @@ impl RefreshController {
     }
 
     /// Drain all pending results from workers.
-    /// Returns Vec of updated UsageMetrics to emit to the UI.
     pub fn drain_results(
         &mut self,
         providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
-    ) -> Vec<UsageMetrics> {
-        let mut updates = Vec::new();
+    ) -> Drained {
+        let mut drained = Drained::default();
         while let Ok(item) = self.result_rx.try_recv() {
             if let Some(result) = self.complete(item, providers) {
                 self.updated.emit(&result);
-                updates.push(result);
+                drained.updates.push(result);
+                if !self.is_busy() {
+                    drained.idle_completions += 1;
+                }
             }
         }
-        updates
+        drained
     }
 
     fn complete(
@@ -315,7 +329,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("the worker did not finish");
 
-        let results = ctrl.drain_results(&providers);
+        let results = ctrl.drain_results(&providers).updates;
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert_eq!(r.provider_id, "mock_panic");
@@ -443,7 +457,7 @@ mod tests {
             .expect("the callback set while the worker ran was not called");
 
         // 4. Poll should drain and return the updates
-        let updates = ctrl.poll(&providers);
+        let updates = ctrl.poll(&providers).updates;
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].provider_id, "mock_instant");
         assert_eq!(updates[0].metric1_text, "42%");

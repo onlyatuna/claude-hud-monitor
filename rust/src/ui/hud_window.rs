@@ -165,6 +165,20 @@ pub fn tick_gap_exceeded(previous: Option<SystemTime>, now: SystemTime) -> bool 
         .is_some_and(|gap| gap > Duration::from_secs(WAKE_GAP_SECS))
 }
 
+/// Python `hideEvent`: `QTimer.singleShot(150, trim_memory)` (`hud_window.py:615-617`).
+const HIDE_TRIM_DELAY_MS: u64 = 150;
+/// Python `_on_busy_changed(False)`: `QTimer.singleShot(1000, trim_memory)` (`:455-459`).
+const IDLE_TRIM_DELAY_MS: u64 = 1000;
+
+/// `QTimer.singleShot(delay_ms, trim_memory)`, with the trim set at scheduling time.
+fn schedule_trim(trim: &Rc<RefCell<TrimFn>>, delay_ms: u64) {
+    let trim = Arc::clone(&trim.borrow());
+    qtrs_core::timer::Timer::single_shot(delay_ms, move || trim());
+}
+
+/// The memory trim the HUD schedules (`crate::memory::trim_memory`; tests count calls instead).
+type TrimFn = Arc<dyn Fn() + Send + Sync>;
+
 pub struct HUDWindow {
     pub config: Arc<Mutex<Config>>,
     pub refresh_ctrl: Arc<Mutex<RefreshController>>,
@@ -192,6 +206,8 @@ pub struct HUDWindow {
     last_tick: Option<SystemTime>,
     /// Diagnostic counter of long-gap refreshes; never read by any decision.
     wake_refresh_seq: u64,
+    /// What the trim timers call; shared with the window event handler.
+    trim: Rc<RefCell<TrimFn>>,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -458,7 +474,10 @@ impl HUDWindow {
             apply_size(&mut cfg_resize.lock(), size.width, size.height);
             debouncer_resize.request_save();
         });
-        // Python `moveEvent` / `mouseReleaseEvent` / `closeEvent` (`hud_window.py:595-609`).
+        // Python `moveEvent` / `mouseReleaseEvent` / `closeEvent` / `hideEvent`
+        // (`hud_window.py:595-617`). `hide()` and the close request both reach `hideEvent`.
+        let trim: Rc<RefCell<TrimFn>> = Rc::new(RefCell::new(Arc::new(crate::memory::trim_memory)));
+        let trim_events = Rc::clone(&trim);
         let cfg_events = Arc::clone(&config);
         let debouncer_events = Arc::clone(&debouncer);
         window.set_window_event_handler(move |event| match event.kind {
@@ -480,6 +499,7 @@ impl HUDWindow {
             EventKind::MouseButtonRelease { .. } | EventKind::Close => {
                 persist_rect(&debouncer_events, geom_now.get());
             }
+            EventKind::Hide => schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS),
             _ => {}
         });
         {
@@ -511,6 +531,7 @@ impl HUDWindow {
             table,
             debouncer: Arc::clone(&debouncer),
             busy: false,
+            trim,
         };
         debouncer.set_restoring(false);
 
@@ -583,7 +604,6 @@ impl HUDWindow {
         self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
-        crate::memory::trim_memory();
     }
 
     #[allow(dead_code)]
@@ -591,7 +611,37 @@ impl HUDWindow {
         self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
-        crate::memory::trim_memory();
+    }
+
+    /// Replaces what the trim timers call, so tests can observe the scheduling.
+    #[cfg(test)]
+    fn set_trim(&self, trim: TrimFn) {
+        *self.trim.borrow_mut() = trim;
+    }
+
+    /// A worker finished (the controller's notify callback): apply its results.
+    pub fn drain_refresh_results(&mut self) {
+        let drained = self.refresh_ctrl.lock().drain_results(&self.providers);
+        self.apply_drained(&drained);
+    }
+
+    /// The 100 ms poll timer: apply finished results, launch due providers, update the status dot.
+    pub fn poll_refresh(&mut self) {
+        let drained = self.refresh_ctrl.lock().poll(&self.providers);
+        self.apply_drained(&drained);
+        let busy = self.refresh_ctrl.lock().is_busy();
+        self.set_busy(busy);
+    }
+
+    /// Python `updated` per result, and `_on_busy_changed(False)`'s trim per completion that left
+    /// every provider idle.
+    fn apply_drained(&mut self, drained: &crate::refresh_controller::Drained) {
+        for update in &drained.updates {
+            self.on_data_fetched(update);
+        }
+        for _ in 0..drained.idle_completions {
+            schedule_trim(&self.trim, IDLE_TRIM_DELAY_MS);
+        }
     }
 
     pub fn persist_geometry(&self) {
@@ -1299,6 +1349,137 @@ mod tests {
             }
         }
         n
+    }
+
+    /// Counts trim calls and when they happened, relative to `install`.
+    struct TrimLog(Arc<Mutex<Vec<Duration>>>, std::time::Instant);
+
+    impl TrimLog {
+        fn install(hud: &HUDWindow) -> Self {
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let start = std::time::Instant::now();
+            let sink = Arc::clone(&calls);
+            hud.set_trim(Arc::new(move || sink.lock().push(start.elapsed())));
+            TrimLog(calls, start)
+        }
+
+        fn calls(&self) -> Vec<Duration> {
+            self.0.lock().clone()
+        }
+
+        /// Runs the event loop until `ms` after `install`.
+        fn pump_until(&self, el: &mut qtrs_core::event_loop::EventLoop, ms: u64) {
+            while self.1.elapsed() < Duration::from_millis(ms) {
+                el.process_events(false);
+                std::thread::sleep(Duration::from_millis(2));
+            }
+        }
+    }
+
+    /// The timers are coarse (`Timer::single_shot`), which may fire up to 5 % early; 10 % is the
+    /// floor asserted here. Timer precision itself is outside this check (C5.5).
+    fn assert_one_trim_after(log: &TrimLog, delay_ms: u64, what: &str) {
+        let calls = log.calls();
+        assert_eq!(calls.len(), 1, "{what}: trims {calls:?}");
+        assert!(
+            calls[0] >= Duration::from_millis(delay_ms * 9 / 10),
+            "{what}: trimmed at {:?}, Python waits {delay_ms} ms",
+            calls[0]
+        );
+    }
+
+    /// Runs one fetch of `id` to completion; its result is then waiting in the channel.
+    fn finish_fetch(hud: &HUDWindow, rx: &std::sync::mpsc::Receiver<String>, id: &str) {
+        let provider = Arc::clone(&hud.providers[id]);
+        hud.refresh_ctrl.lock().launch(id, provider);
+        rx.recv_timeout(Duration::from_secs(10)).expect("fetch");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    /// Python `hideEvent` -> `QTimer.singleShot(150, trim_memory)` (`hud_window.py:615-617`).
+    #[test]
+    fn hide_trims_150ms_later_not_during_the_hide() {
+        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let (mut hud, _rx) = hud_with_stubs();
+        hud.show();
+        let log = TrimLog::install(&hud);
+        hud.hide();
+        assert!(log.calls().is_empty(), "hide() trimmed synchronously");
+        log.pump_until(&mut el, 1000);
+        assert_one_trim_after(&log, 150, "hide");
+    }
+
+    /// Alt+F4: the close request hides the HUD (RC-06), and Python's `hideEvent` then trims.
+    #[cfg(windows)]
+    #[test]
+    fn close_request_trims_150ms_after_the_hide() {
+        #[link(name = "user32")]
+        extern "system" {
+            fn SendMessageW(hwnd: *mut core::ffi::c_void, msg: u32, w: usize, l: isize) -> isize;
+        }
+        const WM_CLOSE: u32 = 0x0010;
+        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let (mut hud, _rx) = hud_with_stubs();
+        hud.show();
+        let log = TrimLog::install(&hud);
+        unsafe { SendMessageW(hud.window.native_handle() as _, WM_CLOSE, 0, 0) };
+        assert!(!hud.window.is_visible(), "WM_CLOSE hides the HUD");
+        log.pump_until(&mut el, 1000);
+        assert_one_trim_after(&log, 150, "close request");
+    }
+
+    /// Python `_complete` emits `busy_changed(False)` when the last running provider finishes, and
+    /// `_on_busy_changed(False)` trims 1000 ms later (`refresh_controller.py:125-126`,
+    /// `hud_window.py:455-459`). Here through the worker notify path.
+    #[test]
+    fn last_provider_finishing_trims_a_second_later() {
+        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let (mut hud, rx) = hud_with_stubs();
+        finish_fetch(&hud, &rx, "claude");
+        let log = TrimLog::install(&hud);
+        hud.drain_refresh_results();
+        log.pump_until(&mut el, 1500);
+        assert_one_trim_after(&log, 1000, "idle completion (notify path)");
+    }
+
+    /// `poll` drains results and then launches due providers in one call. Python's completion
+    /// event happens before its separate poll timer launches anything, so the HUD being busy again
+    /// after `poll` must not swallow the idle completion.
+    #[test]
+    fn idle_completion_survives_a_due_provider_launched_in_the_same_poll() {
+        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let (mut hud, rx) = hud_with_stubs();
+        finish_fetch(&hud, &rx, "claude");
+        hud.refresh_ctrl.lock().states.get_mut("codex").unwrap().due =
+            Some(std::time::Instant::now());
+        let log = TrimLog::install(&hud);
+        hud.poll_refresh();
+        assert!(
+            hud.refresh_ctrl.lock().is_busy(),
+            "codex was due and launched"
+        );
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("codex fetch");
+        log.pump_until(&mut el, 1500);
+        assert_one_trim_after(&log, 1000, "idle completion (poll path)");
+    }
+
+    /// Python emits `busy_changed(True)` while another provider still runs: no trim.
+    #[test]
+    fn completion_while_another_provider_runs_does_not_trim() {
+        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let (mut hud, rx) = hud_with_stubs();
+        finish_fetch(&hud, &rx, "claude");
+        hud.refresh_ctrl
+            .lock()
+            .states
+            .get_mut("codex")
+            .unwrap()
+            .running = true;
+        let log = TrimLog::install(&hud);
+        hud.drain_refresh_results();
+        log.pump_until(&mut el, 1500);
+        assert!(log.calls().is_empty(), "trimmed with codex running");
     }
 
     #[test]
