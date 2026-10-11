@@ -7,8 +7,8 @@
 #![cfg(windows)]
 
 use qtrs_core::event_loop::EventLoop;
-use qtrs_core::object::QObject;
-use qtrs_core::timer::Timer;
+use qtrs_core::object::{register_qobject, unregister_qobject, ObjectData, ObjectId, QObject};
+use qtrs_core::timer::{Timer, TimerType};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -142,4 +142,105 @@ fn restarting_a_timer_keeps_the_object_alive() {
         "re-registering an object must not kill its own liveness token"
     );
     timer.stop();
+}
+
+/// QObject whose `timer_event` counts deliveries (object-timer path, `QObject::startTimer`).
+struct TickObject {
+    data: ObjectData,
+    ticks: Arc<AtomicU32>,
+}
+
+impl TickObject {
+    fn new(ticks: Arc<AtomicU32>) -> Self {
+        Self {
+            data: ObjectData::new(ObjectId::next()),
+            ticks,
+        }
+    }
+}
+
+impl QObject for TickObject {
+    fn object_data(&self) -> &ObjectData {
+        &self.data
+    }
+    fn object_data_mut(&mut self) -> &mut ObjectData {
+        &mut self.data
+    }
+    fn as_qobject_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+    fn as_qobject_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    fn timer_event(&mut self, _timer_id: u64) {
+        self.ticks.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn start_timer_fires_timer_event() {
+    let mut el = EventLoop::new();
+    let ticks = Arc::new(AtomicU32::new(0));
+    let mut obj = Box::new(TickObject::new(Arc::clone(&ticks)));
+    // SAFETY: `obj` is boxed and not moved until the timer is killed and the object unregistered.
+    unsafe { register_qobject(&mut *obj) };
+
+    let id = obj.start_timer(20, TimerType::Precise);
+    assert!(id.is_valid());
+    assert!(
+        pump_until(&mut el, Duration::from_secs(2), || ticks
+            .load(Ordering::SeqCst)
+            >= 3),
+        "QObject::start_timer must arm delivery; got {} ticks",
+        ticks.load(Ordering::SeqCst)
+    );
+    obj.kill_timer(id);
+    unsafe { unregister_qobject(obj.object_data().id) };
+}
+
+#[test]
+fn kill_timer_stops_firing() {
+    let mut el = EventLoop::new();
+    let ticks = Arc::new(AtomicU32::new(0));
+    let mut obj = Box::new(TickObject::new(Arc::clone(&ticks)));
+    // SAFETY: `obj` is boxed and not moved until the object is unregistered below.
+    unsafe { register_qobject(&mut *obj) };
+
+    let id = obj.start_timer(20, TimerType::Precise);
+    assert!(pump_until(&mut el, Duration::from_secs(2), || ticks
+        .load(Ordering::SeqCst)
+        >= 1));
+    assert!(obj.kill_timer(id));
+    let snapshot = ticks.load(Ordering::SeqCst);
+    let settle = Instant::now() + Duration::from_millis(200);
+    while Instant::now() < settle {
+        el.process_events(false);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(
+        ticks.load(Ordering::SeqCst),
+        snapshot,
+        "killed object timer must stop"
+    );
+    unsafe { unregister_qobject(obj.object_data().id) };
+}
+
+#[test]
+fn zero_interval_object_timer_fires_repeatedly() {
+    let mut el = EventLoop::new();
+    let ticks = Arc::new(AtomicU32::new(0));
+    let mut obj = Box::new(TickObject::new(Arc::clone(&ticks)));
+    // SAFETY: `obj` is boxed and not moved until the timer is killed and the object unregistered.
+    unsafe { register_qobject(&mut *obj) };
+
+    let id = obj.start_timer(0, TimerType::Coarse);
+    assert!(
+        pump_until(&mut el, Duration::from_secs(2), || ticks
+            .load(Ordering::SeqCst)
+            >= 5),
+        "zero-interval object timer must repost ZeroTimer; got {} ticks",
+        ticks.load(Ordering::SeqCst)
+    );
+    obj.kill_timer(id);
+    unsafe { unregister_qobject(obj.object_data().id) };
 }

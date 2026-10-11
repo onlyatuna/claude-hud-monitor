@@ -958,8 +958,15 @@ pub trait QObject: std::any::Any {
     /// Main event entry point (`QObject::event`).
     fn event(&mut self, event: &mut Event) -> bool {
         match &event.kind {
-            EventKind::Timer { timer_id } | EventKind::ZeroTimer { timer_id } => {
+            EventKind::Timer { timer_id } => {
                 self.timer_event(*timer_id);
+                true
+            }
+            EventKind::ZeroTimer { timer_id } => {
+                let timer_id = *timer_id;
+                let receiver = self.object_data().id;
+                self.timer_event(timer_id);
+                crate::timer::repost_zero_timer(receiver, timer_id);
                 true
             }
             EventKind::DynamicPropertyChange { property_name } => {

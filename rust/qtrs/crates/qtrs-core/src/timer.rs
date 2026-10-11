@@ -212,7 +212,7 @@ impl TimerRegistry {
     pub fn expired_timers(&self, now_ms: u64) -> Vec<TimerId> {
         self.entries
             .values()
-            .filter(|e| !e.in_timer_event && now_ms >= e.next_fire_ms)
+            .filter(|e| !e.in_timer_event && e.interval_ms > 0 && now_ms >= e.next_fire_ms)
             .map(|e| e.id)
             .collect()
     }
@@ -291,13 +291,72 @@ pub fn stop_timers_for_object(receiver: ObjectId) -> usize {
     .unwrap_or(0)
 }
 
+/// Registers a timer and arms its delivery source (`QObject::startTimer` → `registerTimer`,
+/// qeventdispatcher_win.cpp:345-381). Zero interval posts `ZeroTimer` (360-363); otherwise
+/// `SetTimer` on Windows. Shared by `Timer::start` and `start_object_timer`.
+fn arm_in_context(
+    ctx: &ThreadTimerContext,
+    receiver: ObjectId,
+    interval_ms: u64,
+    timer_type: TimerType,
+    single_shot: bool,
+) -> TimerId {
+    let mut reg = ctx.registry.lock().unwrap();
+    let timer_id = reg.register(receiver, interval_ms, timer_type, single_shot);
+    if interval_ms == 0 {
+        crate::event_loop::post_event_to_thread(
+            crate::object::ThreadId::current(),
+            receiver,
+            crate::event::Event::new(crate::event::EventKind::ZeroTimer {
+                timer_id: timer_id.0 as u64,
+            }),
+        );
+    } else {
+        #[cfg(windows)]
+        {
+            if !ctx.internal_hwnd.is_null() {
+                let interval = interval_ms.min(u32::MAX as u64) as u32;
+                unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
+                        ctx.internal_hwnd,
+                        timer_id.0 as usize,
+                        interval,
+                        None,
+                    );
+                }
+            }
+        }
+    }
+    timer_id
+}
+
+/// Removes a timer and disarms its delivery source (`QObject::killTimer` → `unregisterTimer`,
+/// qeventdispatcher_win.cpp:383-392). Uses the REGISTERED interval, not the mutable `Timer` field.
+fn disarm_in_context(ctx: &ThreadTimerContext, id: TimerId) -> bool {
+    let mut reg = ctx.registry.lock().unwrap();
+    let Some(entry) = reg.unregister(id) else {
+        return false;
+    };
+    #[cfg(windows)]
+    {
+        if entry.interval_ms > 0 && !ctx.internal_hwnd.is_null() {
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(
+                    ctx.internal_hwnd,
+                    id.0 as usize,
+                );
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    drop(entry);
+    true
+}
+
 /// Starts an object timer registered to the current thread's timer registry.
 pub fn start_object_timer(receiver: ObjectId, interval_ms: u64, timer_type: TimerType) -> TimerId {
-    with_thread_timer_context(|ctx| {
-        let mut reg = ctx.registry.lock().unwrap();
-        reg.register(receiver, interval_ms, timer_type, false)
-    })
-    .unwrap_or(TimerId::INVALID)
+    with_thread_timer_context(|ctx| arm_in_context(ctx, receiver, interval_ms, timer_type, false))
+        .unwrap_or(TimerId::INVALID)
 }
 
 pub(crate) fn register_single_shot_callback(
@@ -321,11 +380,7 @@ pub(crate) fn dispatch_single_shot_callback(receiver: ObjectId) -> bool {
 
 /// Kills an object timer by TimerId in the current thread's timer registry.
 pub fn kill_object_timer(id: TimerId) -> bool {
-    with_thread_timer_context(|ctx| {
-        let mut reg = ctx.registry.lock().unwrap();
-        reg.unregister(id).is_some()
-    })
-    .unwrap_or(false)
+    with_thread_timer_context(|ctx| disarm_in_context(ctx, id)).unwrap_or(false)
 }
 
 /// Timer event structure matching `QTimerEvent`.
@@ -384,6 +439,12 @@ impl Timer {
         // stop/unregister; see the method's Safety contract.
         unsafe { crate::object::register_qobject(self) };
 
+        self.rearm()
+    }
+
+    /// Registers this timer's current configuration with the thread timer context and records
+    /// the new id. Callers must have stopped the timer first, or it must never have been started.
+    fn rearm(&mut self) -> TimerId {
         let receiver = self.data.id;
         let interval_ms = self.interval_ms;
         let timer_type = self.timer_type;
@@ -394,36 +455,7 @@ impl Timer {
             let Some(ctx) = borrow.as_ref() else {
                 return TimerId::INVALID;
             };
-
-            let mut reg = ctx.registry.lock().unwrap();
-            let timer_id = reg.register(receiver, interval_ms, timer_type, single_shot);
-
-            if interval_ms == 0 {
-                crate::event_loop::post_event_to_thread(
-                    crate::object::ThreadId::current(),
-                    receiver,
-                    crate::event::Event::new(crate::event::EventKind::ZeroTimer {
-                        timer_id: timer_id.0 as u64,
-                    }),
-                );
-            } else {
-                #[cfg(windows)]
-                {
-                    if !ctx.internal_hwnd.is_null() {
-                        let interval = interval_ms.min(u32::MAX as u64) as u32;
-                        unsafe {
-                            windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
-                                ctx.internal_hwnd,
-                                timer_id.0 as usize,
-                                interval,
-                                None,
-                            );
-                        }
-                    }
-                }
-            }
-
-            timer_id
+            arm_in_context(ctx, receiver, interval_ms, timer_type, single_shot)
         });
 
         self.id = id;
@@ -443,25 +475,10 @@ impl Timer {
     pub fn stop(&mut self) {
         if self.is_active() {
             let id = self.id;
-            let interval_ms = self.interval_ms;
             let _ = THREAD_TIMER_CONTEXT.try_with(|ctx| {
                 if let Ok(borrow) = ctx.try_borrow() {
                     if let Some(ctx) = borrow.as_ref() {
-                        let mut reg = ctx.registry.lock().unwrap();
-                        reg.unregister(id);
-                        if interval_ms > 0 {
-                            #[cfg(windows)]
-                            {
-                                if !ctx.internal_hwnd.is_null() {
-                                    unsafe {
-                                        windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(
-                                            ctx.internal_hwnd,
-                                            id.0 as usize,
-                                        );
-                                    }
-                                }
-                            }
-                        }
+                        disarm_in_context(ctx, id);
                     }
                 }
             });
@@ -473,16 +490,32 @@ impl Timer {
         self.id.is_valid()
     }
 
+    /// Sets the interval (`QTimer::setInterval`); an active timer is restarted with it.
     pub fn set_interval(&mut self, ms: u64) {
-        self.interval_ms = ms;
+        if self.is_active() {
+            self.stop();
+            self.interval_ms = ms;
+            self.rearm();
+        } else {
+            self.interval_ms = ms;
+        }
     }
 
     pub fn interval(&self) -> u64 {
         self.interval_ms
     }
 
+    /// Sets single-shot mode; an active timer's registry entry is updated to match.
     pub fn set_single_shot(&mut self, v: bool) {
         self.single_shot = v;
+        if self.is_active() {
+            let id = self.id;
+            with_thread_timer_context(|ctx| {
+                if let Some(entry) = ctx.registry.lock().unwrap().get_mut(id) {
+                    entry.single_shot = v;
+                }
+            });
+        }
     }
 
     pub fn is_single_shot(&self) -> bool {
@@ -641,6 +674,26 @@ impl Timer {
     }
 }
 
+/// Re-posts a zero-interval repeating timer after its slot ran (Qt re-arms zero timers each
+/// loop iteration). Skips the repost when the timer was stopped, restarted, or made single-shot
+/// inside the slot, since the registry entry for `timer_id` is then gone or changed.
+pub fn repost_zero_timer(receiver: ObjectId, timer_id: u64) {
+    let id = TimerId(timer_id as u32);
+    let still_armed = with_thread_timer_context(|ctx| {
+        let reg = ctx.registry.lock().unwrap();
+        reg.get(id)
+            .is_some_and(|e| e.receiver == receiver && e.interval_ms == 0 && !e.single_shot)
+    })
+    .unwrap_or(false);
+    if still_armed {
+        crate::event_loop::post_event_to_thread(
+            crate::object::ThreadId::current(),
+            receiver,
+            crate::event::Event::new(crate::event::EventKind::ZeroTimer { timer_id }),
+        );
+    }
+}
+
 impl QObject for Timer {
     fn object_data(&self) -> &ObjectData {
         &self.data
@@ -661,7 +714,7 @@ impl QObject for Timer {
     fn timer_event(&mut self, timer_id: u64) {
         if timer_id == self.id.0 as u64 {
             if self.single_shot {
-                self.id = TimerId::INVALID;
+                self.stop();
             }
             self.timeout.emit(&());
         }
@@ -962,6 +1015,153 @@ mod tests {
             !timer.is_active(),
             "Single shot zero timer should be inactive after firing"
         );
+        assert_eq!(
+            event_loop.timer_registry().lock().unwrap().len(),
+            0,
+            "fired single-shot zero timer must unregister from the registry"
+        );
+    }
+
+    #[test]
+    fn zero_single_shot_leaves_registry_empty() {
+        use crate::event_loop::EventLoop;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut el = EventLoop::new();
+        let fired = Arc::new(AtomicBool::new(false));
+        let f = Arc::clone(&fired);
+        let mut timer = Timer::new();
+        timer.set_interval(0);
+        timer.set_single_shot(true);
+        timer.timeout.connect(move |_| {
+            f.store(true, Ordering::SeqCst);
+        });
+        unsafe { timer.start() };
+        el.process_events(false);
+        assert!(fired.load(Ordering::SeqCst));
+        assert_eq!(
+            el.timer_registry().lock().unwrap().len(),
+            0,
+            "fired zero single-shot must unregister"
+        );
+        assert_eq!(
+            el.next_timeout(),
+            None,
+            "idle loop must not spin on a fired zero timer"
+        );
+    }
+
+    #[test]
+    fn zero_timer_repeats_each_iteration() {
+        use crate::event_loop::EventLoop;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let mut el = EventLoop::new();
+        let count = Arc::new(AtomicU32::new(0));
+        let c = Arc::clone(&count);
+        let mut timer = Timer::new();
+        timer.set_interval(0);
+        timer.timeout.connect(move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        unsafe { timer.start() };
+        for _ in 0..100 {
+            if count.load(Ordering::SeqCst) >= 5 {
+                break;
+            }
+            el.process_events(false);
+        }
+        assert!(
+            count.load(Ordering::SeqCst) >= 5,
+            "repeating zero timer must fire on successive iterations, got {}",
+            count.load(Ordering::SeqCst)
+        );
+        timer.stop();
+    }
+
+    #[test]
+    fn set_interval_on_active_timer_restarts_with_new_interval() {
+        use crate::event_loop::EventLoop;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let mut el = EventLoop::new();
+        let count = Arc::new(AtomicU32::new(0));
+        let c = Arc::clone(&count);
+        let mut timer = Timer::new();
+        timer.set_interval(60_000);
+        timer.timeout.connect(move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        unsafe { timer.start() };
+        timer.set_interval(0);
+        for _ in 0..100 {
+            if count.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            el.process_events(false);
+        }
+        assert!(
+            count.load(Ordering::SeqCst) >= 1,
+            "QTimer::setInterval on an active timer must restart it with the new interval"
+        );
+        timer.stop();
+    }
+
+    /// Pumps `el` for `ms` milliseconds and returns how many times `count` advanced.
+    fn pump_for(
+        el: &mut crate::event_loop::EventLoop,
+        ms: u64,
+        count: &std::sync::atomic::AtomicU32,
+    ) -> u32 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+        while std::time::Instant::now() < deadline {
+            el.process_events(false);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        count.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[test]
+    fn set_single_shot_true_on_active_timer_fires_once() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let mut el = crate::event_loop::EventLoop::new();
+        let count = Arc::new(AtomicU32::new(0));
+        let c = Arc::clone(&count);
+        let mut timer = Timer::new();
+        timer.set_interval(15);
+        timer.timeout.connect(move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        unsafe { timer.start() };
+        timer.set_single_shot(true);
+        // QTimer::timerEvent reads `single` at fire time (qtimer.cpp:330-331).
+        assert_eq!(pump_for(&mut el, 300, &count), 1);
+        assert!(!timer.is_active());
+    }
+
+    #[test]
+    fn set_single_shot_false_on_active_timer_keeps_repeating() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let mut el = crate::event_loop::EventLoop::new();
+        let count = Arc::new(AtomicU32::new(0));
+        let c = Arc::clone(&count);
+        let mut timer = Timer::new();
+        timer.set_interval(15);
+        timer.set_single_shot(true);
+        timer.timeout.connect(move |_| {
+            c.fetch_add(1, Ordering::SeqCst);
+        });
+        unsafe { timer.start() };
+        timer.set_single_shot(false);
+        let fired = pump_for(&mut el, 300, &count);
+        assert!(
+            fired >= 2,
+            "a timer made repeating while active must keep firing, got {fired}"
+        );
+        assert!(timer.is_active());
+        timer.stop();
     }
 
     #[test]

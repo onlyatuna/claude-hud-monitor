@@ -13,7 +13,7 @@
 1. **不得自行決定 semantic。** 實作依本文件；本文件沒寫的行為，先補一條（Qt behavior + 證據），再寫程式。
 2. **「HUD 目前沒用到 / 沒測到」不是「這個行為不重要」。** 每一項 gap 的嚴重度與「HUD 是否使用」分開記錄（見 Severity）。不得因為 HUD 沒用到就刪除、降級或不寫 gap。
 3. **不得把 gap 改寫成 by design。** 要標 `D`（unsupported by design）必須在該項寫出理由，並且 `qtrs` 在被誤用時要 **可見地失敗**（錯誤、panic 或明確回傳值），不得靜默丟棄。
-4. **測試釘住了非 Qt 行為，或根本沒有斷言 → 必須改寫測試，不得保留。** 已知案例：`test_application_layers.rs`（`exit()` 先於 `exec()` 被釘成「立刻返回」，見 C4.1；已由 RC-79 改寫）、`test_signal_sender_tracking_and_auto_disconnection`（drop 之後沒有任何 assertion，見 C6.4）、`test_zero_timer_immediate_dispatch`（不檢查 registry 是否殘留，見 C5.3）、`test_qobject_start_and_kill_timer`（只斷言記帳，不斷言觸發，見 C5.4）。
+4. **測試釘住了非 Qt 行為，或根本沒有斷言 → 必須改寫測試，不得保留。** 已知案例：`test_application_layers.rs`（`exit()` 先於 `exec()` 被釘成「立刻返回」，見 C4.1；已由 RC-79 改寫）、`test_signal_sender_tracking_and_auto_disconnection`（drop 之後沒有任何 assertion，見 C6.4）、`test_zero_timer_immediate_dispatch`（不檢查 registry 是否殘留，見 C5.3；已由 RC-84 補斷言）、`test_qobject_start_and_kill_timer`（只斷言記帳，不斷言觸發，見 C5.4）。
 5. **修好一個 gap 的條件** = 該項「Required test」先在修改前失敗、修改後通過，且寫進 repo。只有「能編譯」或「舊測試仍過」不算。
 6. 同一個 gap 若要縮小範圍（只修一部分）→ 必須在該項保留剩餘部分的 gap 條目，不得整條關閉。
 7. **同一個 root cause 在多處登錄時，以附錄 D 的 RC 為修復單位**：一次變更只能宣稱修復一個 RC，並須重新檢查該 RC 對應的**所有** gap；不得把同一處修改分別宣稱為修了 N 個 gap。
@@ -342,8 +342,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `BROKEN`：`set_interval` 只寫欄位（`timer.rs` `pub fn set_interval`），registry 項與 Win32 `SetTimer` 仍用舊間隔。
   - `BROKEN`：`set_single_shot` 啟動中只改欄位；registry 項沿用 `start` 時複製的旗標。
 - **Known gap**
-  - **G5.1.a [P1, RAN]** `set_interval` 對啟動中的計時器無效。重現：`set_interval(5000)`、`start()`、`set_interval(20)`，pump 400 ms → **0 次** `timeout`（Qt：約 20 次）。
-  - **G5.1.b [P1, READ]** `set_single_shot` 啟動中無效。
+  - **G5.1.a [P1, RAN；已修復：RC-85]** （修復前）`set_interval` 對啟動中的計時器無效。重現：`set_interval(5000)`、`start()`、`set_interval(20)`，pump 400 ms → **0 次** `timeout`（Qt：約 20 次）。
+  - **G5.1.b [P1, RAN；已修復：RC-85]** （修復前）`set_single_shot` 啟動中無效。
   - **G5.1.c [P1, READ]** `Timer::start` 是 `unsafe` 並以原始位址註冊（pinning 契約）；`Timer::new` 沒有 parent 參數，沒有 `QTimer(self)` 那種「隨 parent 銷毀」的生命週期。
   - **G5.1.d [P2, READ]** 執行緒沒有 timer context 時 `start` 靜默回 `TimerId::INVALID`（Qt 會警告）。
   - **G5.1.e [P2, READ]** `timeout` 是公開 `Signal<()>` 欄位，不在 meta-object 上。
@@ -367,8 +367,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：非單發的 0 ms 計時器 MUST 每輪重複觸發；單發 0 ms MUST 觸發一次且**不留 registry 項**；沒有存活計時器的 idle loop MUST 阻塞而不是空轉。
 - **Current implementation**：`Timer::start` 只 post **一個** `ZeroTimer`（`timer.rs`），沒有任何地方再 post（grep `ZeroTimer` 於 `rust/` 只有這個生產者）。
 - **Known gap**
-  - **G5.3.a [P1, RAN]** 單發 0 ms 計時器觸發後 **registry 項殘留**：重現 `fired=1 registry_len=1 next_timeout=Some(0ns)`。`EventLoop::next_timeout` 永遠回 0 → `exec` 以 100% CPU 空轉。（既有 `test_zero_timer_immediate_dispatch` 只檢查有觸發與 inactive，沒檢查 `registry.len()`。）
-  - **G5.3.b [P1, READ]** 重複 0 ms 計時器只觸發一次。
+  - **G5.3.a [P1, RAN；已修復：RC-84]** （修復前）單發 0 ms 計時器觸發後 **registry 項殘留**：重現 `fired=1 registry_len=1 next_timeout=Some(0ns)`。`EventLoop::next_timeout` 永遠回 0 → `exec` 以 100% CPU 空轉。（既有 `test_zero_timer_immediate_dispatch` 只檢查有觸發與 inactive，沒檢查 `registry.len()`。）
+  - **G5.3.b [P1, RAN；已修復：RC-84]** （修復前）重複 0 ms 計時器只觸發一次。
 - **Test**：必要：`zero_single_shot_leaves_registry_empty`（RAN 重現失敗）；`zero_timer_repeats_each_iteration`；`idle_exec_blocks_without_timers`（`next_timeout()==None`）。
 - **HUD usage**：HUD 用 `Timer::single_shot(0, …)`（MetaCall 路徑，見 C5.5），**沒走**這個壞掉的路徑；因此 P1。
 
@@ -377,8 +377,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：Windows 上 `start_timer(interval)` MUST 在運行中的 loop 內週期性呼叫 `timer_event(id)`；`kill_timer` MUST 真的停止（含 `KillTimer`）。
 - **Current implementation**：`BROKEN`（Windows）。`start_object_timer` 只做 `registry.register`，`QObject::start_timer` 只加進 `ObjectData.timers`；沒有 `SetTimer`。Windows 的 `send_timer_events` 只排空**已到達的 `WM_TIMER` id**，從不輪詢 registry 到期時間。unix dispatcher 有輪詢（`registry.expired_timers`），所以只有 Windows 受影響。
 - **Known gap**
-  - **G5.4.a [P1, RAN]** 重現：註冊物件 `start_timer(20ms)`、pump 400 ms → `timer_event` **0 次**。到期後 `next_timeout()` 回 0，`exec` 空轉。
-  - **G5.4.b [P1, READ]** `kill_timer` 不呼叫 `KillTimer`。
+  - **G5.4.a [P1, RAN；已修復：RC-83]** （修復前）重現：註冊物件 `start_timer(20ms)`、pump 400 ms → `timer_event` **0 次**。到期後 `next_timeout()` 回 0，`exec` 空轉。
+  - **G5.4.b [P1, RAN；已修復：RC-83]** （修復前）`kill_timer` 不呼叫 `KillTimer`。
   - **G5.4.c [P2]** `TimerId` 是 per-registry 計數器，非全域唯一。
 - **Test**：既有 `test_qobject_start_and_kill_timer` 只斷言 registry 記帳（**必須補**：實際觸發）。必要：`start_timer_fires_timer_event`、`kill_timer_stops_firing`。
 - **HUD usage**：HUD 不用（Python grep `startTimer|killTimer` 為空；Rust 只有 `key_sequence_edit.rs:845` 的 release timer，**該 widget 因此在 Windows 上可能壞掉**，`[INFERENCE]` 未實測）。
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 113 項：G2.1.a、G2.1.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.d、G7.1.a、G7.1.c、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 119 項：G2.1.a、G2.1.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.d、G7.1.a、G7.1.c、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1344,18 +1344,18 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G4.2.d | P2, READ | `WM_QUIT` 以 `PostQuitMessage(n)` 的 n 為 code |
 | G4.3.a | P1, RAN；已修復：RC-68 | 選單開著時 posted events 要等選單關閉才送出（posted pump 內的 modal pump 被重入保護擋下） |
 | G4.3.b | P2, READ | modal pump 一律保留 DeferredDelete，不依 loop level 判斷 |
-| G5.1.a | P1, RAN | `set_interval` 對啟動中的計時器無效 |
-| G5.1.b | P1, READ | `set_single_shot` 啟動中無效 |
+| G5.1.a | P1, RAN；已修復：RC-85 | `set_interval` 對啟動中的計時器無效 |
+| G5.1.b | P1, RAN；已修復：RC-85 | `set_single_shot` 啟動中無效 |
 | G5.1.c | P1, READ | `Timer::start` 是 `unsafe` 並以原始位址註冊 |
 | G5.1.d | P2, READ | 執行緒沒有 timer context 時 `start` 靜默回 `TimerId::INVALID` |
 | G5.1.e | P2, READ | `timeout` 是公開 `Signal<()>` 欄位，不在 meta-object 上 |
 | G5.1.f | P1, RAN；已修復：RC-11a | 重啟已啟動的 `Timer` 後 `timeout` 不再觸發（重新註冊物件時 liveness 被自己殺死） |
 | G5.2.a | P1, READ | Windows 路徑直接呼叫 `obj.timer_event(id)`，不建 `Event`、不經 `notify_helper`/`event()` |
 | G5.2.b | P2, READ | `send_timer_events` 持有 registry mutex 的同時遞送 |
-| G5.3.a | P1, RAN | 單發 0 ms 計時器觸發後 **registry 項殘留**：重現 `fired=1 registry_len=1 next_timeout=Some(0ns)` |
-| G5.3.b | P1, READ | 重複 0 ms 計時器只觸發一次 |
-| G5.4.a | P1, RAN | 重現：註冊物件 `start_timer(20ms)`、pump 400 ms → `timer_event` **0 次** |
-| G5.4.b | P1, READ | `kill_timer` 不呼叫 `KillTimer` |
+| G5.3.a | P1, RAN；已修復：RC-84 | 單發 0 ms 計時器觸發後 **registry 項殘留**：重現 `fired=1 registry_len=1 next_timeout=Some(0ns)` |
+| G5.3.b | P1, RAN；已修復：RC-84 | 重複 0 ms 計時器只觸發一次 |
+| G5.4.a | P1, RAN；已修復：RC-83 | 重現：註冊物件 `start_timer(20ms)`、pump 400 ms → `timer_event` **0 次** |
+| G5.4.b | P1, RAN；已修復：RC-83 | `kill_timer` 不呼叫 `KillTimer` |
 | G5.4.c | P2 | `TimerId` 是 per-registry 計數器，非全域唯一 |
 | G5.5.a | P2, READ | 無 context 版本、無取消 |
 | G5.5.b | P1, READ | 執行緒無 loop 時 `single_shot` 靜默丟 callback |
@@ -2855,3 +2855,39 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 覆寫語意：第二個 Application 會取代主執行緒 id（Qt 斷言只有一個實例，G4.1.f）。
   - Qt 中 worker 若先呼叫 `QThread::currentThread()` 會被 adopt 為主執行緒；qtrs 沒有對應的 adopt 機制 `[INFERENCE]` 差異只在 Application 建構前。
   - pool worker 仍無 TLS context（不影響 `is_main_thread()`）。macOS 範例的 macOS 路徑未在本機執行。
+
+#### RC-83 物件計時器的 arm／disarm（`QObject::startTimer`／`killTimer`）
+
+- **Contract gaps**：G5.4.a、G5.4.b。
+- **Qt 行為**：`QObject::startTimer` → `registerTimer`：interval 0 post `QZeroTimerEvent`（`[QT-SRC corelib/kernel/qeventdispatcher_win.cpp:360-363]`），否則 `SetTimer`；`killTimer` → `unregisterTimer`：0 ms 移除 posted 事件，否則 `KillTimer`（`:383-393`）。
+- **修改前**：`start_object_timer`／`kill_object_timer`（`qtrs-core/src/timer.rs`）只寫 registry，不 arm／disarm；Windows 上物件計時器從不觸發。`Timer::stop` 的 `KillTimer` 以 `Timer` 欄位的 interval 判斷，不是登記時的 interval。
+- **修正**：抽出 `arm_in_context`（登記＋0 ms post `ZeroTimer`／否則 `SetTimer`）與 `disarm_in_context`（unregister＋依**登記的** interval `KillTimer`），`Timer::start`／`stop` 與 `start_object_timer`／`kill_object_timer` 共用。
+- **Evidence**：`RAN`（本機 Windows）。`test_timer_restart.rs`：
+  - `start_timer_fires_timer_event`：修改前 FAIL（`0 ticks`）；修改後通過。
+  - `kill_timer_stops_firing`：修改前在前置斷言 FAIL（從未觸發，無法驗證 kill）；修改後通過。G5.4.b 本身在 Windows 沒有獨立的修改前 FAIL。
+  - `zero_interval_object_timer_fires_repeatedly`：修改前 `0 ticks`；僅 RC-83 時 1 次，RC-84 後通過。
+- **Residual**：既有 `test_qobject_start_and_kill_timer` 仍只斷言記帳；觸發與停止已由上列測試覆蓋。停止後殘留的 posted `ZeroTimer` 不移除（Qt `removePostedTimerEvent`），由 `repost_zero_timer` 與 id 檢查使其無作用。
+
+#### RC-84 0 ms 計時器的生命週期
+
+- **Contract gaps**：G5.3.a、G5.3.b。
+- **Qt 行為**：`QTimer::timerEvent` 單發時先 `stop()` 再發 `timeout`（`[QT-SRC corelib/kernel/qtimer.cpp:326-334]`）；`QZeroTimerEvent` 送出後若計時器仍登記且未重啟，post 下一個 `QZeroTimerEvent`（`[QT-SRC corelib/kernel/qeventdispatcher_win.cpp:886-900]`）。
+- **修改前**：`Timer::timer_event` 單發時只把 `id` 設為 INVALID，registry 項殘留，`next_timeout()` 永遠 0（`exec` 空轉）；重複 0 ms 計時器只觸發一次；`expired_timers` 也回傳 0 ms 項（unix 以 poll 再送一次）。
+- **修正**：`Timer::timer_event` 單發時呼叫 `stop()`；`QObject::event` 的 `ZeroTimer` 分支在 `timer_event` 後呼叫 `repost_zero_timer`（只在 registry 項仍為同一 receiver、interval 0、非單發時 post），`Timer` 與物件計時器共用；`expired_timers` 排除 interval 0。
+- **Evidence**：`RAN`（本機 Windows）。`timer.rs::tests`：
+  - `zero_timer_repeats_each_iteration`：修改前 FAIL（`got 1`）；修改後通過。
+  - `zero_single_shot_leaves_registry_empty` 與補上 registry 斷言的 `test_zero_timer_immediate_dispatch`（§0 規則 4）：修改前行程以 `0xc0000409` 中止（WndProc 內 panic），修改後通過。
+- **Residual**：unix／macOS 路徑只在 CI 執行；本機未驗證 unix 每次 `process_events` 只送一次 `[INFERENCE]`。覆寫 `QObject::event` 而不呼叫預設 `ZeroTimer` 分支的物件不會 repost（與 Qt 覆寫 `event` 不呼叫基底時相同）。
+
+#### RC-85 啟動中的 `set_interval`／`set_single_shot`
+
+- **Contract gaps**：G5.1.a、G5.1.b。
+- **Qt 行為**：`QTimer::setInterval` 在 active 時 `killTimer` 再以新 interval `startTimer`（`[QT-SRC corelib/kernel/qtimer.cpp:664-680]`）；`setSingleShot` 只寫旗標（`:619-623`），`timerEvent` 觸發時才讀（`:330-331`）。
+- **修改前**：兩者只寫 `Timer` 欄位；registry 與 Windows `SetTimer` 保留啟動時的快照。
+- **修正**：`set_interval` 在 active 時 `stop()`、寫入、`rearm()`（從 `start` 抽出的登記＋arm，不重新 `register_qobject`，維持安全 API）；`set_single_shot` 在 active 時同步 registry 項（dispatcher 依該項決定單發的 unregister／`KillTimer`）。
+- **Evidence**：`RAN`（本機 Windows）。`timer.rs::tests`：
+  - `set_interval_on_active_timer_restarts_with_new_interval`：修改前 FAIL（`must restart it with the new interval`）；修改後通過。
+  - `set_single_shot_false_on_active_timer_keeps_repeating`：停用同步時 FAIL（`got 1`，dispatcher 依舊項當單發停止）；修改後通過。
+  - `set_single_shot_true_on_active_timer_fires_once`：修改前後皆通過（行為由 RC-84 的 `stop()` 保證），守住此方向。
+  - 三個 RC 合併後：qtrs workspace（略過 `real_windows`）101 個 test binary 全 ok、0 failed；HUD 121 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過。
+- **Residual**：無。
