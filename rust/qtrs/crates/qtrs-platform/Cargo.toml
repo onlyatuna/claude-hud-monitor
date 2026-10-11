@@ -10,26 +10,7 @@ bitflags = "2.4"
 tinyfiledialogs = "3.9.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = [
-    "Win32_Foundation",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_Graphics_Gdi",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_HiDpi",
-    "Win32_System_LibraryLoader",
-    "Win32_Graphics_Dwm",
-    "Win32_UI_Controls",
-    "Win32_UI_Input_Ime",
-    "Win32_System_Com",
-    "Win32_System_DataExchange",
-    "Win32_System_Memory",
-    "Win32_System_Ole",
-    "Win32_System_Registry",
-    "Win32_System_SystemInformation",
-    "Win32_System_Threading",
-    "Win32_System_ProcessStatus",
-    "Win32_UI_Shell",
-] }
+windows-sys = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Future dependencies: zbus, x11rb / wayland-client

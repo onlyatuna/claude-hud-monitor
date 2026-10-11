@@ -7,7 +7,9 @@ time, and on timeout the tail of its output (libtest names the tests that have b
 over 60 seconds). Diagnostic only; the exit code is 1 if any target failed or timed out. Doc tests
 are not included (`cargo test --doc`).
 
-Usage (from rust/qtrs): python tools/run_test_binaries.py [--timeout SECONDS]
+Usage (from rust/qtrs): python tools/run_test_binaries.py [--timeout SECONDS] [--jobs N]
+
+`--jobs` is cargo's build parallelism (default 1); tests always run one target at a time.
 """
 
 import argparse
@@ -21,9 +23,9 @@ import time
 KIND_FLAGS = {"lib": "--lib", "test": "--test", "bin": "--bin", "example": "--example", "bench": "--bench"}
 
 
-def test_targets():
+def test_targets(jobs):
     out = subprocess.run(
-        ["cargo", "test", "-j", "1", "--workspace", "--no-run", "--message-format=json"],
+        ["cargo", "test", "-j", jobs, "--workspace", "--no-run", "--message-format=json"],
         stdout=subprocess.PIPE,
         check=True,
     ).stdout.decode("utf-8", "replace")
@@ -42,7 +44,7 @@ def test_targets():
         if kind in ("lib", "rlib", "proc-macro", "cdylib", "dylib", "staticlib"):
             flag = "--lib"
         package = os.path.basename(os.path.dirname(msg["manifest_path"]))
-        cmd = ["cargo", "test", "-j", "1", "-p", package, flag]
+        cmd = ["cargo", "test", "-j", jobs, "-p", package, flag]
         if flag != "--lib":
             cmd.append(msg["target"]["name"])
         found.append(("{} {}".format(package, msg["target"]["name"]), cmd))
@@ -59,10 +61,11 @@ def kill_tree(proc):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timeout", type=float, default=120.0, help="seconds per test target")
+    parser.add_argument("--jobs", default="1", help="cargo build jobs (-j)")
     args = parser.parse_args()
 
     results = []
-    for name, cmd in test_targets():
+    for name, cmd in test_targets(args.jobs):
         print("::group::{}".format(name), flush=True)
         start = time.monotonic()
         proc = subprocess.Popen(

@@ -45,6 +45,8 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: python/requirements-build.txt
 
       - name: Install dependencies
         working-directory: python
@@ -228,7 +230,7 @@ jobs:
       # Lists every target that does not compile on this platform; `cargo test` stops at the first.
       - name: Compile every qtrs target (cargo check --keep-going)
         working-directory: rust/qtrs
-        run: cargo check -j 1 --workspace --all-targets --keep-going
+        run: cargo check --workspace --all-targets --keep-going
         continue-on-error: true
 
       - name: Set up Python
@@ -240,14 +242,15 @@ jobs:
       - name: Run qtrs test binaries (per-binary timeout)
         working-directory: rust/qtrs
         # 120 s: about 5x the slowest normal target observed (test_tooltip, 23.1 s on Windows).
-        run: python tools/run_test_binaries.py --timeout 120
+        # Builds use every runner core; the targets still run one at a time.
+        run: python tools/run_test_binaries.py --timeout 120 --jobs 4
 
       # libtest runs tests on worker threads; this runs GuiApplication/CoreApplication on the OS
       # main thread, one child process per check with its own time limit.
       - name: macOS main-thread entry (application dispatcher and event loop)
         if: ${{ runner.os == 'macOS' && !cancelled() }}
         working-directory: rust/qtrs
-        run: cargo run -j 1 -q -p qtrs-gui --example main_thread_entry
+        run: cargo run -q -p qtrs-gui --example main_thread_entry
 
       # qtrs-platform AppKit checks (windows, status items, menus, screens, cursor, theme) on the
       # OS main thread, one child process per check, reporting ok/FAILED/ENV/CRASH per check.
@@ -257,10 +260,10 @@ jobs:
         if: ${{ runner.os == 'macOS' && !cancelled() }}
         working-directory: rust/qtrs
         run: >-
-          cargo run -j 1 -q -p qtrs-platform --example appkit_main_thread --
+          cargo run -q -p qtrs-platform --example appkit_main_thread --
           --known-open=status_item_message
 
       - name: Run qtrs doc tests
         if: ${{ !cancelled() }}
         working-directory: rust/qtrs
-        run: cargo test -j 1 --workspace --doc
+        run: cargo test --workspace --doc
