@@ -621,10 +621,10 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 ### C8.2 Enabled
 - **Qt behavior** `[QT-SRC qwidget.cpp:3405-3476]`：`setEnabled` 傳遞到所有後代、清除被停用的焦點 widget、送 `EnabledChange`、重繪；QSS `:disabled` 生效。
 - **qtrs required**：MUST 傳遞到後代、MUST 重繪、停用 widget MUST 不收滑鼠／鍵盤／焦點；`:disabled` SHOULD 一致。
-- **Current implementation**：`PARTIAL`。`set_enabled` 只 `Cell.set`：不傳遞、不重繪、無事件、不處理焦點；`Button` 在 handler 內自己檢查；`:disabled` 從未提供給樣式解析（`pseudo_states` 是 `&[]` 或只有 hover/pressed）。
-- **Known gap**：**G8.2.a [P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；停用焦點容器時的焦點候選已修復：RC-42；`Widget::set_enabled` 不送事件的入口已移除：RC-43]** （修復前：） 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺。 RC-33：`WidgetBase::set_enabled` 依 `setEnabled_helper` 傳遞到後代（自己的 children 與 layout 內 widget）、記錄明確停用（`force_disabled` = `WA_ForceDisabled`）、在停用的 parent 下無法啟用、狀態改變時 `update()`。RC-36：停用焦點 widget 時同步清掉 `has_focus` 與視窗焦點 id。RC-37：`set_widget_enabled` 在回傳前送出 `FocusOut`、`focusNextChild`／`clearFocus`、`FocusIn`；視窗內仍有 widget 被 borrow 時（含 `Widget::set_enabled` 這個 borrow 中的入口）退回 RC-36 的延後處理。RC-38：`set_widget_enabled` 在回傳前依 Qt 順序送 `EnabledChange`（子項先於 parent、焦點事件排在該焦點 widget 的位置）。仍缺：經 `Widget::set_enabled`（borrow 中）呼叫時不送 `EnabledChange`，且焦點移交延後；呼叫端仍 borrow 的 widget 收不到 `EnabledChange`；被停用的焦點 widget 有可 Tab 子項時的下一焦點候選未驗證（`[INFERENCE]`，見 RC-38 Residual，待 oracle）（QSS `:disabled` 見 G8.5.e／RC-34）。
+- **Current implementation**：`PARTIAL`（只剩 G8.2.a 殘餘）。唯一入口 `set_widget_enabled(&WidgetRef, bool)`（`qtrs-widgets/src/widget.rs:17-46`）：傳遞、重繪、`EnabledChange`、焦點移交見 G8.2.a；`:disabled` 見 G8.5.e／RC-34。（修復前：`set_enabled` 只 `Cell.set`：不傳遞、不重繪、無事件、不處理焦點；`Button` 在 handler 內自己檢查；`:disabled` 從未提供給樣式解析。）
+- **Known gap**：**G8.2.a [P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；停用焦點容器時的焦點候選已修復：RC-42；`Widget::set_enabled` 不送事件的入口已移除：RC-43]** （修復前：） 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺。 RC-33：`WidgetBase::set_enabled` 依 `setEnabled_helper` 傳遞到後代（自己的 children 與 layout 內 widget）、記錄明確停用（`force_disabled` = `WA_ForceDisabled`）、在停用的 parent 下無法啟用、狀態改變時 `update()`。RC-36：停用焦點 widget 時同步清掉 `has_focus` 與視窗焦點 id。RC-37：`set_widget_enabled` 在回傳前送出 `FocusOut`、`focusNextChild`／`clearFocus`、`FocusIn`；視窗內仍有 widget 被 borrow 時退回 RC-36 的延後處理（當時也包括 `Widget::set_enabled` 這個 borrow 中的入口，RC-43 已移除）。RC-38：`set_widget_enabled` 在回傳前依 Qt 順序送 `EnabledChange`（子項先於 parent、焦點事件排在該焦點 widget 的位置）。RC-42：停用的焦點 widget 有可 Tab 子項時，依 Qt 先把焦點移給子項再清除（PySide6 oracle 確認）。RC-43：移除 `Widget::set_enabled`／`WidgetBase::set_enabled`，`set_widget_enabled` 為唯一入口。仍缺：呼叫端仍 borrow 的 widget 收不到自己的 `EnabledChange`；祖先被 borrow 時焦點移交延後到 dispatcher 的下一個事件（`widget.rs:22-24,40`）。（QSS `:disabled` 見 G8.5.e／RC-34。）
 - **Test**：必要：`disable_parent_disables_children_and_repaints`；`disabled_button_ignores_press`；`qss_disabled_color`。
-- **HUD usage**：Python `self.icon.setEnabled(not muted)`（`usage_table.py:323`）；Rust 自訂 icon widget 把 `set_enabled` 轉給 base（重繪視 widget 而定）。
+- **HUD usage**：Python `self.icon.setEnabled(not muted)`（`usage_table.py:323`）；Rust HUD 不呼叫 `set_widget_enabled`，離線時改以 `ProviderIconWidget::set_color(theme.text3)` 調暗圖示（`rust/src/ui/usage_table.rs:1055-1063`），與 Qt 停用狀態的繪製是否一致未驗證。
 
 ### C8.3 幾何、最小／最大／固定大小、size policy
 - **Qt behavior** `[QT-SRC qlayoutitem.cpp:578-676]`：`setMinimumSize/setMaximumSize/setFixedSize` 夾住 `resize/setGeometry` 並呼叫 `updateGeometry()`；`QWidgetItem` 的大小用 `qSmartMinSize/qSmartMaxSize`。
@@ -703,7 +703,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`IMPLEMENTED`（RC-11c；Win32 真實視窗驗證）。`Widget::tool_tip/set_tool_tip/tool_tip_duration/always_show_tool_tips`、`EventKind::ToolTip{x,y,global_x,global_y}`（`QHelpEvent` 形狀，無 `text`）、`qtrs-widgets/src/tooltip.rs`（`ToolTip::show_text/hide_text/is_visible/text/geometry`、純函式 `place_tip`／`expire_time_ms`）、`EventTreeDispatcher::dispatch_mouse_move`。
 - **Known gap**：**G8.8.a [P0, READ；已修復：RC-11c + HUD 接線]** Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` 設定 tooltip；Rust HUD 已在 `provider_card.rs`（卡片 `container`）、`usage_table.rs`（5 個 value cell + header + dial + m2_val 的 run-out 備註）、`hud_window.rs`（`ghost_label`、`layout_toggle_btn`）設定相同文字（測試 `ui/tool_tip_tests.rs` 7 項，修前全部失敗；真實 `ClaudeHUD.exe` Windows smoke：停留約 1.3 s 後出現 `WS_EX_NOACTIVATE|TOPMOST` 的 tip 視窗、未搶前景、移開與點擊後消失、子 widget 退回父層 tooltip；tip 外觀未取得像素，仍須 MANUAL WINDOWS VERIFICATION）；**G8.8.b [P2, READ]** 無 `QToolTip::showText` 的 `rect` 參數（`setTipRect`，游標離開該矩形即隱藏）與 `QToolTip::font/palette/setFont/setPalette`；**G8.8.c [P2, READ]** 游標大小固定為 `QPlatformCursor` 預設的 16×16 邏輯像素（偏移 `(2,16)`）。Qt 的 `placeTip` 取 `cursor->size()`（Windows 為 `QWindowsCursor::size()`，由登錄檔 `CursorBaseSize` 與 DPI 算出，`qwindowscursor.cpp:675-692`），再經 `QHighDpi::fromNativePixels` 除以 DPR（`qtooltip.cpp:325-328`）；qtrs 兩步都沒做。因此 tip 相對游標的偏移只有在「預設 100% DPI 且登錄值剛好得 16」時才可能與 Qt 一致 `[INFERENCE]`；DPR≠1 或自訂游標大小時偏移必然不同，須手動驗證。**位置幾何與 Qt 的一致性只由 `place_tip` 純函式測試（手算自 `qtooltip.cpp:349-361`）支持，不涵蓋游標大小；真實視窗測試只證明接線，不是 Qt 幾何 parity 證明**；**G8.8.d [P1, READ]** tip 內容是單行 `Label`：沒有自動換行（Qt 在比螢幕寬時換行，`qtooltip.cpp:152-157`）、沒有 rich text（`Qt::mightBeRichText`）、字串中的換行未驗證。Python 的 tooltip 是否含換行／HTML 待 Phase 4 核對；**G8.8.e [P2, READ]** `set_tool_tip` 不送 `ToolTipChange`（無 `EventKind`、無 `changeEvent`）；`StatusTip`、`WhatsThis` 未實作；`Action::tool_tip` 未接到 menu／toolbar；**G8.8.f [P2, READ]** tip 視窗只重用一個實例（Qt 每次新建並 `deleteLater`）；無淡入淡出；`WindowActivate/Deactivate/ActivationChange` 不存在（G11.1.d），tip 因 `FocusIn/FocusOut` 而隱藏，不因啟用狀態改變；**G8.8.g [P2, `[INFERENCE]`]** 混合 DPI：tip 視窗以主螢幕 DPR 建立，再移到游標所在螢幕；未在異質 DPI 實機驗證。
 - **Test**：`qtrs-widgets/tests/test_tooltip.rs`（26 項：純函式 `place_tip`／`expire_time_ms`；喚醒延遲、取消、fall-asleep、冒泡與座標、`showText` 更換／位置／存活；真實視窗：按鈕狀態、非活動視窗與 `WA_AlwaysShowToolTips`、不搶前景）。tip 外觀（顏色、字型、圓角）不自動斷言，須手動驗證。
-- **HUD usage**：見上；HUD 尚未設定 tooltip（Phase 4）。
+- **HUD usage**：見上；HUD 已設定與 Python 相同的 tooltip（見 G8.8.a，`rust/src/ui/tool_tip_tests.rs`）。
 
 ---
 
@@ -945,7 +945,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`PARTIAL`。`NativeWindow::set_opacity` 存值，僅對**非** `LAYERED` 視窗呼叫 `SetLayeredWindowAttributes`；`Win32LayeredPresenter` 用它當 `SourceConstantAlpha`；`get_or_create_presenter` 對 `LAYERED` 視窗**先試 `DCompSurface::new`**，失敗才退回 GDI layered presenter。
 - **Known gap**
   - **G11.5.a [P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現；已修復：RC-09 implementation complete / DirectComposition hardware verification pending]** **DComp 路徑丟棄 opacity**：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)`（`surface/dcomp.rs`）從不使用它；`WindowsPresenter::set_opacity` 對 `DirectComposition` 為 no-op；以寫死的 `1.0` 呈現。若 DComp 被選用，HUD 的不透明度設定**無效**（`hud_window.py:132,820` vs `hud_window.rs:223,782-788`）。
-  - **G11.5.c [test gap, RAN；部分處理：RC-09 新增明確標為 ignore 的 DComp 測試，既有 test_dcomp_* 仍靜默 skip]** `test_dcomp_*`（5 項）在本機因 `CreateDXGIFactory1 failed for IDXGIFactory2` 全部 skip，卻顯示為 passed；`window.rs:1490-1492` 對所有 `LAYERED` 視窗**無閘門地先試 DComp**，另有 `test_layered_interactive_resize::window_pipeline_*` 在本機選到 Layered。DComp 路徑在本機完全沒被測試。
+  - **G11.5.c [test gap, RAN；部分處理：RC-09 新增明確標為 ignore 的 DComp 測試，既有 test_dcomp_* 仍靜默 skip]** `test_dcomp_*`（5 項）在本機因 `CreateDXGIFactory1 failed for IDXGIFactory2` 全部 skip，卻顯示為 passed；`window.rs:1678-1679` 對所有 `LAYERED` 視窗**無閘門地先試 DComp**，另有 `test_layered_interactive_resize::window_pipeline_*` 在本機選到 Layered。DComp 路徑在本機完全沒被測試。
   - **G11.5.d [P1, RAN；已修復：RC-09]** 非 `LAYERED` 視窗的 `setWindowOpacity` 無效：`dyn PlatformWindow::set_opacity`（widgets `Window::set_opacity` 走的路徑）只寫入欄位並通知 presenter；`Win32DcPresenter` 不處理 opacity；另一個 inherent `NativeWindow::set_opacity` 呼叫 `SetLayeredWindowAttributes` 卻沒設 `WS_EX_LAYERED`（對沒有該樣式的視窗會失敗），且 trait 路徑根本不會呼叫它。Qt：`setWindowLayered` 在 `opacity < 1` 時加 `WS_EX_LAYERED`，再 `SetLayeredWindowAttributes(qRound(255*level))`（`qwindowswindow.cpp:494-530`）。
   - **G11.5.e [test gap]** `Win32LayeredPresenter` 把 opacity 傳為 `UpdateLayeredWindowIndirect` 的 `SourceConstantAlpha`（與 Qt 的 `qRound(255*opacity)` 等價，讀碼確認）；沒有讀回合成結果的測試——桌面合成無法在不依賴桌面內容的前提下讀回。
   - **G11.5.f [P2, 未量測]** DComp 的 opacity 以 CPU 在 staging DIB 複製時逐像素縮放實作（`opacity < 1` 時每次呈現多一次乘法；opacity 變更時整面重傳），而非 GPU 端的 `IDCompositionEffectGroup::SetOpacity`。後者的 vtable slot 在本機無法驗證（本機沒有 DXGI factory），因此未採用。
@@ -1428,7 +1428,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.c | P1, READ | 無 Show/Hide 事件 |
 | G8.1.d | P1, READ；已修復：RC-63、RC-63b、RC-63c、RC-63d | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
 | G8.1.e | P2, RAN；已修復：RC-66 | 子容器以 cell 大小而非自身大小判斷是否重排，多一次排程與重繪請求 |
-| G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；`Widget::set_enabled` 不送事件的入口已移除：RC-43 | 傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺 |
+| G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；停用焦點容器時的焦點候選已修復：RC-42；`Widget::set_enabled` 不送事件的入口已移除：RC-43 | （修復前）傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺；殘餘：borrow 中的 widget 收不到 `EnabledChange` |
 | G8.3.a | P1, READ | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
 | G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
@@ -1705,7 +1705,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - 六份稽核由子代理唯讀完成；§3–§5 與 §8–§9 的 Qt 行為引用了 repo 內的 `qtbase/` 原始碼，其他章節多為 `[QT-DOC]`。行號會漂移。
 - 本文件沒有對 PySide6 做新的行為實測，**除了**第 C9.7 的 layout harness；所有其他「Qt behavior」都是引用，不是本次量測。
 - macOS／Linux 後端完全未驗證。
-- 最需要先實測的項目：`G10.7.a`（非主螢幕 DPR，需異 DPI 雙螢幕）。`G4.3.a` 已由 RC-68 以 widget 測試實測（HUD 真機仍未測）。`G11.5.a` 已在本機實測：選到 Layered，非 DComp（見 G11.5.c）。`G7.9.a` 已由讀碼降為 P2，仍待驗證。
+- 最需要先實測的項目：`G10.7.a`（非主螢幕 DPR，需異 DPI 雙螢幕）。`G4.3.a` 已由 RC-68 以 widget 測試實測（HUD 真機仍未測）。`G11.5.a`：本機實測選到 Layered，DComp 路徑沒有被執行（見 G11.5.c），DComp 的 opacity 仍待實機驗證。`G7.9.a` 已由讀碼降為 P2，仍待驗證。
 
 ---
 
@@ -1823,7 +1823,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 雙擊：`double_click_a_widget_does_not_handle_is_delivered_to_it_as_a_press`（`QWidget::mouseDoubleClickEvent` 預設呼叫 `mousePressEvent`，`qwidget.cpp:9636`）、`unhandled_double_click_falls_back_to_the_press_handler`、`double_click_and_release_reach_the_window_handler_when_no_widget_takes_them`、平台層 `native_window_class_asks_the_os_for_double_clicks`（`CS_DBLCLKS`）與 `double_click_message_is_a_double_click_event_not_a_second_press`。
   - 內建 widget：`right_press_on_a_button_reaches_the_parent`（`QAbstractButton` 忽略非左鍵）、`wheel_over_a_label_inside_a_scroll_area_scrolls_it`。
   - 視窗：`close_request_without_handler_hides_window`、`close_event_ignored_keeps_window_visible`、`window_close_handler_can_refuse_the_close`、`accepted_close_hides_children_after_the_window`、`show_hide_events_delivered_in_order`（Show：子 → 自己；Hide：自己 → 子；重複 show／hide 不重發）、`explicitly_hidden_child_gets_no_show_event`、`window_move_reaches_the_window_widget_and_handler`。關閉測試用真正的 `WM_CLOSE`（`SendMessageW`）驅動。
-- **Downstream**：RC-11（tooltip）、RC-17（幾何持久化）、RC-18（喚醒偵測，`Power::Resume` 已存在）。
+- **Downstream**：RC-11（tooltip）、RC-17（幾何持久化）、RC-18（喚醒偵測；最終以 application 層的 tick 間隔實作，不依賴 `Power::Resume`，該事件目前沒有 consumer，見 G12.5.x）。
 - **Can remove app workaround**：`hud_window.rs:352` 的 `set_mouse_press_handler` 拖曳／縮放模擬；`hide()` 內的 trim（`hud_window.rs:479-485`）— **只有在 HUD 以真正的 `mousePressEvent` 冒泡重寫後**。
 - **Status**：**已修復**（RC-06）。
   - **根因**：事件翻譯散在各處——`EventTreeDispatcher` 對每種滑鼠事件只送給最內層 widget 並回傳其 `bool`，沒有 accept／ignore 與 parent 鏈；`WindowEventHandler` 對 `CloseRequest`、雙擊、`Move` 沒有 arm（`_ => {}`），Win32 的 `WM_*DBLCLK` 被當成第二次 `MousePress`；`Show`／`Hide`／`Close` 從未送到任何 widget。
@@ -1880,7 +1880,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 #### RC-09 Presenter 尊重 opacity
 - **Contract gaps**：G11.5.a（= G12.5.t）；新增 G11.5.c（test gap）。
 - **Qt behavior** `[QT-DOC]`：`setWindowOpacity` 對所有後端生效。
-- **qtrs root**：`presenter.rs:361-363` DComp 以寫死 `1.0` 呈現；`set_opacity` 對 DComp 為 no-op（`:342-348`）；`window.rs:1490-1492` **對所有 `LAYERED` 視窗無閘門地先試 DComp**。
+- **qtrs root**：`presenter.rs:361-363` DComp 以寫死 `1.0` 呈現；`set_opacity` 對 DComp 為 no-op（`:342-348`）；`window.rs:1678-1679` **對所有 `LAYERED` 視窗無閘門地先試 DComp**。
 - **Evidence**：`READ` + `RAN`：本機 `FRAMELESS|LAYERED` 視窗選到 **Layered**；`test_dcomp_*` 5 項因 `CreateDXGIFactory1 failed for IDXGIFactory2` **全部 skip**（顯示為「通過」）。因此**本機未重現**，且 DComp 路徑在本機**完全沒被測試**。
 - **Required observable**：不論選到哪個後端，`set_opacity(0.5)` 後合成 alpha 為 0.5。
 - **Required test**（`qtrs-platform/tests/test_window_opacity.rs`；修改前以「DComp 縮放忽略 opacity」「trait 路徑回到舊的 set_opacity」兩處模擬舊行為：2 項 FAIL）：
@@ -1943,7 +1943,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **範圍（使用者核定）**：
   - **RC-11a**（已完成，commit 另列）：`Timer` 重啟語意，G5.1.f。只改 `register_object_metadata` 的 liveness 處理；未改其他計時器語意（G5.4.a/b、單發、`remaining_time` 皆未動）。實作完成，無需手動驗證。
   - **RC-11b**（implementation complete / real X11、Wayland、macOS 驗證 pending）：`PlatformWindow::is_active()`（必要方法，無 default；Win32 = `QWindowsWindow::isActive` 的 `GetForegroundWindow` 檢查，真實驗證；Cocoa `isKeyWindow`、X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Generic `FocusIn/Out`，皆為模擬驗證）與 `WindowFlags::TOOLTIP`（Win32：`WS_POPUP`＋`WS_EX_NOACTIVATE|TOPMOST|TOOLWINDOW`＋`SW_SHOWNOACTIVATE`；Cocoa：`orderFront:` 不成為 key）。測試 `qtrs-platform/tests/test_window_activation.rs`（11 項，含「一般視窗 `show()` 會搶前景」的對照組；變異檢查：把 `SW_SHOWNOACTIVATE` 改回 `SW_SHOW` 時前景測試 FAIL）。新缺口 G11.1.c、G11.1.d。新 API 無法在舊 code 上執行，故無 before-FAIL，以變異檢查代替。
-  - **RC-11c**（implementation complete；Win32 真實視窗驗證；外觀、X11／Wayland／Cocoa 真實驗證 pending）：`Widget::tool_tip` 等屬性；`EventKind::ToolTip` 改為 `{x,y,global_x,global_y}`（移除 `text`，並改寫 `test_advanced_event_system.rs` 原本釘住 `text` 的斷言）；`WindowSystemEvent::MouseMove` 新增 `buttons`（Win32 `MK_*`；其他後端記錄 press／release）；`EventTreeDispatcher::dispatch_mouse_move`（`QApplication::notify` 的喚醒）；wake-up 700 ms／20 ms、fall-asleep 2000 ms、hide 300 ms、存活 `10000+40*max(0,len-100)`；沿 parent 冒泡；`QToolTip::showText` 位置（翻轉＋夾入螢幕，純函式 `place_tip`）；以 `PlatformWindow::is_active`（RC-11b）判斷「視窗為 active 或 `WA_AlwaysShowToolTips`」。**慣例**：widget 的 `event()` 對 `ToolTip` 回傳 `false` 表示「交給 `QWidget::event` 的預設行為」（顯示自己的 `tool_tip`，空字串則 `ignore`）；回傳 `true` 則由該 widget 自行決定接受與否。**不修 G11.1.d**：RC-11c 直接查 `PlatformWindow::is_active`，沒有建 `Application::active_window`／`ActivationChange`。**證據分類**：新 API 在舊程式碼上無法執行，所以沒有 before-FAIL；以變異檢查取代（不是 before-FAIL）：喚醒延遲 700→70 ms 使 `hover_shows…` FAIL；移除 active 閘門使 `an_inactive_window…` FAIL；忽略按鈕狀態使 `a_move_with_a_button_down…` 與真實視窗的按鈕測試 FAIL。測試會把真實游標移到測試視窗上再還原（否則 Windows 對 `TrackMouseEvent` 立刻回 `WM_MOUSELEAVE`，那是真實的 `Leave`，會取消 tip）。新缺口 G8.8.b–G8.8.g。HUD 接線（Phase 4）未做，G8.8.a／G12.5.i 在 HUD 端仍開著。
+  - **RC-11c**（implementation complete；Win32 真實視窗驗證；外觀、X11／Wayland／Cocoa 真實驗證 pending）：`Widget::tool_tip` 等屬性；`EventKind::ToolTip` 改為 `{x,y,global_x,global_y}`（移除 `text`，並改寫 `test_advanced_event_system.rs` 原本釘住 `text` 的斷言）；`WindowSystemEvent::MouseMove` 新增 `buttons`（Win32 `MK_*`；其他後端記錄 press／release）；`EventTreeDispatcher::dispatch_mouse_move`（`QApplication::notify` 的喚醒）；wake-up 700 ms／20 ms、fall-asleep 2000 ms、hide 300 ms、存活 `10000+40*max(0,len-100)`；沿 parent 冒泡；`QToolTip::showText` 位置（翻轉＋夾入螢幕，純函式 `place_tip`）；以 `PlatformWindow::is_active`（RC-11b）判斷「視窗為 active 或 `WA_AlwaysShowToolTips`」。**慣例**：widget 的 `event()` 對 `ToolTip` 回傳 `false` 表示「交給 `QWidget::event` 的預設行為」（顯示自己的 `tool_tip`，空字串則 `ignore`）；回傳 `true` 則由該 widget 自行決定接受與否。**不修 G11.1.d**：RC-11c 直接查 `PlatformWindow::is_active`，沒有建 `Application::active_window`／`ActivationChange`。**證據分類**：新 API 在舊程式碼上無法執行，所以沒有 before-FAIL；以變異檢查取代（不是 before-FAIL）：喚醒延遲 700→70 ms 使 `hover_shows…` FAIL；移除 active 閘門使 `an_inactive_window…` FAIL；忽略按鈕狀態使 `a_move_with_a_button_down…` 與真實視窗的按鈕測試 FAIL。測試會把真實游標移到測試視窗上再還原（否則 Windows 對 `TrackMouseEvent` 立刻回 `WM_MOUSELEAVE`，那是真實的 `Leave`，會取消 tip）。新缺口 G8.8.b–G8.8.g。HUD 接線（Phase 4）在本 RC 時未做，之後已完成（見 G8.8.a，`rust/src/ui/tool_tip_tests.rs` 7 項）。
   - **計時器規則**：700 ms／2 s 是 Qt tooltip 協定，明確豁免「不新增 timer／debounce」規則，不是 application debounce。
   - **外觀**（圓角、深色底、字型）留手動驗證；自動化契約只鎖：觸發、取消、冒泡、位置、存活、不搶焦點。
 
@@ -2118,7 +2118,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 - **Contract gaps**：G8.2.a（RC-38 Residual）。計數不變。
 - **Qt behavior** `[QT-SRC qwidget.cpp:3405-3476]`：`QWidget::setEnabled` 是唯一入口，`setEnabled_helper` 在返回前依序送出子項與自己的 `EnabledChange`；狀態未變（含重複設定）時不送。
-- **qtrs root**：`Widget::set_enabled(&self)` 在呼叫端的 borrow 中執行，`event()` 需要 `&mut self`，無法同步送事件給自己；它只更新狀態（`WidgetBase::set_enabled` → `set_enabled_helper(.., None)`），事件與焦點移交都不送，或延後到下一個事件。
+- **qtrs root**（修改前；兩個入口已於本 RC 移除）：`Widget::set_enabled(&self)` 在呼叫端的 borrow 中執行，`event()` 需要 `&mut self`，無法同步送事件給自己；它只更新狀態（`WidgetBase::set_enabled` → `set_enabled_helper(.., None)`），事件與焦點移交都不送，或延後到下一個事件。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle `rc43_oracle.py`（`root`{`c`{`x`,`a`},`b`}，`changeEvent` 記錄，`setEnabled` 一返回就讀）：b off → `b:EC:off`、再 off → 無、on → `b:EC:on`；c off → `x:EC:off`、`a:EC:off`、`c:EC:off`、再 off → 無、on → `x/a/c:EC:on`。新測試 `the_widget_entry_point_notifies_before_it_returns`：以 `t.b.borrow().set_enabled(..)` 撰寫時修改前失敗（`left: []`、`right: ["b:EC:off"]`）；入口移除後呼叫改為 `set_widget_enabled`，斷言不變，通過。
 - **Status**：**已修復（入口調整）**。`Widget` trait 移除 `set_enabled`，`WidgetBase::set_enabled` 移除；`set_widget_enabled(&WidgetRef, bool)` 為唯一入口，`set_enabled_helper` 改為必收 `&mut Vec<EnabledNotice>`。所有轉發 impl（qtrs-widgets 各 widget、測試、`usage_table.rs` 4 處）刪除；`Menu` 原本在 `set_enabled` 內呼叫自己的 `update()`，改為在 `event(EnabledChange)` 時呼叫（對應 `changeEvent` 的重繪）。只對未包進 `WidgetRef` 的 widget 呼叫的測試（`test_stylesheet_disabled`／`test_stylesheet_enabled`／`test_accessibility`）改為先包進 `WidgetRef`。`test_focus_disable.rs::the_borrowed_entry_point_defers_the_events` 隨入口移除而刪除（RC-37 的 borrow 衝突延後路徑仍由 `with_a_borrowed_ancestor_the_events_wait_for_the_next_event` 覆蓋）。
 - **去重**：入口移除後，該測試與 `a_change_is_notified_once_and_no_change_not_at_all`（`b` 部分完全相同）、`the_children_are_notified_before_the_parent`（`c` 部分僅差父項重複設定）重複；已刪除，父項「重複設定不送事件」的斷言併入 `the_children_are_notified_before_the_parent`。
@@ -2657,7 +2657,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 | Phase | 內容 | 前提 |
 |---|---|---|
-| 0 | Contract 清理（本次已完成）；實測 G11.5.a（已測：本機為 Layered）、G10.7.a、RC-14/15/16 的幾何 diff（已完成，見 C12.8） | 無 |
+| 0 | Contract 清理（本次已完成）；實測 G11.5.a（本機只選到 Layered，DComp 未測）、G10.7.a、RC-14/15/16 的幾何 diff（已完成，見 C12.8） | 無 |
 | 1 | RC-01、RC-02、RC-03、RC-04；**每個 RC 一個提交**，各自附「修改前 FAIL、修改後 PASS」的測試 | RC-03 在 RC-02 之後（同一檔案）；RC-01、RC-04 與其他獨立 |
 | 2 | RC-05、RC-06 | Phase 1 完成 |
 | 3 | RC-07、RC-08、RC-09、RC-10、RC-11 | RC-08、RC-09 先實測；RC-10 依賴 RC-05；RC-11 依賴 RC-06 與 RC-11a（G5.1.f；不依賴 G5.4.a） |
