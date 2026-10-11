@@ -152,6 +152,86 @@ pub(crate) fn registration_thread_of(id: ObjectId) -> Option<ThreadId> {
     Some(thread_id)
 }
 
+/// Invokes a method on a registered object through its thread's event loop
+/// (`QMetaObject::invokeMethod` with `Qt::QueuedConnection` or `Qt::BlockingQueuedConnection`).
+///
+/// Needs no `&mut` borrow of the object, so any thread may call it with the receiver's id and its
+/// static `MetaObject`. The member is resolved and its argument count checked before anything is
+/// posted, as Qt does (qmetaobject.cpp `invokeMethodImpl`). `Queued` returns `Ok(Variant::Invalid)`
+/// once posted; the return value is not delivered. `BlockingQueued` waits for the result on the
+/// receiver's thread. `Auto` queues when the caller is on another thread. `Direct`, and `Auto` on the
+/// receiver's own thread, need a `&mut` borrow and return `Err(TargetBorrowFailed)`; use
+/// `QObject::invoke_method_with_type` for those.
+pub fn invoke_method_on_thread(
+    receiver: ObjectId,
+    meta: &'static crate::meta::MetaObject,
+    member: &str,
+    args: &[Variant],
+    conn_type: crate::signal::ConnectionType,
+) -> Result<Variant, crate::meta::InvokeError> {
+    use crate::signal::ConnectionType;
+    let idx = meta
+        .index_of_method(member)
+        .ok_or(crate::meta::InvokeError::MethodNotFound)?;
+    let method = meta
+        .method(idx)
+        .ok_or(crate::meta::InvokeError::MethodNotFound)?;
+    if !method.is_invokable() {
+        return Err(crate::meta::InvokeError::MethodNotFound);
+    }
+    if args.len() != method.parameter_count() {
+        return Err(crate::meta::InvokeError::ParameterCountMismatch {
+            expected: method.parameter_count(),
+            actual: args.len(),
+        });
+    }
+
+    let thread =
+        registration_thread_of(receiver).ok_or(crate::meta::InvokeError::TargetBorrowFailed)?;
+    let blocking = match conn_type {
+        ConnectionType::Queued => false,
+        ConnectionType::BlockingQueued => true,
+        ConnectionType::Auto if thread != ThreadId::current() => false,
+        ConnectionType::Auto | ConnectionType::Direct => {
+            return Err(crate::meta::InvokeError::TargetBorrowFailed)
+        }
+    };
+
+    let member_owned = member.to_string();
+    let args_owned = args.to_vec();
+    if !blocking {
+        let event = Event::new(EventKind::MetaCall(Box::new(
+            move |target: &mut dyn std::any::Any| {
+                // Qt drops the return value of a queued invoke along with any failure.
+                let _ = meta.invoke_method(target, &member_owned, &args_owned);
+            },
+        )));
+        crate::event_loop::post_event_to_thread(thread, receiver, event);
+        return Ok(Variant::Invalid);
+    }
+
+    if thread == ThreadId::current() {
+        // Qt: "Dead lock detected" (qmetaobject.cpp:1750); QMetaMethod::invoke returns
+        // DeadLockDetected (qmetaobject.cpp:2926-2929). Reported as an error instead of blocking forever.
+        return Err(crate::meta::InvokeError::ExecutionFailed(
+            "BlockingQueued invoke on the receiver's own thread would deadlock".to_string(),
+        ));
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Variant, crate::meta::InvokeError>>();
+    let event = Event::new(EventKind::MetaCall(Box::new(
+        move |target: &mut dyn std::any::Any| {
+            let result = meta.invoke_method(target, &member_owned, &args_owned);
+            let _ = tx.send(result);
+        },
+    )));
+    crate::event_loop::post_event_to_thread(thread, receiver, event);
+    match rx.recv() {
+        Ok(result) => result,
+        // The loop dropped the call without running it (receiver gone or loop shut down).
+        Err(_) => Err(crate::meta::InvokeError::TargetBorrowFailed),
+    }
+}
+
 /// Moves an object's physical registration to `thread_id`. Only `move_to_thread` calls this.
 pub(crate) fn set_registration_thread(id: ObjectId, thread_id: ThreadId) {
     if let Ok(reg) = GLOBAL_OBJECT_REGISTRY.read() {
@@ -1086,6 +1166,34 @@ pub trait QObject: std::any::Any {
         } else {
             Err(crate::meta::InvokeError::TargetBorrowFailed)
         }
+    }
+
+    /// Invokes a method with an explicit connection type (`QMetaObject::invokeMethod(obj, name,
+    /// Qt::ConnectionType, ...)`, qmetaobject.cpp `invokeMethodImpl`).
+    ///
+    /// `Direct` invokes in the caller. `Auto` is `Direct` when the object lives on the calling thread
+    /// (or is unregistered), otherwise it is queued. `Queued` and `BlockingQueued` are delegated to
+    /// [`invoke_method_on_thread`], which needs no `&mut` borrow of the object.
+    fn invoke_method_with_type(
+        &mut self,
+        member: &str,
+        args: &[Variant],
+        conn_type: crate::signal::ConnectionType,
+    ) -> Result<Variant, crate::meta::InvokeError> {
+        use crate::signal::ConnectionType;
+        let id = self.object_data().id;
+        let on_owner_thread =
+            registration_thread_of(id).map_or(true, |thread| thread == ThreadId::current());
+        let direct = match conn_type {
+            ConnectionType::Direct => true,
+            ConnectionType::Auto => on_owner_thread,
+            ConnectionType::Queued | ConnectionType::BlockingQueued => false,
+        };
+        if direct {
+            return self.invoke_method(member, args);
+        }
+        let meta = self.meta_object();
+        invoke_method_on_thread(id, meta, member, args, conn_type)
     }
 
     /// Returns all registered dynamic property names (`QObject::dynamicPropertyNames`).

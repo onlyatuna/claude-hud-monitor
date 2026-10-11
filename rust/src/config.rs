@@ -185,6 +185,9 @@ impl ConfigManager {
     /// Unit tests get a throw-away file: they switch layouts and save, and must not rewrite the
     /// settings of the HUD installed on the machine.
     pub fn config_path() -> PathBuf {
+        if let Some(path) = CONFIG_PATH_OVERRIDE.lock().clone() {
+            return path;
+        }
         #[cfg(test)]
         {
             std::env::temp_dir()
@@ -332,6 +335,68 @@ impl ConfigManager {
             Err(e) => error!("[Config] Serialize error: {e}"),
         }
     }
+}
+
+/// Config path forced by an isolated `--smoke-test` run; `None` means normal resolution.
+static CONFIG_PATH_OVERRIDE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Value that `--smoke-test` writes and reloads (`python/core/smoke_check.py:27-29`).
+pub const SMOKE_OPACITY: f32 = 0.55;
+
+/// Isolated user-data directory for `--smoke-test` (`python/core/smoke_check.py:15-18`).
+///
+/// Entering points `APPDATA` at `root` and forces the config file to
+/// `root/ClaudeHUDMonitor/config.json`, the file a redirected `config_dir()` yields. The forced
+/// path also bypasses a portable `config.json` next to the executable, which would otherwise be
+/// the user's real settings. Dropping restores both and deletes `root`, like Python's `finally`.
+pub struct SmokeIsolation {
+    root: PathBuf,
+    previous_appdata: Option<std::ffi::OsString>,
+    previous_override: Option<PathBuf>,
+}
+
+impl SmokeIsolation {
+    pub fn enter(root: &std::path::Path) -> Self {
+        let previous_appdata = std::env::var_os("APPDATA");
+        std::env::set_var("APPDATA", root);
+        let config_file = root.join("ClaudeHUDMonitor").join("config.json");
+        let previous_override = CONFIG_PATH_OVERRIDE.lock().replace(config_file);
+        Self {
+            root: root.to_path_buf(),
+            previous_appdata,
+            previous_override,
+        }
+    }
+}
+
+impl Drop for SmokeIsolation {
+    fn drop(&mut self) {
+        *CONFIG_PATH_OVERRIDE.lock() = self.previous_override.take();
+        match &self.previous_appdata {
+            Some(value) => std::env::set_var("APPDATA", value),
+            None => std::env::remove_var("APPDATA"),
+        }
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// `--smoke-test` config check, mirroring `smoke_check.py:20-29`: the config must resolve inside
+/// the isolated directory, and a value written through the normal save path must survive a reload
+/// from disk. Returns the reloaded config.
+pub fn smoke_config_check(isolation: &SmokeIsolation) -> Result<Config, String> {
+    if !ConfigManager::config_path().starts_with(&isolation.root) {
+        return Err("Config did not use the isolated user-data directory".to_owned());
+    }
+    let config = Mutex::new(ConfigManager::load());
+    ConfigManager::update_and_save(&config, |cfg| cfg.opacity = SMOKE_OPACITY);
+    let reloaded = ConfigManager::load();
+    if (reloaded.opacity - SMOKE_OPACITY).abs() > f32::EPSILON {
+        return Err(format!(
+            "Settings did not survive reload (opacity {})",
+            reloaded.opacity
+        ));
+    }
+    Ok(reloaded)
 }
 
 /// Process-wide serialization of config file writes (tmp write + rename).
@@ -1360,5 +1425,98 @@ mod tests {
         assert!(debouncer.is_worker_joined());
         assert!(!debouncer.is_in_flight());
         assert!(!debouncer.is_pending());
+    }
+
+    /// G12.5.k. `--smoke-test` must write only under its isolated root (Python `smoke_check.py`
+    /// temp APPDATA) and must prove persistence by a save/reload round trip.
+    fn smoke_scratch(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "ClaudeHUDMonitor-smoke-test-{}-{name}",
+            std::process::id()
+        ))
+    }
+
+    /// Restores `APPDATA` on drop, so a failing assertion cannot leak the decoy value.
+    struct RestoreAppData(Option<std::ffi::OsString>);
+
+    impl RestoreAppData {
+        fn capture() -> Self {
+            Self(std::env::var_os("APPDATA"))
+        }
+    }
+
+    impl Drop for RestoreAppData {
+        fn drop(&mut self) {
+            match &self.0 {
+                Some(value) => std::env::set_var("APPDATA", value),
+                None => std::env::remove_var("APPDATA"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_smoke_writes_only_into_isolated_directory() {
+        let decoy = smoke_scratch("decoy-appdata");
+        let root = smoke_scratch("isolated");
+        let _ = fs::remove_dir_all(&decoy);
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&decoy).expect("create decoy APPDATA");
+        let _restore = RestoreAppData::capture();
+        std::env::set_var("APPDATA", &decoy);
+
+        let expected = root.join("ClaudeHUDMonitor").join("config.json");
+        {
+            let isolation = SmokeIsolation::enter(&root);
+            let cfg = smoke_config_check(&isolation).expect("round trip under isolation");
+            assert_eq!(cfg.opacity, SMOKE_OPACITY);
+            assert_eq!(
+                ConfigManager::config_path(),
+                expected,
+                "config path must resolve to the isolated file"
+            );
+            assert!(
+                expected.is_file(),
+                "smoke must persist under the isolated root: missing {expected:?}"
+            );
+            let leaked: Vec<_> = fs::read_dir(&decoy).expect("read decoy").collect();
+            assert!(
+                leaked.is_empty(),
+                "smoke wrote into the real APPDATA: {leaked:?}"
+            );
+        }
+
+        assert_ne!(
+            ConfigManager::config_path(),
+            expected,
+            "isolation must be undone on drop"
+        );
+        assert!(!root.exists(), "isolated root must be removed on drop");
+        assert_eq!(
+            std::env::var_os("APPDATA"),
+            Some(decoy.clone().into_os_string()),
+            "APPDATA must be restored on drop"
+        );
+        let _ = fs::remove_dir_all(&decoy);
+    }
+
+    #[test]
+    fn test_smoke_round_trip_detects_persistence_failure() {
+        let scratch = smoke_scratch("blocked");
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch).expect("create scratch");
+        // A regular file where the isolated config directory must be created: the save fails.
+        let blocker = scratch.join("blocker");
+        fs::write(&blocker, b"not a directory").expect("write blocker");
+
+        let isolation = SmokeIsolation::enter(&blocker.join("root"));
+        let result = smoke_config_check(&isolation);
+        drop(isolation);
+        let _ = fs::remove_dir_all(&scratch);
+
+        let err = result.expect_err("a failed save must fail the round trip");
+        assert!(
+            err.contains("Settings did not survive reload"),
+            "unexpected error: {err}"
+        );
     }
 }

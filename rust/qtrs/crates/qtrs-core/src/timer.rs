@@ -249,6 +249,7 @@ thread_local! {
     static THREAD_TIMER_CONTEXT: RefCell<Option<ThreadTimerContext>> = const { RefCell::new(None) };
     static SINGLE_SHOT_CALLBACKS: RefCell<HashMap<ObjectId, Box<dyn FnOnce() + Send>>> =
         RefCell::new(HashMap::new());
+    static PENDING_SINGLE_SHOTS: RefCell<Vec<(ObjectId, u64)>> = RefCell::new(Vec::new());
 }
 
 pub fn register_thread_timer_context(
@@ -261,6 +262,13 @@ pub fn register_thread_timer_context(
             #[cfg(windows)]
             internal_hwnd,
         });
+    });
+    // Arm single-shot timers requested before this thread had a loop (G5.5.b); they must not be dropped.
+    let pending = PENDING_SINGLE_SHOTS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    with_thread_timer_context(|ctx| {
+        for (receiver, interval_ms) in pending {
+            arm_single_shot(ctx, receiver, interval_ms);
+        }
     });
 }
 
@@ -289,6 +297,27 @@ pub fn with_thread_timer_context<R>(f: impl FnOnce(&ThreadTimerContext) -> R) ->
         .try_with(|ctx| ctx.borrow().as_ref().map(f))
         .ok()
         .flatten()
+}
+
+/// Arms one single-shot timer for `receiver` on this thread's registry (Windows: also `SetTimer`
+/// on the internal window, as `Timer::single_shot` always did).
+fn arm_single_shot(ctx: &ThreadTimerContext, receiver: ObjectId, interval_ms: u64) {
+    let _timer_id =
+        ctx.registry
+            .lock()
+            .unwrap()
+            .register(receiver, interval_ms, TimerType::Coarse, true);
+    #[cfg(windows)]
+    if !ctx.internal_hwnd.is_null() {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
+                ctx.internal_hwnd,
+                _timer_id.0 as usize,
+                interval_ms.min(u32::MAX as u64) as u32,
+                None,
+            );
+        }
+    }
 }
 
 /// Stops and unregisters all active timers registered to the specified receiver object.
@@ -759,25 +788,11 @@ impl Timer {
 
         let receiver = ObjectId::next();
         register_single_shot_callback(receiver, callback);
-        with_thread_timer_context(|ctx| {
-            let _timer_id = ctx.registry.lock().unwrap().register(
-                receiver,
-                interval_ms,
-                TimerType::Coarse,
-                true,
-            );
-            #[cfg(windows)]
-            if !ctx.internal_hwnd.is_null() {
-                unsafe {
-                    windows_sys::Win32::UI::WindowsAndMessaging::SetTimer(
-                        ctx.internal_hwnd,
-                        _timer_id.0 as usize,
-                        interval_ms.min(u32::MAX as u64) as u32,
-                        None,
-                    );
-                }
-            }
-        });
+        // Keep the arm when this thread has no timer context yet; `register_thread_timer_context`
+        // arms it once the thread's event loop exists (G5.5.b), instead of silently dropping it.
+        if with_thread_timer_context(|ctx| arm_single_shot(ctx, receiver, interval_ms)).is_none() {
+            PENDING_SINGLE_SHOTS.with(|p| p.borrow_mut().push((receiver, interval_ms)));
+        }
     }
 }
 

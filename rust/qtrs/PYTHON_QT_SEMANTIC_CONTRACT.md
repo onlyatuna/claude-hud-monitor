@@ -109,7 +109,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | 單一實例 | 無 | Windows mutex + 喚醒訊息 | `rust/src/main.rs`、`qtrs-platform/src/single_instance.rs`；`test_single_instance.rs` 3 項測試 |
 | `--snapshot` 輸出 | 無 | 寫 `rust/target/snapshots/*.png` | `rust/src/main.rs` |
 | 熱鍵字串可設定 | 固定 Alt+C / Alt+Shift+C | 可設定 | `rust/src/hotkey.rs` |
-| `--smoke-test` | 檢查設定持久化 | 只用預設 Config | `smoke_check.py` vs `main.rs`（**這個是 gap，見 G12.5.k，不是刻意**） |
+| `--smoke-test` | 檢查設定持久化 | 隔離 APPDATA 並做存讀往返（RC-122） | `smoke_check.py` vs `main.rs`（G12.5.k 已修復） |
 | 版面切換 | 重建 `inner_layout` | `StackedWidget` | `hud_window.py:272-347` vs `hud_window.rs`（行為差異，見 C9.6） |
 
 > 刻意差異的前提：**可觀察結果相同**。例如單一實例是附加能力，不改變單一視窗內的任何行為。
@@ -389,7 +389,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`IMPLEMENTED`：0 ms → `MetaCall` 送給 `ObjectId(0)`（`timer.rs` `single_shot`），與 Qt queued-call 語意一致；`ms>0` → 隱藏 registry 項 + thread-local callback map（key 為新的 `ObjectId::next()`），固定 `Coarse`。測試 `test_single_shot_timer`、`test_qtimer_single_shot_static_api_zero_delay`。
 - **Known gap**
   - **G5.5.a [P2, READ]** 無 context 版本、無取消。
-  - **G5.5.b [P1, READ]** 執行緒無 loop 時 `single_shot` 靜默丟 callback（0 ms 時 `post_event_to_thread` 回 false）。
+  - **G5.5.b [P1, RAN；已修復：RC-118]** （修復前）執行緒無 loop 時 `single_shot` 靜默丟 callback（0 ms 時 `post_event_to_thread` 回 false）。
   - **G5.5.c [P2]** 類型恆為 `Coarse`（Qt <2 s 為 `Precise`，`[QT-SRC qtimer.h:176-183]` `defaultTypeFor`）。原本寫「在 20 ms < interval < 20 s 內排程數學相同，無可觀察差異」不成立：Qt 的 `Precise` 不會提早觸發，`Coarse` 可在 5% 容差內提早（C5.6）。RC-73 的 150／1000 ms trim 經此路徑；G12.5.h 稽核 probe 量到約 185／1020 ms，只證明 callback 有觸發，不證明與 Qt 等價。未修。
   - **G5.5.d [P2]** callback 必須 `Send + 'static` 且只在呼叫執行緒執行。
 - **Test**：必要：`single_shot_ms_fires_once_via_exec`（Windows，30 ms，斷言恰一次且 callback map 為空）；`single_shot_zero_runs_after_earlier_posted_events`（FIFO）。
@@ -417,7 +417,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G6.1.a [P0, RAN；已修復：RC-03]** **發射期間被 disconnect 的 slot 仍會執行**（快照在呼叫前複製、之後不再檢查）。重現：slot A 在發射中 disconnect slot B → B 仍被呼叫 1 次。
   - **G6.1.b [P0, RAN；已修復：RC-02]** **兩個 Signal 的 `ConnectionId` 在全域表 `GLOBAL_CONNECTIONS` 碰撞**。每個 Signal 以自己的計數器從 1 開始編號，卻共用以 id 為 key 的全域 `HashMap`。重現：兩個 `Signal<i32>` 各以 `connect_to` 接一個 receiver，`id_a=1 id_b=1`；銷毀 receiver 1 後 `a.emit` **仍呼叫 slot**（對照組：只有一個 Signal 時正確為 0 次）。後果：receiver 銷毀時的自動斷線**靜默失效**；`Signal::disconnect(id)` 會刪掉別的 Signal 的全域記錄。`ConnectionId::next()`（全域計數器）存在但沒有 Signal 使用。
   - **G6.1.c [P2, READ]** `disconnect_receiver`／`disconnect_all` 不清 `GLOBAL_CONNECTIONS`（洩漏、stale 記錄）。RC-02 之後 id 全域唯一，stale 記錄只剩**洩漏**，不再造成錯誤斷線；仍未修。
-  - **G6.1.d [P1, READ]** 無 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線（`thread/channel.rs` 的 `connect_to_signal` 是 channel 適配器，不是）。
+  - **G6.1.d [P1, RAN；已修復：RC-119]** （修復前）無 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線（`thread/channel.rs` 的 `connect_to_signal` 是 channel 適配器，不是）。
   - **G6.1.e [D]** slot 需 `Fn(&T) + Send + Sync + 'static`（不能捕捉 `Rc`）；每個 signal 單一型別載荷（多參數用 tuple）；無 PySide 的「參數多於 slot 時截斷」。理由：Rust 型別系統；須在 `qtrs` 文件說明。
   - **G6.1.f [P1, RAN；已修復：RC-80]** （修復前）`connect_with_type(Queued, …)` 只儲存 direct dispatcher，`emit` 時被當 direct 呼叫——「Queued」連線若不是用知道 receiver 的 `connect_*` 建立，會**靜默同步**。
 - **Test**：既有如上。必要：`slot_disconnected_during_emit_is_not_called`（RAN 重現失敗）；`two_signals_each_connected_to_receiver_both_cut_on_destroy`（RAN 重現失敗）；`disconnect_on_signal_a_does_not_touch_signal_b_record`；`connect_with_type_queued_is_deferred_or_rejected`。
@@ -466,7 +466,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G6.5.a [P1, RAN；已修復：RC-88]** （修復前）見 G3.6.a。
   - **G6.5.b [P1, READ]** HUD **依賴**這個 stub 路徑（`ObjectId(0)` 哨兵，見 C3.6）。
-  - **G6.5.c [P1, READ]** `invoke_method` 無連線類型參數、無 queued 形式；signal 不可 invoke（invoker 為 `None`）；meta 層只驗參數個數不驗型別；`index_of_method` 取第一個符合者，overload 有歧義。
+  - **G6.5.c [P1, RAN；部分修復：RC-120]** （修復前）`invoke_method` 無連線類型參數、無 queued 形式；signal 不可 invoke（invoker 為 `None`）；meta 層只驗參數個數不驗型別；`index_of_method` 取第一個符合者，overload 有歧義。
   - **G6.5.d [D]** 無字串式 `SIGNAL()/SLOT()`、無 `connectSlotsByName`。理由：qtrs 的連線是型別化閉包 API，沒有 moc 字串簽章；誤用在編譯期就不可能發生（不存在該 API）。
 - **Test**：必要：同 C3.6；queued `invoke_method` 被延後。
 - **HUD usage**：Python `@Slot(str,int,object)` 只在 `_complete`（`refresh_controller.py:98`），且是直接呼叫（`:96`），沒有經信號；`invokeMethod`/`QMetaObject` 未用。
@@ -561,9 +561,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 帶 loop 的 worker 收得到 posted events／queued 信號；`quit` 結束 loop；`is_finished` 反映完成；優先序 SHOULD 生效或不提供此 API。
 - **Current implementation**（`thread/thread.rs`）：`spawn`、`spawn_with_event_loop`、`EventLoopThreadHandle::quit`。`IMPLEMENTED`：spawn／中斷／帶 loop 執行緒 + quit（`test_thread_spawn_and_interruption`、`test_thread_with_event_loop`）。
 - **Known gap**
-  - **G7.6.a [P1, READ]** `ThreadHandle::is_finished()` 在 `join(self)` 之前**恆為 false**（旗標由 builder 建立卻從未與執行緒共享，只有消耗 handle 的 `join` 會設）。
-  - **G7.6.b [P1, READ]** `ThreadBuilder::priority` 存了但從不套用。
-  - **G7.6.c [P1]** 無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning`。
+  - **G7.6.a [P1, RAN；已修復：RC-121]** （修復前）`ThreadHandle::is_finished()` 在 `join(self)` 之前**恆為 false**（旗標由 builder 建立卻從未與執行緒共享，只有消耗 handle 的 `join` 會設）。
+  - **G7.6.b [P1, RAN；已修復：RC-121]** （修復前）`ThreadBuilder::priority` 存了但從不套用。
+  - **G7.6.c [P1, RAN；已修復：RC-121]** （修復前）無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning`。
   - **G7.6.d [P2]** 閉包 panic 會跳過 `clear_current`（無 guard）。
   - **G7.6.e [P2]** `EventLoopThreadHandle` 無 Drop／join，丟棄即分離。
   - **G7.6.f [P1, RAN（macOS CI）；已修復：RC-44]** macOS 上每個執行緒的事件迴圈都用 `CocoaEventDispatcher`，它要求主執行緒，所以 `spawn_with_event_loop` 與任何非主執行緒的 `EventLoop::process_events`／`exec` 一定 panic。
@@ -1188,14 +1188,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.h [P1；部分修復：RC-73] | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms（啟動後 trim）。修復前 Rust 在 `hide()` 立即 trim、Alt+F4 不 trim、busy→idle 不 trim，只有 2500 ms。RC-73 修了 150 與 1000 ms。**殘餘**：(1) 300 ms：Python 建構時視窗可互動，300 ms 後先檢查 click-through 熱鍵再套用穿透（`hud_window.py:106-108,426-437`）；Rust 建構時就依設定套用穿透（`hud_window.rs` 建構時加 `WindowFlags::CLICK_THROUGH`），熱鍵檢查不通過時在 `main.rs` 的啟動閘門同步撤銷，**在 `exec()` 之前**完成（`main.rs:517-530`，`exec` 在 `:583`），之後沒有其他撤銷路徑，所以不會鎖死；兩邊的閘門條件相同（`hotkey.rs` `click_through_startup_allowed`）。差異只在啟動最初約 300 ms：Python 可互動、Rust 已穿透（熱鍵可用時）。決定：不改（要對齊須改視窗建立旗標、ghost label 與托盤狀態時序並處理 300 ms 內熱鍵切換的競態，風險大於收益），記為已知時序偏差。(2) 2500 ms 的起點不同（Python `HUDWindow.__init__` 結尾，Rust `main.rs:573` 在托盤與熱鍵之後），差距未量測，不稱等價。 | `hud_window.py:108,114,459,617` vs `hud_window.rs:168-177,502,638-646`、`main.rs:510-525,573` | 300 ms 待量測後修復或核准；2500 ms 低優先 |
 | G12.5.i [P0, READ；= G8.8.a；已修復：HUD tooltip 接線] | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） | G8.8.a | 修復 |
 | G12.5.j [P0, READ；= G11.9.a；已修復：RC-12] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
-| G12.5.k [P1] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 修復 |
+| G12.5.k [P1, RAN；已修復：RC-122] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 已修復（RC-122） |
 | G12.5.l [P0, READ；= G11.4.a；已修復：RC-13] | 螢幕選擇／脫離螢幕還原規則 | G11.4.a | 修復 |
 | G12.5.m [P1, RAN；已修復：RC-114] | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu | `tray_icon.py:54-122` vs `rust/src/ui/tray_icon.rs:73-240` | 已依 Python 修正（RC-114） |
 | G12.5.n [P1；已修復：RC-12（hotkey 失敗）、RC-77（ghost 啟用、autostart 失敗）] | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 | `main.rs:503`、`main.rs:486-488`、`hud_window.rs:526-532`、`tray_icon.rs:686-690` | 修復 |
 | G12.5.o [P1, RAN；已修復：RC-117] | QMenu 外觀為寫死數值，非 QSS | G8.5.f | 已修復（RC-117） |
 | G12.5.p [P1] | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** | `usage_table.rs` vs `usage_table.py:88` | 已修復（`qtrs_gui::color::darker`，PySide6 逐位元比對；圖例像素與 PySide6 相同） |
 | G12.5.q [P1] | `UsageDial` 最小尺寸 0 vs 84。**已修復：RC-29** | G8.3.e | 已修復（`minimum_size()` 84×84；PySide6 oracle 比對擠壓後的 dial 尺寸） |
-| G12.5.r [P1] | 版面切換：`StackedWidget` vs 重建 | C9.6 | 決定 |
+| G12.5.r [P1] | 版面切換：`StackedWidget` vs 重建 | C9.6 | 決定（DraftY 查證 `[INFERENCE]` 待測：Python HUD 沒有 QStackedWidget，`hud_window.py:268-320` 只把目前頁面放進 `inner_layout` 重建；本表 112-113 列的方向可能相反；兩邊視窗最小尺寸都是明確設定，隱藏頁的 hint 推測無可見影響） |
 | G12.5.s [P0, READ；= G8.5.d；已修復：RC-10] | `Window::set_style_sheet` 為 app 全域 | G8.5.d | 修復 |
 | G12.5.t [P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending] | DComp 路徑 opacity 無效（待實測） | G11.5.a | 實測後修復 |
 | G12.5.u [P2] | 色彩／字型解析細節 | G12.3.e–h | 驗證 |
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 169 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.k、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 175 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.k、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1358,7 +1358,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G5.4.b | P1, RAN；已修復：RC-83 | `kill_timer` 不呼叫 `KillTimer` |
 | G5.4.c | P2 | `TimerId` 是 per-registry 計數器，非全域唯一 |
 | G5.5.a | P2, READ | 無 context 版本、無取消 |
-| G5.5.b | P1, READ | 執行緒無 loop 時 `single_shot` 靜默丟 callback |
+| G5.5.b | P1, RAN；已修復：RC-118 | 執行緒無 loop 時 `single_shot` 靜默丟 callback |
 | G5.5.c | P2 | 類型恆為 `Coarse` |
 | G5.5.d | P2 | callback 必須 `Send + 'static` 且只在呼叫執行緒執行 |
 | G5.6.a | P2, READ | `remaining_time` 用 floor |
@@ -1366,7 +1366,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.1.a | P0, RAN；已修復：RC-03 | **發射期間被 disconnect 的 slot 仍會執行** |
 | G6.1.b | P0, RAN；已修復：RC-02 | **兩個 Signal 的 `ConnectionId` 在全域表 `GLOBAL_CONNECTIONS` 碰撞** |
 | G6.1.c | P2, READ | `disconnect_receiver`／`disconnect_all` 不清 `GLOBAL_CONNECTIONS` |
-| G6.1.d | P1, READ | 無 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線 |
+| G6.1.d | P1, RAN；已修復：RC-119 | 無 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線 |
 | G6.1.e | D | slot 需 `Fn(&T) + Send + Sync + 'static` |
 | G6.1.f | P1, RAN；已修復：RC-80 | `connect_with_type(Queued, …)` 只儲存 direct dispatcher，`emit` 時被當 direct 呼叫——「Queued」連線若不是用知 |
 | G6.2.a | P1, RAN；已修復：RC-108 | receiver 執行緒在**連線時**擷取，且優先於即時查詢 |
@@ -1383,7 +1383,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.4.d | test gap, 已修復：RC-02 | `test_signal_sender_tracking_and_auto_disconnection` |
 | G6.5.a | P1, RAN；已修復：RC-88 | 見 G3.6.a |
 | G6.5.b | P1, READ | HUD **依賴**這個 stub 路徑 |
-| G6.5.c | P1, READ | `invoke_method` 無連線類型參數、無 queued 形式 |
+| G6.5.c | P1, RAN；部分修復：RC-120 | `invoke_method` 無連線類型參數、無 queued 形式 |
 | G6.5.d | D | 無字串式 `SIGNAL()/SLOT()`、無 `connectSlotsByName` |
 | G6.6.a | P1, READ | 無 `#[slot]` |
 | G6.6.b | P2, READ | derive 一律把 superclass 設為 `QOBJECT_META_OBJECT` |
@@ -1410,9 +1410,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.5.f | P2 | `caller` 是參數而非從 OS 讀取 |
 | G7.5.g | P2 | target 沒有 loop 時仍回 `Ok` |
 | G7.5.h | D；已修復：RC-107 | 物件實體仍綁註冊執行緒 |
-| G7.6.a | P1, READ | `ThreadHandle::is_finished()` 在 `join(self)` 之前**恆為 false** |
-| G7.6.b | P1, READ | `ThreadBuilder::priority` 存了但從不套用 |
-| G7.6.c | P1 | 無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning` |
+| G7.6.a | P1, RAN；已修復：RC-121 | `ThreadHandle::is_finished()` 在 `join(self)` 之前**恆為 false** |
+| G7.6.b | P1, RAN；已修復：RC-121 | `ThreadBuilder::priority` 存了但從不套用 |
+| G7.6.c | P1, RAN；已修復：RC-121 | 無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning` |
 | G7.6.d | P2 | 閉包 panic 會跳過 `clear_current` |
 | G7.6.e | P2 | `EventLoopThreadHandle` 無 Drop／join，丟棄即分離 |
 | G7.6.f | P1, RAN（macOS CI）；已修復：RC-44 | macOS 非主執行緒的事件迴圈用 Cocoa dispatcher 而 panic |
@@ -1618,7 +1618,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.h | P1；部分修復：RC-73 | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms；殘餘 300 ms 與 2500 ms 起點 |
 | G12.5.i | P0, READ；= G8.8.a；已修復：HUD tooltip 接線 | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） |
 | G12.5.j | P0, READ；= G11.9.a；已修復：RC-12 | 熱鍵註冊失敗不被回報；鎖定防護失效 |
-| G12.5.k | P1 | `--smoke-test` 不檢查設定持久化 |
+| G12.5.k | P1, RAN；已修復：RC-122 | `--smoke-test` 不檢查設定持久化 |
 | G12.5.l | P0, READ；= G11.4.a；已修復：RC-13 | 螢幕選擇／脫離螢幕還原規則 |
 | G12.5.m | P1, RAN；已修復：RC-114 | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu |
 | G12.5.n | P1, RAN；已修復：RC-12、RC-77 | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 |
@@ -3157,3 +3157,37 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **驗證**：`test_style_scope.rs` `a_qmenu_padding_from_its_parent_window_sheet_changes_its_size` 修正前 FAIL `:260 left: 56 right: 66`；`a_qmenu_item_font_size_from_its_parent_window_sheet_changes_its_row_height` FAIL「a 24px row font left the menu height unchanged」；HUD `cards_disabled_menu_rows_keep_the_normal_text_colour` FAIL `tray_icon.rs:1019`（#64748b vs #e2e8f0）。改寫：兩個 style_scope 測試原本比較「無樣式選單 vs 有樣式選單」（兩條路徑列高公式不同，釘住實作基準），改為同一選單換樣式表前後比較。`--snapshot` 本體選單已目視。
 - **Residual**：邊框寬固定 1 px、separator 高度不讀 QSS、勾選色 `#38bdf8` 寫死；無 QSS 時的預設幾何為自訂數值；寬度以列字型量測（Qt 用 item 字型）；PySide6 offscreen 量到列高 26 px、Rust 27 px，差 1 px 原因未查（探針標籤與 HUD 不同）。
 - **共同驗證（RC-114..117）**：qtrs workspace（略過 `real_windows`）114 個 test binary 全 ok；HUD 130 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過（`cargo fmt` 整理了 `main.rs` 兩處）；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG。
+
+#### RC-118 迴圈尚未建立時的 `single_shot(ms>0)` 保留到迴圈出現後觸發（G5.5.b）
+- **Qt 依據**：計時器在沒有事件迴圈的執行緒上仍被註冊，等該執行緒的 dispatcher 執行時觸發（`qthread_win.cpp:173`、`qthread_unix.cpp:461`、`qcoreapplication.cpp:872-883`，draft 引用）。
+- **根因**：`single_shot` 在 `with_thread_timer_context` 回 None 時直接返回，callback 被丟棄（0 ms 路徑已由 RC-04 處理）。
+- **修正**：沒有 timer context 時把 arm 記為 pending，執行緒註冊 timer context 時 arm。
+- **驗證**：新 test binary `test_timer_single_shot_before_loop.rs`，修正前 FAIL `:47:5 left: 0 right: 1`。
+- **Residual**：始終沒有事件迴圈的執行緒，pending arm 會留到執行緒結束。
+
+#### RC-119 `UniqueConnection`、`SingleShotConnection`、signal-to-signal 連線（G6.1.d）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:5510-5513]` UniqueConnection 需要 receiver 與 member，重複時不連；`4362, 4381` SingleShot 在呼叫 slot 前就移除連線（重入 emit 也只跑一次）。
+- **根因**：`Subscriber` 沒有唯一鍵或單發旗標，`emit` 不移除單發訂閱。
+- **修正**：`signal.rs` 加入 unique 檢查、單發訂閱在呼叫前移除、signal 轉接到另一 signal 的連線。WExec 同時把 `signal.rs` 的鎖改為 `parking_lot`（未被要求；失去 lock poisoning，記錄）。
+- **驗證**：新 test binary `test_signal_unique_single_shot.rs`（4 個）；停用防護時 FAIL：重入單發 `left: 3 right: 1`、`single_shot_to` `left: 6 right: 3`、unique `:39:5`。
+
+#### RC-120 `invoke_method` 依連線類型 Direct／Queued／BlockingQueued／Auto（G6.5.c 部分）
+- **Qt 依據**：`QMetaObject::invokeMethodImpl` 依 ConnectionType 分派（`qmetaobject.cpp` ~1715-1760，queued 無回傳值 ~1738-1745）；同執行緒 BlockingQueued 偵測 deadlock（`qmetaobject.cpp:1750`、`qobject.cpp:4356`、`2926-2929`）。
+- **修正**：`QObject::invoke_method_with_type` 與 `invoke_method_on_thread`；Queued post MetaCall 到 receiver 執行緒、BlockingQueued 等待、Auto 依執行緒選擇。
+- **驗證**：新 test binary `test_meta_invoke_connection_type.rs`（7 個）；把 Queued 強制改為 direct 時 FAIL（`queued_on_owner` 回傳 `I64(3)` 而非 `Invalid`；未註冊 receiver 回 `I64(1)` 而非 `TargetBorrowFailed`）。
+- **Residual**：同執行緒 BlockingQueued 回 `ExecutionFailed`（Qt 為 deadlock 警告）；非擁有者執行緒的 Direct invoke 回 `TargetBorrowFailed`；signal 仍不可 invoke（derive invoker 為 None）；meta 只驗參數個數；`index_of_method` overload 取第一個；跨執行緒路徑無突變 FAIL。
+
+#### RC-121 執行緒完成狀態、優先權、wait／is_running／exit、started／finished（G7.6.a、G7.6.b、G7.6.c）
+- **Qt 依據**：`[QT-SRC corelib/thread/qthread.cpp:495-499]` `isFinished`、`513-518` `isRunning`、`732-778` `exit`／`quit`（quit 不要求 interruption，777-778）、`933-968` `wait`、`325-367` started／finished；`qthread_win.cpp:404-452` 優先權在執行緒開始時以 `SetThreadPriority` 套用，Inherit 複製建立者；`qthread_unix.cpp:729-767` Idle → `SCHED_IDLE`；`qthread.cpp:906-931` terminate「dangerous／discouraged」。
+- **根因**：`is_finished` 只由 `join` 設；priority 從未套用（預設 Normal，Qt 為 Inherit）；`quit` 走 interruption；無 exit(code)／wait／is_running／started／finished。
+- **修正**：`thread/thread.rs` 共享 `Completion`，`FinishGuard`（Drop 時發 finished，panic 也發）；`ThreadBuilder` priority 為 Option（None = Inherit），開始時套用；`EventLoopThreadHandle` 加 `exit(code)`、`wait(timeout)`、`is_running`、started／finished；`quit()` = `exit(0)`。不提供 terminate（依 Qt 自身警告）。
+- **驗證**：新 test binary `test_thread_gap_g7_6.rs`：修正前 FAIL `:34:5`（is_finished）、`:47:5`（quit 要求 interruption）；突變 FAIL `:79:5`（exit code）、`:97:5`（wait）、`:121:10`／`:146:10`（finished，含 panic）、`:173:9`／`:185:9`（Windows 優先權）。Linux `SCHED_IDLE` 測試本機未跑（CI）。
+- **Residual**：預設優先權由 Normal 改為 Inherit（Qt 預設）。
+
+#### RC-122 `--smoke-test` 隔離設定目錄並做存讀往返（G12.5.k）
+- **Python 依據**：`python/smoke_check.py:1-51`：`TemporaryDirectory('hud-smoke-')`、改 APPDATA 並在 finally 還原（17-18、46-50）、設定路徑必須在暫存目錄下（20-23）、設 opacity 0.55 後重新載入，否則「Settings did not survive reload」（26-29）。
+- **根因**：Rust smoke 路徑用 `Config::default()`、未隔離 APPDATA，且 `apply_ui_mode` 等會寫入使用者真實設定檔；從不做存讀往返。
+- **修正**：`config.rs` `CONFIG_PATH_OVERRIDE` 與 `SmokeIsolation`（設 APPDATA 與 override 到暫存根目錄，Drop 還原並刪除）；`smoke_config_check` 存讀往返；`main.rs` 在 `logger::setup_logging` 之前進入隔離。
+- **驗證**：`config::tests::test_smoke_writes_only_into_isolated_directory` 修正前 FAIL `config.rs:1428:13 left: 0.88 right: 0.55`；`test_smoke_round_trip_detects_persistence_failure` FAIL `config.rs:1470:26`。未執行 HUD 執行檔（依使用者限制）。
+- **Residual**：Python smoke 的 cards／table 復原與切換主題步驟（`smoke_check.py:30-36`）未移植。
+- **共同驗證（RC-118..122）**：qtrs workspace（略過 `real_windows`）118 個 test binary 全 ok；HUD 132 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG。另：`ee84506` 修正實窗 tooltip 測試（真實游標位置送移動），CI 38178313084 success、3 notices。

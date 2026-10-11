@@ -88,35 +88,55 @@ fn configure_application_policy() {
     qtrs_gui::application::GuiApplication::set_quit_on_last_window_closed(false);
 }
 
+/// Offline `--smoke-test` (`python/core/smoke_check.py`). The config save/reload round trip runs
+/// first, inside the isolated directory; a failed round trip returns FAILURE.
+fn run_smoke_test(isolation: &config::SmokeIsolation) -> std::process::ExitCode {
+    info!("Running offline smoke-test...");
+    let smoke_config = match config::smoke_config_check(isolation) {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            log::error!("Smoke-test failed: {}", err);
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+    let config = Arc::new(Mutex::new(smoke_config));
+    let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+    let _app = Application::new(std::env::args().collect());
+
+    let mut hud = HUDWindow::new(config, refresh_ctrl).expect("Failed to initialize HUDWindow");
+    hud.on_data_fetched(&crate::providers::base::UsageMetrics {
+        provider_id: "agy".to_string(),
+        error: Some("test error".to_string()),
+        ..Default::default()
+    });
+    hud.on_data_fetched(&crate::providers::base::UsageMetrics {
+        provider_id: "agy".to_string(),
+        metric1_val: Some(20.0),
+        metric1_text: "20%".to_string(),
+        ..Default::default()
+    });
+    hud.apply_ui_mode("table");
+    hud.apply_ui_mode("cards");
+    hud.set_theme(true);
+    hud.update_clock();
+    let _ = qtrs_core::application::CoreApplication::process_events(false);
+    info!("=== Smoke-test passed successfully! ===");
+    std::process::ExitCode::SUCCESS
+}
+
 fn main() -> std::process::ExitCode {
+    // Isolation must exist before logging: the logger resolves its directory from APPDATA. The
+    // guard lives until `main` returns, so HUD objects (dropped earlier) never outlive it.
+    let smoke_isolation = std::env::args().any(|a| a == "--smoke-test").then(|| {
+        config::SmokeIsolation::enter(
+            &std::env::temp_dir().join(format!("hud-smoke-{}", std::process::id())),
+        )
+    });
     logger::setup_logging();
     info!("=== Claude HUD Monitor (Rust Qt) starting ===");
 
-    if std::env::args().any(|a| a == "--smoke-test") {
-        info!("Running offline smoke-test...");
-        let config = Arc::new(Mutex::new(config::Config::default()));
-        let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let _app = Application::new(std::env::args().collect());
-
-        let mut hud = HUDWindow::new(config, refresh_ctrl).expect("Failed to initialize HUDWindow");
-        hud.on_data_fetched(&crate::providers::base::UsageMetrics {
-            provider_id: "agy".to_string(),
-            error: Some("test error".to_string()),
-            ..Default::default()
-        });
-        hud.on_data_fetched(&crate::providers::base::UsageMetrics {
-            provider_id: "agy".to_string(),
-            metric1_val: Some(20.0),
-            metric1_text: "20%".to_string(),
-            ..Default::default()
-        });
-        hud.apply_ui_mode("table");
-        hud.apply_ui_mode("cards");
-        hud.set_theme(true);
-        hud.update_clock();
-        let _ = qtrs_core::application::CoreApplication::process_events(false);
-        info!("=== Smoke-test passed successfully! ===");
-        return std::process::ExitCode::SUCCESS;
+    if let Some(isolation) = &smoke_isolation {
+        return run_smoke_test(isolation);
     }
 
     if std::env::args().any(|a| a == "--snapshot") {
