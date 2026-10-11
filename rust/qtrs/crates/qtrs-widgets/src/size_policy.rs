@@ -55,6 +55,8 @@ pub struct QSizePolicy {
     pub vertical: Policy,
     pub horizontal_stretch: u32,
     pub vertical_stretch: u32,
+    /// `QSizePolicy::heightForWidth` (`hfw` bit): the widget's height depends on its width.
+    pub height_for_width: bool,
 }
 
 impl Default for QSizePolicy {
@@ -64,6 +66,7 @@ impl Default for QSizePolicy {
             vertical: Policy::Preferred,
             horizontal_stretch: 0,
             vertical_stretch: 0,
+            height_for_width: false,
         }
     }
 }
@@ -76,6 +79,7 @@ impl QSizePolicy {
             vertical,
             horizontal_stretch: 0,
             vertical_stretch: 0,
+            height_for_width: false,
         }
     }
 
@@ -108,6 +112,7 @@ impl QSizePolicy {
             vertical: self.horizontal,
             horizontal_stretch: self.vertical_stretch,
             vertical_stretch: self.horizontal_stretch,
+            height_for_width: self.height_for_width,
         }
     }
 }

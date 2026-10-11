@@ -2,6 +2,7 @@ use crate::accessibility::{AccessibleAction, AccessibleRole};
 use crate::style::stylesheet::QStyleSheetStyle;
 use crate::focus::FocusPolicy;
 use crate::layout::Layout;
+use crate::layout_engine::WIDGET_SIZE_MAX;
 pub use crate::size_policy::{Policy, QSizePolicy};
 use qtrs_core::event::{Event, EventKind, FocusReason};
 use qtrs_core::event_loop::post_event_to_thread;
@@ -177,7 +178,7 @@ pub trait Widget: QObject + 'static {
     }
 
     fn minimum_size(&self) -> Size {
-        Size::new(0, 0)
+        self.widget_base().min_size.get()
     }
 
     fn minimum_size_hint(&self) -> Size {
@@ -185,7 +186,72 @@ pub trait Widget: QObject + 'static {
     }
 
     fn maximum_size(&self) -> Size {
-        Size::new(16777215, 16777215)
+        self.widget_base().max_size.get()
+    }
+
+    /// `QWidget::setMinimumSize` (qwidget.cpp:4005-4028): stores the bound, runs `updateGeometry`,
+    /// and grows the widget to the bound if it is currently smaller.
+    fn set_minimum_size(&self, size: Size) {
+        let min = Size::new(
+            size.width.clamp(0, WIDGET_SIZE_MAX),
+            size.height.clamp(0, WIDGET_SIZE_MAX),
+        );
+        self.widget_base().min_size.set(min);
+        self.update_geometry();
+        let g = self.geometry();
+        if min.width > g.width || min.height > g.height {
+            self.set_geometry(Rect::new(
+                g.x,
+                g.y,
+                g.width.max(min.width),
+                g.height.max(min.height),
+            ));
+        }
+    }
+
+    /// `QWidget::setMaximumSize`: stores the bound (negatives clamp to 0), runs `updateGeometry`,
+    /// and shrinks the widget to the bound if it is currently larger.
+    fn set_maximum_size(&self, size: Size) {
+        let max = Size::new(
+            size.width.clamp(0, WIDGET_SIZE_MAX),
+            size.height.clamp(0, WIDGET_SIZE_MAX),
+        );
+        self.widget_base().max_size.set(max);
+        self.update_geometry();
+        let g = self.geometry();
+        if max.width < g.width || max.height < g.height {
+            self.set_geometry(Rect::new(
+                g.x,
+                g.y,
+                g.width.min(max.width),
+                g.height.min(max.height),
+            ));
+        }
+    }
+
+    /// `QWidget::setFixedSize` (qwidget.cpp:4155-4170): sets the minimum and maximum to `size` and
+    /// resizes to it. The size policy is not changed.
+    fn set_fixed_size(&self, size: Size) {
+        self.set_minimum_size(size);
+        self.set_maximum_size(size);
+    }
+
+    /// `QWidget::hasHeightForWidth` (qwidget.cpp:10495-10499): the layout's answer when the widget
+    /// has a layout, else the size policy's `heightForWidth` flag.
+    fn has_height_for_width(&self) -> bool {
+        match self.widget_base().layout.borrow().as_ref() {
+            Some(layout) => layout.has_height_for_width(),
+            None => self.size_policy().height_for_width,
+        }
+    }
+
+    /// `QWidget::heightForWidth` (qwidget.cpp:10482-10487): the layout's answer when the widget has
+    /// a layout, else -1.
+    fn height_for_width(&self, width: i32) -> i32 {
+        match self.widget_base().layout.borrow().as_ref() {
+            Some(layout) => layout.height_for_width(width),
+            None => -1,
+        }
     }
 
     fn size_policy(&self) -> QSizePolicy {
@@ -431,6 +497,9 @@ pub struct WidgetBase {
     pub always_show_tool_tips: Cell<bool>,
     /// `WA_MouseTracking`: buttonless mouse moves are delivered to this widget.
     pub mouse_tracking: Cell<bool>,
+    /// `QWidget::minimumSize` / `maximumSize` explicit bounds (`setMinimumSize`, `setMaximumSize`).
+    pub min_size: Cell<Size>,
+    pub max_size: Cell<Size>,
 }
 
 impl WidgetBase {
@@ -457,6 +526,8 @@ impl WidgetBase {
             tool_tip_duration: Cell::new(-1),
             always_show_tool_tips: Cell::new(false),
             mouse_tracking: Cell::new(false),
+            min_size: Cell::new(Size::new(0, 0)),
+            max_size: Cell::new(Size::new(WIDGET_SIZE_MAX, WIDGET_SIZE_MAX)),
         }
     }
 
@@ -1017,7 +1088,7 @@ impl Widget for EmptyWidget {
     }
 
     fn minimum_size(&self) -> Size {
-        Size::new(0, 0)
+        self.base.min_size.get()
     }
 
     /// `QWidget::minimumSizeHint` of a widget with a layout: the layout's minimum size.
@@ -1030,7 +1101,7 @@ impl Widget for EmptyWidget {
     }
 
     fn maximum_size(&self) -> Size {
-        Size::new(16777215, 16777215)
+        self.base.max_size.get()
     }
 
     fn is_visible(&self) -> bool {

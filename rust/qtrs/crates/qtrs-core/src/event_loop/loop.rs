@@ -103,6 +103,15 @@ pub fn deliver_timer_event(receiver: ObjectId, timer_id: u64) -> TimerDelivery {
     }
 }
 
+static BORROWED_SEND_REJECTIONS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Synchronous sends rejected because the receiver's borrow was held by a running callback.
+#[cfg(test)]
+pub(crate) fn borrowed_send_rejections() -> usize {
+    BORROWED_SEND_REJECTIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
     // QScopedScopeLevelCounter in QCoreApplication::notify (qcoreapplication.cpp:1118).
     let _scope = ScopeLevelGuard::enter();
@@ -131,6 +140,18 @@ pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
         let _ = deliver_timer_event(receiver, timer_id);
         crate::timer::repost_zero_timer(receiver, timer_id);
         return true;
+    }
+
+    // Qt has no borrow check in `sendEvent` (qcoreapplication.cpp:1563-1572): it calls the receiver
+    // directly, re-entrantly. Here the receiver's `&mut` is already held by a running callback, so
+    // the event cannot be delivered now. It is rejected visibly and the caller gets `false`. Posted
+    // events are deferred instead (`next_deliverable_index`).
+    if crate::object::qobject::registered_and_borrowed(receiver) {
+        BORROWED_SEND_REJECTIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        eprintln!(
+            "qtrs: sendEvent to borrowed receiver '{receiver:?}' rejected: its callback is still running"
+        );
+        return false;
     }
 
     if object_filters_consumed(receiver, event) {
@@ -765,6 +786,40 @@ fn deliverable_now(event: &Event) -> bool {
     }
 }
 
+/// Index of the next posted event this pump may deliver, among the first `insertion_offset`.
+///
+/// An event whose receiver is borrowed by a running callback stays queued in place. Qt has no such
+/// state (`QCoreApplication::sendEvent` has no borrow check, qcoreapplication.cpp:1563-1572), and
+/// skipping in place keeps per-receiver order and lets `purge` still see the event. A gated
+/// `DeferredDelete` leaves the turn, as `remove_at` plus `insert_posted` did before. When nothing is
+/// deliverable, the turn ends with `insertion_offset = 0` and the events stay queued.
+fn next_deliverable_index(q: &mut EventQueue, modal: bool) -> Option<usize> {
+    let mut index = 0;
+    while index < q.insertion_offset {
+        let posted = &q.events[index];
+        if crate::object::qobject::registered_and_borrowed(posted.receiver) {
+            index += 1;
+            continue;
+        }
+        if let EventKind::DeferredDelete {
+            loop_level,
+            scope_level,
+        } = posted.event.kind
+        {
+            if modal
+                || !deferred_delete_deliverable((loop_level, scope_level), current_levels(), false)
+            {
+                let posted = q.remove_at(index);
+                q.insert_posted(posted);
+                continue;
+            }
+        }
+        return Some(index);
+    }
+    q.insertion_offset = 0;
+    None
+}
+
 static DEFERRED_DELETE_HOOK: std::sync::OnceLock<fn(ObjectId)> = std::sync::OnceLock::new();
 
 /// Installs the callback run after each delivered `DeferredDelete`. Widgets are not registered in
@@ -820,31 +875,10 @@ fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Op
     loop {
         let posted = {
             let mut q = queue.lock().unwrap();
-            if q.insertion_offset == 0 {
+            let Some(index) = next_deliverable_index(&mut q, modal) else {
                 break;
-            }
-
-            if let EventKind::DeferredDelete {
-                loop_level,
-                scope_level,
-            } = q.events[0].event.kind
-            {
-                // A modal pump keeps every DeferredDelete queued. A normal pump keeps the ones the
-                // gate refuses (qcoreapplication.cpp:1886-1903). Both rotate them behind the turn.
-                if modal
-                    || !deferred_delete_deliverable(
-                        (loop_level, scope_level),
-                        current_levels(),
-                        false,
-                    )
-                {
-                    let deferred = q.remove_at(0);
-                    q.insert_posted(deferred);
-                    continue;
-                }
-            }
-
-            q.remove_at(0)
+            };
+            q.remove_at(index)
         };
         let Some(PostedEvent {
             receiver,
@@ -2674,6 +2708,42 @@ mod tests {
         );
         assert_eq!(el.send_posted_events(), 1);
         assert!(ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn metacall_to_registered_borrowed_receiver_is_deferred_not_run_on_stub() {
+        let _watchdog = Watchdog::arm(Duration::from_secs(10));
+        let el = EventLoop::new();
+        let mut probe = UnregisteredProbe {
+            data: ObjectData::new(ObjectId::next()),
+        };
+        let id = probe.data.id;
+        unsafe { register_qobject(&mut probe) };
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = Arc::clone(&ran);
+        post_event_to_thread(
+            ThreadId::current(),
+            id,
+            meta_call(move || ran_clone.store(true, Ordering::SeqCst)),
+        );
+        // A callback on the receiver holds its borrow while the pump runs (re-entrant case).
+        let during = crate::object::with_object_mut(id, |_| el.send_posted_events());
+        assert_eq!(
+            during,
+            Some(0),
+            "posted call must not be delivered while its receiver is borrowed"
+        );
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "call must not run on the NullObj stub while its receiver is borrowed"
+        );
+        assert_eq!(
+            el.send_posted_events(),
+            1,
+            "call must be delivered once the borrow ends"
+        );
+        assert!(ran.load(Ordering::SeqCst));
+        unsafe { unregister_qobject(id) };
     }
 
     /// Aborts the test process when a body hangs, so a regression fails instead of hanging CI.

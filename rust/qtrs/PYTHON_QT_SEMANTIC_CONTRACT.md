@@ -140,7 +140,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G2.1.a [P0, RAN；已修復：RC-01]** `set_parent(owned_child, None)` **銷毀 child**。舊 parent 的 `Box` 被搬進區域變數 `transferred`，沒有新 parent 接手就在函式結尾 drop；回傳型別 `()`，呼叫者拿不回所有權。
   - **G2.1.b [P1, RAN；已修復：RC-81]** （修復前）`add_owned_child` 不送 `ChildAdded`（Qt 在建構時帶 parent 就會送）。
   - **G2.1.c [P2, READ]** `ChildAdded/Removed` 經 `dispatch_to_object`／`event()` 直送，不經 `notify_helper`；object filter 與 application filter 看不到。
-  - **G2.1.d [P1, READ]** parent 正被借用（dispatch 中）時 `with_object_mut` 回 `None`：`ObjectData::drop` 的解除連結與 `set_parent` 的 child-list 更新被**靜默略過**，留下 stale children id，事件遺失。
+  - **G2.1.d [P1, RAN；已修復：RC-123]** （修復前）parent 正被借用（dispatch 中）時 `with_object_mut` 回 `None`：`ObjectData::drop` 的解除連結與 `set_parent` 的 child-list 更新被**靜默略過**，留下 stale children id，事件遺失。
   - **G2.1.e [P2, READ]** 無自我 parent／環／跨執行緒檢查。
   - **G2.1.f [P2, READ]** `set_parent` 跨 registry 鎖與物件借用，非原子；`QT_CPP_MAPPING.md` 寫「atomically」不實。
   - **G2.1.g [D]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。理由：Rust 所有權；須在文件註明「parent 只銷毀它擁有的 Box」。
@@ -206,7 +206,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`sendEvent` 給正在處理事件的物件是允許的（可重入）；跨執行緒 `sendEvent` 是錯誤（警告但仍遞送）。
 - **qtrs required**：MUST 可重入派送要嘛送達、要嘛**可見地**被拒並記載；MUST 非擁有者執行緒的派送被拒。
 - **Current implementation**：`with_object*` 以 per-object `borrow_flag` CAS + 執行緒檢查；第二次借用回 `None`，`dispatch_to_object` 轉為 `false`。
-- **Known gap**：**G2.7.a [P1, READ]** 對已被借用的物件送事件會**無聲丟失**（含重入 `send_event` 與 parent 自己 handler 內觸發的 `ChildAdded`）；**G2.7.b [D]** 跨執行緒直接派送不支援（`registered_ptr` 拒絕非註冊執行緒）。理由：registry 存 thread-local 原始指標；誤用回 `false`，須補上診斷（見 C7.4）；**G2.7.c [test gap]** `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tests」標題下沒有任何測試。
+- **Known gap**：**G2.7.a [P1, RAN；已修復：RC-123]** （修復前）對已被借用的物件送事件會**無聲丟失**（含重入 `send_event` 與 parent 自己 handler 內觸發的 `ChildAdded`）；**G2.7.b [D]** 跨執行緒直接派送不支援（`registered_ptr` 拒絕非註冊執行緒）。理由：registry 存 thread-local 原始指標；誤用回 `false`，須補上診斷（見 C7.4）；**G2.7.c [test gap]** `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tests」標題下沒有任何測試。
 - **Test**：必要：從 `event()` 內對自己 `send_event`，斷言記載的結果且無 panic／UB；非擁有者執行緒派送回 false。
 - **HUD usage**：Rust HUD 不直接碰 registry。
 
@@ -465,7 +465,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`notify_helper` 對 `MetaCall` 先試註冊的 receiver，查不到就在 `NullObj` 上執行（故意偏離 Qt）。`invoke_method` 只有 direct。`MethodInvoker` 是普通 `fn` 指標。
 - **Known gap**
   - **G6.5.a [P1, RAN；已修復：RC-88]** （修復前）見 G3.6.a。
-  - **G6.5.b [P1, READ]** HUD **依賴**這個 stub 路徑（`ObjectId(0)` 哨兵，見 C3.6）。
+  - **G6.5.b [P1, RAN；已修復：RC-123]** （修復前）HUD **依賴**這個 stub 路徑（`ObjectId(0)` 哨兵，見 C3.6）。
   - **G6.5.c [P1, RAN；部分修復：RC-120]** （修復前）`invoke_method` 無連線類型參數、無 queued 形式；signal 不可 invoke（invoker 為 `None`）；meta 層只驗參數個數不驗型別；`index_of_method` 取第一個符合者，overload 有歧義。
   - **G6.5.d [D]** 無字串式 `SIGNAL()/SLOT()`、無 `connectSlotsByName`。理由：qtrs 的連線是型別化閉包 API，沒有 moc 字串簽章；誤用在編譯期就不可能發生（不存在該 API）。
 - **Test**：必要：同 C3.6；queued `invoke_method` 被延後。
@@ -633,7 +633,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 對 HUD 用到的每種 widget 提供 min/max/fixed 與 `setSizePolicy`；變更 MUST 使 parent layout 失效。
 - **Current implementation**：`PARTIAL`。`Widget`/`WidgetBase` **沒有** `set_minimum_size/set_maximum_size/set_fixed_size`（grep：只有 `Window::set_minimum_size`）；min/max 只來自 QSS（Label、Button、Frame、ProgressBar）或自訂 `Widget` 覆寫；trait 預設 `set_size_policy` 是**靜默 no-op**，`Label` 沒有覆寫。`Widget::size_hint` 預設 (100,30)（QWidget 為無效 (-1,-1)）。
 - **Known gap**
-  - **G8.3.a [P1, READ]** 無通用 min/max/fixed API。
+  - **G8.3.a [P1, RAN；已修復：RC-124]** （修復前）無通用 min/max/fixed API。
   - **G8.3.b [P0, READ；已修復：RC-05]** **`Label.set_size_policy` 被丟棄**。Python `title.setSizePolicy(Minimum, Preferred)`（`provider_card.py:39`）在 Rust 無對應呼叫（grep `set_size_policy` 於 `provider_card.rs` 為空）→ 卡片模式標題寬度行為可能不同。
   - **G8.3.c [P2, READ]** `WidgetBase::set_geometry` 不夾 min/max（只有 `item_set_geometry` 夾）。
   - **G8.3.d [P2]** 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值。
@@ -719,7 +719,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G9.1.a [P1, READ；已修復：RC-30]** （修復前：） `add_stretch(0)` 被強制成 1（`layout.rs` `stretch.max(1)`）；Qt 的 `addStretch(0)` stretch 為 0。 RC-30：兩處 `stretch.max(1)`（`Layout::add_stretch` 預設實作與 `BoxLayout::add_stretch`）改為原值傳入；`test_box_layout_add_stretch_zero.rs` 4 項以 PySide6 參考值比對。
   - **G9.1.b [P1；已修復：RC-31]** （修復前：） 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor`（grep 為空）。 RC-31：`BoxLayout` 新增 `add_spacing`／`insert_spacing`／`add_spacer_item`／`insert_spacer_item`／`insert_stretch`／`set_stretch_factor`／`set_stretch`／`stretch`，以及公開的 `SpacerItem`（`QSpacerItem` 的 min／max／hint／expanding）；`LayoutItem::spacer` 由 `bool` 改為 `Option<SpacerItem>`。`set_stretch_factor(QLayout*)` 不適用（qtrs 子 layout 掛在 widget 上，以 widget 版本處理）。
   - **G9.1.c [P1；= G9.2.a；已修復：RC-07]** 無 item 對齊（見 C9.3）。
-  - **G9.1.d [P1]** 無 `heightForWidth`（grep `height_for_width|has_height` 為空）——換行 label 無法如 Qt 排版。
+  - **G9.1.d [P1, RAN；已修復：RC-125]** （修復前）無 `heightForWidth`（grep `height_for_width|has_height` 為空）——換行 label 無法如 Qt 排版。
   - **G9.1.e [P1]** 無 `retainSizeWhenHidden`、無 RTL（`Direction` 只有 TopToBottom／LeftToRight）、無 `SizeConstraint`。
 - **Test**：既有 `test_vbox_and_hbox_layout_calculation`、`test_box_layout_add_stretch`、`test_layout_stretch_minimum.rs`（6 項，用 `spacer=0`，而 layout 實際用 `-1`）、`qt_layout_compare.py`（手動，見 C9.7）。`add_stretch_zero_matches_qt` 已由 RC-30 的 `test_box_layout_add_stretch_zero.rs` 補上。 G9.1.b API 由 RC-31 的 `test_box_layout_spacing.rs`（8 項）以 PySide6 參考值比對。
 - **HUD usage**：Python `QVBoxLayout/QHBoxLayout`（`hud_window.py:135,143,168,280,336`；`provider_card.py:25-90`；`usage_table.py:114,273-276,411`）、`addStretch`（`hud_window.py:286`、`provider_card.py:42,63,90`、`usage_table.py:123,278,285`）。Rust：對應檔案的 `BoxLayout::` 與 `add_stretch(1)`。
@@ -732,7 +732,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G9.2.a [P0, READ；已修復：RC-07]** **無 per-item 對齊**。Python 傳 `AlignVCenter|AlignLeft`／`AlignHCenter` 給 `addWidget`（`usage_table.py:392,417,430`）；Rust `add_widget(widget,row,col)`／`add_widget_with_span` 沒有對齊參數（`layout.rs`），Rust 表格以 wrapper + stretch 模擬垂直置中（`usage_table.rs:1173-1209`）。對齊也會改變 `expandingDirections` 與 max size（`[QT-SRC qlayoutitem.cpp:597-600]`），`item_expanding` 沒有此邏輯。
   - **G9.2.b [P1, RAN；已修復：RC-110]** （修復前）`Layout::add_widget_with_stretch` 對 grid **靜默忽略 stretch** 並新增一列；`Layout::set_spacing` 兩軸都設但 `spacing()` 只回水平。
   - **G9.2.c [P1, RAN；部分修復：RC-110]** （修復前）無 `setRowStretch`／`setColumnStretch`／`setColumnMinimumWidth` 讀回；無 `addLayout` 進格；GridLayout 沒有 `remove_widget`。
-  - **G9.2.d [P1, READ]** RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth`（G9.1.d）時，垂直對齊的 widget 以 size hint 高度為準；Qt 的 `QWidgetItem::setGeometry` 在 `hasHeightForWidth()` 時改用 `heightForWidth(寬度)`（`qlayoutitem.cpp:443-446`）；(2) 沒有 layout 自身的對齊（`QLayout::setAlignment(Qt::Alignment)` 影響 `maximumSize` 與 `setGeometry`，`qgridlayout.cpp:1216,1324`、`qboxlayout.cpp:620,743`）；(3) 沒有 RTL，所以 `AlignAbsolute` 與 `QStyle::visualAlignment` 的翻轉不存在；(4) `QLayout::setAlignment(QLayout*, …)`（巢狀 layout 的對齊）隨 `addLayout`（C9.3）一起缺；(5) `ItemAlignment` 與 `Label` 的文字 `Alignment`、`qtrs_gui::TextAlignment` 是三個互不相通的型別，Qt 只有一個 `Qt::Alignment`。
+  - **G9.2.d [P1, RAN；部分修復：RC-125]** （修復前）RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth`（G9.1.d）時，垂直對齊的 widget 以 size hint 高度為準；Qt 的 `QWidgetItem::setGeometry` 在 `hasHeightForWidth()` 時改用 `heightForWidth(寬度)`（`qlayoutitem.cpp:443-446`）；(2) 沒有 layout 自身的對齊（`QLayout::setAlignment(Qt::Alignment)` 影響 `maximumSize` 與 `setGeometry`，`qgridlayout.cpp:1216,1324`、`qboxlayout.cpp:620,743`）；(3) 沒有 RTL，所以 `AlignAbsolute` 與 `QStyle::visualAlignment` 的翻轉不存在；(4) `QLayout::setAlignment(QLayout*, …)`（巢狀 layout 的對齊）隨 `addLayout`（C9.3）一起缺；(5) `ItemAlignment` 與 `Label` 的文字 `Alignment`、`qtrs_gui::TextAlignment` 是三個互不相通的型別，Qt 只有一個 `Qt::Alignment`。
 - **Test**：既有 `test_layout_stretch_minimum.rs`、`test_grid_matches_qt_geometry`、`test_columns_follow_widest_cell_hint`。必要：grid 對齊測試；harness 擴充 `setRowMinimumHeight/setColumnMinimumWidth` 與對齊旗標。
 - **HUD usage**：Python `QGridLayout`（`usage_table.py:384-434`：`setHorizontalSpacing(10)`、`setVerticalSpacing(4)`、`setColumnStretch`、`setRowStretch(5,1)`、`setRowMinimumHeight(2,18)`、span `:396`）；Rust `usage_table.rs:1136-1221`。
 
@@ -1272,14 +1272,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 175 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.k、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 180 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.k、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
 | G2.1.a | P0, RAN；已修復：RC-01 | `set_parent(owned_child, None)` **銷毀 child** |
 | G2.1.b | P1, RAN；已修復：RC-81 | `add_owned_child` 不送 `ChildAdded` |
 | G2.1.c | P2, READ | `ChildAdded/Removed` 經 `dispatch_to_object`／`event()` 直送，不經 `notify_helper` |
-| G2.1.d | P1, READ | parent 正被借用 |
+| G2.1.d | P1, RAN；已修復：RC-123 | parent 正被借用 |
 | G2.1.e | P2, READ | 無自我 parent／環／跨執行緒檢查 |
 | G2.1.f | P2, READ | `set_parent` 跨 registry 鎖與物件借用，非原子 |
 | G2.1.g | D | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
@@ -1301,7 +1301,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.6.b | P2, READ | `Variant::Invalid` 不移除 |
 | G2.6.c | P1, RAN；已修復：RC-100 | notify signal 從不發射 |
 | G2.6.d | P2, READ | 沒有 `as_qobject_any` 時 meta 路徑靜默落到動態 map |
-| G2.7.a | P1, READ | 對已被借用的物件送事件會**無聲丟失** |
+| G2.7.a | P1, RAN；已修復：RC-123 | 對已被借用的物件送事件會**無聲丟失** |
 | G2.7.b | D | 跨執行緒直接派送不支援 |
 | G2.7.c | test gap | `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tes |
 | G3.1.a | P2, READ | `Pointer`=251、`DpiChanged`=250 不是 Qt 數值 |
@@ -1382,7 +1382,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.4.c | P2 | 無 receiver 的閉包連線 |
 | G6.4.d | test gap, 已修復：RC-02 | `test_signal_sender_tracking_and_auto_disconnection` |
 | G6.5.a | P1, RAN；已修復：RC-88 | 見 G3.6.a |
-| G6.5.b | P1, READ | HUD **依賴**這個 stub 路徑 |
+| G6.5.b | P1, RAN；已修復：RC-123 | HUD **依賴**這個 stub 路徑 |
 | G6.5.c | P1, RAN；部分修復：RC-120 | `invoke_method` 無連線類型參數、無 queued 形式 |
 | G6.5.d | D | 無字串式 `SIGNAL()/SLOT()`、無 `connectSlotsByName` |
 | G6.6.a | P1, READ | 無 `#[slot]` |
@@ -1433,7 +1433,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.1.d | P1, READ；已修復：RC-63、RC-63b、RC-63c、RC-63d | Layout 尺寸指標無快取，resize 與 size_hint 重複走訪子元件 |
 | G8.1.e | P2, RAN；已修復：RC-66 | 子容器以 cell 大小而非自身大小判斷是否重排，多一次排程與重繪請求 |
 | G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；停用焦點容器時的焦點候選已修復：RC-42；`Widget::set_enabled` 不送事件的入口已移除：RC-43 | （修復前）傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺；殘餘：borrow 中的 widget 收不到 `EnabledChange` |
-| G8.3.a | P1, READ | 無通用 min/max/fixed API |
+| G8.3.a | P1, RAN；已修復：RC-124 | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
 | G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
 | G8.3.d | P2 | 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值 |
@@ -1476,12 +1476,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.1.a | P1, READ；已修復：RC-30 | `add_stretch(0)` 被強制成 1 |
 | G9.1.b | P1；已修復：RC-31 | 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor` |
 | G9.1.c | P1；= G9.2.a；已修復：RC-07 | 無 item 對齊 |
-| G9.1.d | P1 | 無 `heightForWidth` |
+| G9.1.d | P1, RAN；已修復：RC-125 | 無 `heightForWidth` |
 | G9.1.e | P1 | 無 `retainSizeWhenHidden`、無 RTL |
 | G9.2.a | P0, READ；已修復：RC-07 | **無 per-item 對齊** |
 | G9.2.b | P1, RAN；已修復：RC-110 | `Layout::add_widget_with_stretch` 對 grid **靜默忽略 stretch** 並新增一列 |
 | G9.2.c | P1, RAN；部分修復：RC-110 | 無 `setRowStretch`／`setColumnStretch`／`setColumnMinimumWidth` 讀回 |
-| G9.2.d | P1, READ | RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth` |
+| G9.2.d | P1, RAN；部分修復：RC-125 | RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth` |
 | G9.3.a | P1, RAN；已修復：RC-111 | wrapper 是 QWidget item：其 `maximum_size` 為 16777215，而巢狀 `QLayout` 回報其子項最大值之和 |
 | G9.3.b | P2 | wrapper 多一個 child widget 進入 hit-test／paint 樹 |
 | G9.3.c | P0, READ；已修復：RC-16 | HUD 的 `header_widget` 額外被設為 `Expanding/Fixed` |
@@ -3191,3 +3191,25 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **驗證**：`config::tests::test_smoke_writes_only_into_isolated_directory` 修正前 FAIL `config.rs:1428:13 left: 0.88 right: 0.55`；`test_smoke_round_trip_detects_persistence_failure` FAIL `config.rs:1470:26`。未執行 HUD 執行檔（依使用者限制）。
 - **Residual**：Python smoke 的 cards／table 復原與切換主題步驟（`smoke_check.py:30-36`）未移植。
 - **共同驗證（RC-118..122）**：qtrs workspace（略過 `real_windows`）118 個 test binary 全 ok；HUD 132 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG。另：`ee84506` 修正實窗 tooltip 測試（真實游標位置送移動），CI 38178313084 success、3 notices。
+
+#### RC-123 對借用中物件的事件不再無聲遺失；ChildAdded／ChildRemoved 延後送達；MetaCall 不在替身上執行（G2.7.a、G2.1.d、G6.5.b）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:1563-1572]` `sendEvent` 沒有借用檢查，可重入；`[QT-SRC corelib/kernel/qobject.cpp:2287-2360]` `setParent_helper` 同步送 `ChildRemoved`（2325）與 `ChildAdded`（2350）。safe Rust 不能別名 `&mut`，故以「保持順序的延後送達」或「可見的拒絕」取代重入。
+- **根因**：每物件的借用旗標讓 `with_object_mut` 回 None，`dispatch_to_object`／`notify_helper`／`set_parent`／`ObjectData::drop` 靜默略過；`notify_helper` 對已註冊但借用中的 receiver 在 `NullObj` 替身上執行 MetaCall；pump 從頭取出並輪轉被擋的 DeferredDelete，借用中 receiver 的事件被丟或亂序。
+- **修正**：posted 事件遇到借用中的 receiver 時留在佇列、借用結束後依序送達；同步 `send_event` 對借用中的 receiver 回 false 並印診斷（偏離 Qt 的重入）；parent 借用中時 `ChildAdded`／`ChildRemoved` 改為 post，借用結束後送達；已註冊但借用中 receiver 的 MetaCall 延後，不在替身上跑（`ObjectId(0)` 哨兵不變）。
+- **驗證**：`loop.rs` `metacall_to_registered_borrowed_receiver_is_deferred_not_run_on_stub` 修正前 FAIL「posted call must not be delivered while its receiver is borrowed left: Some(1) right: Some(0)」；`qobject.rs` `test_child_added_to_borrowed_parent_is_deferred_not_lost`「ChildAdded lost… left: 0 right: 1」；`test_sync_send_to_borrowed_receiver_is_rejected_visibly`、`test_child_removed_on_drop_while_parent_borrowed_is_deferred_not_lost` 以停用防護突變時 FAIL（left: 0 right: 1）。
+- **Residual**：同步 send 不重入（Qt 會）；延後的 child 事件晚於 Qt，handler 可能先看到新 child；parent 借用中時 `ObjectData` 的 children 鏡像落後（registry 已更新）；`add_owned_child` 不更新 registry children；G2.1.c（非 owned 路徑不經 filter）、G2.1.e／f（無自我／環檢查）、G2.1.g 未處理；qtrs-widgets 的 `try_borrow` 靜默略過（`widget.rs`）不在此範圍。
+
+#### RC-124 widget 明確的最小／最大／固定尺寸（G8.3.a）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qwidget.cpp:3942-4245]` `setMinimumSize`／`setMaximumSize`／`setFixedSize`（4155-4170：只設 min 與 max，不改 size policy）；`[QT-SRC widgets/kernel/qlayoutengine.cpp:309-375]` `qSmartMinSize`／`qSmartMaxSize` 以明確值優先。
+- **根因**：`WidgetBase` 沒有明確尺寸欄位，layout 只讀 trait 的 min／max。
+- **修正**：`WidgetBase` min／max 欄位；`set_minimum_size`／`set_maximum_size`／`set_fixed_size`（依 Qt 不改 policy）；`layout_engine` 的 `effective_minimum_size`／`effective_maximum_size` 用於 smart min／max、size hint 與 `ItemLimits`。
+- **驗證**：新 test binary `test_explicit_size_and_hfw.rs`，期望值以 PySide6 offscreen 探針取得。修正前 FAIL：`explicit_minimum_width_widens_the_item_in_a_box` `left: (125, 0, 50, 20) right: (110, 0, 80, 20)`；`set_fixed_size_caps_an_expanding_item_and_keeps_its_policy` `left: (100, 0, 100, 20) right: (130, 0, 40, 20)`；`set_minimum_size_grows_the_widget_and_set_maximum_size_shrinks_it` `left: (0, 0, 100, 30) right: (0, 0, 120, 40)`；`set_fixed_size_sets_minimum_and_maximum_and_resizes` `left: (0, 0, 100, 30) right: (0, 0, 40, 20)`。
+- **Residual**：未提供單軸 setter（`setMinimumWidth` 等）；G8.3.c（`set_geometry` 夾值）未處理。
+
+#### RC-125 heightForWidth 協定；垂直 box 與對齊項使用 HFW（G9.1.d；G9.2.d(1)）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qwidget.cpp:10482-10499]`；`qsizepolicy.h:64-104, 145-155`（HFW 位元，transpose 保留）；`[QT-SRC widgets/kernel/qboxlayout.cpp:338, 366-396, 630-668, 752-766]`（calcHfw、`heightForWidth`、`setGeometry` 垂直替換）；`[QT-SRC widgets/kernel/qlayoutitem.cpp:432-474, 508-535]`（對齊項以 `heightForWidth(width)` 為高）。
+- **根因**：沒有 HFW 位元與 Widget／Layout 的 HFW 方法；BoxLayout 沒有 calcHfw 與垂直替換；對齊的垂直項以 size hint 高度為準。
+- **修正**：`QSizePolicy.height_for_width`；`Widget`／`Layout` 的 `has_height_for_width`／`height_for_width`；`BoxLayout::calc_hfw` 與 `activate` 的垂直替換；`layout_engine` 對齊垂直項套用 HFW。
+- **驗證**：`a_grid_cell_on_an_aligned_vertical_axis_takes_height_for_width` 修正前 FAIL `left: (0, 40, 40, 20) right: (0, 10, 40, 80)`；`a_vertical_box_gives_a_height_for_width_item_the_height_for_its_width` 停用核心時 FAIL `left: (0, 0, 40, 24) right: (0, 0, 40, 44)`（PySide6 兩項探針）。
+- **Residual**：GridLayout 的 HFW、QLabel 換行（qtrs-widgets 沒有 word_wrap）、HFW 快取、`minimumHeightForWidth`、qBoxLayout tryWidth 未移植；G9.2.d (2)(3) 未處理。Python HUD 沒有 `setWordWrap`／`heightForWidth`，HUD 無可見影響。
+- **共同驗證（RC-123..125）**：qtrs workspace（略過 `real_windows`）119 個 test binary 全 ok；HUD 132 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 與改動前逐像素比對：只有時鐘與由時間推得的重設時間文字不同，選單完全相同。

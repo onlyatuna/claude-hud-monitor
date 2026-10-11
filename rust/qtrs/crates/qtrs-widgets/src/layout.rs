@@ -1,8 +1,9 @@
 use std::cell::{Cell, RefCell};
 use crate::layout_engine::{
-    distribute_multi_box, find_size, init_empty_multi_box, item_expanding, item_is_empty,
-    item_minimum_size, item_set_geometry_with, item_size_hint, q_geom_calc, ItemLimits,
-    q_max_exp_calc, setup_spacings, LayoutStruct, LAYOUT_SIZE_MAX,
+    distribute_multi_box, find_size, init_empty_multi_box, item_expanding,
+    item_has_height_for_width, item_height_for_width, item_is_empty, item_minimum_size,
+    item_set_geometry_with, item_size_hint, q_geom_calc, q_max_exp_calc, setup_spacings,
+    ItemLimits, LayoutStruct, LAYOUT_SIZE_MAX,
 };
 use crate::size_policy::Policy;
 use crate::widget::{EmptyWidget, Widget, WidgetRef};
@@ -160,6 +161,17 @@ pub trait Layout: 'static {
     /// The directions the layout wants to grow in, as (horizontal, vertical)
     /// (`QLayout::expandingDirections`).
     fn expanding_directions(&self) -> (bool, bool);
+
+    /// Whether the layout's height depends on its width (`QLayout::hasHeightForWidth`).
+    fn has_height_for_width(&self) -> bool {
+        false
+    }
+
+    /// The height the layout wants at `width` (`QLayout::heightForWidth`). `-1` when it has no
+    /// height-for-width (`qlayout.cpp`: the default returns -1).
+    fn height_for_width(&self, _width: i32) -> i32 {
+        -1
+    }
 
     /// Marks this layout as dirty/invalid, requiring recalculation on next activation.
     fn invalidate(&mut self);
@@ -420,6 +432,25 @@ impl Layout for BoxLayout {
         self.geom_cache.borrow().as_ref().unwrap().expanding
     }
 
+    /// `QBoxLayout::hasHeightForWidth` (qboxlayout.cpp:635-640).
+    fn has_height_for_width(&self) -> bool {
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().has_hfw
+    }
+
+    /// `QBoxLayout::heightForWidth` (qboxlayout.cpp:641-652): the width less the margins, then the
+    /// content height plus the margins.
+    fn height_for_width(&self, width: i32) -> i32 {
+        self.ensure_geom();
+        let cache = self.geom_cache.borrow();
+        let geom = cache.as_ref().unwrap();
+        if !geom.has_hfw {
+            return -1;
+        }
+        let m = self.margins;
+        self.calc_hfw(geom, width - m.left - m.right) + m.top + m.bottom
+    }
+
     fn invalidate(&mut self) {
         self.metric_dirty.set(true);
         self.needs_activation.set(true);
@@ -453,6 +484,25 @@ impl Layout for BoxLayout {
         );
         let (pos, space) = if horz { (s.x, s.width) } else { (s.y, s.height) };
         let n = chain.len();
+        // qboxlayout.cpp:752-766: a vertical box gives each height-for-width item the height it
+        // wants at the width it gets, as both its size hint and its minimum.
+        if !horz && self.geom_cache.borrow().as_ref().unwrap().has_hfw {
+            for (i, item) in self.items.iter().enumerate() {
+                if item.spacer.is_some() {
+                    continue;
+                }
+                let w = item.widget.borrow();
+                if !item_has_height_for_width(&**w) {
+                    continue;
+                }
+                let min_w = item_minimum_size(&**w).width;
+                let limits = self.geom_cache.borrow().as_ref().unwrap().limits[i];
+                let width = s.width.min(limits.item_max.width).max(min_w);
+                let height = item_height_for_width(&**w, width);
+                chain[i].size_hint = height;
+                chain[i].minimum_size = height;
+            }
+        }
         q_geom_calc(&mut chain, 0, n, pos, space, -1);
 
         for (i, (item, data)) in self.items.iter().zip(&chain).enumerate() {
@@ -488,6 +538,24 @@ struct BoxGeom {
     max: Size,
     hint: Size,
     expanding: (bool, bool),
+    /// Some item has height-for-width (`QBoxLayoutPrivate::hasHfw`).
+    has_hfw: bool,
+}
+
+/// `QBoxLayoutItem::hfw` (qboxlayout.cpp:22-28): the item's height at `width` when it has
+/// height-for-width, else its size-hint height.
+fn box_item_hfw(item: &LayoutItem, width: i32) -> i32 {
+    match item.spacer {
+        Some(spacer) => spacer.size_hint().height,
+        None => {
+            let w = item.widget.borrow();
+            if item_has_height_for_width(&**w) {
+                item_height_for_width(&**w, width)
+            } else {
+                item_size_hint(&**w).height
+            }
+        }
+    }
 }
 
 impl BoxLayout {
@@ -498,6 +566,28 @@ impl BoxLayout {
         let geom = self.setup_geom();
         *self.geom_cache.borrow_mut() = Some(geom);
         self.metric_dirty.set(false);
+    }
+
+    /// `QBoxLayoutPrivate::calcHfw` (qboxlayout.cpp:366-395): the content height at `width`, margins
+    /// excluded. A horizontal box lays its items out at `width` and takes the tallest; a vertical
+    /// box stacks them with their spacing.
+    fn calc_hfw(&self, geom: &BoxGeom, width: i32) -> i32 {
+        if self.direction == Direction::LeftToRight {
+            let mut chain = geom.chain.clone();
+            let n = chain.len();
+            q_geom_calc(&mut chain, 0, n, 0, width, -1);
+            self.items
+                .iter()
+                .zip(&chain)
+                .map(|(item, data)| box_item_hfw(item, data.size))
+                .fold(0, i32::max)
+        } else {
+            self.items
+                .iter()
+                .zip(&geom.chain)
+                .map(|(item, data)| box_item_hfw(item, width) + data.spacing)
+                .sum()
+        }
     }
 
     /// `QBoxLayoutPrivate::setupGeom`: the chain handed to `qGeomCalc` and the layout's sizes.
@@ -513,6 +603,7 @@ impl BoxLayout {
         let mut chain = vec![LayoutStruct::default(); self.items.len()];
         let mut limits = Vec::with_capacity(self.items.len());
         let mut previous_non_empty: Option<usize> = None;
+        let mut has_hfw = false;
 
         for (i, item) in self.items.iter().enumerate() {
             // Everything below is (main axis, cross axis).
@@ -589,6 +680,9 @@ impl BoxLayout {
             chain[i].empty = empty;
             limits.push(item_limits);
             chain[i].spacing = 0; // may be set non-zero by a later non-empty item
+            if item.spacer.is_none() {
+                has_hfw = has_hfw || item_has_height_for_width(&**item.widget.borrow());
+            }
         }
 
         let extra = Size::new(self.margins.left + self.margins.right, self.margins.top + self.margins.bottom);
@@ -619,6 +713,7 @@ impl BoxLayout {
                 bounded(hint_h, min_h, max_h) + extra.height,
             ),
             expanding: if horz { (main_exp, cross_exp) } else { (cross_exp, main_exp) },
+            has_hfw,
         }
     }
 }

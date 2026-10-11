@@ -329,6 +329,44 @@ fn expand_flag(policy: Policy) -> bool {
     matches!(policy, Policy::Expanding | Policy::MinimumExpanding)
 }
 
+/// `qSmartMinSize`/`qSmartMaxSize`'s explicit bounds (`QWidget::setMinimumSize`): per axis, a
+/// non-zero explicit minimum wins, else the widget's own minimum (`minimum_size`).
+pub fn effective_minimum_size(widget: &dyn Widget) -> Size {
+    let explicit = widget.widget_base().min_size.get();
+    let own = widget.minimum_size();
+    Size::new(
+        if explicit.width > 0 {
+            explicit.width
+        } else {
+            own.width
+        },
+        if explicit.height > 0 {
+            explicit.height
+        } else {
+            own.height
+        },
+    )
+}
+
+/// Explicit `QWidget::setMaximumSize` bound per axis (unless `WIDGET_SIZE_MAX`), else the widget's
+/// own maximum (`maximum_size`).
+pub fn effective_maximum_size(widget: &dyn Widget) -> Size {
+    let explicit = widget.widget_base().max_size.get();
+    let own = widget.maximum_size();
+    Size::new(
+        if explicit.width != WIDGET_SIZE_MAX {
+            explicit.width
+        } else {
+            own.width
+        },
+        if explicit.height != WIDGET_SIZE_MAX {
+            explicit.height
+        } else {
+            own.height
+        },
+    )
+}
+
 /// `qSmartMinSize(sizeHint, minSizeHint, minSize, maxSize, sizePolicy)` for `widget`.
 pub fn smart_min_size(widget: &dyn Widget) -> Size {
     fn axis(policy: Policy, hint: i32, min_hint: i32) -> i32 {
@@ -340,8 +378,8 @@ pub fn smart_min_size(widget: &dyn Widget) -> Size {
     }
     let hint = widget.size_hint();
     let min_hint = widget.minimum_size_hint();
-    let min = widget.minimum_size();
-    let max = widget.maximum_size();
+    let min = effective_minimum_size(widget);
+    let max = effective_maximum_size(widget);
     let policy = widget.size_policy();
 
     let mut w = axis(policy.horizontal, hint.width, min_hint.width).min(max.width);
@@ -363,9 +401,9 @@ pub fn smart_max_size(widget: &dyn Widget, align: ItemAlignment) -> Size {
     }
     let hint = widget.size_hint();
     let min_hint = widget.minimum_size_hint();
-    let min = widget.minimum_size();
+    let min = effective_minimum_size(widget);
     let policy = widget.size_policy();
-    let mut s = widget.maximum_size();
+    let mut s = effective_maximum_size(widget);
     let hint = Size::new(hint.width.max(min_hint.width).max(min.width), hint.height.max(min_hint.height).max(min.height));
     if s.width == WIDGET_SIZE_MAX && !align.horizontal() && !policy.horizontal.can_grow() {
         s.width = hint.width;
@@ -394,8 +432,8 @@ pub fn item_size_hint(widget: &dyn Widget) -> Size {
     }
     let hint = widget.size_hint();
     let min_hint = widget.minimum_size_hint();
-    let min = widget.minimum_size();
-    let max = widget.maximum_size();
+    let min = effective_minimum_size(widget);
+    let max = effective_maximum_size(widget);
     let policy = widget.size_policy();
     let mut w = hint.width.max(min_hint.width).min(max.width).max(min.width);
     let mut h = hint.height.max(min_hint.height).min(max.height).max(min.height);
@@ -426,6 +464,29 @@ pub fn item_maximum_size(widget: &dyn Widget, align: ItemAlignment) -> Size {
     }
 }
 
+/// `QWidgetItem::hasHeightForWidth`: an empty item has none.
+pub fn item_has_height_for_width(widget: &dyn Widget) -> bool {
+    !item_is_empty(widget) && widget.has_height_for_width()
+}
+
+/// `QWidgetItem::heightForWidth` (qlayoutitem.cpp:508-535): the widget's height for `width`, kept
+/// within its effective minimum and maximum height; -1 for an empty item.
+pub fn item_height_for_width(widget: &dyn Widget, width: i32) -> i32 {
+    if item_is_empty(widget) {
+        return -1;
+    }
+    let min = effective_minimum_size(widget).height;
+    let max = effective_maximum_size(widget).height;
+    let h = widget.height_for_width(width);
+    if h > max {
+        max
+    } else if h < min {
+        min
+    } else {
+        h
+    }
+}
+
 /// `QWidgetItem::expandingDirections` as (horizontal, vertical): the size policy's, plus those of
 /// the widget's own layout when the policy lets it grow, minus the axes the item is aligned in.
 pub fn item_expanding(widget: &dyn Widget, align: ItemAlignment) -> (bool, bool) {
@@ -452,8 +513,8 @@ pub fn item_expanding(widget: &dyn Widget, align: ItemAlignment) -> (bool, bool)
 /// The widget gets the rectangle bounded by the item's maximum size; on an aligned axis it is
 /// also cut down to the item's size hint and placed inside the rectangle. A missing horizontal
 /// alignment means `AlignLeft` (`QStyle::visualAlignment`), a missing vertical one centres. A
-/// hidden widget keeps no geometry. Without `heightForWidth` (not ported), a vertically aligned
-/// widget is cut to its size hint height.
+/// hidden widget keeps no geometry. A vertically aligned widget is cut to its height for its width
+/// when it has `heightForWidth`, else to its size hint height.
 pub fn item_set_geometry(widget: &dyn Widget, rect: Rect, align: ItemAlignment) {
     item_set_geometry_with(widget, rect, align, ItemLimits::of(widget, align));
 }
@@ -482,10 +543,16 @@ impl ItemLimits {
             let policy = widget.size_policy();
             let mut pref = item_size_hint(widget);
             if policy.horizontal == Policy::Ignored {
-                pref.width = widget.size_hint().width.max(widget.minimum_size().width);
+                pref.width = widget
+                    .size_hint()
+                    .width
+                    .max(effective_minimum_size(widget).width);
             }
             if policy.vertical == Policy::Ignored {
-                pref.height = widget.size_hint().height.max(widget.minimum_size().height);
+                pref.height = widget
+                    .size_hint()
+                    .height
+                    .max(effective_minimum_size(widget).height);
             }
             pref
         } else {
@@ -493,8 +560,8 @@ impl ItemLimits {
         };
         Self {
             item_max: item_maximum_size(widget, align),
-            widget_min: widget.minimum_size(),
-            widget_max: widget.maximum_size(),
+            widget_min: effective_minimum_size(widget),
+            widget_max: effective_maximum_size(widget),
             aligned_pref,
         }
     }
@@ -518,7 +585,11 @@ pub fn item_set_geometry_with(
         width = width.min(limits.aligned_pref.width);
     }
     if align.vertical() {
-        height = height.min(limits.aligned_pref.height);
+        height = if item_has_height_for_width(widget) {
+            height.min(item_height_for_width(widget, width))
+        } else {
+            height.min(limits.aligned_pref.height)
+        };
     }
     let mut x = rect.x;
     let mut y = rect.y;

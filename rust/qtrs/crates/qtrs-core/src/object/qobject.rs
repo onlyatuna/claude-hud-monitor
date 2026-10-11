@@ -82,6 +82,25 @@ pub(crate) fn registered_on_current_thread(id: ObjectId) -> bool {
     registered_ptr(id).is_some()
 }
 
+/// Whether `id` is registered and alive on the calling thread, with its borrow held by a running
+/// callback. `ObjectId(0)` names no object, so it is never borrowed.
+pub(crate) fn registered_and_borrowed(id: ObjectId) -> bool {
+    id != ObjectId(0)
+        && registered_ptr(id).is_some_and(|(entry, _)| entry.borrow_flag.load(Ordering::Acquire))
+}
+
+/// Defers a child event to a registered parent whose borrow is held (G2.1.d). The event is posted,
+/// so the parent's handler sees it after the borrow ends, instead of it being dropped. Returns the
+/// event back when the parent is not borrowed, so the caller delivers it now.
+fn defer_if_borrowed(parent: ObjectId, event: Event) -> Result<(), Event> {
+    if registered_and_borrowed(parent) {
+        crate::event_loop::post_event_to_thread(ThreadId::current(), parent, event);
+        Ok(())
+    } else {
+        Err(event)
+    }
+}
+
 fn borrow_registered(id: ObjectId) -> Option<ObjectBorrowGuard> {
     let (entry, ptr) = registered_ptr(id)?;
     entry
@@ -607,18 +626,28 @@ impl Drop for ObjectData {
     fn drop(&mut self) {
         // 1. If we have a parent, unlink from parent and notify it
         if let Some(parent_id) = self.parent {
-            with_object_mut(parent_id, |parent_obj| {
-                parent_obj
-                    .object_data_mut()
-                    .children
-                    .retain(|&id| id != self.id);
-                parent_obj
-                    .object_data_mut()
-                    .owned_children
-                    .retain(|c| c.object_data().id != self.id);
-                let mut ev = Event::new(EventKind::ChildRemoved { child_id: self.id });
-                parent_obj.event(&mut ev);
-            });
+            if registered_and_borrowed(parent_id) {
+                // G2.1.d: the parent's borrow is held, so its child lists cannot be edited now. The
+                // removal is posted, not dropped.
+                crate::event_loop::post_event_to_thread(
+                    ThreadId::current(),
+                    parent_id,
+                    Event::new(EventKind::ChildRemoved { child_id: self.id }),
+                );
+            } else {
+                with_object_mut(parent_id, |parent_obj| {
+                    parent_obj
+                        .object_data_mut()
+                        .children
+                        .retain(|&id| id != self.id);
+                    parent_obj
+                        .object_data_mut()
+                        .owned_children
+                        .retain(|c| c.object_data().id != self.id);
+                    let mut ev = Event::new(EventKind::ChildRemoved { child_id: self.id });
+                    parent_obj.event(&mut ev);
+                });
+            }
         }
 
         // 2. Cascade deletion to all children (deleteChildren)
@@ -754,8 +783,10 @@ pub fn set_parent(child: &mut ObjectData, new_parent: Option<ObjectId>) -> Resul
         with_object_mut(old_parent_id, |obj| {
             obj.object_data_mut().children.retain(|&id| id != child_id);
         });
-        let mut ev = Event::new(EventKind::ChildRemoved { child_id });
-        dispatch_to_object(old_parent_id, &mut ev);
+        let removed = Event::new(EventKind::ChildRemoved { child_id });
+        if let Err(mut removed) = defer_if_borrowed(old_parent_id, removed) {
+            dispatch_to_object(old_parent_id, &mut removed);
+        }
     }
     child.parent = new_parent;
     if let Some(new_parent_id) = new_parent {
@@ -765,8 +796,10 @@ pub fn set_parent(child: &mut ObjectData, new_parent: Option<ObjectId>) -> Resul
                 data.children.push(child_id);
             }
         });
-        let mut ev = Event::new(EventKind::ChildAdded { child_id });
-        dispatch_to_object(new_parent_id, &mut ev);
+        let added = Event::new(EventKind::ChildAdded { child_id });
+        if let Err(mut added) = defer_if_borrowed(new_parent_id, added) {
+            dispatch_to_object(new_parent_id, &mut added);
+        }
     }
     Ok(())
 }
@@ -1638,5 +1671,162 @@ mod tests {
 
         let mut ev = Event::new(EventKind::UpdateRequest);
         assert!(!send_event(id, &mut ev));
+    }
+
+    /// G2.1.d: a ChildAdded for a borrowed registered parent is posted and delivered after the
+    /// borrow ends, not dropped (Qt's setParent_helper sends it through sendEvent,
+    /// qobject.cpp:2287-2352).
+    #[test]
+    fn test_child_added_to_borrowed_parent_is_deferred_not_lost() {
+        struct Parent {
+            data: ObjectData,
+            child_added: Arc<AtomicUsize>,
+        }
+        impl QObject for Parent {
+            fn object_data(&self) -> &ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut ObjectData {
+                &mut self.data
+            }
+            fn event(&mut self, event: &mut Event) -> bool {
+                if matches!(event.kind, EventKind::ChildAdded { .. }) {
+                    self.child_added.fetch_add(1, Ordering::SeqCst);
+                    return true;
+                }
+                false
+            }
+        }
+
+        let el = crate::event_loop::EventLoop::new();
+        let child_added = Arc::new(AtomicUsize::new(0));
+        let mut parent = Parent {
+            data: ObjectData::new(ObjectId::next()),
+            child_added: Arc::clone(&child_added),
+        };
+        let parent_id = parent.data.id;
+        // SAFETY: `parent` stays at this stack address and is unregistered below before it drops.
+        unsafe { register_qobject(&mut parent) };
+        let mut child = ObjectData::new(ObjectId::next());
+
+        // The parent's borrow is held while `set_parent` runs, as in a re-entrant callback.
+        let during = with_object_mut(parent_id, |_| {
+            set_parent(&mut child, Some(parent_id)).unwrap();
+            el.send_posted_events()
+        });
+        assert_eq!(during, Some(0));
+        assert_eq!(child_added.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            el.send_posted_events(),
+            1,
+            "ChildAdded lost: parent was borrowed during set_parent"
+        );
+        assert_eq!(child_added.load(Ordering::SeqCst), 1);
+        // SAFETY: the last callback has completed on this thread.
+        unsafe { unregister_qobject(parent_id) };
+    }
+
+    /// G2.7.a: a synchronous send to a borrowed receiver returns `false` and is counted, not
+    /// silently dropped. Qt has no borrow check here (qcoreapplication.cpp:1563-1572); this is the
+    /// documented Rust deviation.
+    #[test]
+    fn test_sync_send_to_borrowed_receiver_is_rejected_visibly() {
+        struct Target {
+            data: ObjectData,
+            events: Arc<AtomicUsize>,
+        }
+        impl QObject for Target {
+            fn object_data(&self) -> &ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut ObjectData {
+                &mut self.data
+            }
+            fn event(&mut self, _event: &mut Event) -> bool {
+                self.events.fetch_add(1, Ordering::SeqCst);
+                true
+            }
+        }
+
+        let events = Arc::new(AtomicUsize::new(0));
+        let mut target = Target {
+            data: ObjectData::new(ObjectId::next()),
+            events: Arc::clone(&events),
+        };
+        let id = target.data.id;
+        // SAFETY: `target` stays at this stack address and is unregistered below before it drops.
+        unsafe { register_qobject(&mut target) };
+
+        let rejections_before = crate::event_loop::borrowed_send_rejections();
+        let sent = with_object_mut(id, |_| {
+            let mut ev = Event::new(EventKind::UpdateRequest);
+            send_event(id, &mut ev)
+        });
+        assert_eq!(
+            sent,
+            Some(false),
+            "a sync send to a borrowed receiver must report failure"
+        );
+        assert_eq!(
+            crate::event_loop::borrowed_send_rejections() - rejections_before,
+            1,
+            "reentrant send was silently dropped"
+        );
+        assert_eq!(
+            events.load(Ordering::SeqCst),
+            0,
+            "receiver must not run re-entrantly"
+        );
+        // SAFETY: the last callback has completed on this thread.
+        unsafe { unregister_qobject(id) };
+    }
+
+    /// G2.1.d: a child destroyed while its registered parent is borrowed posts `ChildRemoved`
+    /// instead of dropping it. This is a documented Rust deviation: the borrow forbids the
+    /// immediate call, and a deferred delivery keeps the notification.
+    #[test]
+    fn test_child_removed_on_drop_while_parent_borrowed_is_deferred_not_lost() {
+        struct Parent {
+            data: ObjectData,
+            removed: Arc<AtomicUsize>,
+        }
+        impl QObject for Parent {
+            fn object_data(&self) -> &ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut ObjectData {
+                &mut self.data
+            }
+            fn event(&mut self, event: &mut Event) -> bool {
+                if matches!(event.kind, EventKind::ChildRemoved { .. }) {
+                    self.removed.fetch_add(1, Ordering::SeqCst);
+                    return true;
+                }
+                false
+            }
+        }
+
+        let el = crate::event_loop::EventLoop::new();
+        let removed = Arc::new(AtomicUsize::new(0));
+        let mut parent = Parent {
+            data: ObjectData::new(ObjectId::next()),
+            removed: Arc::clone(&removed),
+        };
+        let parent_id = parent.data.id;
+        // SAFETY: `parent` stays at this stack address and is unregistered below before it drops.
+        unsafe { register_qobject(&mut parent) };
+        let mut child = ObjectData::new(ObjectId::next());
+        set_parent(&mut child, Some(parent_id)).unwrap();
+
+        with_object_mut(parent_id, move |_| drop(child));
+        assert_eq!(removed.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            el.send_posted_events(),
+            1,
+            "ChildRemoved lost: child dropped while parent was borrowed"
+        );
+        assert_eq!(removed.load(Ordering::SeqCst), 1);
+        // SAFETY: the last callback has completed on this thread.
+        unsafe { unregister_qobject(parent_id) };
     }
 }
