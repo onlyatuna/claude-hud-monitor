@@ -873,7 +873,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G10.7.a [P0, READ；已修復：RC-08 implementation complete / real heterogeneous-DPI verification pending]** `DpiChanged` 處理把 store 調成 `dpi_x/96`，然後呼叫 `do_render_and_present`，後者又以 `platform().primary_screen().device_pixel_ratio()` 重新 resize——**在與主螢幕 DPI 不同的螢幕上，store 會退回主螢幕的 DPR**。同樣的「主螢幕 DPR」假設還出現在 `Window::new`、`set_geometry`、`set_geometry_silent`、`present_custom`、`present_custom_at`、`NativeWindow::present_region`、`menu.rs`、`tray_icon.rs:281`；而 WM handler 用的是每視窗的 `GetDpiForWindow`。
   - **G10.7.b [P1, READ]** `application_device_pixel_ratio`（各螢幕最大值）只在 `Application::new` 設一次，DPI 變更或螢幕熱插拔後 stale。
   - **G10.7.c [P1, READ]** `HighDpiScaleFactorRoundingPolicy` 存了但從不讀（grep `rounding_policy` 只有存取器）；DPR 恰為 `dpi/96`，等同 Python 設的 `PassThrough`（`main.py:46`），其他 policy 被忽略。
-  - **G10.7.d [P1, READ]** RC-08 之後視窗**內**的換算都用視窗自己的 DPR，但**視窗之間沒有共同的邏輯座標系**：`Window::new` 以主螢幕 DPR 決定原生位置（視窗尚未存在，無法先問它的螢幕），之後 `set_geometry` 以視窗 DPR 換位置。Qt 以 `QHighDpiScaling` 的螢幕原點映射處理（`qhighdpiscaling.cpp`）。僅在異 DPI 多螢幕下可見。
+  - **G10.7.d [P1, RAN；已修復：RC-72]** RC-08 之後視窗**內**的換算都用視窗自己的 DPR，但**視窗之間沒有共同的邏輯座標系**：`Window::new` 以主螢幕 DPR 決定原生位置（視窗尚未存在，無法先問它的螢幕），之後 `set_geometry` 以視窗 DPR 換位置。Qt 以 `QHighDpiScaling` 的螢幕原點映射處理（`qhighdpiscaling.cpp`）。僅在異 DPI 多螢幕下可見。
   - **G10.7.e [P1, RAN；已修復：RC-67（選單夾限）；游標 DPR 部分屬 G11.8.a，未修]** 彈出選單的螢幕夾限仍取 `primary_screen().available_geometry()`（`menu.rs:551`），選單不會出現在非主螢幕；同時 `tray_icon.rs:281` 以主螢幕 DPR 換算游標位置（G11.8.a 未修）。
   - **G10.7.f [P2, READ]** `hit_test.rs:321` 的 `DpiChanged` 分支以固定的 `old_dpr = 1.0` 呼叫 `propagate_dpi_change_recursive`；`Window` 的兩條路徑已改用視窗快取的 DPR。
   - **G10.7.g [P1, READ]** 視窗 DPR 只在建立時與 `DpiChanged`（`WM_DPICHANGED`）更新；Qt 另在 `handleWindowScreenChanged`／`QPlatformWindow::handleScreenChanged` 重算（`qguiapplication.cpp:3431,3504`、`qplatformwindow.cpp:824`）並送 `QEvent::DevicePixelRatioChange`。螢幕熱插拔與跨螢幕移動而不改 DPI 的情形未涵蓋。
@@ -1269,7 +1269,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 373 項：D 12、P0 35、P1 168、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 93 項：G2.1.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.5.c、G10.7.a、G10.7.e、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 373 項：D 12、P0 35、P1 168、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 94 項：G2.1.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1514,7 +1514,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.7.a | P0, READ；已修復：RC-08 implementation complete / real heterogeneous-DPI verification pending | `DpiChanged` 處理把 store 調成 `dpi_x/96`，然後呼叫 `do_render_and_present`，後者又以 `platform().primary |
 | G10.7.b | P1, READ | `application_device_pixel_ratio` |
 | G10.7.c | P1, READ | `HighDpiScaleFactorRoundingPolicy` 存了但從不讀 |
-| G10.7.d | P1, READ | RC-08 之後視窗**內**的換算都用視窗自己的 DPR，但**視窗之間沒有共同的邏輯座標系**：`Window::new` 以主螢幕 DPR 決定原生位置 |
+| G10.7.d | P1, RAN；已修復：RC-72 | RC-08 之後視窗**內**的換算都用視窗自己的 DPR，但**視窗之間沒有共同的邏輯座標系**：`Window::new` 以主螢幕 DPR 決定原生位置 |
 | G10.7.e | P1, RAN；已修復：RC-67（選單夾限） | 彈出選單的螢幕夾限仍取 `primary_screen().available_geometry()` |
 | G10.7.f | P2, READ | `hit_test.rs:321` 的 `DpiChanged` 分支以固定的 `old_dpr = 1.0` 呼叫 `propagate_dpi_change_recursive |
 | G10.7.g | P1, READ | 視窗 DPR 只在建立時與 `DpiChanged` |
@@ -2599,6 +2599,45 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - RC-71 單獨上線時，視窗定位仍不看原點（G10.7.d，RC-72 修），兩者在非 (0, 0) 原點、縮放不同的螢幕上暫時不一致 `[INFERENCE]`。
   - G11.4.h（`screen_at`）與 G11.4.d（`primary()` 寫死 (0, 0)、DPR 夾到 1.0）未改。
   - G11.8.a（托盤）未改、未重新分類。
+
+#### RC-72 視窗的桌面座標不經所在螢幕換算
+
+- **Contract gaps**：G10.7.d（已修復）。總數不變（373）；已修復 93 → 94。
+- **兩個根因，分開驗證**：(a) 用哪個螢幕的 DPR：建立視窗時固定用主螢幕的，移動時用視窗快取的；(b) 以哪個原點換算：一律以桌面原點 (0, 0) 直接乘除。測試把兩者拆開（下述 Evidence），兩組都通過才關閉本項。
+- **Qt behavior**：
+  - `[QT-SRC gui/kernel/qwindow.cpp:566-568, 1867-1870, 1894-1910]`：`QWindowPrivate::create` 在原生視窗存在前，以 `screenForGeometry(geometry)` 決定螢幕（新視窗的目前螢幕是主螢幕）；`QWindow::setGeometry` 對 top-level 同樣以 `screenForGeometry(rect)` 選螢幕再 `toNativeGlobalPosition(rect, newScreen)`。`screenForGeometry`：目前螢幕含 rect 中心就用它，否則第一個含中心的螢幕，否則最後一個與 rect 相交的螢幕，否則目前螢幕。中心是 `QRect::center`（`qrect.h:253-257`）。
+  - `[QT-SRC plugins/platforms/windows/qwindowsintegration.cpp:299-300]`：Windows 外掛以 `toNativePixels(window->geometry(), window)` 建立原生視窗。
+  - `[QT-SRC gui/kernel/qhighdpiscaling_p.h:150-158, 213-260; gui/kernel/qhighdpiscaling.cpp:646-681, 713-744]`：上述換算都以該螢幕的原生左上角為原點、該螢幕的係數縮放；尺寸只縮放。
+  - `[QT-SRC gui/kernel/qwindowsysteminterface.cpp:298, 419-420]`：原生的幾何變更以 `fromNativeWindowGeometry`（視窗所在螢幕的原點）換回邏輯座標；滑鼠事件的全域座標以 `fromNativeGlobalPosition`，經含該點的螢幕換算，沒有就用視窗的螢幕。
+- **qtrs root**：
+  - `Window::new`（qtrs-widgets）以 `primary_screen().device_pixel_ratio()` 對整個 rect 乘除。
+  - `set_geometry`／`set_geometry_silent` 以視窗快取的 DPR 乘除。
+  - `present_custom_at` 把邏輯位置交給平台層，平台層以視窗 DPR 乘除（`Win32Window::present_region`）。
+  - `WM_SIZE`／`WM_MOVE` 的位置、滑鼠事件的全域座標、選單迴圈的游標位置都以視窗 DPR 直接除。
+  - 全部沒有螢幕原點。主螢幕 150%、100% 副螢幕在右側時，邏輯 x 3000 的視窗被放到原生 4500，尺寸也放大 1.5 倍；兩個 150% 螢幕並排時，副螢幕上的位置以 (0, 0) 為原點縮放（原生 4500，Qt 為 3060）。
+- **修正**：
+  - `high_dpi` 新增 `to_native_global_rect`、`to_native_global_point`、`from_native_global_point`（與 RC-71 的 `from_native_global_rect` 共用同一個換算）；`from_native_point`／`to_native_point`／`to_native_rect` 的說明改為只用於視窗內座標。RC-71 之後已無呼叫者的 `from_native_rect` 移除。
+  - qtrs-widgets `window.rs`：`screen_for_geometry`（對應 `QWindowPrivate::screenForGeometry`，中心用 `QRect::center` 的算法，避開 G11.4.e）；螢幕原點取邏輯 `geometry()` 的左上角（RC-71 之後等於原生左上角）。`Window::new` 以主螢幕為目前螢幕選螢幕；`set_geometry`、`set_geometry_silent`、`present_custom_at` 經新的 `Window::native_mapping_for`。建立後讀回的視窗 DPR 與所選螢幕不同時，仍保留原本的尺寸修正。
+  - `PlatformWindow::set_target_pos` 改收原生位置（只有 Win32 實作），平台層不再自行換算，`Win32Window` 的 `geometry.x/y` 因此與寬高同為原生單位（原本 x/y 存邏輯值、寬高存實體值）。
+  - qtrs-platform `window.rs`：`WM_SIZE`／`WM_MOVE` 的位置以視窗所在螢幕（`MonitorFromWindow`）的原點換算；五種滑鼠訊息的全域座標以 `win32_screen::from_native_global_point`（`MonitorFromPoint`，沒有就用視窗的螢幕）換算。`screen.rs` 抽出 `monitor_dpr` 與 `monitor_mapping`。
+  - 選單（`menu.rs`）：游標位置經同一個函式換算；`present_popup` 的繪製位移以與視窗定位相同的螢幕換算，維持「視窗與選單原點都在整數像素上」的既有不變量。
+- **Evidence**：`RAN`（本機 Windows；GitHub Actions 三平台）。
+  - 新測試 `qtrs-widgets/tests/test_window_screen_mapping.rs`：fake platform 直接提供 Qt 的邏輯螢幕矩形（原生左上角、尺寸除以 DPR），不經 `Win32Screen`，所以不受 RC-71 影響；fake 視窗的 DPR 取其原生中心所在螢幕（同 Windows）。修改前本機 9 項全部失敗：
+    - DPR 來源：`a_window_on_an_unscaled_screen_beside_a_scaled_primary_is_not_scaled`（主螢幕 150%、副螢幕 100%）：(4500, 150, 600, 450)，預期 (3000, 100, 400, 300)。
+    - 原點：`a_window_on_a_second_screen_of_the_same_ratio_maps_from_that_screens_origin`（兩螢幕同為 150%，只差原點）：(4500, 150, 600, 450)，預期 (3060, 150, 600, 450)；`origins_left_of_and_below_the_primary_screen`：(−2000, 100, 600, 450)，預期 (−1560, 150, 600, 450)；下方螢幕預期 (150, 1260, 600, 450)。
+    - 選螢幕：`the_screen_under_the_centre_maps_a_rect_that_starts_on_another_screen`：(1800, 100, 400, 300)，預期 (1740, 150, 600, 450)；`a_rect_whose_centre_is_on_no_screen_maps_through_a_screen_it_intersects`：(3700, 900, 400, 300)，預期 (4590, 1350, 600, 450)。
+    - 移動：`set_geometry_maps_through_the_screen_the_window_moves_to`：(2000, 100, 400, 300)，預期 (2040, 150, 600, 450)；`set_geometry_back_to_the_primary_screen_does_not_keep_the_old_screens_ratio`：(150, 150, 600, 450)，預期 (100, 100, 400, 300)；`set_geometry_silent_maps_like_set_geometry` 同前者；`present_custom_at_places_the_window_through_the_screen_under_the_rect`：目標 (2000, 100)，預期原生 (2040, 150)。
+  - 修改後 9 項通過。新增 `high_dpi::tests::a_desktop_position_reads_back_from_its_native_position`（設定位置再由 `WM_MOVE` 的原生位置讀回，四種原點與 DPR 都得到原值）。
+  - 刪除 RC-08 的 `set_geometry_converts_with_the_window_ratio`：它斷言 `set_geometry` 用視窗快取的 DPR；Qt 用目標螢幕的係數，且該 fake 的視窗位於 1.0 的螢幕卻回報 2.0。同檔其餘 3 項不變並通過。
+  - 本機 qtrs workspace（略過 `real_windows`）：只有 `test_system_move_release::move_loop_end_releases_a_button_the_loop_swallowed_the_release_of` 失敗一次（釋放次數 0，預期 1），單獨重跑 5 次都通過；該測試依真實游標位置放置視窗，執行期間游標移動就會失敗 `[INFERENCE]`。主 crate 測試與 `cargo clippy -D warnings` 通過。
+  - 修改後 run 38132983799（`ci/qtrs-tests`，手動觸發）三平台全部成功，0 warning。
+- **Status**：**已修復**（換算與選螢幕）。
+- **Residual**：
+  - 沒有多螢幕實機驗證：`MonitorFromWindow`／`MonitorFromPoint` 的路徑在單一螢幕上原點為 (0, 0)，結果與修改前相同；HUD 在異 DPI 多螢幕上的拖曳、儲存位置、選單位置都未實測。
+  - qtrs 視窗沒有 `screen()`（G11.4.b），`set_geometry` 的「目前螢幕」以 `screenForGeometry(目前幾何)` 近似；只有新 rect 與所有螢幕都不相交時才會用到。
+  - `WM_MOVE` 的位置用視窗所在螢幕的原點、視窗的 DPR。跨螢幕拖曳時 `WM_DPICHANGED` 前後兩者可能短暫來自不同螢幕 `[INFERENCE]`；Qt 在 `handleScreenChanged` 更新視窗螢幕（G10.7.g）。
+  - 托盤（G11.8.a）仍以主螢幕 DPR、無原點換算游標，未改、未重新分類；它算出的邏輯點現在再經選單的新換算，在非 (0, 0) 原點的螢幕上仍會偏位 `[INFERENCE]`。
+  - 選單迴圈對每則訊息都換算一次游標位置（`MonitorFromPoint` + `GetMonitorInfoW` + `GetDpiForMonitor`）。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
