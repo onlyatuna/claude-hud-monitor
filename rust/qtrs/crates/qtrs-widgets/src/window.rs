@@ -1168,6 +1168,10 @@ fn render_widget_recursive(widget_ref: &WidgetRef, painter: &mut Painter, dirty_
 
     painter.save();
     painter.translate(geom.x as f32, geom.y as f32);
+    // Each widget paints only inside its own geometry, as `QWidgetPrivate::clipRect` intersects
+    // the widget rect with every ancestor (qwidget.cpp:1904-1922). The clip is intersected, so a
+    // child also stays inside its parent's clip.
+    painter.clip_to_rect(RectF::new(0.0, 0.0, geom.width as f32, geom.height as f32));
 
     let dbg_w = qtrs_platform::resize_debug::start();
     widget.paint_event(painter);

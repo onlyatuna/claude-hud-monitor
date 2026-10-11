@@ -73,9 +73,10 @@ impl MockButton {
         let id = ObjectId::next();
         let mut data = ObjectData::new(id);
         data.set_object_name(name);
+        let clicked = Signal::with_owner(&data);
         Self {
             data,
-            clicked: Signal::with_emitter(id),
+            clicked,
             text: text.to_string(),
         }
     }

@@ -57,12 +57,13 @@ impl Button {
             (75, 26)
         };
         base.set_geometry(Rect::new(0, 0, text_w.max(min_w), text_h.max(min_h)));
+        let clicked = Signal::with_owner(&base.object_data);
         Self {
             base,
             text: text_str,
             font,
             state: ButtonState::Normal,
-            clicked: Signal::new(),
+            clicked,
             normal_bg: Color::from_rgba8(240, 240, 240, 255),
             hover_bg: Color::from_rgba8(225, 235, 245, 255),
             press_bg: Color::from_rgba8(200, 220, 240, 255),

@@ -180,9 +180,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 抑制該物件擁有的每個 `Signal`；MUST 回傳先前狀態；blocker MUST 還原先前狀態而非 false。
 - **Current implementation**：`IMPLEMENTED`（`block_signals` + `SignalBlocker`；`Signal::emit` 查全域 registry）。測試 `test_raii_signal_blocker`。
 - **Known gap**
-  - **G2.4.a [P1, READ]** `Signal::new()` 沒有 emitter id → `block_signals` 被忽略。`with_emitter(id)` 要手動接，目前只有 `timer.rs` 與測試在用。**所有 `qtrs-widgets` 信號（`button.rs`、`action.rs`、`menu.rs` …）都是無 emitter 的**。
-  - **G2.4.b [P1, READ]** 即使有 emitter id，物件若未 `register_qobject`，`query_object_signals_blocked` 回 `None`，被當成「未封鎖」。
-  - **G2.4.c [P2, READ]** unregister 後封鎖靜默失效；`derive(QObject)` 不會自動綁 `#[signal]` 欄位的 emitter id。
+  - **G2.4.a [P1, RAN；已修復：RC-98]** （修復前）`Signal::new()` 沒有 emitter id → `block_signals` 被忽略。`with_emitter(id)` 要手動接，目前只有 `timer.rs` 與測試在用。**所有 `qtrs-widgets` 信號（`button.rs`、`action.rs`、`menu.rs` …）都是無 emitter 的**。
+  - **G2.4.b [P1, RAN；已修復：RC-97]** （修復前）即使有 emitter id，物件若未 `register_qobject`，`query_object_signals_blocked` 回 `None`，被當成「未封鎖」。
+  - **G2.4.c [P2, RAN；部分修復：RC-97]** （修復前）unregister 後封鎖靜默失效；`derive(QObject)` 不會自動綁 `#[signal]` 欄位的 emitter id。
 - **Test**：既有 `test_raii_signal_blocker`。必要：未註冊 emitter 的 `block_signals(true)` 抑制發射；巢狀 blocker 還原外層狀態；derive 出來的信號遵守 block。
 - **HUD usage**：Python 無（grep `blockSignals|QSignalBlocker` 為空）；Rust 無。
 
@@ -198,7 +198,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：宣告屬性 `setProperty` 成功回 true；未宣告名稱建立動態屬性並回 **false**；動態屬性變更送 `QDynamicPropertyChangeEvent`；設為 invalid variant 即移除；宣告屬性有 notify signal 時變更要發射。
 - **qtrs required**：MUST 宣告／動態屬性可往返、唯讀被拒；SHOULD 回傳值與移除語意同 Qt；notify signal MUST 在值改變時發射一次。
 - **Current implementation**：`PARTIAL`（`QObject::property/set_property`：先 meta 再動態 map；`DynamicPropertyChange` 有送）。
-- **Known gap**：**G2.6.a [P2, READ]** 新動態屬性回 `true`（Qt 回 false）；**G2.6.b [P2, READ]** `Variant::Invalid` 不移除；**G2.6.c [P1, READ]** notify signal 從不發射（derive 寫死 `notify_signal = None`）；**G2.6.d [P2, READ]** 沒有 `as_qobject_any` 時 meta 路徑靜默落到動態 map。
+- **Known gap**：**G2.6.a [P2, READ]** 新動態屬性回 `true`（Qt 回 false）；**G2.6.b [P2, READ]** `Variant::Invalid` 不移除；**G2.6.c [P1, RAN；已修復：RC-100]** （修復前）notify signal 從不發射（derive 寫死 `notify_signal = None`）；**G2.6.d [P2, READ]** 沒有 `as_qobject_any` 時 meta 路徑靜默落到動態 map。
 - **Test**：必要：動態屬性變更事件次數與回傳值；Invalid 移除；notify 每次變更發射一次。
 - **HUD usage**：Python `widget.setProperty("state", …)` + `unpolish/polish`（`usage_table.py:256-260`）供 `QLabel[state="muted"]`。Rust 走 widget 層 `set_property(&str,&str)`（`usage_table.rs:879`），因樣式每次 lazily 解析，不需 polish（見 C8.5）。
 
@@ -441,7 +441,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 直接與 queued slot 期間回發射者、之後為 `None`；SHOULD 巢狀 emit 還原外層 sender。
 - **Current implementation**：thread-local 發射者 id 堆疊；`emit` 在有 emitter id 時以 `SenderGuard` 推入；queued 閉包在 receiver 執行緒重新推入。`IMPLEMENTED`（直接路徑與 emit 後彈出：`test_signal_sender_tracking_and_auto_disconnection`）。
 - **Known gap**
-  - **G6.3.a [P1, READ]** 無 emitter id 的 Signal（`Signal::new()`，即所有 widget 信號）不設 sender，slot 內 `sender()` 回的是外層發射者或 `None`。
+  - **G6.3.a [P1, RAN；已修復：RC-99]** （修復前）無 emitter id 的 Signal（`Signal::new()`，即所有 widget 信號）不設 sender，slot 內 `sender()` 回的是外層發射者或 `None`。
   - **G6.3.b [P2, READ]** 無存活檢查。
   - **G6.3.c [P2]** queued 與巢狀路徑沒有測試。
 - **Test**：必要：巢狀 emit 還原外層 sender；queued slot 在 receiver 執行緒看得到發射者；無 emitter 的 signal 在有 emitter 的 signal 的 slot 內 sender 為 `None`。
@@ -693,7 +693,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：child 在 parent 之後、按 z 序繪製，且**被裁剪到自己的矩形與 parent 內容**。
 - **qtrs required**：child MUST 被裁剪到自己的 geometry；widget `paint_event` MUST 不畫到自己矩形外。
 - **Current implementation**：`PARTIAL`。`render_widget_recursive`：可見性 + dirty 相交裁剪 → `translate` → `paint_event` → children；**沒有 per-widget clip**（`set_clip_rect` 只有 dirty clip 與 `scroll.rs`、`backing_store.rs` 呼叫）。
-- **Known gap**：**G8.7.a [P1, READ]** 無 child 裁剪（溢出的 label 文字、自訂 painter 不被裁）；**G8.7.b [P2]** 髒區只有整個 widget。
+- **Known gap**：**G8.7.a [P1, RAN；已修復：RC-96]** （修復前）無 child 裁剪（溢出的 label 文字、自訂 painter 不被裁）；**G8.7.b [P2]** 髒區只有整個 widget。
   - **G8.7.c [P1, RAN；已修復：RC-64]** 文字 shaping 每次重建 HarfBuzz face：`GlyphLayout::shape_with_engines` 每次呼叫都以 `rustybuzz::Face::from_slice` 重新解析字型的 GSUB/GPOS，約佔每次 `draw_text` 的一半；Qt 把 `hb_face_t`／`hb_font_t` 存在 `QFontEngine` 上（`qharfbuzzng.cpp:668-676, 709`）。
   - **G8.7.d [P1, RAN；已修復：RC-65]** 純色填滿的 SourceOver 合成與 Qt 不同：`Painter::fill_path` 交給 tiny-skia 的通用 raster pipeline，進位方式與 Qt 的 `BYTE_MUL` 不同（例如目的灰階 1 經 alpha 230 的黑色覆蓋後得 1，Qt 得 0），半透明大面積填滿每像素約 4 ns；Qt 以 coverage span 加 `comp_func_solid_SourceOver` 合成（`qdrawhelper.cpp:4027-4062`、`qcompositionfunctions.cpp:697-711`）。
 - **Test**：既有 `test_dirty_region_culling_skips_non_intersecting_widgets`。必要：`child_painting_is_clipped_to_its_geometry`。
@@ -815,7 +815,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：移動或隱藏 child MUST 重繪空出的區域；`paint_event` MUST 不畫到自己矩形外；children MUST 被裁剪到 parent。
 - **Current implementation**：`PARTIAL`。`do_render_and_present` 清除髒矩形、設一個 clip、遞迴、呈現實體髒區；`render_widget_recursive`：`save → translate(geom) → paint_event → children → restore`，跳過隱藏與髒區外 widget。
 - **Known gap**
-  - **G10.3.a [P1, READ]** 無 per-widget clip（`set_clip_rect` 只有 `window.rs`、`scroll.rs`、`backing_store.rs` 呼叫）。RC-95 期間已實作並驗證（`render_widget_recursive` 以 `Painter::clip_to_rect` 夾住每個 widget；修正前 FAIL：子 widget 畫到幾何外 `left (255,0,0,255) right (0,0,255,255)`），但 HUD 表格模式的週值 label 比欄寬長而被裁掉（Python 端 QLabel 的 minimumSizeHint 會撐大欄寬與視窗，qtrs 缺 G9.5.d／G8.6.c），故未合併；待 G9.5.d 修好後再開（`local://draft_N.md`）。
+  - **G10.3.a [P1, RAN；已修復：RC-96]** （修復前）無 per-widget clip（`set_clip_rect` 只有 `window.rs`、`scroll.rs`、`backing_store.rs` 呼叫）。
   - **G10.3.b [P1, RAN；已修復：RC-95]** （修復前）`EmptyWidget::set_geometry` 只使新矩形失效：**移動不會使舊位置失效**。
   - **G10.3.c [P2]** `Painter::set_clip_rect` 取代而非相交，且忽略目前 transform（見 C10.4）。
 - **Test**：既有無（沒有測試在 child 移動後斷言像素）。必要：移動彩色 child 10 px 後，舊矩形被清除；child 比 parent 大時，parent 外的像素不被動。
@@ -864,7 +864,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior**：子類別覆寫 `paintEvent(QPaintEvent*)`，拿到已在本地座標的 `QPainter`。
 - **qtrs required**：`paint_event(&mut Painter)` MUST 以本地座標被呼叫，parent 先 child 後。
 - **Current implementation**：`IMPLEMENTED`（`widget.rs`、`window.rs`）；`EmptyWidget` 另有 `paint_handler` 閉包。
-- **Known gap**：**G10.6.a [P2]** 無 `QPaintEvent` 矩形；**G10.6.b [P2]** 無法防止畫到矩形外（G8.7.a）。
+- **Known gap**：**G10.6.a [P2]** 無 `QPaintEvent` 矩形；**G10.6.b [P2, RAN；已修復：RC-96]** （修復前）無法防止畫到矩形外（G8.7.a）。
 - **Test**：既有 `test_arc_progress_and_custom_paint.rs::{test_widget_virtual_paint_event_override, test_custom_widget_paint_handler_closure}`。
 - **HUD usage**：Python `usage_table.py:160`；Rust `install_panel_painter`（`hud_window.rs:111-124`）。
 
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 137 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 144 項：G2.1.a、G2.1.b、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1292,14 +1292,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.3.c | P2, READ | 只搜 `owned_children` |
 | G2.3.d | P2, READ | 無 `objectNameChanged` |
 | G2.3.e | P2, READ | `parent()/children()/thread()` 取用器不存在 |
-| G2.4.a | P1, READ | `Signal::new()` 沒有 emitter id → `block_signals` 被忽略 |
-| G2.4.b | P1, READ | 即使有 emitter id，物件若未 `register_qobject`，`query_object_signals_blocked` 回 `None`，被當成「未封鎖」 |
-| G2.4.c | P2, READ | unregister 後封鎖靜默失效 |
+| G2.4.a | P1, RAN；已修復：RC-98 | `Signal::new()` 沒有 emitter id → `block_signals` 被忽略 |
+| G2.4.b | P1, RAN；已修復：RC-97 | 即使有 emitter id，物件若未 `register_qobject`，`query_object_signals_blocked` 回 `None`，被當成「未封鎖」 |
+| G2.4.c | P2, RAN；部分修復：RC-97 | unregister 後封鎖靜默失效 |
 | G2.5.a | P1, RAN；已修復：RC-11a | 重複 `register_qobject` 同一物件會把它標死：`register_object_metadata` 對被取代的 record 呼叫 `liveness.store |
 | G2.5.b | P2 | `QPointer` 無法解參考，只攜帶 `id()` |
 | G2.6.a | P2, READ | 新動態屬性回 `true` |
 | G2.6.b | P2, READ | `Variant::Invalid` 不移除 |
-| G2.6.c | P1, READ | notify signal 從不發射 |
+| G2.6.c | P1, RAN；已修復：RC-100 | notify signal 從不發射 |
 | G2.6.d | P2, READ | 沒有 `as_qobject_any` 時 meta 路徑靜默落到動態 map |
 | G2.7.a | P1, READ | 對已被借用的物件送事件會**無聲丟失** |
 | G2.7.b | D | 跨執行緒直接派送不支援 |
@@ -1374,7 +1374,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.2.c | P0, READ；已修復：RC-04 | 目標執行緒無 loop 時 queued 閉包忽略 `post_event_to_thread` 回傳值 → **queued slot 靜默遺失** |
 | G6.2.d | P2, READ | BlockingQueued 無逾時 |
 | G6.2.e | P2 | queued 需 `T: Clone + Send + 'static` |
-| G6.3.a | P1, READ | 無 emitter id 的 Signal |
+| G6.3.a | P1, RAN；已修復：RC-99 | 無 emitter id 的 Signal |
 | G6.3.b | P2, READ | 無存活檢查 |
 | G6.3.c | P2 | queued 與巢狀路徑沒有測試 |
 | G6.4.a | P1, RAN；已修復：隨 RC-02 | 受 G6.1.b 影響 |
@@ -1462,7 +1462,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.6.a | P2 | 無 per-widget `WA_*` 屬性 |
 | G8.6.b | P1, READ | `set_stays_on_top` 執行期路徑沒有測試 |
 | G8.6.c | P1 | 無 layout 導出的頂層最小尺寸 |
-| G8.7.a | P1, READ | 無 child 裁剪 |
+| G8.7.a | P1, RAN；已修復：RC-96 | 無 child 裁剪 |
 | G8.7.b | P2 | 髒區只有整個 widget |
 | G8.7.c | P1, RAN；已修復：RC-64 | 文字 shaping 每次重建 HarfBuzz face |
 | G8.7.d | P1, RAN；已修復：RC-65 | 純色填滿的 SourceOver 合成與 Qt 不同（進位、速度） |
@@ -1501,7 +1501,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.1.c | P2 | `Window::set_geometry`／`show`／`set_opacity`／`set_style_sheet` 同步繪製 |
 | G10.2.a | P2 | 無局部／立即重繪 API |
 | G10.2.b | P2 | 每個 widget 一個髒矩形，合併為一個外框 |
-| G10.3.a | P1, READ | 無 per-widget clip |
+| G10.3.a | P1, RAN；已修復：RC-96 | 無 per-widget clip |
 | G10.3.b | P1, RAN；已修復：RC-95 | `EmptyWidget::set_geometry` 只使新矩形失效：**移動不會使舊位置失效** |
 | G10.3.c | P2 | `Painter::set_clip_rect` 取代而非相交，且忽略目前 transform |
 | G10.4.a | P1, READ | `set_clip_rect` **不經 transform** |
@@ -1515,7 +1515,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.5.d | P2 | hit-test 用邏輯整數，繪製用裝置取整，差最多 1 裝置像素 |
 | G10.5.e | P2 | 非 Windows 的 `exec_popup` 沒有原生視窗 |
 | G10.6.a | P2 | 無 `QPaintEvent` 矩形 |
-| G10.6.b | P2 | 無法防止畫到矩形外 |
+| G10.6.b | P2, RAN；已修復：RC-96 | 無法防止畫到矩形外 |
 | G10.7.a | P0, READ；已修復：RC-08 implementation complete / real heterogeneous-DPI verification pending | `DpiChanged` 處理把 store 調成 `dpi_x/96`，然後呼叫 `do_render_and_present`，後者又以 `platform().primary |
 | G10.7.b | P1, READ | `application_device_pixel_ratio` |
 | G10.7.c | P1, READ | `HighDpiScaleFactorRoundingPolicy` 存了但從不讀 |
@@ -2999,5 +2999,39 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **根因**：`set_geometry` 只使新矩形失效；`update()` 會覆蓋 pending dirty rect。
 - **修正**：`WidgetBase::update_rect` 以聯集累加 pending dirty rect；`WidgetBase::set_geometry` 與 `EmptyWidget::set_geometry` 在矩形改變時以 `invalidate_vacated_rect(old)` 使 parent 的舊矩形失效（parent 正被可變借用時略過）；葉 widget 經 `leaf_widget_common!` 走同一路徑。另新增 `Painter::clip_to_rect`（經 transform 的交集 clip，`qpainter.cpp:2798-2816`），`ScrollArea::paint_event` 改用它（原 `set_clip_rect` 落在錯誤座標，G10.4.a 的 ScrollArea 部分）。
 - **驗證**：新 test binary `test_geometry_invalidation.rs`：`moved_child_leaves_no_stale_pixels_at_its_old_rect` 修正前 FAIL `test_geometry_invalidation.rs:88:5 'old rect shows the parent again' left (255,0,0,255) right (0,0,255,255)`；`pending_parent_update_survives_child_move`（聯集的回歸防護，修正前也通過）。
-- **Residual**：parent 失效整個舊矩形（Qt 扣掉新矩形，`qwidgetrepaintmanager.cpp:414`）；dirty 區域為外接矩形聯集，會多畫；ScrollArea 子 widget 移動與 `clip_to_rect` 改動未經測試；per-widget clip（G10.3.a／G8.7.a）見 G10.3.a 註記。
+- **Residual**：parent 失效整個舊矩形（Qt 扣掉新矩形，`qwidgetrepaintmanager.cpp:414`）；dirty 區域為外接矩形聯集，會多畫；ScrollArea 子 widget 移動與 `clip_to_rect` 改動未經測試；per-widget clip 見 RC-96。
 - **共同驗證（RC-92..95）**：qtrs workspace（略過 `real_windows`）104 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 產出四張 PNG。表格模式快照的週值列在 mock 資料下「92 % · MONTHLY」與「5 % · BURST LIMIT」重疊／超出視窗，為既有版面問題（無 G9.5.d），非本次造成 `[INFERENCE]`（本波未改版面程式；改動前的快照已被覆寫，無法直接比對）。
+
+#### RC-96 每個 widget 只畫在自己的幾何內（G10.3.a、G8.7.a、G10.6.b）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qwidget.cpp:1904-1922]` `QWidgetPrivate::clipRect` 把 widget 矩形與每一層祖先求交集；`paintEvent` 的輸出被裁在其中。`[QT-SRC gui/painting/qpainter.cpp:2798-2816]` `setClipRect(..., IntersectClip)` 在使用者座標（經 transform）。
+- **根因**：`render_widget_recursive` translate 後直接呼叫 `paint_event`，沒有 clip。
+- **修正**：`render_widget_recursive` 在 translate 後以 `Painter::clip_to_rect(0,0,w,h)`（RC-95 新增）與現有 clip 求交集。
+- **Python 對照**（m2 以 PySide6 6.11.2 offscreen `grab()`，HUD 表格模式 450×350、相同 mock 資料）：Codex 週值 label 108 px 寬、文字 advance 118（`minimumSizeHint` 122），Antigravity 109 px／129（133）；QGridLayout 因表格只有 426 px 而把欄壓到最小值以下，Python 畫面顯示「2 % · MONTHL」「% · BURST LIM」——文字被裁在 label 自己的矩形內。Python HUD 設了明確最小尺寸（`hud_window.py:296`），視窗不會因 label 變寬（DraftN 的推論，`qlayout.cpp:1079-1087`）。
+- **驗證**：`test_geometry_invalidation.rs` `child_paint_is_clipped_to_its_own_geometry`，修正前 FAIL `test_geometry_invalidation.rs:139:5 'child paint stays inside its geometry' left (255,0,0,255) right (0,0,255,255)`。`--snapshot` 表格模式：週值顯示「92 % · MONTH」「5 % · BURST LIM」，裁在 label 矩形內，與 Python 相同。
+- **Residual**：文字比 label 寬時，Qt 置中後兩側都被裁（「2 % · MONTHL」）；qtrs 從左緣開始畫，只裁右側（「92 % · MONTH」）。label 對齊在溢出時的行為未修。
+
+#### RC-97 封鎖狀態屬於物件本身，不靠 registry（G2.4.b；G2.4.c 部分）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:4273]` `doActivate` 直接讀發射者自己的 `blockSig` 旗標；`blockSignals` 只切換這個 per-object 旗標。
+- **根因**：封鎖狀態存在全域 registry 的 `ObjectRecord.signals_blocked`，Signal 只記 emitter id；物件未註冊或已 unregister 時查不到，被當成未封鎖。
+- **修正**：`ObjectData.signals_blocked: Arc<AtomicBool>`；`Signal::with_owner(&ObjectData)` 持有同一個旗標，`emit` 直接讀；移除 registry 欄位、`query_object_signals_blocked` 與 `Signal::with_emitter`（呼叫端全部改為 `with_owner`）。
+- **驗證**：新 test binary `test_signal_owner_binding.rs`：`unregistered_owner_block_suppresses_emit` 修正前 FAIL `:60 'unregistered blocked emitter still emitted' left 1 right 0`；`block_survives_unregister` `:85 left 1 right 0`；`signal_blocker_suppresses_unregistered_owner` `:106 left 2 right 1`。改寫：`test_qobject_lifecycle_and_hierarchy.rs` `MockButton::new`、`test_qobject_safety_and_qt6_features.rs` 改用 `with_owner`，期望不變。
+- **Residual（G2.4.c 另一半）**：`derive(QObject)` 不會把使用者建立的 `#[signal]` 欄位綁到 owner。
+
+#### RC-98 widget 信號綁定 owner，`block_signals` 生效（G2.4.a）
+- **Qt 依據**：同 RC-97；Qt 的每個信號都屬於其 QObject。
+- **根因**：qtrs-widgets 的信號一律 `Signal::new()`，沒有 owner。
+- **修正**：`button.rs`、`action.rs`、`application/mod.rs`、`menu.rs`、`scroll.rs`、`progress_bar.rs`、`stacked.rs`、`key_sequence_edit.rs` 的信號改為 `Signal::with_owner(&base.object_data)`（或對應 owner）。
+- **驗證**：`qtrs-widgets/tests/test_button_block.rs` `button_clicked_honours_block_signals`，修正前 FAIL `:23 'blocked Button emitted clicked' left 1 right 0`。
+- **Residual**：qtrs-core（animation、socket_notifier、watcher、future、property）、qtrs-gui、qtrs-platform 與 HUD `refresh_controller.rs:70` 仍有無 owner 的 `Signal::new()`，不受 `block_signals` 控制。
+
+#### RC-99 無 owner 的信號在 slot 內 `sender()` 為 None（G6.3.a）
+- **根因**：`CURRENT_SENDER_STACK` 只在有 emitter 時 push，無 owner 的內層 emit 會沿用外層發射者。
+- **修正**：堆疊改為 `Vec<Option<ObjectId>>`，每次 emit 都 push（無 owner 為 `None`）。Qt 沒有無 owner 的信號，此規則是 Contract 對 qtrs 的要求（與 Qt 「`sender()` 只在 slot 由信號觸發時有效」一致）。
+- **驗證**：`unbound_signal_inside_bound_slot_has_no_sender`，修正前 FAIL `test_signal_owner_binding.rs:129 left [Some(ObjectId(5))] right [None]`。
+
+#### RC-100 `#[property(notify = ...)]` 在值改變時發射（G2.6.c）
+- **Qt 依據**：`[QT-SRC tools/moc/generator.cpp:1209-1226]` `MEMBER` + `NOTIFY` 屬性的 moc 寫入碼：`if (QtMocHelpers::setProperty(member, v)) Q_EMIT _t->notify(member);`——只在值改變時發射，payload 為新值（型別相同時）；發射照常受 `blockSignals` 控制。
+- **根因**：derive 寫死 `notify_signal = None`，setter 從不發射。
+- **修正**：`qtrs-derive` 解析 `notify`，檢查它指向 payload 型別相同的 `#[signal]` 欄位；寫入且值改變、owner 未封鎖時發射。未知的 `#[property(...)]` 選項改為編譯錯誤；`readonly` + `notify` 暫不允許（Qt 允許 READ+NOTIFY 無 WRITE，記為限制）。
+- **驗證**：`derived_property_write_emits_notify_once_per_change` 修正前 FAIL `test_signal_owner_binding.rs:162 'notify not emitted on change' left [] right [5]`；`derived_property_notify_honours_block_signals` `:187 left 0 right 1`。
+- **共同驗證（RC-96..100）**：qtrs workspace（略過 `real_windows`）106 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG 產出，表格模式已目視。

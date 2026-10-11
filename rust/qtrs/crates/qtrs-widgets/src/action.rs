@@ -272,8 +272,13 @@ pub type QAction = Action;
 impl Action {
     /// Creates a new action with the given text (mnemonics use `&`).
     pub fn new(text: impl Into<String>) -> Self {
+        let object_data = ObjectData::new(ObjectId::next());
+        let triggered = Signal::with_owner(&object_data);
+        let toggled = Signal::with_owner(&object_data);
+        let changed = Signal::with_owner(&object_data);
+        let hovered = Signal::with_owner(&object_data);
         Self {
-            object_data: ObjectData::new(ObjectId::next()),
+            object_data,
             text: text.into(),
             icon_text: String::new(),
             tool_tip: String::new(),
@@ -288,10 +293,10 @@ impl Action {
             data: Variant::Invalid,
             menu: None,
             group: None,
-            triggered: Signal::new(),
-            toggled: Signal::new(),
-            changed: Signal::new(),
-            hovered: Signal::new(),
+            triggered,
+            toggled,
+            changed,
+            hovered,
         }
     }
 
@@ -587,10 +592,11 @@ pub type QActionGroup = ActionGroup;
 impl ActionGroup {
     /// Creates an exclusive action group.
     pub fn new() -> Self {
-        let triggered = Signal::new();
-        let hovered = Signal::new();
+        let object_data = ObjectData::new(ObjectId::next());
+        let triggered = Signal::with_owner(&object_data);
+        let hovered = Signal::with_owner(&object_data);
         Self {
-            object_data: ObjectData::new(ObjectId::next()),
+            object_data,
             state: Rc::new(GroupState {
                 actions: RefCell::new(Vec::new()),
                 current: Cell::new(None),

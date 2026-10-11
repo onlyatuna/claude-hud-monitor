@@ -2,49 +2,46 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::object::query_object_thread;
-use crate::object::{ObjectId, QObject, ThreadId};
+use crate::object::{ObjectData, ObjectId, QObject, ThreadId};
 
 use crate::event::{Event, EventKind};
 use crate::event_loop::post_event_to_thread;
 
 thread_local! {
-    static CURRENT_SENDER_STACK: RefCell<Vec<ObjectId>> = const { RefCell::new(Vec::new()) };
+    static CURRENT_SENDER_STACK: RefCell<Vec<Option<ObjectId>>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Returns the ObjectId of the object that sent the signal currently being handled.
 /// Returns None if no signal is actively being emitted.
 /// Modeled after Qt's QObject::sender().
 pub fn sender() -> Option<ObjectId> {
-    CURRENT_SENDER_STACK.with(|stack| stack.borrow().last().copied())
+    CURRENT_SENDER_STACK.with(|stack| stack.borrow().last().copied().flatten())
 }
 
-/// RAII guard to track current signal emitter in thread-local sender stack.
-pub struct SenderGuard(bool);
+/// RAII guard that pushes the emitter of the signal being delivered onto the sender stack.
+/// Every emission pushes an entry, `None` for an unbound signal, so a slot reached through an
+/// unbound signal sees `sender() == None` rather than an outer emitter. Qt `QObject::sender()` is
+/// `nullptr` when no QObject emitted the signal.
+pub struct SenderGuard;
 
 impl SenderGuard {
     pub fn new(sender_id: Option<ObjectId>) -> Self {
-        if let Some(id) = sender_id {
-            CURRENT_SENDER_STACK.with(|stack| stack.borrow_mut().push(id));
-            SenderGuard(true)
-        } else {
-            SenderGuard(false)
-        }
+        CURRENT_SENDER_STACK.with(|stack| stack.borrow_mut().push(sender_id));
+        SenderGuard
     }
 }
 
 impl Drop for SenderGuard {
     fn drop(&mut self) {
-        if self.0 {
-            let _ = CURRENT_SENDER_STACK.try_with(|stack| {
-                if let Ok(mut borrow) = stack.try_borrow_mut() {
-                    borrow.pop();
-                }
-            });
-        }
+        let _ = CURRENT_SENDER_STACK.try_with(|stack| {
+            if let Ok(mut borrow) = stack.try_borrow_mut() {
+                borrow.pop();
+            }
+        });
     }
 }
 
@@ -256,7 +253,16 @@ impl<T> Clone for Subscriber<T> {
 /// methods require `T: Clone + Send + 'static`.
 pub struct Signal<T> {
     inner: Arc<Mutex<SignalInner<T>>>,
-    emitter_id: Option<ObjectId>,
+    emitter: Option<Emitter>,
+}
+
+/// The QObject that owns a bound signal. `blocked` is the owner's own `signals_blocked` flag
+/// (Qt `QObjectPrivate::blockSig`), shared rather than looked up in the registry, so blocking
+/// works for unregistered owners and survives unregistration.
+#[derive(Clone)]
+struct Emitter {
+    id: ObjectId,
+    blocked: Arc<AtomicBool>,
 }
 
 /// Type alias for signals explicitly dedicated to queued or cross-thread messaging.
@@ -287,7 +293,7 @@ impl<T> Clone for Signal<T> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            emitter_id: self.emitter_id,
+            emitter: self.emitter.clone(),
         }
     }
 }
@@ -304,19 +310,27 @@ impl<T> Signal<T> {
             inner: Arc::new(Mutex::new(SignalInner {
                 subscribers: Vec::new(),
             })),
-            emitter_id: None,
+            emitter: None,
         }
     }
 
-    /// Creates a signal bound to an emitter QObject.
-    /// Emitted calls will be suppressed when emitter object's signals are blocked.
-    pub fn with_emitter(emitter_id: ObjectId) -> Self {
+    /// Creates a signal owned by `owner`, matching a QObject's own signal.
+    /// Emission is suppressed while `owner` has signals blocked (`QObject::blockSignals`), whether
+    /// or not `owner` is registered. Slots see `owner` as `sender()`.
+    pub fn with_owner(owner: &ObjectData) -> Self {
         Self {
             inner: Arc::new(Mutex::new(SignalInner {
                 subscribers: Vec::new(),
             })),
-            emitter_id: Some(emitter_id),
+            emitter: Some(Emitter {
+                id: owner.id,
+                blocked: Arc::clone(&owner.signals_blocked),
+            }),
         }
+    }
+
+    fn emitter_id(&self) -> Option<ObjectId> {
+        self.emitter.as_ref().map(|e| e.id)
     }
 
     /// Internal subscriber representation.
@@ -397,15 +411,13 @@ impl<T> Signal<T> {
     /// Emits the signal to all connected subscribers.
     /// Modeled after Qt `qobject.cpp:doActivate`.
     pub fn emit(&self, value: &T) {
-        if let Some(emitter) = self.emitter_id {
-            if let Some(blocked) = crate::object::query_object_signals_blocked(emitter) {
-                if blocked {
-                    return;
-                }
+        if let Some(emitter) = &self.emitter {
+            if emitter.blocked.load(Ordering::Acquire) {
+                return;
             }
         }
 
-        let _sender_guard = SenderGuard::new(self.emitter_id);
+        let _sender_guard = SenderGuard::new(self.emitter_id());
 
         let snapshot = self.inner.lock().unwrap().subscribers.clone();
         let current_thread = ThreadId::current();
@@ -442,7 +454,7 @@ impl<T> Signal<T> {
                         slot(value);
                     }
                     SlotDispatcher::Queued { ref queued_fn, .. } => {
-                        queued_fn(value, sub.receiver_id, target_thread, self.emitter_id);
+                        queued_fn(value, sub.receiver_id, target_thread, self.emitter_id());
                     }
                 },
             }
@@ -491,7 +503,7 @@ impl<T: 'static> Signal<T> {
                 }
             }
         });
-        register_connection(id, self.emitter_id, Some(receiver_id), disconnect_fn);
+        register_connection(id, self.emitter_id(), Some(receiver_id), disconnect_fn);
 
         id
     }
@@ -571,7 +583,7 @@ impl<T: Clone + Send + 'static> Signal<T> {
                 }
             }
         });
-        register_connection(id, self.emitter_id, Some(receiver_id), disconnect_fn);
+        register_connection(id, self.emitter_id(), Some(receiver_id), disconnect_fn);
 
         id
     }
@@ -681,7 +693,7 @@ impl<T: Clone + Send + 'static> Signal<T> {
                 }
             }
         });
-        register_connection(id, self.emitter_id, Some(receiver_id), disconnect_fn);
+        register_connection(id, self.emitter_id(), Some(receiver_id), disconnect_fn);
 
         id
     }

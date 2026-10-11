@@ -64,6 +64,7 @@ impl ProgressBar {
         let base = WidgetBase::with_geometry(Rect::new(0, 0, 160, 22));
         base.set_focus_policy(FocusPolicy::NoFocus);
         base.set_size_policy(QSizePolicy::new(Policy::Expanding, Policy::Fixed));
+        let value_changed = Signal::with_owner(&base.object_data);
         Self {
             base,
             minimum: 0,
@@ -81,7 +82,7 @@ impl ProgressBar {
             chunk_color: Color::from_rgba8(6, 176, 37, 255),
             border_color: Color::from_rgba8(188, 188, 188, 255),
             text_color: Color::from_rgba8(20, 20, 20, 255),
-            value_changed: Signal::new(),
+            value_changed,
         }
     }
 

@@ -14,6 +14,7 @@ use syn::{parse_macro_input, Attribute, DeriveInput, Fields, Ident, LitStr, Type
 /// - `fn meta_object(&self) -> &'static MetaObject`
 ///
 /// Supports field-level `#[property]` and `#[signal]` attributes:
+/// `#[property(notify = "signal")]` emits the named `#[signal]` field when a write changes the value.
 /// ```ignore
 /// #[derive(QObject)]
 /// #[qobject(class_name = "MyButton")]
@@ -87,9 +88,18 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
                 // Check for #[property] attribute
                 for attr in &field.attrs {
                     if attr.path().is_ident("property") {
-                        let is_readonly = check_property_readonly(attr);
+                        let (is_readonly, notify) = match parse_property_attr(attr) {
+                            Ok(parsed) => parsed,
+                            Err(err) => return err.to_compile_error().into(),
+                        };
                         let prop_name = f_ident.to_string();
-                        properties.push((f_ident.clone(), f_type.clone(), prop_name, is_readonly));
+                        properties.push((
+                            f_ident.clone(),
+                            f_type.clone(),
+                            prop_name,
+                            is_readonly,
+                            notify,
+                        ));
                     }
                 }
 
@@ -108,6 +118,48 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
                     }
                 }
             }
+        }
+    }
+    for (_, f_type, _, is_readonly, notify) in &properties {
+        let Some(notify_lit) = notify else {
+            continue;
+        };
+        let notify_name = notify_lit.value();
+        if *is_readonly {
+            return syn::Error::new(
+                notify_lit.span(),
+                "`notify` requires a writable property; remove `readonly`",
+            )
+            .to_compile_error()
+            .into();
+        }
+        let Some((_, payload_types)) = signals
+            .iter()
+            .find(|(sig, _)| sig.to_string() == notify_name)
+        else {
+            return syn::Error::new(
+                notify_lit.span(),
+                format!(
+                    "`notify = \"{notify_name}\"` must name a `#[signal]` field of this struct"
+                ),
+            )
+            .to_compile_error()
+            .into();
+        };
+        let payload_matches = matches!(
+            payload_types.as_slice(),
+            [only] if quote!(#only).to_string() == quote!(#f_type).to_string()
+        );
+        if !payload_matches {
+            return syn::Error::new(
+                notify_lit.span(),
+                format!(
+                    "`notify = \"{notify_name}\"` requires `Signal<{}>` matching the property type",
+                    quote!(#f_type)
+                ),
+            )
+            .to_compile_error()
+            .into();
         }
     }
     if data_field_ident.is_none() {
@@ -129,10 +181,16 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
     let mut meta_properties = Vec::new();
     let meta_obj_ident = Ident::new(&format!("__{}_META_OBJECT", name), name.span());
 
-    for (f_ident, f_type, _prop_name, is_readonly) in &properties {
+    let data_ident = data_field_ident
+        .clone()
+        .unwrap_or_else(|| Ident::new("data", name.span()));
+    for (f_ident, f_type, _prop_name, is_readonly, notify) in &properties {
         let is_writable = !*is_readonly;
         let getter_fn_ident = Ident::new(&format!("__qtrs_get_{}_{}", name, f_ident), name.span());
         let setter_fn_ident = Ident::new(&format!("__qtrs_set_{}_{}", name, f_ident), name.span());
+        let notify_ident = notify
+            .as_ref()
+            .map(|lit| Ident::new(&lit.value(), lit.span()));
 
         let (getter_impl, setter_impl) = generate_property_accessors(
             name,
@@ -141,6 +199,8 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
             &getter_fn_ident,
             &setter_fn_ident,
             is_writable,
+            notify_ident.as_ref(),
+            &data_ident,
         );
 
         meta_properties.push(quote! {
@@ -151,7 +211,7 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
 
     let prop_descriptors: Vec<_> = properties
         .iter()
-        .map(|(f_ident, f_type, prop_name, is_readonly)| {
+        .map(|(f_ident, f_type, prop_name, is_readonly, notify)| {
             let is_writable = !*is_readonly;
             let getter_fn_ident =
                 Ident::new(&format!("__qtrs_get_{}_{}", name, f_ident), name.span());
@@ -165,6 +225,10 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
             };
 
             let type_name_str = quote!(#f_type).to_string();
+            let notify_option = match notify {
+                Some(lit) => quote! { Some(#lit) },
+                None => quote! { None },
+            };
 
             quote! {
                 ::qtrs_core::meta::MetaProperty::new(
@@ -174,7 +238,7 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
                     #is_writable,
                     false,
                     false,
-                    None,
+                    #notify_option,
                     Some(#getter_fn_ident),
                     #setter_ref,
                 )
@@ -291,15 +355,26 @@ fn is_object_data_type(ty: &Type) -> bool {
     false
 }
 
-fn check_property_readonly(attr: &Attribute) -> bool {
+fn parse_property_attr(attr: &Attribute) -> syn::Result<(bool, Option<LitStr>)> {
     let mut readonly = false;
-    let _ = attr.parse_nested_meta(|meta| {
+    let mut notify = None;
+    // A bare `#[property]` has no nested options to parse.
+    if matches!(attr.meta, syn::Meta::Path(_)) {
+        return Ok((readonly, notify));
+    }
+    attr.parse_nested_meta(|meta| {
         if meta.path.is_ident("readonly") {
             readonly = true;
+            Ok(())
+        } else if meta.path.is_ident("notify") {
+            notify = Some(meta.value()?.parse::<LitStr>()?);
+            Ok(())
+        } else {
+            Err(meta
+                .error("unknown `#[property]` option; expected `readonly` or `notify = \"...\"`"))
         }
-        Ok(())
-    });
-    readonly
+    })?;
+    Ok((readonly, notify))
 }
 
 fn generate_property_accessors(
@@ -309,6 +384,8 @@ fn generate_property_accessors(
     getter_ident: &Ident,
     setter_ident: &Ident,
     is_writable: bool,
+    notify_ident: Option<&Ident>,
+    data_ident: &Ident,
 ) -> (proc_macro2::TokenStream, proc_macro2::TokenStream) {
     let getter = quote! {
         #[allow(non_snake_case)]
@@ -321,6 +398,19 @@ fn generate_property_accessors(
         }
     };
 
+    let (changed_check, notify_emit) = match notify_ident {
+        Some(notify_ident) => (
+            quote! { let changed = s.#field_ident != converted; },
+            quote! {
+                if changed && !s.#data_ident.signals_blocked.load(::std::sync::atomic::Ordering::Acquire) {
+                    let new_value = s.#field_ident.clone();
+                    s.#notify_ident.emit(&new_value);
+                }
+            },
+        ),
+        None => (quote! {}, quote! {}),
+    };
+
     let setter = if is_writable {
         quote! {
             #[allow(non_snake_case)]
@@ -331,7 +421,9 @@ fn generate_property_accessors(
                 if let Some(s) = obj.downcast_mut::<#struct_name>() {
                     // Try to convert variant to property type
                     if let Some(converted) = ::qtrs_core::variant::convert_variant_to_type::<#field_type>(&val) {
+                        #changed_check
                         s.#field_ident = converted;
+                        #notify_emit
                         Ok(())
                     } else {
                         Err(::qtrs_core::meta::InvokeError::TypeMismatch {

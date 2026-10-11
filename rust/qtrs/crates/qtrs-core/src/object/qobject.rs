@@ -23,7 +23,6 @@ pub struct ObjectRecord {
     registration_thread: ThreadId,
     pub parent: RwLock<Option<ObjectId>>,
     pub children: RwLock<Vec<ObjectId>>,
-    pub signals_blocked: Arc<AtomicBool>,
     pub liveness: Arc<AtomicBool>,
     pub generation: AtomicU32,
     borrow_flag: Arc<AtomicBool>,
@@ -149,14 +148,6 @@ pub fn query_object_thread(id: ObjectId) -> Option<ThreadId> {
     None
 }
 
-pub fn query_object_signals_blocked(id: ObjectId) -> Option<bool> {
-    GLOBAL_OBJECT_REGISTRY
-        .read()
-        .ok()?
-        .get(&id)
-        .map(|record| record.signals_blocked.load(Ordering::Acquire))
-}
-
 /// # Safety
 /// The object must remain alive at the same address until `unregister_qobject` completes.
 /// Do not move or drop it while registered. All access from any thread must occur through
@@ -180,7 +171,6 @@ fn register_object_metadata(data: &ObjectData, ptr: *mut dyn QObject) {
         registration_thread: ThreadId::current(),
         parent: RwLock::new(data.parent),
         children: RwLock::new(data.children.clone()),
-        signals_blocked: Arc::clone(&data.signals_blocked),
         liveness: Arc::clone(&data.liveness),
         generation: AtomicU32::new(data.generation),
         borrow_flag: Arc::new(AtomicBool::new(false)),

@@ -59,6 +59,7 @@ impl ScrollBar {
             Orientation::Vertical => (10, 100),
         };
         base.set_geometry(Rect::new(0, 0, w, h));
+        let value_changed = Signal::with_owner(&base.object_data);
 
         Self {
             base,
@@ -78,7 +79,7 @@ impl ScrollBar {
             thumb_color: Color::from_rgba8(170, 170, 170, 180),
             thumb_hover_color: Color::from_rgba8(130, 130, 130, 220),
 
-            value_changed: Signal::new(),
+            value_changed,
         }
     }
 

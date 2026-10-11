@@ -53,9 +53,10 @@ impl Application {
             .fold(1.0, f32::max);
         qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
 
+        let focus_changed = Signal::with_owner(gui_app.object_data());
         Self {
             gui_app,
-            focus_changed: Signal::new(),
+            focus_changed,
         }
     }
     /// Sets the application-wide style sheet (`QApplication::setStyleSheet`).

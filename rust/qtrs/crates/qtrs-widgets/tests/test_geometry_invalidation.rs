@@ -1,9 +1,11 @@
-//! Moving or resizing a child must repaint its old footprint in the parent.
+//! Moving or resizing a child must repaint its old footprint in the parent, and a child's paint
+//! must stay inside its own geometry.
 //!
 //! Qt: `QWidgetPrivate::setGeometry_sys` (qwidget.cpp:7297-7410) calls `moveRect` (:7380) or
 //! `invalidateBackingStore_resizeHelper` (:7382) on the old rect of a visible widget, so the parent
 //! repaints the vacated area (`QWidgetRepaintManager::moveRect`, qwidgetrepaintmanager.cpp:382-430).
 //! Dirty regions accumulate: a later `update()` adds to the pending one instead of replacing it.
+//! `QWidget::paintEvent` output is clipped to the widget's own rect (`clipRect`, qwidget.cpp:1904-1923).
 #![cfg(windows)]
 
 use std::cell::{Cell, RefCell};
@@ -114,5 +116,41 @@ fn pending_parent_update_survives_child_move() {
         px(&win, 250, 190),
         BLUE,
         "pending parent update repaints outside child rects"
+    );
+}
+
+#[test]
+fn child_paint_is_clipped_to_its_own_geometry() {
+    let mut win = new_window();
+    let root = win.root_widget();
+    let parent = container(|| BLUE);
+    root.borrow_mut().add_child(Rc::clone(&parent));
+
+    // Paints a red rect far larger than the child's 50x50 geometry.
+    let mut child = EmptyWidget::with_geometry(Rect::new(10, 10, 50, 50));
+    child.set_paint_handler(|painter| {
+        painter.fill_rect(
+            RectF {
+                x: -20.0,
+                y: -20.0,
+                width: 200.0,
+                height: 200.0,
+            },
+            rgba(RED),
+        );
+    });
+    let child: WidgetRef = Rc::new(RefCell::new(Box::new(child)));
+    parent.borrow_mut().add_child(child);
+    win.render_and_present();
+
+    assert_eq!(
+        px(&win, 70, 70),
+        BLUE,
+        "child paint stays inside its geometry"
+    );
+    assert_eq!(
+        px(&win, 0, 0),
+        BLUE,
+        "child paint stays inside its geometry (top-left)"
     );
 }

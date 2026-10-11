@@ -132,7 +132,7 @@ fn test_signal_sender_tracking_and_auto_disconnection() {
     unsafe { register_qobject(&mut *emitter) };
     let emitter_id = emitter.data.id;
 
-    let sig: Signal<i32> = Signal::with_emitter(emitter_id);
+    let sig: Signal<i32> = Signal::with_owner(&emitter.data);
     let captured_sender = Arc::new(Mutex::new(None));
     let captured_clone = Arc::clone(&captured_sender);
 

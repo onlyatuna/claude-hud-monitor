@@ -413,14 +413,15 @@ impl Default for Timer {
 
 impl Timer {
     pub fn new() -> Self {
-        let id = ObjectId::next();
+        let data = ObjectData::new(ObjectId::next());
+        let timeout = Signal::with_owner(&data);
         Self {
-            data: ObjectData::new(id),
+            data,
             id: TimerId::INVALID,
             interval_ms: 0,
             single_shot: false,
             timer_type: TimerType::Coarse,
-            timeout: Signal::with_emitter(id),
+            timeout,
         }
     }
 

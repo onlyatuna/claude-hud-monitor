@@ -222,10 +222,11 @@ impl StackedWidget {
             crate::size_policy::Policy::Expanding,
             crate::size_policy::Policy::Expanding,
         ));
+        let current_changed = Signal::with_owner(&base.object_data);
         Self {
             base,
             layout: std::cell::RefCell::new(StackedLayout::new()),
-            current_changed: Signal::new(),
+            current_changed,
         }
     }
 

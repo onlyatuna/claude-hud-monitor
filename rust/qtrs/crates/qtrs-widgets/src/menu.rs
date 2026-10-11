@@ -167,6 +167,10 @@ impl Menu {
         // Windows styles (qmenu.cpp:172, qcommonstyle.cpp:5411, qwindowsstyle.cpp:463).
         base.set_mouse_tracking(true);
         base.set_geometry(Rect::new(0, 0, MIN_WIDTH, 2 * V_PADDING));
+        let triggered = Signal::with_owner(&base.object_data);
+        let hovered = Signal::with_owner(&base.object_data);
+        let about_to_show = Signal::with_owner(&base.object_data);
+        let about_to_hide = Signal::with_owner(&base.object_data);
         Self {
             base,
             title: title.into(),
@@ -190,10 +194,10 @@ impl Menu {
             highlight_text_color: Color::from_rgba8(56, 189, 248, 255),
             separator_color: Color::from_rgba8(255, 255, 255, 31),
 
-            triggered: Signal::new(),
-            hovered: Signal::new(),
-            about_to_show: Signal::new(),
-            about_to_hide: Signal::new(),
+            triggered,
+            hovered,
+            about_to_show,
+            about_to_hide,
         }
     }
 

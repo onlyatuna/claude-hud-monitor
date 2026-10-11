@@ -664,6 +664,8 @@ impl KeySequenceEdit {
         base.set_focus_policy(FocusPolicy::StrongFocus);
         base.set_size_policy(QSizePolicy::new(Policy::Expanding, Policy::Fixed));
         base.set_geometry(Rect::new(0, 0, 160, 28));
+        let key_sequence_changed = Signal::with_owner(&base.object_data);
+        let editing_finished = Signal::with_owner(&base.object_data);
         Self {
             base,
             key_sequence: KeySequence::new(),
@@ -677,8 +679,8 @@ impl KeySequenceEdit {
             placeholder: "Press shortcut".to_string(),
             font: Font::new("Segoe UI", 13.0),
             palette: Palette::light(),
-            key_sequence_changed: Signal::new(),
-            editing_finished: Signal::new(),
+            key_sequence_changed,
+            editing_finished,
         }
     }
 
