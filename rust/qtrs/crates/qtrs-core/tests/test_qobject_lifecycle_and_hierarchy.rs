@@ -410,3 +410,31 @@ fn test_qpointer_and_generational_liveness() {
     // SAFETY: dropping the returned Box ended its callback lifetime.
     unsafe { unregister_qobject(id) };
 }
+
+/// G2.5.a / C2.5: re-registering a live object (Qt re-registration path, e.g. Timer restart) must
+/// keep it reachable. `register_object_metadata` only retires the previous record when the
+/// liveness token differs, so the same object registered twice must still be `Some` in the registry.
+#[test]
+fn test_double_register_keeps_object_reachable() {
+    let widget = Box::new(MockButton::new("double_reg_btn", "Again"));
+    let (id, mut registered) = unsafe { register_boxed_qobject(widget) };
+    let qptr: QPointer<MockButton> = QPointer::new(&*registered);
+
+    // SAFETY: the object stays boxed on this thread and is registered again at the same address.
+    unsafe { register_qobject(&mut *registered) };
+
+    assert!(
+        qptr.is_valid(),
+        "second registration must not kill the live object"
+    );
+    assert_eq!(qptr.id(), Some(id));
+    let found = qtrs_core::object::with_object(id, |obj| obj.object_data().id);
+    assert_eq!(
+        found,
+        Some(id),
+        "with_object must still resolve the double-registered object"
+    );
+
+    // SAFETY: no callbacks are active on this registration thread.
+    unsafe { unregister_qobject(id) };
+}

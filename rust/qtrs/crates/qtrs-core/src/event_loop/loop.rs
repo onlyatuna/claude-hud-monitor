@@ -1447,6 +1447,84 @@ mod tests {
         // SAFETY: no callback is active and this runs on the registration thread.
         unsafe { unregister_qobject(id) };
     }
+
+    /// G3.2.a / C3.2: `QCoreApplication::sendPostedEvents` snapshots `insertionOffset` at the start
+    /// of a pass (qcoreapplication.cpp:1815-1817), so events posted from a handler wait for the next
+    /// pass, and events posted between passes are ordered by priority among the remaining entries.
+    /// `CleanUp` shifts `insertionOffset` down by the number of erased entries (1844-1849).
+    #[test]
+    fn test_posted_during_pump_waits_for_next_pass_and_orders_by_priority() {
+        let execution_order = Arc::new(Mutex::new(Vec::new()));
+
+        struct NestedRelay {
+            data: ObjectData,
+            order: Arc<Mutex<Vec<&'static str>>>,
+            loop_handle: EventLoopHandle,
+        }
+        impl QObject for NestedRelay {
+            fn object_data(&self) -> &ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut ObjectData {
+                &mut self.data
+            }
+            fn event(&mut self, event: &mut Event) -> bool {
+                if let EventKind::User(any_data) = &event.kind {
+                    let label = *any_data.downcast_ref::<&'static str>().unwrap();
+                    self.order.lock().unwrap().push(label);
+                    if label == "B" {
+                        self.loop_handle.post_event_with_priority(
+                            self.data.id,
+                            Event::new(EventKind::User(Box::new("X"))),
+                            0,
+                        );
+                        self.loop_handle.post_event_with_priority(
+                            self.data.id,
+                            Event::new(EventKind::User(Box::new("Y"))),
+                            100,
+                        );
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+
+        let mut event_loop = EventLoop::new();
+        let mut relay = NestedRelay {
+            data: ObjectData::new(ObjectId::next()),
+            order: Arc::clone(&execution_order),
+            loop_handle: event_loop.handle(),
+        };
+        // SAFETY: relay stays on this thread and alive until the test ends.
+        unsafe { register_qobject(&mut relay) };
+        let id = relay.data.id;
+
+        event_loop.post_event_with_priority(id, Event::new(EventKind::User(Box::new("A"))), 0);
+        event_loop.post_event_with_priority(id, Event::new(EventKind::User(Box::new("B"))), 0);
+
+        // Pass 1 delivers A and B; X and Y were posted during it and must not run yet.
+        assert_eq!(event_loop.send_posted_events(), 2);
+        assert_eq!(*execution_order.lock().unwrap(), vec!["A", "B"]);
+
+        // Pass 2 delivers the nested posts, higher priority first.
+        assert_eq!(event_loop.send_posted_events(), 2);
+        assert_eq!(*execution_order.lock().unwrap(), vec!["A", "B", "Y", "X"]);
+
+        // Posts made between passes: priority decides among them, insertion order breaks ties.
+        event_loop.post_event_with_priority(id, Event::new(EventKind::User(Box::new("L"))), 0);
+        event_loop.post_event_with_priority(id, Event::new(EventKind::User(Box::new("M"))), 0);
+        event_loop.post_event_with_priority(id, Event::new(EventKind::User(Box::new("H"))), 100);
+        assert_eq!(event_loop.send_posted_events(), 3);
+        assert_eq!(
+            *execution_order.lock().unwrap(),
+            vec!["A", "B", "Y", "X", "H", "L", "M"]
+        );
+
+        // SAFETY: no callback is active and this runs on the registration thread.
+        unsafe { unregister_qobject(id) };
+    }
     #[test]
     fn test_generic_event_dispatcher_and_event_loop_abstraction() {
         use super::super::dispatcher::{EventDispatcher, GenericEventDispatcher};

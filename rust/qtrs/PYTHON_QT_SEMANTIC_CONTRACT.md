@@ -190,8 +190,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior**：`QPointer<T>` 在物件銷毀時自動變 null，之後保持 null。
 - **qtrs required**：MUST 在 drop 或 unregister 後為 null 且保持 null。
 - **Current implementation**：`IMPLEMENTED`（`Arc<AtomicBool>` liveness，與 registry record 共用）。測試 `test_qpointer_and_generational_liveness`。
-- **Known gap**：**G2.5.a [P1, READ]** 重複 `register_qobject` 同一物件會把它標死：`register_object_metadata` 對被取代的 record 呼叫 `liveness.store(false)`，而新舊 record 共用同一個 `Arc`，`registered_ptr` 之後失敗。`add_owned_child` 本身會呼叫 `register_qobject`，所以「呼叫者先註冊再 `add_owned_child`」的子物件會變成無法 dispatch。**G2.5.b [P2]** `QPointer` 無法解參考，只攜帶 `id()`。
-- **Test**：必要：同一物件註冊兩次後 `with_object(id, …)` 仍為 `Some`（目前回 `None`）。
+- **Known gap**：**G2.5.a [P1, RAN；已修復：RC-11a（`register_object_metadata` 只在 liveness token 不同時才退役舊 record，`qobject.rs:187-196`）]** （修復前）重複 `register_qobject` 同一物件會把它標死：`register_object_metadata` 對被取代的 record 呼叫 `liveness.store(false)`，而新舊 record 共用同一個 `Arc`，`registered_ptr` 之後失敗。`add_owned_child` 本身會呼叫 `register_qobject`，所以「呼叫者先註冊再 `add_owned_child`」的子物件會變成無法 dispatch。**G2.5.b [P2]** `QPointer` 無法解參考，只攜帶 `id()`。
+- **Test**：同一物件註冊兩次後 `with_object(id, …)` 仍為 `Some`、`QPointer` 仍有效：`qtrs-core/tests/test_qobject_lifecycle_and_hierarchy.rs::test_double_register_keeps_object_reachable`（RC-11a 之後補上，通過）。
 - **HUD usage**：無。
 
 ### C2.6 動態／宣告屬性
@@ -227,7 +227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 同優先序 FIFO；MUST 較高優先序先送，**含跨輪**；MUST 處理中 post 的事件等下一輪；SHOULD 接收者執行緒尚無 loop 時排隊而非丟棄。
 - **Current implementation**：`IMPLEMENTED`：輪次邊界於 pump 開始時取得（`loop.rs` 的 `insertion_offset`）；post 時喚醒。`PARTIAL`：優先序插入用 `insertion_offset.min(len)`，`insertion_offset` 設為 pump 開始時的佇列長度、**從不遞減**，已送出的事件從頭移除，所以偏移過期。
 - **Known gap**
-  - **G3.2.a [P1, READ]** 跨輪／下一輪的優先序錯誤。例：pump `[A,B]`，B 的 handler 先 post X(0) 再 post Y(100)，Y 落在 X 之後（Qt 先送 Y）；3 個事件 pump 完後 post L(0)、M(0)、H(100)，H 落在 M 之後（Qt 的 cleanup 會減掉 `startOffset`，H 先）。現有 `test_insertion_offset_priority_ordering` 只測 pump 期間，分辨不出。
+  - **G3.2.a [P1, RAN；已修復：RC-68（`remove_at` 遞減 `insertion_offset`，見 C4.3）]** （修復前）跨輪／下一輪的優先序錯誤。例：pump `[A,B]`，B 的 handler 先 post X(0) 再 post Y(100)，Y 落在 X 之後（Qt 先送 Y）；3 個事件 pump 完後 post L(0)、M(0)、H(100)，H 落在 M 之後（Qt 的 cleanup 會減掉 `startOffset`，H 先）。當時的 `test_insertion_offset_priority_ordering` 只測 pump 期間，分辨不出；兩個例子現由 `loop.rs::tests::test_posted_during_pump_waits_for_next_pass_and_orders_by_priority` 釘住（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1815-1817,1844-1849]`），通過：順序 A,B → Y,X → H,L,M。
   - **G3.2.b [P0, READ；已修復：RC-04]** 目標執行緒沒有已註冊 loop 時 `post_event_to_thread` 回 `false`，呼叫端（`CoreApplication::post_event_with_priority`、`signal.rs` 的 queued 閉包、`widget.rs:296`）**忽略回傳值 → 事件靜默遺失**（Qt 會排隊）。HUD 的 `run_on_main_thread` 在 loop 註冊前被 worker 呼叫即遺失；需實測啟動競態。
   - **G3.2.c [P2, READ]** 巢狀 pump（handler 內呼叫 `process_events`）吃掉外層剩餘事件後，外層迴圈 `processed_count < max_index` 會誤送下一輪事件。
   - **G3.2.d [P2]** 無 null receiver 警告；`ObjectId(0)` 被刻意當成「無接收者」哨兵（`main.rs:46`、`timer.rs:612`）。哨兵語意必須保留並明文記載（見 C3.6）。
@@ -761,7 +761,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`PARTIAL`，機制刻意不同。`Widget::request_layout` 只 post 給**直接 parent**（thread-local `WidgetCommandQueue`），每次 dispatch 後與繪製前 flush，**不是** `EventKind::LayoutRequest`（widgets 從不 post 它）。box／grid／stacked 的 `activate` 在 child 大小改變時重新使子 wrapper layout 失效：傳遞**只向下**。setter（`set_margins/set_spacing/add_widget…`）**立即**重排，不像 Qt 壓縮到 `LayoutRequest`。
 - **Known gap**
   - **G9.5.a [P1, READ；已修復：RC-28]** （修復前：）無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout（Fixed/Maximum wrapper 底下的文字變更不會調整 wrapper）；HUD 以明確 `update_layout()` 補（現行位置 `hud_window.rs:741,822`、`provider_card.rs:472`；`provider_card.rs:807` 為測試）。RC-28：`LayoutScheduler::activate_pending` 在 layout 真的重跑後呼叫擁有者的 `update_geometry()`（= `qlayout.cpp:1131` 的 `mw->updateGeometry()`），每次 flush 往上一層，到視窗 root（無 parent）為止。HUD 的手動 `update_layout()` 未移除（另案）。
-  - **G9.5.b [P1, READ]** `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_property`、`set_visible` 不請求 layout（→ G8.1.a、G8.5.c）。
+  - **G9.5.b [P1, RAN；已修復：RC-05（字型／樣式）、RC-26（`set_visible`）]** （修復前）`Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_property`、`set_visible` 不請求 layout（→ G8.1.a、G8.5.c）。回歸測試 `qtrs-widgets/tests/test_widget_invalidation.rs::label_and_button_text_font_and_alignment_setters_request_a_parent_layout` 另涵蓋 `Label::set_alignment`、`Button::set_font`（通過）。
   - **G9.5.c [P2]** setter 立即重排與 Qt 壓縮不同（只有在 mutation 中讀取 geometry 的程式碼觀察得到）。
   - **G9.5.d [P1]** 頂層最小尺寸不從 layout 導出（Python HUD 明確設定 `hud_window.py:296,327,347`，所以不受影響）。
 - **Test**：既有 `test_reentrant_layout_request_during_callback`、`test_multilevel_layout_traversal_with_cell`、`test_command_queue_deduplication`、`test_resize_event_observable_ordering_before_layout_activation`、`test_single_resize_pipeline`、`test_resize_deferred_render`。必要：`text_change_below_fixed_wrapper_resizes_wrapper`；`layout_min_size_sets_toplevel_min_when_not_explicit`；`button_set_text_requests_layout`。
@@ -771,7 +771,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qstackedlayout.cpp:417-448]`：`sizeHint` = **所有**頁面 hint 的最大值（`Ignored` policy 算 0），`minimumSize` = 所有頁面 `qSmartMinSize` 的最大值；非當前頁被隱藏；`currentChanged` 信號。
 - **qtrs required**：MUST 與 Qt 相同。
 - **Current implementation**：`IMPLEMENTED-UNTESTED`（幾何）。`StackedLayout::size_hint`／`minimum_size`／`expanding_directions` **只用當前頁**；`activate` 把每頁都設成同一矩形並切換可見性；`set_current_index` 只在索引改變且在範圍內時發 `current_changed`。
-- **Known gap**：**G9.6.a [P1, READ；決議：不在 P0 階段修，不標 D]** `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值（`Ignored` 策略的軸取 0），`minimumSize` 取所有頁 `qSmartMinSize` 的最大值；qtrs（`stacked.rs:123-147`）只看當前頁。目前 HUD 不依賴。 頁面大小不同時，視窗 hint／最小值在切換卡片↔表格時會跳動，與 Qt 不同。**注意：Python HUD 不用 `QStackedWidget`**（grep 為空）；它重建 `inner_layout`（`hud_window.py:272-347`）。所以這是 Rust HUD 的設計偏離（`hud_window.rs:301-309,585-606`），不是移植錯誤；須決定「改成與 Python 相同的重建」或「讓 StackedLayout 符合 Qt 並證明結果等價」。**G9.6.b [P2]** `set_spacing` 為 no-op。 **已修復：RC-24**。`[QT-SRC qstackedlayout.cpp:417-436,438-448]` `sizeHint`＝所有頁 `widget->sizeHint()` 的逐分量最大值（某軸 policy 為 `Ignored` 則該軸以 0 計），`minimumSize`＝所有頁 `qSmartMinSize` 的最大值，與目前頁無關。PySide6 實測（`QStackedLayout`，頁面覆寫 `sizeHint`／`minimumSizeHint`）：頁 100×50＋60×80 → hint (100,80)，目前頁 0 或 1 皆同；明確 min (30,10)＋(20,40) → min (30,40)；Fixed 頁（hint 100×50、minHint 70×30）即使非目前頁 → min (100,50)；Ignored 水平的頁 → hint (60,50)；兩軸 Ignored → 該頁對 hint 與 min 皆為 0；空 → (0,0)。修復：`stacked.rs` 的 `size_hint`／`minimum_size` 改為遍歷所有頁（沿用 qtrs 既有「layout 的 size_hint 含 margins」慣例，與 Qt 的 `QLayout::totalSizeHint` 一致）。測試 `tests/test_stacked_layout_hint.rs` 5 項，其中 3 項修復前 FAIL（hint (100,50) vs (100,80)；min (30,10) vs (30,40)；Ignored (100,50) vs (60,50)）。**HUD 影響**：HUD 的 `StackedWidget` 同時裝著卡片頁與表格頁，stack 的 hint 現在含兩者；HUD 測試（含 RC-16 的 header／卡片幾何）全數仍過，並新增 `test_default_vertical_window_layout_matches_pyside6_with_the_table_page_in_the_stack`（預設 280×410：header 33、卡片 109、間距 122，取自 PySide6）。**未修**：`expanding_directions` 仍只看目前頁（Qt `QStackedLayout` 沒有覆寫，用 `QLayout` 的預設）；`activate` 仍給每一頁 geometry（Qt `StackOne` 只給目前頁，`qstackedlayout.cpp:453-467`）；Qt `sizeHint` 不含 margins 而 qtrs 含（margins 預設 0，HUD 為 0）。
+- **Known gap**：**G9.6.a [P1, READ；決議：不在 P0 階段修，不標 D；已修復：RC-24]** `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值（`Ignored` 策略的軸取 0），`minimumSize` 取所有頁 `qSmartMinSize` 的最大值；qtrs（`stacked.rs:123-147`）只看當前頁。目前 HUD 不依賴。 頁面大小不同時，視窗 hint／最小值在切換卡片↔表格時會跳動，與 Qt 不同。**注意：Python HUD 不用 `QStackedWidget`**（grep 為空）；它重建 `inner_layout`（`hud_window.py:272-347`）。所以這是 Rust HUD 的設計偏離（`hud_window.rs:301-309,585-606`），不是移植錯誤；須決定「改成與 Python 相同的重建」或「讓 StackedLayout 符合 Qt 並證明結果等價」。**G9.6.b [P2]** `set_spacing` 為 no-op。 **已修復：RC-24**。`[QT-SRC qstackedlayout.cpp:417-436,438-448]` `sizeHint`＝所有頁 `widget->sizeHint()` 的逐分量最大值（某軸 policy 為 `Ignored` 則該軸以 0 計），`minimumSize`＝所有頁 `qSmartMinSize` 的最大值，與目前頁無關。PySide6 實測（`QStackedLayout`，頁面覆寫 `sizeHint`／`minimumSizeHint`）：頁 100×50＋60×80 → hint (100,80)，目前頁 0 或 1 皆同；明確 min (30,10)＋(20,40) → min (30,40)；Fixed 頁（hint 100×50、minHint 70×30）即使非目前頁 → min (100,50)；Ignored 水平的頁 → hint (60,50)；兩軸 Ignored → 該頁對 hint 與 min 皆為 0；空 → (0,0)。修復：`stacked.rs` 的 `size_hint`／`minimum_size` 改為遍歷所有頁（沿用 qtrs 既有「layout 的 size_hint 含 margins」慣例，與 Qt 的 `QLayout::totalSizeHint` 一致）。測試 `tests/test_stacked_layout_hint.rs` 5 項，其中 3 項修復前 FAIL（hint (100,50) vs (100,80)；min (30,10) vs (30,40)；Ignored (100,50) vs (60,50)）。**HUD 影響**：HUD 的 `StackedWidget` 同時裝著卡片頁與表格頁，stack 的 hint 現在含兩者；HUD 測試（含 RC-16 的 header／卡片幾何）全數仍過，並新增 `test_default_vertical_window_layout_matches_pyside6_with_the_table_page_in_the_stack`（預設 280×410：header 33、卡片 109、間距 122，取自 PySide6）。**未修**：`expanding_directions` 仍只看目前頁（Qt `QStackedLayout` 沒有覆寫，用 `QLayout` 的預設）；`activate` 仍給每一頁 geometry（Qt `StackOne` 只給目前頁，`qstackedlayout.cpp:453-467`）；Qt `sizeHint` 不含 margins 而 qtrs 含（margins 預設 0，HUD 為 0）。
 - **Test**：既有 `test_stacked_widget_page_switching`（索引／信號）。必要：`stacked_size_hint_is_max_over_all_pages`；`stacked_hides_non_current_page_and_hit_test_skips_it`；切換 layout 後的視窗大小與 Python 逐項比對。
 - **HUD usage**：Rust `hud_window.rs:301-309,585-606`。
 
@@ -892,7 +892,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`Frameless | Tool | StaysOnTop` 對應無邊框、tool、topmost 視窗；`WA_TranslucentBackground` 使其為 per-pixel alpha；`setWindowFlag(WindowStaysOnTopHint, v)` **重建**原生視窗並隱藏，呼叫端要再 `show()`。
 - **qtrs required**：HUD 旗標 MUST 產生 `WS_POPUP | WS_EX_TOOLWINDOW | WS_EX_LAYERED`，on-top 時加 `WS_EX_TOPMOST`；topmost 切換 MUST 保持視窗可見且幾何不變。
 - **Current implementation**：旗標 `IMPLEMENTED`，切換 `PARTIAL`。`NativeWindow::new`（`qtrs-platform/src/window.rs`）；HUD 請求 `FRAMELESS | CUSTOM_FRAMELESS | LAYERED | TOOL [| STAYS_ON_TOP] [| CLICK_THROUGH]`（`hud_window.rs:207-216`）；`LAYERED` 優先於 `CUSTOM_FRAMELESS`，所以不裝 NCHITTEST 設定，resize／move 走 `start_system_move/resize`（與 Python 的 `startSystemMove/Resize` 相同）；`set_stays_on_top` 就地 `SetWindowPos(HWND_TOPMOST/NOTOPMOST)`。
-- **Known gap**：**G11.1.a [P2]** 無 `set_window_flags`；就地 `SetWindowPos` 保持可見，可觀察終態與 Python 的 `setWindowFlag + show()` 一致；**G11.1.b [P1]** 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT`；**G11.1.c [P2, READ]** X11／Wayland／Cocoa 後端是模擬：沒有真實 X server／Wayland compositor／AppKit 連線（Cocoa 走 `MockObjcRuntime`；macOS 上的真實 AppKit 已在主執行緒入口實測，見 C11.13）。RC-11b 之後 `is_active` 與 `WindowFlags::TOOLTIP` 在這些後端上由注入的事件或 mock 狀態驅動（X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Cocoa `isKeyWindow`），未對真實系統驗證；X11 沒有 window type／override-redirect，Wayland 沒有 popup role。`WindowSystemEvent::MouseMove.buttons` 在 Win32 來自 `wParam` 的 `MK_*`（真實）；X11／Wayland／Cocoa 後端由視窗物件記錄自己看到的 press／release（模擬事件沒有按鈕狀態遮罩）。Wayland 以 keyboard focus 為 active，qtwayland 原始碼不在 `qtbase/`，`[INFERENCE]`；**G11.1.d [P1, READ；已修復：RC-27]** （修復前：）`Application::active_window()` 從不被設定（`set_active_window` 只有測試呼叫），沒有 `WindowActivate`／`WindowDeactivate`／`ActivationChange` 遞送給 widget，`QWidget::isActiveWindow` 不存在。平台層 `PlatformWindow::is_active` 已可用（RC-11b），但尚未接到 toolkit 層；RC-11c 的「只在 active window 顯示 tooltip」需要它。RC-27 之後：`FocusIn`／`FocusOut` 設定／清除 `Application::active_window()`，送 `WindowActivate`／`WindowDeactivate`（先到視窗事件處理器，再到可見的非視窗子 widget），並新增 `Widget::is_active_window`。**仍缺**：`ActivationChange` 事件、`SH_Widget_ShareActivation`（Tool 視窗共享啟用）、popup 視窗的 `isActiveWindow`、`QWidget::activateWindow`；tooltip 的「是否 active」仍讀 `PlatformWindow::is_active`，未改接到 toolkit 層。
+- **Known gap**：**G11.1.a [P2]** 無 `set_window_flags`；就地 `SetWindowPos` 保持可見，可觀察終態與 Python 的 `setWindowFlag + show()` 一致；**G11.1.b [P1, RAN；已修復：補測試 `qtrs-platform/src/window.rs::tests::test_set_stays_on_top_toggles_topmost_exstyle`（行為本來正確，測試直接通過）]** （補測試前）測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT`；**G11.1.c [P2, READ]** X11／Wayland／Cocoa 後端是模擬：沒有真實 X server／Wayland compositor／AppKit 連線（Cocoa 走 `MockObjcRuntime`；macOS 上的真實 AppKit 已在主執行緒入口實測，見 C11.13）。RC-11b 之後 `is_active` 與 `WindowFlags::TOOLTIP` 在這些後端上由注入的事件或 mock 狀態驅動（X11 `FocusIn/Out`、Wayland `KeyboardEnter/Leave`、Cocoa `isKeyWindow`），未對真實系統驗證；X11 沒有 window type／override-redirect，Wayland 沒有 popup role。`WindowSystemEvent::MouseMove.buttons` 在 Win32 來自 `wParam` 的 `MK_*`（真實）；X11／Wayland／Cocoa 後端由視窗物件記錄自己看到的 press／release（模擬事件沒有按鈕狀態遮罩）。Wayland 以 keyboard focus 為 active，qtwayland 原始碼不在 `qtbase/`，`[INFERENCE]`；**G11.1.d [P1, READ；已修復：RC-27]** （修復前：）`Application::active_window()` 從不被設定（`set_active_window` 只有測試呼叫），沒有 `WindowActivate`／`WindowDeactivate`／`ActivationChange` 遞送給 widget，`QWidget::isActiveWindow` 不存在。平台層 `PlatformWindow::is_active` 已可用（RC-11b），但尚未接到 toolkit 層；RC-11c 的「只在 active window 顯示 tooltip」需要它。RC-27 之後：`FocusIn`／`FocusOut` 設定／清除 `Application::active_window()`，送 `WindowActivate`／`WindowDeactivate`（先到視窗事件處理器，再到可見的非視窗子 widget），並新增 `Widget::is_active_window`。**仍缺**：`ActivationChange` 事件、`SH_Widget_ShareActivation`（Tool 視窗共享啟用）、popup 視窗的 `isActiveWindow`、`QWidget::activateWindow`；tooltip 的「是否 active」仍讀 `PlatformWindow::is_active`，未改接到 toolkit 層。
 - **Test**：既有 `window.rs::test_window_flags_to_win32_styles`（建立時樣式）、`test_native_window_lifecycle_and_methods`（只查 `flags` 欄位）。必要：`set_stays_on_top(false)` 後 `GetWindowLongPtrW(GWL_EXSTYLE) & WS_EX_TOPMOST == 0`。
 - **HUD usage**：Python `hud_window.py:123-128,804-812`；Rust `hud_window.rs:538-545`。
 
@@ -944,7 +944,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：`set_opacity(v)` MUST 在 HUD 的分層視窗上改變可見 alpha，**不論選用哪個 surface**。
 - **Current implementation**：`PARTIAL`。`NativeWindow::set_opacity` 存值，僅對**非** `LAYERED` 視窗呼叫 `SetLayeredWindowAttributes`；`Win32LayeredPresenter` 用它當 `SourceConstantAlpha`；`get_or_create_presenter` 對 `LAYERED` 視窗**先試 `DCompSurface::new`**，失敗才退回 GDI layered presenter。
 - **Known gap**
-  - **G11.5.a [P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現；已修復：RC-09 implementation complete / DirectComposition hardware verification pending]** **DComp 路徑丟棄 opacity**：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)`（`surface/dcomp.rs`）從不使用它；`WindowsPresenter::set_opacity` 對 `DirectComposition` 為 no-op；以寫死的 `1.0` 呈現。若 DComp 被選用，HUD 的不透明度設定**無效**（`hud_window.py:132,820` vs `hud_window.rs:223,782-788`）。
+  - **G11.5.a [P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現；已修復：RC-09 implementation complete / DirectComposition hardware verification pending]** **DComp 路徑丟棄 opacity**（RC-09 修改前）：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)`（`surface/dcomp.rs`）從不使用它；`WindowsPresenter::set_opacity` 對 `DirectComposition` 為 no-op；以寫死的 `1.0` 呈現。若 DComp 被選用，HUD 的不透明度設定**無效**（`hud_window.py:132,820` vs `hud_window.rs:223,782-788`）。
   - **G11.5.c [test gap, RAN；部分處理：RC-09 新增明確標為 ignore 的 DComp 測試，既有 test_dcomp_* 仍靜默 skip]** `test_dcomp_*`（5 項）在本機因 `CreateDXGIFactory1 failed for IDXGIFactory2` 全部 skip，卻顯示為 passed；`window.rs:1678-1679` 對所有 `LAYERED` 視窗**無閘門地先試 DComp**，另有 `test_layered_interactive_resize::window_pipeline_*` 在本機選到 Layered。DComp 路徑在本機完全沒被測試。
   - **G11.5.d [P1, RAN；已修復：RC-09]** 非 `LAYERED` 視窗的 `setWindowOpacity` 無效：`dyn PlatformWindow::set_opacity`（widgets `Window::set_opacity` 走的路徑）只寫入欄位並通知 presenter；`Win32DcPresenter` 不處理 opacity；另一個 inherent `NativeWindow::set_opacity` 呼叫 `SetLayeredWindowAttributes` 卻沒設 `WS_EX_LAYERED`（對沒有該樣式的視窗會失敗），且 trait 路徑根本不會呼叫它。Qt：`setWindowLayered` 在 `opacity < 1` 時加 `WS_EX_LAYERED`，再 `SetLayeredWindowAttributes(qRound(255*level))`（`qwindowswindow.cpp:494-530`）。
   - **G11.5.e [test gap]** `Win32LayeredPresenter` 把 opacity 傳為 `UpdateLayeredWindowIndirect` 的 `SourceConstantAlpha`（與 Qt 的 `qRound(255*opacity)` 等價，讀碼確認）；沒有讀回合成結果的測試——桌面合成無法在不依賴桌面內容的前提下讀回。
@@ -958,15 +958,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt/Python behavior**：Python 在 Windows 設 `WS_EX_TRANSPARENT | WS_EX_LAYERED` 再 `SetWindowPos(SWP_FRAMECHANGED)`（`hud_window.py:474-486`）；topmost 切換後**重新斷言** click-through（`:809-810`）。
 - **qtrs required**：視窗 MUST 讓滑鼠穿透；樣式位元 MUST 在 topmost 切換後保留。
 - **Current implementation**：`IMPLEMENTED-UNTESTED`。`set_click_through` 在既有樣式上設／清 `WS_EX_TRANSPARENT`（HUD 視窗本來就是 `WS_EX_LAYERED`）；無 `SWP_FRAMECHANGED`；`set_stays_on_top` 不碰 click-through 樣式，所以不需重新斷言。
-- **Known gap**：**G11.6.a [P2]** 非 `LAYERED` 視窗的 `set_click_through(true)` 只得 `WS_EX_TRANSPARENT`，沒有 `WS_EX_LAYERED` 時不穿透；**G11.6.b [P1]** 沒有測試斷言樣式位元。
+- **Known gap**：**G11.6.a [P2]** 非 `LAYERED` 視窗的 `set_click_through(true)` 只得 `WS_EX_TRANSPARENT`，沒有 `WS_EX_LAYERED` 時不穿透；**G11.6.b [P1, RAN；已修復：補測試 `qtrs-platform/src/window.rs::tests::test_set_click_through_toggles_transparent_exstyle`（行為本來正確，測試直接通過）]** （補測試前）沒有測試斷言樣式位元。
 - **Test**：必要：`set_click_through(true/false)` 前後及 `set_stays_on_top` 後斷言 `GWL_EXSTYLE & WS_EX_TRANSPARENT`。
 - **HUD usage**：Python `hud_window.py:474-532,809-810`；Rust `hud_window.rs:526-536`。
 
 ### C11.7 背景（Acrylic / vibrancy）
 - **Python behavior**：`vibrancy.apply` 只在 widget 可見且非 offscreen 平台時執行；呼叫 `SetWindowCompositionAttribute(WCA_ACCENT_POLICY)`，state 4、flags 2、gradient `0x99161a22`（暗）或 `0x99f0f2f8`（亮）；`clear` 設 state 0；樣式表依 apply 是否成功（`vibrant`）而不同（`vibrancy.py:75-159`、`hud_window.py:240-250`）。
 - **qtrs required**：MUST 相同的 accent policy 與相同的失敗退路。
-- **Current implementation**：accent policy `IMPLEMENTED`（`qtrs-platform/src/backdrop.rs`，常數相同），fallback `PARTIAL`。`BackdropType::None` 清除 accent policy，並額外呼叫 `DWMWA_USE_IMMERSIVE_DARK_MODE`、`DWMWA_SYSTEMBACKDROP_TYPE=NONE`、`DwmEnableBlurBehindWindow(false)`。
-- **Known gap**：**G11.7.a [P1, READ]** HUD 在視窗可見之前呼叫 `set_backdrop`（`hud_window.rs:229`）並忽略回傳；Python 以 `isVisible()` 把關，失敗就用實心面板；Rust 一律畫 vibrant 面板色（`:88-92`）（→ G12.5.c）；**G11.7.b [P2]** `None` 比 Python 的 `clear` 多做 DWM 呼叫；**G11.7.c [P2]** macOS 路徑只對 `MockObjcRuntime` 測過（macOS：真實 AppKit 已在主執行緒入口實測，見 C11.13）。
+- **Current implementation**：accent policy `IMPLEMENTED`（`qtrs-platform/src/backdrop.rs`，常數相同），fallback `IMPLEMENTED`（RC-74，HUD 層：`install_backdrop` 只在視窗可見時裝 Acrylic、依回傳值選面板色，`show` 時重做）。`BackdropType::None` 清除 accent policy，並額外呼叫 `DWMWA_USE_IMMERSIVE_DARK_MODE`、`DWMWA_SYSTEMBACKDROP_TYPE=NONE`、`DwmEnableBlurBehindWindow(false)`。
+- **Known gap**：**G11.7.a [P1, RAN；已修復：RC-74]** （修復前）HUD 在視窗可見之前呼叫 `set_backdrop`（`hud_window.rs:229`）並忽略回傳；Python 以 `isVisible()` 把關，失敗就用實心面板；Rust 一律畫 vibrant 面板色（`:88-92`）（→ G12.5.c）；**G11.7.b [P2]** `None` 比 Python 的 `clear` 多做 DWM 呼叫；**G11.7.c [P2]** macOS 路徑只對 `MockObjcRuntime` 測過（macOS：真實 AppKit 已在主執行緒入口實測，見 C11.13）。
 - **Test**：既有 `test_cross_platform_backdrop_and_click_through`（Mock）、`test_backdrop_type_variants`。必要：Windows 上 `set_backdrop(Acrylic, dark)` 後 `GetWindowCompositionAttribute` 回報 state 4 與 gradient。
 - **HUD usage**：Python `hud_window.py:240-250`；Rust `hud_window.rs:224-229,626-631,712`。
 
@@ -1142,7 +1142,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 **Gap**
 - **G12.3.a [P1]** QMenu 規則被解析但不消費（G8.5.f）；Rust 卡片樣式表**丟掉了** QMenu 規則，Python 卡片樣式表有（`rust/src/ui/styles.rs:128-327`）；表格模式的 QMenu 數值是從 `get_hud_stylesheet` 複製的數字（`rust/src/ui/tray_icon.rs:258-278`）。
 - **G12.3.b [P0, READ；已修復：RC-15]** Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px`（`styles.rs:192,291`），Python 沒有此屬性（`styles.py:116-124`）。
-- **G12.3.c [P1, READ]** 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_solid`；Rust 不接受 `vibrant`，一律以 `panel_bg_vibrant` 自繪（`styles.rs:371`、`hud_window.rs:88-92`）。
+- **G12.3.c [P1, RAN；已修復：RC-74（面板色依 `vibrant` 選擇；樣式表本身不畫面板）]** （修復前）表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_solid`；Rust 不接受 `vibrant`，一律以 `panel_bg_vibrant` 自繪（`styles.rs:371`、`hud_window.rs:88-92`）。
 - **G12.3.d [P1]** 型別比對無繼承；Label 的 `pseudo_states` 為空（`:hover/:disabled` 對 label 不成立）。
 - **G12.3.e [P2]** `font-family` 清單以一個原始字串存、查找時才拆；generic（`sans-serif`/`monospace`）被跳過而非映射到系統字型，`'Consolas', monospace` 在沒有 Consolas 時沒有等寬退路。**Qt 依據**：Linux 的 `QFontconfigDatabase::resolveFontFamilyAlias` 把家族字串交給 `FcConfigSubstitute`（`qfontconfigdatabase.cpp:970-995`），`fallbacksForFamily` 另把 style hint 轉成 fontconfig 的 `sans-serif`／`monospace` 等（`getFcFamilyForStyleHint`，`:347-367`）；macOS 無此家族時依 style hint 取 Menlo 等（`qcoretextfontdatabase.mm:625-640`）；Windows 取 Courier New 等（`qwindowsfontdatabasebase.cpp:939-961`）。與 G12.6.d 同一根因（字型來源與缺字型規則），一起處理，不單獨修。CSS 的 generic 名稱在 Qt 內經哪一條路徑變成 style hint，尚未追到 `qcssparser.cpp`／`qstylesheetstyle.cpp`，`[INFERENCE]`。
 - **G12.3.f [P2, INFERENCE]** `font-weight: 800` 映射到 `FontWeight::Black`；列舉無 ExtraBold，字型選擇只分 regular／bold（`font_database.rs`）；Qt 的數值映射未驗證。
@@ -1176,7 +1176,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 |---|---|---|---|
 | G12.5.a [P0, READ；= G12.3.b] | Badge `max-height: 15px` 只在 Rust | `styles.rs:192,291` vs `styles.py:116-124` | 修復＋樣式表比對測試（幾何稽核：案例 A，見 C12.8） |
 | G12.5.b [P0, READ；= G9.4.b] | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 | `provider_card.rs:159` vs `provider_card.py:27`（已讀確認） | 修復或寫理由（幾何稽核：案例 A，須與 G12.8.a 同做，見 C12.8） |
-| G12.5.c [P1] | 面板底色不依 Acrylic 是否成功而改變 | `hud_window.rs:88-92,229` vs `hud_window.py:240-250` | 修復 |
+| G12.5.c [P1；已修復：RC-74] | 面板底色不依 Acrylic 是否成功而改變 | `hud_window.rs:88-92,229` vs `hud_window.py:240-250` | 修復 |
 | G12.5.d [P0, READ；已修復：RC-17] | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 原本只有 resize 的 `ResizeDebouncer` + 3 s 輪詢抓移動，且無 release handler。已修復：3000 ms geometry poll removed because RC-06 window event lifecycle now supplies Move/Release/Close/Hide hooks；HUD 以 `Window::set_window_event_handler` 處理 Move（更新 config x/y＋`request_save`）、MouseButtonRelease 與 Close（立即 `persist_rect`，取消待存）；resize 寫入改為 clamp 至 `MIN_*`（以前寫未 clamp 的尺寸）；250 ms 仍是 HUD 的 `ResizeDebouncer`，不是 qtrs `Timer` 需求；測試 `ui/geometry_persist_tests.rs` 6 項（修前 6/6 失敗；真實 Win32 訊息）；殘餘：Hide 事件本身不另存（`HUDWindow::hide` 已存；Python 也只在 closeEvent 存）、高層 burst 重啟語意只由 `config.rs` 的 debouncer 測試涵蓋（debug build 每次 resize 渲染 180–300 ms，超過 250 ms）| `hud_window.py:595-609,624-649` vs `config.rs:396`、`main.rs:575-591` | 修復 |
 | G12.5.e [P0, READ；已修復：RC-18] | 喚醒偵測（倒數 tick 間隔 >15 s 就刷新）在 Rust 原本不存在。已修復：以 application 層 timestamp-gap detection 實作（`tick_gap_exceeded`＋`HUDWindow::on_clock_tick`，`SystemTime`，嚴格 `>15 s`，第一次 tick 與倒退時鐘皆不刷新，長間隔剛好一次 `RefreshController::refresh()`）。`Power::Resume` 刻意不屬於 RC-18（見 G12.5.x）。測試 `ui::hud_window::tests` 4 項；before-FAIL 不可用（新函式／新 API，未偽造）；真實 suspend/resume：MANUAL WINDOWS VERIFICATION REQUIRED。 診斷（僅供驗證，不影響決策）：`HUDWindow::wake_refresh_seq`（長間隔 refresh 序號）；debug build 於長間隔分支 `eprintln!("[rc18] wake refresh #N previous_ms=… now_ms=… gap_ms=…")`；測試 `wake_refresh_sequence_advances_once_per_long_gap_only`（正常 tick 序號不變、17 s 間隔 +1、其後 1 s tick 不變、剛好 15 s 不變、16 s +1；TI-01 stub，無 real-time sleep）。真實 suspend/resume、lock/unlock、debugger pause 仍為 MANUAL WINDOWS VERIFICATION REQUIRED（可用 stderr `[rc18]` 行判讀）。 | `hud_window.py:461-467`；grep `gap|WM_POWERBROADCAST|resume` 於 `rust/src` 為空 | 修復 |
 | G12.5.x [P2] | `Power::Resume`／`Suspend`（`WM_POWERBROADCAST`）目前沒有 toolkit consumer：`qtrs-widgets` `Window::handle_window_event` 的 `_ => {}` 丟棄 `WindowSystemEvent::Power`，HUD 也未連接 `TrayIcon::on_power_event`。Qt 本身沒有 suspend/resume 事件（`qwindowscontext.cpp` 只處理 `PBT_POWERSETTINGCHANGE`，顯示器喚醒時 `InvalidateRect`），所以這是 qtrs 擴充，與 RC-18 無關 | `window.rs:1126`、`window.rs`(widgets):1508；`qwindowscontext.cpp:271-298` | 待決策 |
@@ -1269,7 +1269,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 373 項：D 12、P0 35、P1 168、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 94 項：G2.1.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 373 項：D 12、P0 35、P1 168、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 102 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.6.a、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1292,7 +1292,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.4.a | P1, READ | `Signal::new()` 沒有 emitter id → `block_signals` 被忽略 |
 | G2.4.b | P1, READ | 即使有 emitter id，物件若未 `register_qobject`，`query_object_signals_blocked` 回 `None`，被當成「未封鎖」 |
 | G2.4.c | P2, READ | unregister 後封鎖靜默失效 |
-| G2.5.a | P1, READ | 重複 `register_qobject` 同一物件會把它標死：`register_object_metadata` 對被取代的 record 呼叫 `liveness.store |
+| G2.5.a | P1, RAN；已修復：RC-11a | 重複 `register_qobject` 同一物件會把它標死：`register_object_metadata` 對被取代的 record 呼叫 `liveness.store |
 | G2.5.b | P2 | `QPointer` 無法解參考，只攜帶 `id()` |
 | G2.6.a | P2, READ | 新動態屬性回 `true` |
 | G2.6.b | P2, READ | `Variant::Invalid` 不移除 |
@@ -1304,7 +1304,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.1.a | P2, READ | `Pointer`=251、`DpiChanged`=250 不是 Qt 數值 |
 | G3.1.b | D | `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)` |
 | G3.1.c | P1, READ | 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等 |
-| G3.2.a | P1, READ | 跨輪／下一輪的優先序錯誤 |
+| G3.2.a | P1, RAN；已修復：RC-68 | 跨輪／下一輪的優先序錯誤 |
 | G3.2.b | P0, READ；已修復：RC-04 | 目標執行緒沒有已註冊 loop 時 `post_event_to_thread` 回 `false`，呼叫端 |
 | G3.2.c | P2, READ | 巢狀 pump |
 | G3.2.d | P2 | 無 null receiver 警告 |
@@ -1484,7 +1484,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.4.a | P1, READ | 依賴 Qt 預設的 layout |
 | G9.4.b | P0, 已讀兩側原始碼確認；已修復：RC-14 | **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)` |
 | G9.5.a | P1, READ；已修復：RC-28 | 無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout。**已修復：RC-28** |
-| G9.5.b | P1, READ | `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_propert |
+| G9.5.b | P1, RAN；已修復：RC-05、RC-26 | `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_propert |
 | G9.5.c | P2 | setter 立即重排與 Qt 壓縮不同 |
 | G9.5.d | P1 | 頂層最小尺寸不從 layout 導出 |
 | G9.6.a | P1, READ；決議：不在 P0 階段修，不標 D；已修復：RC-24 | `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值 **已修復：RC-24**（見 C9.6） |
@@ -1521,7 +1521,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.7.h | P2, READ | `PlatformWindow::device_pixel_ratio` 只有 Windows |
 | G10.7.i | test gap | 沒有異 DPI 實機測試：RC-08 的測試以 fake platform |
 | G11.1.a | P2 | 無 `set_window_flags` |
-| G11.1.b | P1 | 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT` |
+| G11.1.b | P1, RAN；已修復：補測試 | 測試只檢查 `flags` 欄位，不檢查 `WS_EX_TOPMOST`／`WS_EX_TRANSPARENT` |
 | G11.1.c | P2, READ | X11／Wayland／Cocoa 後端是模擬，`is_active`／`TOOLTIP` 未對真實系統驗證 |
 | G11.1.d | P1, READ；已修復：RC-27 | `Application::active_window()` 從不被設定，無 `ActivationChange`／`isActiveWindow`（`is_active` 尚未接到 toolkit 層）。**已修復：RC-27**（`ActivationChange` 等見 C11.1） |
 | G11.2.a | P1, READ；已修復：RC-06 | 無 `Window::is_visible()` |
@@ -1552,8 +1552,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.5.f | P2, 未量測 | DComp 的 opacity 以 CPU 在 staging DIB 複製時逐像素縮放實作 |
 | G11.5.g | P1, 未決策，不在 RC-09 | production 是否允許 DComp |
 | G11.6.a | P2 | 非 `LAYERED` 視窗的 `set_click_through(true)` 只得 `WS_EX_TRANSPARENT`，沒有 `WS_EX_LAYERED` 時不穿透 |
-| G11.6.b | P1 | 沒有測試斷言樣式位元 |
-| G11.7.a | P1, READ | HUD 在視窗可見之前呼叫 `set_backdrop` |
+| G11.6.b | P1, RAN；已修復：補測試 | 沒有測試斷言樣式位元 |
+| G11.7.a | P1, RAN；已修復：RC-74 | HUD 在視窗可見之前呼叫 `set_backdrop` |
 | G11.7.b | P2 | `None` 比 Python 的 `clear` 多做 DWM 呼叫 |
 | G11.7.c | P2 | macOS 路徑只對 `MockObjcRuntime` 測過 |
 | G11.8.a | P1 | 選單位置換算用主螢幕 DPR |
@@ -1596,7 +1596,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.13.r | P1, READ | 視圖沒有輸入處理方法、視窗沒有 delegate，真實輸入不會變成 qtrs 視窗事件 |
 | G12.3.a | P1 | QMenu 規則被解析但不消費 |
 | G12.3.b | P0, READ；已修復：RC-15 | Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px` |
-| G12.3.c | P1, READ | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |
+| G12.3.c | P1, RAN；已修復：RC-74 | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |
 | G12.3.d | P1 | 型別比對無繼承 |
 | G12.3.e | P2 | `font-family` 清單以一個原始字串存、查找時才拆 |
 | G12.3.f | P2, INFERENCE | `font-weight: 800` 映射到 `FontWeight::Black` |
@@ -1604,7 +1604,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.3.h | P2, INFERENCE | 色彩：8 位數十六進位被當 `#RRGGBBAA` |
 | G12.5.a | P0, READ；= G12.3.b；已修復：RC-15 | Badge `max-height: 15px` 只在 Rust |
 | G12.5.b | P0, READ；= G9.4.b；已修復：RC-14 | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 |
-| G12.5.c | P1 | 面板底色不依 Acrylic 是否成功而改變 |
+| G12.5.c | P1, RAN；已修復：RC-74 | 面板底色不依 Acrylic 是否成功而改變 |
 | G12.5.d | P0, READ；已修復：RC-17（3000 ms geometry poll removed because RC-06 window event lifecycle now supplies Move/Release/Close/Hide hooks） | 幾何持久化：Python 250 ms 單發於 move／resize 重啟＋mouse release 儲存；Rust 原本只有 resize 的 `ResizeDebouncer` |
 | G12.5.e | P0, READ；已修復：RC-18（application 層 timestamp-gap detection） | 喚醒偵測（倒數 tick 間隔 >15 s 就刷新）在 Rust 原本不存在 |
 | G12.5.x | P2 | `Power::Resume`／`Suspend` 目前沒有 toolkit consumer（Qt 本身亦無此事件；與 RC-18 獨立） |
@@ -1860,12 +1860,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 #### RC-08 每視窗 DPR／螢幕
 - **Contract gaps**：G10.7.a、G11.3.a（P0, READ，未實測）；相關 P1：G11.8.a。
 - **Qt behavior** `[QT-DOC]`：視窗的 `devicePixelRatio` 取自**所在螢幕**。須在實作前於 `qtbase/` 確認。
-- **qtrs root**：`primary_screen().device_pixel_ratio()` 出現在 `qtrs-widgets/src/window.rs:261,354,468,512,645,668,914`、`menu.rs:551,597,729`、`qtrs-platform/src/window.rs:1633,1891`、`tray_icon.rs:281`；`PlatformWindow` 沒有每視窗 DPR 查詢；WM handler 用 `GetDpiForWindow`（`qtrs-platform window.rs:404`）。
+- **qtrs root**（修改前；行號為當時）：`primary_screen().device_pixel_ratio()` 出現在 `qtrs-widgets/src/window.rs:261,354,468,512,645,668,914`、`menu.rs:551,597,729`、`qtrs-platform/src/window.rs:1633,1891`、`tray_icon.rs:281`；`PlatformWindow` 沒有每視窗 DPR 查詢；WM handler 用 `GetDpiForWindow`（當時 `qtrs-platform window.rs:404`）。現況：`PlatformWindow::device_pixel_ratio()`（`platform_window.rs:52`），Win32 實作經 `get_window_dpr`（`qtrs-platform/src/window.rs:557,1909`）。
 - **Evidence**：`READ`；**只在異 DPI 多螢幕下可見**，本機未實測。
 - **Required observable**：視窗在非主螢幕時，backing store DPR 與該視窗所在螢幕一致，且在 `DpiChanged` 之後不退回主螢幕 DPR。
 - **Required test**（`qtrs-widgets/tests/test_window_device_pixel_ratio.rs`；**以 fake platform 為之**——主螢幕 1.0、視窗所在螢幕 2.0，**沒有第二台螢幕**；修改前以「讓視窗每次讀主螢幕 DPR」模擬舊行為：4 項全 FAIL）：
   - `a_window_takes_its_ratio_from_its_own_screen_not_the_primary_screen`
-  - `set_geometry_converts_with_the_window_ratio`
+  - `set_geometry_converts_with_the_window_ratio`（已於 RC-72 刪除，理由見 RC-72）
   - `a_dpi_change_is_not_undone_by_the_next_render`（原 P0：`DpiChanged` → `render_and_present` → store 退回主螢幕 DPR）
   - `custom_presentation_uses_the_window_ratio`（`present_custom`、`present_custom_at`）
 - **Phase**：3。
@@ -2038,9 +2038,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 #### RC-33 `setEnabled` 不傳遞、不重繪
 - **Contract gaps**：G8.2.a（傳遞與重繪部分）。
 - **Qt behavior** `[QT-SRC qwidget.cpp:3405-3476, 9491-9492, 8977-9001]`：`setEnabled` 設 `WA_ForceDisabled = !enable`，`setEnabled_helper`：在停用的非視窗 parent 下啟用直接返回；狀態未變返回；否則改 `WA_Disabled` 並遞迴子 widget（啟用時跳過 `WA_ForceDisabled` 的子項，停用時跳過已停用者）；送 `EnabledChange`，`QWidget::changeEvent` 因此 `update()`。停用 widget 的 `QWidget::event` 丟棄滑鼠／鍵盤／滾輪。
-- **qtrs root**：`WidgetBase::set_enabled` 只 `Cell::set`；`EmptyWidget` 與 `input_common.rs` 的覆寫甚至繞過 base 直接寫 `base.enabled`。
+- **qtrs root**（修改前）：`WidgetBase::set_enabled` 只 `Cell::set`；`EmptyWidget` 與 `input_common.rs` 的覆寫甚至繞過 base 直接寫 `base.enabled`。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`QWidget`＋兩個 `QLabel` 於 `QVBoxLayout`）：停用 parent → (F,F,F)；在停用 parent 下啟用 b → 仍 (F,F,F)；b 明確停用後啟用 parent → (T,T,F)；a 明確停用、parent 關再開 → (T,F,T)。新測試 `test_widget_enabled.rs` 3 項：修改前 2 項失敗（子項未被停用 `(false,true,true)`、未重繪），第 3 項因修改前不傳遞而湊巧通過；修改後全過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
-- **Status**：**已修復（傳遞、明確停用、重繪）**。`WidgetBase` 新增 `force_disabled`、`set_enabled_helper`；`EmptyWidget`、`input_common.rs` 改為走 `base.set_enabled`。滑鼠輸入已由 `hit_test.rs` 沿路徑 AND enabled 處理。未做：`EnabledChange` 事件種類、焦點清除、QSS `:disabled`、鍵盤事件的 enabled 閘門。parent 連結要到 `adopt_tree`（layout 啟用／paint）後才存在，之前對子項啟用不會被停用的 parent 擋下。HUD 不受影響：HUD 沒有任何 widget `set_enabled` 呼叫。**僅 Windows 驗證。**
+- **Status**：**已修復（傳遞、明確停用、重繪）**。`WidgetBase` 新增 `force_disabled`、`set_enabled_helper`；`EmptyWidget`、`input_common.rs` 改為走 `base.set_enabled`。滑鼠輸入已由 `hit_test.rs` 沿路徑 AND enabled 處理。未做（本條當時）：`EnabledChange` 事件種類、焦點清除、QSS `:disabled`、鍵盤事件的 enabled 閘門；後續 RC-34（`:disabled`）、RC-36／37（焦點）、RC-38（`EnabledChange`）、RC-43（移除 `WidgetBase::set_enabled`，唯一入口 `set_widget_enabled`）。parent 連結要到 `adopt_tree`（layout 啟用／paint）後才存在，之前對子項啟用不會被停用的 parent 擋下。HUD 不受影響：HUD 沒有任何 widget `set_enabled` 呼叫。**僅 Windows 驗證。**
 
 #### RC-34 QSS `:disabled` 不比對
 - **Contract gaps**：G8.5.e（`:disabled` 部分）。
@@ -2059,7 +2059,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 #### RC-36 停用焦點 widget 不清除焦點
 - **Contract gaps**：G8.2.a（焦點清除部分）。計數不變（G8.2.a 已於 RC-33 計入）。
 - **Qt behavior** `[QT-SRC qwidget.cpp:3442-3446]`：`setEnabled_helper` 停用的 widget 若是 `window()->focusWidget()`，parent 啟用時 `focusNextChild()`（Tab reason），失敗或 parent 停用則 `clearFocus()`（Other reason）；事件在 `setEnabled` 回傳前同步送出。
-- **qtrs root**：焦點 id 只存在 `EventTreeDispatcher` 私有的 `FocusManager.focused`，`WidgetBase::set_enabled(&self)` 碰不到；呼叫端又持有該 widget 的 `borrow()`，無法同步送它 `FocusOut`（`borrow_mut()` 會 panic）。
+- **qtrs root**（修改前）：焦點 id 只存在 `EventTreeDispatcher` 私有的 `FocusManager.focused`，`WidgetBase::set_enabled(&self)` 碰不到；呼叫端又持有該 widget 的 `borrow()`，無法同步送它 `FocusOut`（`borrow_mut()` 會 panic）。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle：停用焦點 a → `a:Out:Tab`、`b:In:Tab`；b 為 NoFocus → `a:Out:Other`、無焦點；停用 a 的 parent → `a:Out:Other`、無焦點；停用非焦點 b → 無事件。新測試 `test_focus_disable.rs` 4 項：修改前 3 項失敗（停用後 `has_focus()` 仍為 true），非焦點那項本來就通過；修改後 4 項通過。
 - **Status**：**部分修復：焦點旗標與 `FocusManager` 狀態同步清除已修復；`FocusOut`／`FocusIn` 時序仍與 Qt 不同（residual，由 RC-37 處理）**。`FocusManager` 的焦點 id 改存於共享的 `FocusState`（`Rc`），`give_focus` 時把 `Weak` 交給 widget（`WidgetBase.focus_state`）；`set_enabled_helper` 停用時若自己是焦點 widget，立即清 `has_focus`、清視窗焦點 id（`:focus` 與 `focused_widget_id()` 同步失效），並記下 pending；`FocusManager::process_pending` 於 `dispatch_event`／`dispatch_mouse_move` 前後與 `set_focus` 開頭送 `FocusOut`，再做 `focusNextChild`（Tab 鏈前序、循環）或 `clearFocus`。**Residual（可觀察的語意差異，oracle 已證）**：Qt 在 `setEnabled(false)` 回傳前送完 `FocusOut`、移交焦點、送 `FocusIn`；qtrs 把這三步延到 dispatcher 的下一個事件，期間視窗沒有焦點 widget。剩下的架構問題：呼叫堆疊仍持有該 widget 的 borrow，`set_enabled` 內無法安全觸發焦點移交。未用 `WidgetCommandQueue`，因為它的 `flush` 拿不到 `FocusManager`。`Application::FOCUS_WIDGET` 仍未與 `FocusManager` 接線（既有狀況，未動）。HUD 不受影響：HUD 不使用 widget focus。**僅 Windows 驗證。**
 
@@ -2067,7 +2067,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 - **Gap**：G8.2.a residual（RC-36 只同步清旗標）。
 - **Qt behavior** `[QT-SRC qwidget.cpp:3442-3446]`：`setEnabled_helper` 在 `setEnabled` 回傳前送 `FocusOut`、`focusNextChild()`／`clearFocus()`、送 `FocusIn`。
-- **qtrs root**：`Widget::set_enabled(&self)` 在呼叫端的 borrow 中執行，無法送事件給自己；焦點移交需要視窗 root，`FocusState` 原本不知道 root。
+- **qtrs root**（修改前）：`Widget::set_enabled(&self)` 在呼叫端的 borrow 中執行，無法送事件給自己；焦點移交需要視窗 root，`FocusState` 原本不知道 root。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`setEnabled` 一回傳就讀）同 RC-36。`test_focus_disable.rs` 改為 6 項：先加上只做 `borrow().set_enabled()` 的 `set_widget_enabled`，3 項時序測試失敗（`left: []`，事件尚未送出）；修改後 6 項通過，含祖先被 `borrow_mut()` 時不 panic、延到下一個事件的 guard，與 `Widget::set_enabled` 入口仍延後的測試。
 - **Status**：**已修復（一般路徑同步；borrow 衝突路徑延後）**。`FocusState` 記住 `FocusManager` 的視窗 root（`process_pending`／`set_focus` 時寫入）；新增 `set_widget_enabled(&WidgetRef, bool)`：放掉 borrow 後從該 widget 子樹找出待移交的 `FocusState`，若整棵視窗樹都能 `try_borrow_mut` 就立即送 `FocusOut`、移交、送 `FocusIn`，否則留給 `FocusManager::process_pending`。
 - **Residual**：borrow 衝突（例如在祖先的事件處理中停用子 widget）或經由 `Widget::set_enabled` 呼叫（RC-43 已移除此入口）時，事件仍延到 dispatcher 的下一個事件；repo 內沒有非測試的 widget `set_enabled` 呼叫端，故未做機械式替換。
@@ -2076,7 +2076,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 - **Gap**：G8.2.a（`EnabledChange` 部分）、G3.1.c（缺少的事件型別）。
 - **Qt behavior** `[QT-SRC qwidget.cpp:3429-3476, qcoreevent.h:139]`：`setEnabled_helper` 狀態未變直接返回；改變時先處理焦點（`focusNextChild`／`clearFocus`），再遞迴子 widget，最後 `sendEvent(q, EnabledChange)`（type 98），故子項先於 parent，handler 內 `isEnabled()` 已是新值。
-- **qtrs root**：`EventKind`／`EventType` 無 `EnabledChange`；`set_enabled_helper` 在呼叫端 borrow 中執行，無法對自己或子項呼叫 `&mut self` 的 `event()`。
+- **qtrs root**（修改前）：`EventKind`／`EventType` 無 `EnabledChange`；`set_enabled_helper` 在呼叫端 borrow 中執行，無法對自己或子項呼叫 `&mut self` 的 `event()`。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle（`root`{`c`{`x`,`a`},`b`}，`setEnabled` 一回傳就讀）：停用 b → `b:EC:off`、再停用 → 無、啟用 → `b:EC:on`；x 焦點、停用 c → `x:Out`、`x:EC:off`、`a:EC:off`、`c:EC:off`，啟用 c → `x/a/c:EC:on`；x 先明確停用 → 只有 a、c；a 焦點、停用 c → `x:EC:off`、`a:Out`、`a:EC:off`、`c:EC:off`；a 焦點、停用 a → `a:Out`、`b:In`、`a:EC:off`。新測試 `test_enabled_change.rs` 5 項：修改前（保留新事件型別、還原 widget.rs／focus.rs）5 項全失敗（無 `EnabledChange`）；修改後 5 項通過，`test_focus_disable.rs` 6 項、`test_widget_enabled.rs` 3 項仍通過。
 - **Status**：**已修復（`set_widget_enabled` 入口）**。新增 `EventKind::EnabledChange`／`EventType::EnabledChange = 98`；`set_enabled_helper` 回傳是否改變，並在給定時依 Qt 順序記錄 `EnabledNotice`（`FocusLost(Rc<FocusState>)`、`Changed(WidgetRef)`，後者在子項遞迴後由 parent 記錄、頂層由 `set_widget_enabled` 記錄）；`set_widget_enabled` 放掉 borrow 後依序重播：焦點移交（RC-37 的 `move_lost_focus_now`，取代原本的子樹搜尋）與 `event(EnabledChange)`（非 spontaneous）。`set_widget_enabled` 直接呼叫 `WidgetBase`（Qt 的 `setEnabled` 非 virtual），不經 `Widget::set_enabled` 覆寫。
 - **Residual**：`Widget::set_enabled`（borrow 中）路徑不送 `EnabledChange`（**已修復：RC-43**，該入口已移除）；呼叫端仍 borrow 的 widget 跳過；有祖先被 borrow 時焦點移交延後但 `EnabledChange` 仍立即送出，此時順序與 Qt 不同。**未驗證 residual（不在 RC-38 完成範圍、不宣稱與 Qt 等價）**：焦點移交在重播時才計算下一個 widget（Qt 在遞迴子項前計算）。**已以 oracle 確認與 Qt 不同（`RAN`，Windows）；已修復：RC-42** `[QT-SRC qwidget.cpp:3439-3445]`：Qt 先設自己的 `WA_Disabled`，父項仍啟用時 `focusNextChild()`，此時子項尚未遞迴停用，可取得焦點；接著遞迴到子項，子項發現父項已停用而 `clearFocus()`。PySide6 6.11.2（`rc38f_oracle.py`；win{container(StrongFocus){child(StrongFocus)}, sibling(StrongFocus)}，Tab 順序 container→child→sibling，焦點在 container，`container.setEnabled(False)`）：Qt 序列 `container:Out`、`child:In`、`child:Out`、`child:EC:off`、`container:EC:off`，返回後 `focusWidget()` = **None**（processEvents 後仍 None）；qtrs（拋棄式測試，`set_widget_enabled`）序列 `container:Out`、`sibling:In`、`child:EC:off`、`container:EC:off`，焦點落在 **sibling**。對照組（container 無子項）：Qt `container:Out`、`sibling:In`、`container:EC:off`，焦點 sibling；qtrs 相同。差異僅在「被停用的焦點容器有可聚焦子項」時出現。`EnabledChange` 沒有接到 `changeEvent` 類 hook，widget 只能在 `event()` 看到；重繪仍由 helper 的 `update()` 負責。
@@ -2649,7 +2649,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | RC-15 Badge `max-height: 15px` | G12.3.b、G12.5.a、G12.8.e | `styles.rs:192,291` | 閘門已完成：**案例 A（多餘屬性）**。**已完成（RC-15）**：移除 `styles.rs` 兩處 `max-height: 15px`。DPR 1.0 的 PySide6 oracle 已量（`py_horizontal_dpr1.json`／`py_vertical_dpr1.json`，`QT_ENABLE_HIGHDPI_SCALING=0`、停用 fetch）：badge `sizeHint` = 25×**14**（DPR 1.25 為 25×15），所以 `max-height: 15px` 在 100 % 縮放下是**錯的**而非多餘（Rust 恆為 15）。測試：`test_badge_size_hint_matches_pyside6_at_both_ratios`（DPR 1.0→14、1.25→15）；修改前 FAIL（DPR 1.0：15 vs 14），修改後 PASS。**只涵蓋預設佔位文字 `--`、Windows 字型**；badge 寬度未納入斷言；字重（G12.8.e）另計、未修 |
 | RC-16 header 多餘的 `Expanding/Fixed` | G9.3.c、G12.8.c | `hud_window.rs:272-275` | 閘門已完成：**案例 A，範圍比原描述大**：直向還需改 `stack`／`cards_container` policy、根 stretch、直向卡片 stretch（G12.8.c）。**已完成（RC-16，含 G12.8.c／d；使用者已核准照搬 Python 的直向行為）**：header_widget 不再設 policy；`cards_container` 不設 policy；根 layout 不對 stack 設 stretch；直向卡片不設 stretch（橫向維持 stretch 1）；卡片 `title` 設 `Minimum/Preferred`；`stack` 的 policy 隨頁面切換（卡片頁 Preferred、表格頁 Expanding，因 PySide6 表格頁實測由表格吃掉全部多餘高度 462／500，單純把 stack 改 Preferred 會讓 header 變 213 高，已由測試抓到）。測試：`test_vertical_extra_height_goes_to_header_like_pyside6`（header／title 86、卡片 109、y 0/122/244；修改前 FAIL：header 18 vs 86）、`test_table_mode_table_takes_extra_height_like_pyside6`、`test_ui_mode_switch_keeps_pyside6_extra_height_owner`（卡片↔表格切換）。既有 `test_hud_layout_proportions` 兩項斷言（stack.y ≤ 35、卡片高 ≥ 120）編碼的是舊行為（與 PySide6 相反），已改為 PySide6 行為。**僅 DPR 1.25、Windows 字型、佔位文字；DPR 1.0 的 vertical oracle 已量（`py_vertical_dpr1.json`）但未對 Rust 逐項比對；`layout_toggle_btn` 的 y 殘差屬 G12.8.g（RC-19），未修**。 |
 | RC-17 幾何持久化 | G12.5.d | `hud_window.rs`（`set_window_event_handler`、`apply_size`、`persist_rect`）、`config.rs`（`ResizeDebouncer`） | 依賴 RC-06。**已完成（RC-17，Win32 真實訊息測試＋真實 `ClaudeHUD.exe` 拖曳 smoke）**：3000 ms geometry poll removed because RC-06 window event lifecycle now supplies Move/Release/Close/Hide hooks；沒有新增 timer，沒有改 qtrs `Timer`；250 ms 是 HUD 的 persistence policy（既有 `ResizeDebouncer`），不是 qtrs 需求。RC-18 未動。**後續 RC-17b（G11.2.i）**：真實拖曳中 release 原本到不了 HUD（原生 move loop 吞掉）；框架層補上 `handleExitSizeMove` 按鍵同步後，HUD 既有的 `MouseButtonRelease` → `persist_rect` 路徑不改即生效；`ClaudeHUD.exe` 真實拖曳放開後 11 ms 存檔。RC-17 fixed 狀態不變 |
-| RC-18 喚醒偵測 | G12.5.e | `hud_window.rs`（`tick_gap_exceeded`、`on_clock_tick`）、`main.rs` 的 `clock_timer` | **已完成（RC-18）**：Implemented as application-level timestamp-gap detection. Power::Resume is intentionally not part of RC-18（Power::Resume currently has no toolkit consumer；獨立於 RC-18，見 G12.5.x）。audit 結論 C（不等價）。未改 qtrs Timer／Power dispatch／RefreshController。測試：4 項（T1–T6 純函式＋HUD 長間隔恰一次 refresh，TI-01 stub）；before-FAIL unavailable（新函式／app-private path，未建 16 秒 real-time 測試）；真實 suspend/resume 為 MANUAL WINDOWS VERIFICATION REQUIRED。 診斷（僅供驗證，不影響決策）：`HUDWindow::wake_refresh_seq`（長間隔 refresh 序號）；debug build 於長間隔分支 `eprintln!("[rc18] wake refresh #N previous_ms=… now_ms=… gap_ms=…")`；測試 `wake_refresh_sequence_advances_once_per_long_gap_only`（正常 tick 序號不變、17 s 間隔 +1、其後 1 s tick 不變、剛好 15 s 不變、16 s +1；TI-01 stub，無 real-time sleep）。真實 suspend/resume、lock/unlock、debugger pause 仍為 MANUAL WINDOWS VERIFICATION REQUIRED（可用 stderr `[rc18]` 行判讀）。 |
+| RC-18 喚醒偵測 | G12.5.e | `hud_window.rs`（`tick_gap_exceeded`、`on_clock_tick`）、`main.rs` 的 `clock_timer` | **已完成（RC-18）**：以 application 層的時間戳間隔偵測實作。`Power::Resume` 不在本項範圍（目前沒有 toolkit 消費者，見 G12.5.x）。audit 結論 C（不等價）。未改 qtrs Timer／Power dispatch／RefreshController。測試：4 項（T1–T6 純函式＋HUD 長間隔恰一次 refresh，TI-01 stub）；before-FAIL unavailable（新函式／app-private path，未建 16 秒 real-time 測試）；真實 suspend/resume 為 MANUAL WINDOWS VERIFICATION REQUIRED。 診斷（僅供驗證，不影響決策）：`HUDWindow::wake_refresh_seq`（長間隔 refresh 序號）；debug build 於長間隔分支 `eprintln!("[rc18] wake refresh #N previous_ms=… now_ms=… gap_ms=…")`；測試 `wake_refresh_sequence_advances_once_per_long_gap_only`（正常 tick 序號不變、17 s 間隔 +1、其後 1 s tick 不變、剛好 15 s 不變、16 s +1；TI-01 stub，無 real-time sleep）。真實 suspend/resume、lock/unlock、debugger pause 仍為 MANUAL WINDOWS VERIFICATION REQUIRED（可用 stderr `[rc18]` 行判讀）。 |
 | RC-23 視窗大小常數 | G12.8.f | `config.rs`（常數、`sanitize`）、`hud_window.rs`（`reset_geometry`、`apply_ui_mode_internal`） | 閘門已完成（Python `hud_window.py:31-35,325-354` 與 PySide6 實測，見 G12.8.f）。**已完成（RC-23）**：只改 app 常數，未改 qtrs、`ResizeDebouncer`、RC-17 的 move／resize 持久化。測試 3 項（見 G12.8.f），修改前 FAIL、修改後 PASS。新缺口 G12.8.q（啟動時未套用最小尺寸）未修。**僅 Windows、DPR 1.25；未做像素驗證** |
 | RC-29 `UsageDial` 最小尺寸 | G8.3.e、G12.5.q | `usage_table.rs`（`impl Widget for UsageDial::minimum_size`） | 閘門已完成：`[QT-SRC qwidget.cpp:3966-3971, 4005; qlayoutitem.cpp:616-623; qlayoutengine.cpp:309-336, 354-375]`：`setMinimumSize` 存入 `extra->minw/minh`，`QWidgetItem::minimumSize` 經 `qSmartMinSize`，明確最小值覆蓋 policy 推得的值；`qSmartMaxSize` 只在沒有 GrowFlag 時把最大值夾到 hint，所以 Expanding 仍可長大。`QWidget::minimumSize()` 與 item 的 `minimumSize()` 不同（後者含 layout-item margins、隱藏時為 0），dial 無 margins 故相同。PySide6 6.11.2 oracle（Windows）：`minimumSize` 84×84、policy Expanding/Expanding、`sizeHint`／`minimumSizeHint` 為 −1×−1；`QGridLayout::setGeometry` 擠壓時 dial 不小於 84（426×200→高 84、300×312→寬 84、200×150→84×84，grid 溢出）。**已完成（RC-29）**：app 層搬運漏掉 `setMinimumSize`，未改 qtrs。測試：`test_dial_minimum_size_matches_python`、`test_squeezed_table_keeps_the_dial_at_its_minimum`；修改前 FAIL（0×0；426×200 時 dial 高 26），修改後 PASS；`test_grid_matches_qt_geometry`（450×350）不變。未改：`size_hint` 84×84 與 Python 的 −1×−1 不同（未列入本次）；視窗最小尺寸（RC-23／G12.8.q）。**僅 Windows**。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成 |
 
@@ -2704,3 +2704,23 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 狀態點：notify 路徑只排程 trim，狀態點仍由 100 ms 的 poll 路徑更新（最多晚 100 ms）；Python 在 `_complete` 當下就更新。本條不改，未登記為 gap；差異是否肉眼可見未驗證 `[INFERENCE]`。
   - 最小化等由系統發起的隱藏：Qt 會送 spontaneous `QHideEvent`（`qwidget.cpp:9306-9307`），qtrs 是否在此情況送 `Hide` 未驗證。
   - 只用計數替身驗證排程；實際 `EmptyWorkingSet` 對工作集的效果沿用 G12.5.h 稽核 probe 的觀察，未納入永久測試（受 OS 記憶體管理與主機負載影響）。
+
+#### RC-74 表格模式面板依 Acrylic 是否裝上而選色
+
+- **Contract gaps**：G12.5.c、G12.3.c、G11.7.a（同一根因）。
+- **Python 行為**：`_apply_theme`（`hud_window.py:240-252`）在表格模式算 `vibrant = bool(self.isVisible() and vibrancy.apply(...))`：視窗未顯示時不裝 blur，`apply` 失敗也是 false；`get_hud_stylesheet(theme, vibrant)` 依此選 `panel`（半透明）或 `panel_solid`（`styles.py:205`）。卡片模式 `vibrancy.clear`。`showEvent` 以 `QTimer.singleShot(0, self._apply_theme)` 重做（`hud_window.py:613`），所以建構時（未顯示）先是實心，顯示後才換成半透明。本條是應用層，不涉及 Qt 原始碼。
+- **修改前的 Rust**：三處（建構、`apply_ui_mode_internal`、`set_theme`）呼叫 `Window::set_backdrop` 並丟掉回傳值，不看可見性；`panel_look` 在表格模式一律回 `panel_bg_vibrant`（暗 alpha 140、亮 128）。blur 沒裝上時面板仍是半透明，背後沒有模糊。
+- **修正**（`rust/src/ui/hud_window.rs`）：
+  - `install_backdrop(window, set, ui_mode, dark)`：表格模式 `window.is_visible() && set(Acrylic)`，卡片模式 `set(None)` 並回 false；結果存在 `vibrant: Rc<Cell<bool>>`，由面板 painter 讀取。
+  - `panel_look(cards_mode, vibrant, theme)`：表格模式 `vibrant` 時用 `panel_bg_vibrant`，否則 `panel_bg`（= Python `panel_solid`，alpha 240）。
+  - `show()` 在 `window.show()` 之後重做一次（對應 `showEvent`），`vibrant` 改變才重畫；建構、切換模式、換主題走同一個 `refresh_backdrop`。
+  - 測試替身：`set_backdrop: fn(&mut Window, BackdropType, bool) -> bool` 欄位，預設 `Window::set_backdrop`。
+- **Evidence**：`RAN`（本機 Windows）。修改前以「`panel_look` 忽略 `vibrant`」模擬舊行為：
+  - `table_panel_is_solid_when_the_blur_cannot_be_installed`：FAIL，alpha 140（預期 240）。
+  - `theme_change_whose_blur_fails_switches_to_the_solid_panel`：FAIL，alpha 128（亮主題，預期 240）。
+  - `table_panel_is_translucent_over_an_installed_blur`：通過（反向條件）。
+  - 修改後 3 項通過；HUD 全套 117 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過。
+- **Residual**：
+  - Python 在 `showEvent` 後下一輪才換色（`singleShot(0)`），Rust 在 `show()` 內同步重畫，首幀差異未量測 `[INFERENCE]`。
+  - 視窗被外部（非 `HUDWindow::show`）顯示時不會重做；HUD 沒有這種路徑。
+  - C11.7 的 qtrs 層測試需求（`GetWindowCompositionAttribute` 讀回 state 4 與 gradient）仍未做。

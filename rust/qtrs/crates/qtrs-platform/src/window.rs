@@ -2112,7 +2112,7 @@ mod tests {
     use super::*;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowLongPtrW, IsWindow, GWL_EXSTYLE, GWL_STYLE, WS_CAPTION, WS_EX_LAYERED,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
     };
 
     #[test]
@@ -2252,6 +2252,60 @@ mod tests {
 
         win.close();
         assert!(win.hwnd().is_null());
+    }
+
+    /// G11.1.b / C11.1: `set_stays_on_top(false)` must clear `WS_EX_TOPMOST` again, not only set it.
+    #[test]
+    fn test_set_stays_on_top_toggles_topmost_exstyle() {
+        let mut win = NativeWindow::new(
+            "Topmost Toggle",
+            Rect::new(100, 100, 300, 200),
+            WindowFlags::NORMAL,
+        )
+        .expect("failed to create window");
+        let topmost = |w: &NativeWindow| unsafe {
+            GetWindowLongPtrW(w.hwnd(), GWL_EXSTYLE) as u32 & WS_EX_TOPMOST
+        };
+
+        win.set_stays_on_top(true);
+        assert_ne!(
+            topmost(&win),
+            0,
+            "set_stays_on_top(true) must set WS_EX_TOPMOST"
+        );
+        win.set_stays_on_top(false);
+        assert_eq!(
+            topmost(&win),
+            0,
+            "set_stays_on_top(false) must clear WS_EX_TOPMOST"
+        );
+    }
+
+    /// G11.6.b / C11.6: `set_click_through` toggles `WS_EX_TRANSPARENT` in both directions.
+    #[test]
+    fn test_set_click_through_toggles_transparent_exstyle() {
+        let mut win = NativeWindow::new(
+            "Click Through Toggle",
+            Rect::new(100, 100, 300, 200),
+            WindowFlags::NORMAL,
+        )
+        .expect("failed to create window");
+        let transparent = |w: &NativeWindow| unsafe {
+            GetWindowLongPtrW(w.hwnd(), GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT
+        };
+
+        win.set_click_through(true);
+        assert_ne!(
+            transparent(&win),
+            0,
+            "set_click_through(true) must set WS_EX_TRANSPARENT"
+        );
+        win.set_click_through(false);
+        assert_eq!(
+            transparent(&win),
+            0,
+            "set_click_through(false) must clear WS_EX_TRANSPARENT"
+        );
     }
 
     #[test]

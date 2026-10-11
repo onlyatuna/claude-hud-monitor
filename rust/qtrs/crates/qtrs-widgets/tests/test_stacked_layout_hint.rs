@@ -189,3 +189,49 @@ fn removing_a_page_drops_its_contribution() {
     s.remove_widget(0);
     assert_eq!(hm(&s).0, (60, 80));
 }
+
+/// G9.6.a: `QStackedLayout` gives the whole rectangle to the current page and hides every other
+/// page (qstackedlayout.cpp:453); a hidden page is skipped by hit testing (`QWidget::isVisible`
+/// gates the child search). After a page switch the old page must not receive the click.
+#[test]
+fn stacked_hides_non_current_page_and_hit_test_skips_it() {
+    use qtrs_gui::geometry::primitives::Point;
+    use qtrs_widgets::hit_test::hit_test;
+
+    let mut stack = StackedWidget::new();
+    let page0: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
+    let page1: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
+    stack.add_widget(Rc::clone(&page0));
+    stack.add_widget(Rc::clone(&page1));
+    let root: WidgetRef = Rc::new(RefCell::new(Box::new(stack)));
+    root.borrow().set_geometry(Rect::new(0, 0, 200, 100));
+
+    assert!(page0.borrow().is_visible(), "current page must be visible");
+    assert!(
+        !page1.borrow().is_visible(),
+        "non-current page must be hidden"
+    );
+    let (hit, _) = hit_test(&root, Point::new(10, 10)).expect("point inside the stack");
+    assert_eq!(hit.borrow().id(), page0.borrow().id());
+
+    root.borrow_mut()
+        .as_any_mut()
+        .downcast_mut::<StackedWidget>()
+        .unwrap()
+        .set_current_index(1);
+
+    assert!(
+        !page0.borrow().is_visible(),
+        "old page must be hidden after the switch"
+    );
+    assert!(
+        page1.borrow().is_visible(),
+        "new page must be visible after the switch"
+    );
+    let (hit, _) = hit_test(&root, Point::new(10, 10)).expect("point inside the stack");
+    assert_eq!(
+        hit.borrow().id(),
+        page1.borrow().id(),
+        "hit test must skip the hidden page"
+    );
+}

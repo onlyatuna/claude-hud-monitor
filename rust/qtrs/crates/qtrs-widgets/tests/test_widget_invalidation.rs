@@ -93,6 +93,56 @@ fn changing_the_size_policy_requests_a_parent_layout_and_an_unchanged_one_does_n
     WidgetCommandQueue::clear();
 }
 
+/// G9.5.b: `QWidget::updateGeometry` on a font, text or alignment change invalidates the parent
+/// layout (`FontChange` runs `updateGeometry`, qwidget.cpp:9502; `QLabel::setAlignment` and
+/// `QPushButton::setText` both call `updateGeometry`). Each setter must queue a parent layout request.
+#[test]
+fn label_and_button_text_font_and_alignment_setters_request_a_parent_layout() {
+    use qtrs_gui::text::font::Font;
+    use qtrs_widgets::command::WidgetCommandQueue;
+    use qtrs_widgets::label::Alignment;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let parent: qtrs_widgets::WidgetRef = Rc::new(RefCell::new(Box::new(Frame::new())));
+    let mut label = Label::new("child");
+    label.set_parent_widget(Some(Rc::downgrade(&parent)));
+    let mut button = Button::new("go");
+    button.set_parent_widget(Some(Rc::downgrade(&parent)));
+
+    WidgetCommandQueue::clear();
+    label.set_font(Font::new("Segoe UI", 30.0));
+    assert!(
+        WidgetCommandQueue::pending_count() > 0,
+        "Label::set_font did not request a layout"
+    );
+    WidgetCommandQueue::clear();
+    label.set_text("a longer caption");
+    assert!(
+        WidgetCommandQueue::pending_count() > 0,
+        "Label::set_text did not request a layout"
+    );
+    WidgetCommandQueue::clear();
+    label.set_alignment(Alignment::Center);
+    assert!(
+        WidgetCommandQueue::pending_count() > 0,
+        "Label::set_alignment did not request a layout"
+    );
+    WidgetCommandQueue::clear();
+    button.set_font(Font::new("Segoe UI", 30.0));
+    assert!(
+        WidgetCommandQueue::pending_count() > 0,
+        "Button::set_font did not request a layout"
+    );
+    WidgetCommandQueue::clear();
+    button.set_text("a considerably longer button caption");
+    assert!(
+        WidgetCommandQueue::pending_count() > 0,
+        "Button::set_text did not request a layout"
+    );
+    WidgetCommandQueue::clear();
+}
+
 #[test]
 fn set_visible_on_every_widget_type_requests_a_parent_layout_only_when_it_changes() {
     use qtrs_widgets::command::WidgetCommandQueue;
