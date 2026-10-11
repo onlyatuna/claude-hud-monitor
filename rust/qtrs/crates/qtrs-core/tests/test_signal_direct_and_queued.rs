@@ -1,5 +1,7 @@
 use qtrs_core::event_loop::EventLoop;
-use qtrs_core::object::{ObjectData, ObjectId, QObject, ThreadId};
+use qtrs_core::object::{
+    register_qobject, unregister_qobject, ObjectData, ObjectId, QObject, ThreadId,
+};
 use qtrs_core::signal::{ConnectionType, QueuedSignal, Signal};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -166,7 +168,11 @@ fn test_queued_signal_cross_thread_dispatch() {
 fn test_blocking_queued_signal_cross_thread_synchronization() {
     let signal: Signal<i32> = Signal::new();
     let main_thread = ThreadId::current();
-    let receiver_id = ObjectId::next();
+    let mut receiver = Probe {
+        data: ObjectData::new(ObjectId::next()),
+    };
+    let receiver_id = receiver.data.id;
+    unsafe { register_qobject(&mut receiver) };
 
     let processed = Arc::new(AtomicBool::new(false));
     let proc_clone = Arc::clone(&processed);
@@ -200,6 +206,57 @@ fn test_blocking_queued_signal_cross_thread_synchronization() {
     // Worker can now unblock and terminate
     worker.join().unwrap();
     assert!(worker_finished.load(Ordering::SeqCst));
+    unsafe { unregister_qobject(receiver_id) };
+}
+
+struct Probe {
+    data: ObjectData,
+}
+
+impl QObject for Probe {
+    fn object_data(&self) -> &ObjectData {
+        &self.data
+    }
+
+    fn object_data_mut(&mut self) -> &mut ObjectData {
+        &mut self.data
+    }
+}
+
+#[test]
+fn test_queued_signal_to_unregistered_receiver_never_runs() {
+    let signal: Signal<i32> = Signal::new();
+    let main_thread = ThreadId::current();
+    let mut receiver = Probe {
+        data: ObjectData::new(ObjectId::next()),
+    };
+    let receiver_id = receiver.data.id;
+    unsafe { register_qobject(&mut receiver) };
+
+    let ran = Arc::new(AtomicBool::new(false));
+    let ran_clone = Arc::clone(&ran);
+    signal.connect_object(
+        receiver_id,
+        main_thread,
+        ConnectionType::Queued,
+        move |_| {
+            ran_clone.store(true, Ordering::SeqCst);
+        },
+    );
+
+    // Posted to the main thread before its loop exists, so the call waits in the pending queue.
+    let sig_clone = signal.clone();
+    std::thread::spawn(move || sig_clone.emit(&1))
+        .join()
+        .unwrap();
+    unsafe { unregister_qobject(receiver_id) };
+
+    let mut event_loop = EventLoop::new();
+    event_loop.send_posted_events();
+    assert!(
+        !ran.load(Ordering::SeqCst),
+        "queued slot must not run after its receiver is destroyed"
+    );
 }
 
 // G6.1.f: `connect_with_type` stores no receiver thread, so a Queued or BlockingQueued

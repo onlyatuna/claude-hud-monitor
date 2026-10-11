@@ -711,8 +711,8 @@ mod tests {
         let hwnd = el.dispatcher.internal_hwnd;
         let delivered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-        el.post_event(ObjectId(900_002), counting_metacall(&delivered));
-        el.post_event(ObjectId(900_002), counting_metacall(&delivered));
+        el.post_event(ObjectId(0), counting_metacall(&delivered));
+        el.post_event(ObjectId(0), counting_metacall(&delivered));
 
         let (count, msg) = take_wakeup_messages(hwnd);
         assert_eq!(count, 1, "two posts share one wake-up message");
@@ -729,7 +729,7 @@ mod tests {
         );
 
         // A later post wakes again (pending was reset).
-        el.post_event(ObjectId(900_002), counting_metacall(&delivered));
+        el.post_event(ObjectId(0), counting_metacall(&delivered));
         let (count, msg) = take_wakeup_messages(hwnd);
         assert_eq!(count, 1);
         unsafe {
@@ -746,12 +746,12 @@ mod tests {
 
         let inner = Arc::clone(&delivered);
         el.post_event(
-            ObjectId(900_003),
+            ObjectId(0),
             crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(move |_| {
                 // Posts during dispatch: lands in the next turn and triggers a new wake-up.
                 crate::event_loop::post_event_to_thread(
                     crate::object::ThreadId::current(),
-                    ObjectId(900_003),
+                    ObjectId(0),
                     counting_metacall(&inner),
                 );
             }))),
@@ -782,7 +782,7 @@ mod tests {
 
         // A callback of the normal pump opens a native modal loop, as a menu popup does.
         el.post_event(
-            ObjectId(900_004),
+            ObjectId(0),
             crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(|_| {
                 let _ = crate::event_loop::pump_posted_events_modal();
             }))),
@@ -811,7 +811,7 @@ mod tests {
         el.set_loop_level(2);
 
         el.post_event(
-            ObjectId(900_004),
+            ObjectId(0),
             crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(|_| {
                 let _ = crate::event_loop::pump_posted_events_modal();
             }))),

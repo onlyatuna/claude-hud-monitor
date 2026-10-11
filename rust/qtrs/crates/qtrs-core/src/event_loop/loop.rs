@@ -137,10 +137,17 @@ pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
             if handled.is_some() {
                 return true;
             }
-            // Receiver not registered (ObjectId(0) sentinel, queued slot with unregistered
-            // receiver, or receiver already dropped). Qt discards the event when the receiver
-            // object is gone; here we invoke the closure via a stub so fire-and-forget
-            // MetaCalls (single_shot, queued signals) still execute.
+            // Only the ObjectId(0) sentinel (fire-and-forget calls) may run without a registered
+            // receiver. A non-zero receiver that is not registered on this thread was destroyed or
+            // moved away; Qt never delivers posted events to a destroyed object (qobject.cpp:206-207).
+            if receiver != ObjectId(0)
+                && !crate::object::qobject::registered_on_current_thread(receiver)
+            {
+                eprintln!("qtrs: dropped posted call to unregistered object {receiver:?}");
+                return false;
+            }
+            // Sentinel, or a registered receiver whose borrow is held by a running callback: the
+            // closure runs on a stub (pre-existing fallback, see residuals).
             struct NullObj(ObjectData);
             impl QObject for NullObj {
                 fn object_data(&self) -> &ObjectData {
@@ -251,6 +258,34 @@ impl EventQueue {
             self.insertion_offset -= 1;
         }
         self.events.remove(index)
+    }
+
+    /// Removes every posted event addressed to `receiver` (Qt
+    /// `QCoreApplication::removePostedEvents`, qcoreapplication.cpp:1955-2001). The removed events
+    /// are returned, not dropped here: a payload's `Drop` may unregister objects and re-enter this
+    /// queue, so the caller drops them after releasing the lock (qcoreapplication.cpp:2000-2001).
+    /// `insertion_offset` shrinks by the removed entries inside the current turn, as in `remove_at`.
+    pub(crate) fn remove_posted_events(&mut self, receiver: ObjectId) -> Vec<PostedEvent> {
+        if !self.events.iter().any(|posted| posted.receiver == receiver) {
+            return Vec::new();
+        }
+        let turn_end = self.insertion_offset;
+        let mut removed = Vec::new();
+        let mut removed_in_turn = 0;
+        let mut kept = Vec::with_capacity(self.events.len());
+        for (index, posted) in std::mem::take(&mut self.events).into_iter().enumerate() {
+            if posted.receiver == receiver {
+                if index < turn_end {
+                    removed_in_turn += 1;
+                }
+                removed.push(posted);
+            } else {
+                kept.push(posted);
+            }
+        }
+        self.events = kept;
+        self.insertion_offset -= removed_in_turn;
+        removed
     }
 
     /// Removes posted `Quit` events addressed to `receiver` (qeventloop.cpp:192-195).
@@ -772,6 +807,35 @@ pub fn post_event_to_thread_with_priority(
 pub fn get_thread_event_sender(thread_id: ThreadId) -> Option<EventLoopHandle> {
     let reg = THREAD_EVENT_HANDLES.lock().unwrap();
     reg.as_ref().and_then(|r| r.handles.get(&thread_id).cloned())
+}
+
+/// Removes every posted event addressed to `receiver` from all threads: live loops and the pending
+/// queues of threads without a loop yet (Qt `~QObject` → `removePostedEvents`, qobject.cpp:206-207).
+/// `ObjectId(0)` is the fire-and-forget sentinel, not an object, so it is never purged. Lock order is
+/// the registry, then each queue. Removed events are dropped only after every lock is released,
+/// because a payload's `Drop` may unregister objects and purge again.
+pub(crate) fn purge_posted_events_for_receiver(receiver: ObjectId) {
+    if receiver == ObjectId(0) {
+        return;
+    }
+    let mut removed = Vec::new();
+    {
+        let mut guard = THREAD_EVENT_HANDLES.lock().unwrap();
+        if let Some(reg) = guard.as_mut() {
+            let mut seen: Vec<&Arc<Mutex<EventQueue>>> = Vec::new();
+            for handle in reg.handles.values() {
+                if seen.iter().any(|queue| Arc::ptr_eq(queue, &handle.queue)) {
+                    continue;
+                }
+                seen.push(&handle.queue);
+                removed.extend(handle.queue.lock().unwrap().remove_posted_events(receiver));
+            }
+            for queue in reg.pending.values_mut() {
+                removed.extend(queue.remove_posted_events(receiver));
+            }
+        }
+    }
+    drop(removed);
 }
 
 impl Drop for EventLoop {
@@ -1883,7 +1947,7 @@ mod tests {
     }
 
     fn post_current(event: Event) {
-        post_event_to_thread(ThreadId::current(), ObjectId(900_001), event);
+        post_event_to_thread(ThreadId::current(), ObjectId(0), event);
     }
 
     #[test]
@@ -2080,7 +2144,7 @@ mod tests {
     }
 
     #[test]
-    fn test_modal_pump_runs_metacall_for_unregistered_receiver() {
+    fn test_modal_pump_runs_sentinel_metacall() {
         let _el = EventLoop::new();
         let ran = Arc::new(AtomicBool::new(false));
         let ran_clone = Arc::clone(&ran);
@@ -2106,7 +2170,7 @@ mod tests {
                 let log_p = Arc::clone(&log_x);
                 post_event_to_thread_with_priority(
                     ThreadId::current(),
-                    ObjectId(900_001),
+                    ObjectId(0),
                     meta_call(move || log_p.lock().unwrap().push(name)),
                     priority,
                 );
@@ -2138,7 +2202,7 @@ mod tests {
             let log_x = Arc::clone(&log_outer);
             post_event_to_thread_with_priority(
                 ThreadId::current(),
-                ObjectId(900_001),
+                ObjectId(0),
                 meta_call(move || log_x.lock().unwrap().push("x")),
                 0,
             );
@@ -2148,11 +2212,104 @@ mod tests {
         let log_y = Arc::clone(&log);
         post_event_to_thread_with_priority(
             ThreadId::current(),
-            ObjectId(900_001),
+            ObjectId(0),
             meta_call(move || log_y.lock().unwrap().push("y")),
             5,
         );
         assert_eq!(el.send_posted_events(), 2);
         assert_eq!(*log.lock().unwrap(), vec!["y", "x"]);
+    }
+
+    struct UnregisteredProbe {
+        data: ObjectData,
+    }
+
+    impl QObject for UnregisteredProbe {
+        fn object_data(&self) -> &ObjectData {
+            &self.data
+        }
+
+        fn object_data_mut(&mut self) -> &mut ObjectData {
+            &mut self.data
+        }
+    }
+
+    fn queued_for_current_thread() -> usize {
+        get_thread_event_sender(ThreadId::current())
+            .map(|handle| handle.queue.lock().unwrap().events.len())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn test_purge_keeps_the_current_turn_boundary() {
+        let el = EventLoop::new();
+        let a = ObjectId::next();
+        let b = ObjectId::next();
+        for receiver in [a, b, a, b] {
+            post_event_to_thread(ThreadId::current(), receiver, meta_call(|| {}));
+        }
+        {
+            let mut q = el.queue().lock().unwrap();
+            q.insertion_offset = q.events.len();
+        }
+        // SAFETY: `a` was never registered; the call only purges its posted events.
+        unsafe { unregister_qobject(a) };
+        let q = el.queue().lock().unwrap();
+        assert_eq!(q.events.len(), 2);
+        assert_eq!(
+            q.insertion_offset, 2,
+            "offset must count only surviving current-turn events"
+        );
+    }
+
+    #[test]
+    fn test_metacall_to_receiver_unregistered_before_delivery_is_dropped() {
+        let mut el = EventLoop::new();
+        let mut probe = UnregisteredProbe {
+            data: ObjectData::new(ObjectId::next()),
+        };
+        let id = probe.data.id;
+        unsafe { register_qobject(&mut probe) };
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = Arc::clone(&ran);
+        post_event_to_thread(
+            ThreadId::current(),
+            id,
+            meta_call(move || ran_clone.store(true, Ordering::SeqCst)),
+        );
+        unsafe { unregister_qobject(id) };
+        assert_eq!(el.send_posted_events(), 0);
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "call to a destroyed receiver must not run"
+        );
+    }
+
+    #[test]
+    fn test_event_posted_to_unregistered_receiver_is_removed_from_queue() {
+        let _el = EventLoop::new();
+        let mut probe = UnregisteredProbe {
+            data: ObjectData::new(ObjectId::next()),
+        };
+        let id = probe.data.id;
+        unsafe { register_qobject(&mut probe) };
+        post_event_to_thread(ThreadId::current(), id, meta_call(|| {}));
+        assert_eq!(queued_for_current_thread(), 1);
+        unsafe { unregister_qobject(id) };
+        assert_eq!(queued_for_current_thread(), 0);
+    }
+
+    #[test]
+    fn test_object_id_zero_metacall_still_runs() {
+        let mut el = EventLoop::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let ran_clone = Arc::clone(&ran);
+        post_event_to_thread(
+            ThreadId::current(),
+            ObjectId(0),
+            meta_call(move || ran_clone.store(true, Ordering::SeqCst)),
+        );
+        assert_eq!(el.send_posted_events(), 1);
+        assert!(ran.load(Ordering::SeqCst));
     }
 }

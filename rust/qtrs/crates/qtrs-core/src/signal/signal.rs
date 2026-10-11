@@ -871,7 +871,23 @@ mod tests {
         use crate::event_loop::EventLoop;
 
         let signal: Signal<String> = Signal::new();
-        let receiver_id = ObjectId::next();
+        struct Receiver {
+            data: crate::object::ObjectData,
+        }
+        impl crate::object::QObject for Receiver {
+            fn object_data(&self) -> &crate::object::ObjectData {
+                &self.data
+            }
+            fn object_data_mut(&mut self) -> &mut crate::object::ObjectData {
+                &mut self.data
+            }
+        }
+        let mut receiver = Receiver {
+            data: crate::object::ObjectData::new(ObjectId::next()),
+        };
+        let receiver_id = receiver.data.id;
+        // SAFETY: registered for the test; unregistered before it returns.
+        unsafe { crate::object::register_qobject(&mut receiver) };
         let target_thread = ThreadId::current();
 
         let received_msg = Arc::new(Mutex::new(String::new()));
@@ -896,6 +912,8 @@ mod tests {
         assert!(processed);
 
         assert_eq!(*received_msg.lock().unwrap(), "hello queued");
+        // SAFETY: `receiver` was registered above and is still alive.
+        unsafe { crate::object::unregister_qobject(receiver_id) };
     }
 
     #[test]

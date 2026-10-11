@@ -71,6 +71,11 @@ fn registered_ptr(id: ObjectId) -> Option<(Arc<ObjectRecord>, *mut dyn QObject)>
     Some((entry, ptr))
 }
 
+/// Whether `id` is registered and alive on the calling thread.
+pub(crate) fn registered_on_current_thread(id: ObjectId) -> bool {
+    registered_ptr(id).is_some()
+}
+
 fn borrow_registered(id: ObjectId) -> Option<ObjectBorrowGuard> {
     let (entry, ptr) = registered_ptr(id)?;
     entry
@@ -257,6 +262,9 @@ pub unsafe fn unregister_qobject(id: ObjectId) {
         }
     }
     unregister_object_thread(id);
+    // Posted events addressed to a destroyed object are removed, never delivered (Qt
+    // `~QObjectPrivate`, qobject.cpp:206-207).
+    crate::event_loop::purge_posted_events_for_receiver(id);
     crate::signal::disconnect_all_for_object(id);
     crate::timer::stop_timers_for_object(id);
 }
