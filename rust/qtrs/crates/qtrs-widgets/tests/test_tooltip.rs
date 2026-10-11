@@ -573,6 +573,7 @@ fn an_empty_text_hides_the_tip_after_the_hide_delay() {
 mod real_windows {
     use super::*;
     use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ScreenToClient;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         keybd_event, TrackMouseEvent, KEYEVENTF_KEYUP, TME_LEAVE, TME_QUERY, TRACKMOUSEEVENT,
         VK_MENU,
@@ -693,6 +694,16 @@ mod real_windows {
         unsafe { SendMessageW(f.hwnd as _, WM_MOUSEMOVE, wparam, lparam) };
     }
 
+    /// The real cursor position in `f`'s client coordinates (physical pixels).
+    fn cursor_in_client(f: &Fixture) -> (i32, i32) {
+        let mut pt = POINT { x: 0, y: 0 };
+        unsafe {
+            GetCursorPos(&mut pt);
+            ScreenToClient(f.hwnd as _, &mut pt);
+        }
+        (pt.x, pt.y)
+    }
+
     const SKIP: &str = "SKIPPED: the desktop session refused to give this process the foreground";
 
     #[test]
@@ -706,10 +717,16 @@ mod real_windows {
         let _cursor = CursorOver::new(f.hwnd);
         settle(&mut el, &f);
 
-        mouse_move(&f, 50, 50, MK_LBUTTON);
+        // The messages carry the real cursor position. Windows also sends buttonless
+        // `WM_MOUSEMOVE`s of its own at the real cursor position (e.g. after a capture is released);
+        // the platform layer drops those as Qt does when they repeat the last position
+        // (qwindowspointerhandler.cpp:800-809). A test move elsewhere would make such a move look
+        // like real motion that starts the wake-up timer.
+        let (x, y) = cursor_in_client(&f);
+        mouse_move(&f, x, y, MK_LBUTTON);
         assert!(!pump_until(&mut el, Duration::from_millis(1200), visible), "MK_LBUTTON move started a tip");
 
-        mouse_move(&f, 52, 50, 0);
+        mouse_move(&f, x + 2, y, 0);
         assert!(pump_until(&mut el, Duration::from_millis(3000), visible), "a plain native move never showed the tip");
         assert_eq!(ToolTip::text(), "tip");
     }
