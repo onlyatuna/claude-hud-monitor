@@ -218,6 +218,8 @@ jobs:
             release-dist/ClaudeHUD-Python-Windows-x64.exe
             release-dist/ClaudeHUD-Python-macOS-arm64.zip
             release-dist/SHA256SUMS.txt
+          body: |
+            **Rust 版平台支援**：正式支援 Windows x64（`ClaudeHUD-Rust-Windows-x64.exe`）。`ClaudeHUD-Rust-macOS-Universal.zip` 與 `ClaudeHUD-Rust-Linux-x64` 為實驗性產物：只保證能編譯，HUD 未在 macOS／Linux 實機驗證，macOS 上的滑鼠與鍵盤輸入尚未接到視窗。
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

@@ -17,7 +17,7 @@
 | **HTTP 客戶端** | ureq 2.12 (TLS) | urllib.request (標準函式庫) |
 | **行程與記憶體機制** | 原生編譯二進制，無額外 Runtime 依賴 | 內建 gc.collect() 與 Win32 EmptyWorkingSet 工作集釋放機制 |
 | **打包方式** | `cargo build --release` (opt-level="z"、strip、panic="abort"；lto=false、codegen-units=16；渲染相關 crate 以 opt-level=3 覆寫) | PyInstaller 6.x (自訂 spec 排除未使用的 Qt 模組與語系) |
-| **支援平台與架構** | Windows (x86_64)、macOS (Universal：arm64 與 x86_64 各自編譯後以 lipo 合併)、Linux (x86_64, ubuntu-22.04)；macOS／Linux：可編譯，HUD 未實機驗證 | Windows (x86_64), macOS (arm64) |
+| **支援平台與架構** | **正式支援：Windows (x86_64)**。實驗性（只保證能編譯，HUD 未實機驗證；macOS 上滑鼠與鍵盤輸入尚未接到視窗，見 Contract G11.13.r）：macOS (Universal：arm64 與 x86_64 以 lipo 合併)、Linux (x86_64, ubuntu-22.04) | Windows (x86_64), macOS (arm64) |
 
 ---
 
