@@ -106,6 +106,18 @@ pub fn deliver_timer_event(receiver: ObjectId, timer_id: u64) -> TimerDelivery {
 pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
     // QScopedScopeLevelCounter in QCoreApplication::notify (qcoreapplication.cpp:1118).
     let _scope = ScopeLevelGuard::enter();
+    // Qt checks the receiver's thread in `sendEvent` (qcoreapplication.cpp:539-548, the check itself
+    // debug-only at qcoreapplication.cpp:1223-1225). A foreign thread never runs the owner's
+    // callback here: the call is rejected in every build.
+    if let Some(owner) = crate::object::qobject::registration_thread_of(receiver) {
+        let current = ThreadId::current();
+        if owner != current {
+            eprintln!(
+                "qtrs: cannot send events to objects owned by a different thread. Current thread {current:?}. Receiver '{receiver:?}' was created in thread {owner:?}"
+            );
+            return false;
+        }
+    }
     if app_filters_consumed(receiver, event) {
         return false;
     }
@@ -268,7 +280,16 @@ impl EventQueue {
     /// queue, so the caller drops them after releasing the lock (qcoreapplication.cpp:2000-2001).
     /// `insertion_offset` shrinks by the removed entries inside the current turn, as in `remove_at`.
     pub(crate) fn remove_posted_events(&mut self, receiver: ObjectId) -> Vec<PostedEvent> {
-        if !self.events.iter().any(|posted| posted.receiver == receiver) {
+        self.remove_posted_events_matching(|id| id == receiver)
+    }
+
+    /// Removes every posted event whose receiver satisfies `affected`. The removed events are
+    /// returned for the same reason as `remove_posted_events`.
+    pub(crate) fn remove_posted_events_matching(
+        &mut self,
+        affected: impl Fn(ObjectId) -> bool,
+    ) -> Vec<PostedEvent> {
+        if !self.events.iter().any(|posted| affected(posted.receiver)) {
             return Vec::new();
         }
         let turn_end = self.insertion_offset;
@@ -276,7 +297,7 @@ impl EventQueue {
         let mut removed_in_turn = 0;
         let mut kept = Vec::with_capacity(self.events.len());
         for (index, posted) in std::mem::take(&mut self.events).into_iter().enumerate() {
-            if posted.receiver == receiver {
+            if affected(posted.receiver) {
                 if index < turn_end {
                     removed_in_turn += 1;
                 }
@@ -526,7 +547,7 @@ impl EventLoop {
         }
         let mut delivered = 0;
         loop {
-            let (receiver, mut event) = {
+            let posted = {
                 let mut q = self.state.queue.lock().unwrap();
                 let end = q.insertion_offset;
                 let levels = current_levels();
@@ -538,15 +559,20 @@ impl EventLoop {
                     _ => false,
                 });
                 match found {
-                    Some(index) => {
-                        let posted = q.remove_at(index);
-                        (posted.receiver, posted.event)
-                    }
+                    Some(index) => q.remove_at(index),
                     None => {
                         q.insertion_offset = 0;
                         break;
                     }
                 }
+            };
+            let Some(PostedEvent {
+                receiver,
+                mut event,
+                ..
+            }) = forward_to_owner(posted)
+            else {
+                continue;
             };
             send_event(receiver, &mut event);
             finish_deferred_delete(receiver);
@@ -757,6 +783,28 @@ fn finish_deferred_delete(receiver: ObjectId) {
     }
 }
 
+/// Gives a posted event to its receiver's current thread when the receiver moved after the event
+/// was queued here. `move_receivers_to_thread` moves queued events itself, so this only catches
+/// events added through a direct `EventLoopHandle::post_event`. Returns the event when it is
+/// delivered on this thread.
+fn forward_to_owner(posted: PostedEvent) -> Option<PostedEvent> {
+    if posted.receiver == ObjectId(0) {
+        return Some(posted);
+    }
+    match crate::object::qobject::registration_thread_of(posted.receiver) {
+        Some(owner) if owner != ThreadId::current() => {
+            post_event_to_thread_with_priority(
+                owner,
+                posted.receiver,
+                posted.event,
+                posted.priority,
+            );
+            None
+        }
+        _ => Some(posted),
+    }
+}
+
 fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Option<i32>) {
     {
         let mut q = queue.lock().unwrap();
@@ -770,7 +818,7 @@ fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Op
     // shrinks as they leave, so a nested pump that drains them also ends the outer turn (Qt
     // `startOffset`, qcoreapplication.cpp:1815-1858).
     loop {
-        let (receiver, mut event) = {
+        let posted = {
             let mut q = queue.lock().unwrap();
             if q.insertion_offset == 0 {
                 break;
@@ -796,8 +844,15 @@ fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Op
                 }
             }
 
-            let posted = q.remove_at(0);
-            (posted.receiver, posted.event)
+            q.remove_at(0)
+        };
+        let Some(PostedEvent {
+            receiver,
+            mut event,
+            ..
+        }) = forward_to_owner(posted)
+        else {
+            continue;
         };
 
         if let EventKind::Quit { exit_code } = event.kind {
@@ -916,28 +971,93 @@ pub fn post_event_to_thread_with_priority(
     event: Event,
     priority: i32,
 ) {
-    // One lock covers "is there a loop?" and "buffer it", so a loop registering concurrently
-    // cannot slip between the two and strand the event.
-    let handle = {
-        let mut reg = THREAD_EVENT_HANDLES.lock().unwrap();
-        let reg = reg.get_or_insert_with(ThreadEventRegistry::new);
-        match reg.handles.get(&thread_id) {
-            Some(handle) => handle.clone(),
-            None => {
-                reg.pending
-                    .entry(thread_id)
-                    .or_default()
-                    .post_event_with_priority(receiver, event, priority);
-                return;
-            }
-        }
-    };
-    handle.post_event_with_priority(receiver, event, priority);
+    // One lock covers "who owns the receiver now?", "is there a loop?" and "buffer it". A
+    // `move_to_thread` flips registration and moves queued events under the same lock, so a post
+    // cannot land on the old owner's queue after the move. Qt posts to the receiver's thread data
+    // (qcoreapplication.cpp:1694).
+    let mut reg = THREAD_EVENT_HANDLES.lock().unwrap();
+    let reg = reg.get_or_insert_with(ThreadEventRegistry::new);
+    let thread_id = routed_thread(receiver, thread_id);
+    match reg.handles.get(&thread_id) {
+        Some(handle) => handle.post_event_with_priority(receiver, event, priority),
+        None => reg
+            .pending
+            .entry(thread_id)
+            .or_default()
+            .post_event_with_priority(receiver, event, priority),
+    }
+}
+
+/// The thread a post to `receiver` must reach: the receiver's registration owner when it is
+/// registered, else `default`. `ObjectId(0)` is the fire-and-forget sentinel and is never routed.
+fn routed_thread(receiver: ObjectId, default: ThreadId) -> ThreadId {
+    if receiver == ObjectId(0) {
+        return default;
+    }
+    crate::object::qobject::registration_thread_of(receiver).unwrap_or(default)
 }
 
 pub fn get_thread_event_sender(thread_id: ThreadId) -> Option<EventLoopHandle> {
     let reg = THREAD_EVENT_HANDLES.lock().unwrap();
     reg.as_ref().and_then(|r| r.handles.get(&thread_id).cloned())
+}
+
+/// Moves the posted events addressed to `receivers` onto the queue of `to`, and runs `flip` (which
+/// sets their physical registration) in the same critical section. A concurrent
+/// `post_event_to_thread` either queued before this point, so its event moves here, or runs after
+/// and is routed to `to`. The moved events keep their order and priority and are not compressed
+/// (Qt `setThreadData_helper`, qobject.cpp:1805-1815, under the locks of qobject.cpp:1757-1758).
+pub(crate) fn move_receivers_to_thread(receivers: &[ObjectId], to: ThreadId, flip: impl FnOnce()) {
+    let mut woken = None;
+    {
+        let mut guard = THREAD_EVENT_HANDLES.lock().unwrap();
+        let reg = guard.get_or_insert_with(ThreadEventRegistry::new);
+        flip();
+        let mut moved = Vec::new();
+        let mut seen: Vec<&Arc<Mutex<EventQueue>>> = Vec::new();
+        for (thread, handle) in reg.handles.iter() {
+            if *thread == to || seen.iter().any(|queue| Arc::ptr_eq(queue, &handle.queue)) {
+                continue;
+            }
+            seen.push(&handle.queue);
+            moved.extend(
+                handle
+                    .queue
+                    .lock()
+                    .unwrap()
+                    .remove_posted_events_matching(|id| receivers.contains(&id)),
+            );
+        }
+        for (thread, queue) in reg.pending.iter_mut() {
+            if *thread != to {
+                moved.extend(queue.remove_posted_events_matching(|id| receivers.contains(&id)));
+            }
+        }
+        // A queued `ZeroTimer` of a moved receiver is not carried: `timer::adopt_timers` re-arms
+        // the zero timer on the target. The compressor would merge the two anyway; dropping it
+        // keeps the move independent of that merge.
+        moved.retain(|posted| !matches!(posted.event.kind, EventKind::ZeroTimer { .. }));
+        if !moved.is_empty() {
+            match reg.handles.get(&to) {
+                Some(handle) => {
+                    let mut queue = handle.queue.lock().unwrap();
+                    for posted in moved {
+                        queue.insert_posted(posted);
+                    }
+                    woken = Some(handle.clone());
+                }
+                None => {
+                    let queue = reg.pending.entry(to).or_default();
+                    for posted in moved {
+                        queue.insert_posted(posted);
+                    }
+                }
+            }
+        }
+    }
+    if let Some(handle) = woken {
+        handle.wake_up();
+    }
 }
 
 /// Removes every posted event addressed to `receiver` from all threads: live loops and the pending

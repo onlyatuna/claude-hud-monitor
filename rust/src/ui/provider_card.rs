@@ -222,11 +222,7 @@ impl ProviderCardWidget {
         badge2.borrow_mut().set_object_name("Badge");
         badge2.borrow_mut().set_visible(false);
         header_layout.add_widget(badge2.clone());
-        let header_widget = make_widget(EmptyWidget::new());
-        header_widget
-            .borrow_mut()
-            .set_layout(Box::new(header_layout));
-        root_layout.add_widget(header_widget);
+        root_layout.add_layout(Box::new(header_layout), 0);
 
         // 2. Metric 1 (Session 5H)
         let mut m1_layout = BoxLayout::vertical();
@@ -246,9 +242,7 @@ impl ProviderCardWidget {
         set_metric_value_style(&m1_val, None, 14);
         m1_hdr.add_widget(m1_val.clone());
 
-        let m1_hdr_widget = make_widget(EmptyWidget::new());
-        m1_hdr_widget.borrow_mut().set_layout(Box::new(m1_hdr));
-        m1_layout.add_widget(m1_hdr_widget);
+        m1_layout.add_layout(Box::new(m1_hdr), 0);
 
         let mut bar1 = ProgressBar::new();
         bar1.set_range(0, 100);
@@ -263,9 +257,7 @@ impl ProviderCardWidget {
         m1_sub.borrow_mut().set_object_name("SubDetail");
         m1_layout.add_widget(m1_sub.clone());
 
-        let m1_widget = make_widget(EmptyWidget::new());
-        m1_widget.borrow_mut().set_layout(Box::new(m1_layout));
-        root_layout.add_widget(m1_widget);
+        root_layout.add_layout(Box::new(m1_layout), 0);
 
         // 3. Metric 2 (Weekly 7D)
         let mut m2_layout = BoxLayout::vertical();
@@ -285,9 +277,7 @@ impl ProviderCardWidget {
         set_metric_value_style(&m2_val, None, 14);
         m2_hdr.add_widget(m2_val.clone());
 
-        let m2_hdr_widget = make_widget(EmptyWidget::new());
-        m2_hdr_widget.borrow_mut().set_layout(Box::new(m2_hdr));
-        m2_layout.add_widget(m2_hdr_widget);
+        m2_layout.add_layout(Box::new(m2_hdr), 0);
 
         let mut bar2 = ProgressBar::new();
         bar2.set_range(0, 100);
@@ -302,9 +292,7 @@ impl ProviderCardWidget {
         m2_sub.borrow_mut().set_object_name("SubDetail");
         m2_layout.add_widget(m2_sub.clone());
 
-        let m2_widget = make_widget(EmptyWidget::new());
-        m2_widget.borrow_mut().set_layout(Box::new(m2_layout));
-        root_layout.add_widget(m2_widget);
+        root_layout.add_layout(Box::new(m2_layout), 0);
 
         container.borrow_mut().set_layout(Box::new(root_layout));
 

@@ -82,6 +82,12 @@ impl qtrs_core::event::NativeEventFilter for WakeFilter {
     }
 }
 
+/// `main.py:48` `app.setQuitOnLastWindowClosed(False)`: the HUD hides to the tray on close, so
+/// closing its window must not quit. Only the tray and context-menu exit paths call `exit`.
+fn configure_application_policy() {
+    qtrs_gui::application::GuiApplication::set_quit_on_last_window_closed(false);
+}
+
 fn main() -> std::process::ExitCode {
     logger::setup_logging();
     info!("=== Claude HUD Monitor (Rust Qt) starting ===");
@@ -314,6 +320,7 @@ fn main() -> std::process::ExitCode {
     let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(interval)));
 
     let mut _app = Application::new(std::env::args().collect());
+    configure_application_policy();
 
     #[cfg(target_os = "windows")]
     qtrs_core::application::CoreApplication::install_native_event_filter(Box::new(WakeFilter));
@@ -608,4 +615,18 @@ unsafe fn windows_set_appid(wide: &[u16]) -> i32 {
         fn SetCurrentProcessExplicitAppUserModelID(appid: *const u16) -> i32;
     }
     SetCurrentProcessExplicitAppUserModelID(wide.as_ptr())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::configure_application_policy;
+    use qtrs_gui::application::GuiApplication;
+
+    /// `main.py:48` `app.setQuitOnLastWindowClosed(False)`: closing the HUD window hides it to the
+    /// tray, and only the tray/menu `Application::exit` paths quit.
+    #[test]
+    fn hud_disables_quit_on_last_window_closed_like_python_main() {
+        configure_application_policy();
+        assert!(!GuiApplication::quit_on_last_window_closed());
+    }
 }

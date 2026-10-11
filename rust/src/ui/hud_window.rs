@@ -399,12 +399,8 @@ impl HUDWindow {
         header_layout.add_stretch(1);
         header_layout.add_widget(time_label.clone());
 
-        // Python's header is a bare `QHBoxLayout` with no size policy; the default (Preferred) lets
-        // the root layout hand any extra height to it, as `qGeomCalc` does for the Python layout.
-        let header_widget = make_widget(EmptyWidget::new());
-        header_widget
-            .borrow_mut()
-            .set_layout(Box::new(header_layout));
+        // Python `inner_layout.addLayout(header_layout)` (`hud_window.py:288`): the header is a nested
+        // layout item, sized by its own children (`QBoxLayout::addLayout`).
 
         // Page 0: Cards mode
         // Python sets no size policy and no stretch on the cards container (`hud_window.py:141-145`).
@@ -441,7 +437,7 @@ impl HUDWindow {
         let mut root_layout = BoxLayout::vertical();
         root_layout.set_margins(Margins::new(12, 8, 12, 10));
         root_layout.set_spacing(6);
-        root_layout.add_widget(header_widget);
+        root_layout.add_layout(Box::new(header_layout), 0);
         root_layout.add_widget(stack.clone());
         let root = window.root_widget();
         install_panel_painter(&root, &theme, Arc::clone(&config), Rc::clone(&vibrant));
@@ -592,13 +588,13 @@ impl HUDWindow {
         layout_mode: &str,
     ) {
         let is_horizontal = layout_mode == "horizontal";
-        let mut layout: Box<dyn Layout> = if is_horizontal {
+        let mut layout = if is_horizontal {
             // `body_layout.setSpacing(8)` (`hud_window.py:337`); the vertical layout keeps Qt's default.
             let mut body = BoxLayout::horizontal();
             body.set_spacing(8);
-            Box::new(body)
+            body
         } else {
-            Box::new(BoxLayout::vertical())
+            BoxLayout::vertical()
         };
 
         // Card order of the Python HUD (`provider_ids` in `_apply_cards_layout`); the table
@@ -628,7 +624,7 @@ impl HUDWindow {
                 }
             }
         }
-        container.borrow_mut().set_layout(layout);
+        container.borrow_mut().set_layout(Box::new(layout));
     }
 
     pub fn show(&mut self) {

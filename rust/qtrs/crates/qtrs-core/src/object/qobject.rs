@@ -8,19 +8,26 @@ use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
-thread_local! {
-    static QOBJECT_REGISTRY: std::cell::RefCell<HashMap<ObjectId, *mut dyn QObject>> =
-        std::cell::RefCell::new(HashMap::new());
-}
-
 static GLOBAL_OBJECT_THREADS: RwLock<Option<HashMap<ObjectId, ThreadId>>> = RwLock::new(None);
 
-/// Thread-safe object metadata. It never contains a pointer to the QObject.
-/// Registration metadata plus physical-thread and dynamic-borrow enforcement.
+/// Physical pointer to a registered QObject. It is dereferenced only by `registered_ptr`, after
+/// the caller is verified to run on the record's registration thread.
+struct RegisteredPtr(*mut dyn QObject);
+
+// SAFETY: the pointer is dereferenced only on the registration thread, which `registered_ptr`
+// checks under the record's `registration_thread` lock. Registration requires the object to stay
+// pinned at this address until it is unregistered.
+unsafe impl Send for RegisteredPtr {}
+// SAFETY: shared access to a record never dereferences the pointer off the registration thread.
+unsafe impl Sync for RegisteredPtr {}
+
+/// Registry record for a QObject. The stored pointer is dereferenced only on the registration
+/// thread, which `registered_ptr` enforces together with the borrow flag.
 pub struct ObjectRecord {
     pub id: ObjectId,
     pub thread_id: RwLock<ThreadId>,
-    registration_thread: ThreadId,
+    registration_thread: RwLock<ThreadId>,
+    ptr: RegisteredPtr,
     pub parent: RwLock<Option<ObjectId>>,
     pub children: RwLock<Vec<ObjectId>>,
     pub liveness: Arc<AtomicBool>,
@@ -61,10 +68,12 @@ static GLOBAL_OBJECT_REGISTRY: std::sync::LazyLock<RwLock<HashMap<ObjectId, Arc<
 
 fn registered_ptr(id: ObjectId) -> Option<(Arc<ObjectRecord>, *mut dyn QObject)> {
     let entry = GLOBAL_OBJECT_REGISTRY.read().ok()?.get(&id)?.clone();
-    if entry.registration_thread != ThreadId::current() || !entry.liveness.load(Ordering::Acquire) {
+    if *entry.registration_thread.read().unwrap() != ThreadId::current()
+        || !entry.liveness.load(Ordering::Acquire)
+    {
         return None;
     }
-    let ptr = QOBJECT_REGISTRY.with(|registry| registry.borrow().get(&id).copied())?;
+    let ptr = entry.ptr.0;
     Some((entry, ptr))
 }
 
@@ -133,6 +142,25 @@ pub fn unregister_object_thread(id: ObjectId) {
     }
 }
 
+/// Physical registration thread of a live registered object, or `None` if it is unregistered.
+pub(crate) fn registration_thread_of(id: ObjectId) -> Option<ThreadId> {
+    let entry = GLOBAL_OBJECT_REGISTRY.read().ok()?.get(&id)?.clone();
+    if !entry.liveness.load(Ordering::Acquire) {
+        return None;
+    }
+    let thread_id = *entry.registration_thread.read().unwrap();
+    Some(thread_id)
+}
+
+/// Moves an object's physical registration to `thread_id`. Only `move_to_thread` calls this.
+pub(crate) fn set_registration_thread(id: ObjectId, thread_id: ThreadId) {
+    if let Ok(reg) = GLOBAL_OBJECT_REGISTRY.read() {
+        if let Some(entry) = reg.get(&id) {
+            *entry.registration_thread.write().unwrap() = thread_id;
+        }
+    }
+}
+
 /// Queries the target object's thread affinity across threads.
 pub fn query_object_thread(id: ObjectId) -> Option<ThreadId> {
     if let Ok(reg) = GLOBAL_OBJECT_REGISTRY.read() {
@@ -153,9 +181,9 @@ pub fn query_object_thread(id: ObjectId) -> Option<ThreadId> {
 /// Do not move or drop it while registered. All access from any thread must occur through
 /// registry callbacks, except sequential direct access between callbacks on the registration
 /// thread. The object must not be unregistered or re-registered while a callback is active.
-/// Callbacks execute only on the physical registration thread; thread-affinity changes do not
-/// transfer registration. The caller must ensure no overlapping mutable or mutable/shared
-/// aliases exist while a callback runs.
+/// Callbacks execute only on the physical registration thread. `move_to_thread` transfers that
+/// registration to the target thread together with the thread affinity. The caller must ensure
+/// no overlapping mutable or mutable/shared aliases exist while a callback runs.
 pub unsafe fn register_qobject(obj: &mut dyn QObject) {
     let ptr = obj as *mut dyn QObject;
     let data = unsafe { &*ptr }.object_data();
@@ -168,7 +196,8 @@ fn register_object_metadata(data: &ObjectData, ptr: *mut dyn QObject) {
     let record = Arc::new(ObjectRecord {
         id,
         thread_id: RwLock::new(thread_id),
-        registration_thread: ThreadId::current(),
+        registration_thread: RwLock::new(ThreadId::current()),
+        ptr: RegisteredPtr(ptr),
         parent: RwLock::new(data.parent),
         children: RwLock::new(data.children.clone()),
         liveness: Arc::clone(&data.liveness),
@@ -186,9 +215,6 @@ fn register_object_metadata(data: &ObjectData, ptr: *mut dyn QObject) {
             }
         }
     }
-    QOBJECT_REGISTRY.with(|registry| {
-        registry.borrow_mut().insert(id, ptr);
-    });
     register_object_thread(id, thread_id);
 }
 
@@ -218,12 +244,9 @@ pub unsafe fn register_boxed_qobject<T: QObject + 'static>(
 /// # Safety
 /// The caller must ensure that no callback currently holds a borrow of this object, and that
 /// no concurrent registry callback can begin until this call completes. The object must remain
-/// alive through this call; invoke on the physical registration thread so the thread-local
-/// pointer entry is removed.
+/// alive through this call. Invoke on the object's physical registration thread so its timers
+/// are stopped from that thread's timer registry.
 pub unsafe fn unregister_qobject(id: ObjectId) {
-    let _ = QOBJECT_REGISTRY.try_with(|registry| {
-        registry.borrow_mut().remove(&id);
-    });
     let removed = GLOBAL_OBJECT_REGISTRY
         .write()
         .ok()

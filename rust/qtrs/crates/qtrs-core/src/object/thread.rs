@@ -255,13 +255,25 @@ fn collect_descendants(initial_children: &[ObjectId]) -> Vec<ObjectId> {
     result
 }
 
-/// Moves object and all its children to target thread matching Qt moveToThread semantics.
+/// Sets affinity on `data` and on its owned descendants (`owned_children`), recording visited ids.
+fn flip_owned(data: &mut ObjectData, target_thread: ThreadId, visited: &mut Vec<ObjectId>) {
+    data.thread_id = target_thread;
+    visited.push(data.id);
+    for child in &mut data.owned_children {
+        flip_owned(child.object_data_mut(), target_thread, visited);
+    }
+}
+
+/// Moves object and all its children to target thread matching Qt moveToThread semantics
+/// (`qobject.cpp:1706-1780`).
 ///
-/// Cascading actions:
-/// 1. Recursively migrates ThreadId of root and all descendant children.
-/// 2. Stops and unregisters active timers in the source thread.
-/// 3. Transports queued posted events from source thread to target thread.
-/// 4. Dispatches `EventKind::ThreadChange` to all migrated objects.
+/// Cascading actions, in Qt order (`qobject.cpp:1782-1792`):
+/// 1. Dispatches `EventKind::ThreadChange` to the root and all descendants before any change.
+/// 2. Detaches their timers from the source thread; the target re-arms them under the same ids
+///    (`qobject.cpp:1490-1502`).
+/// 3. Changes thread affinity (`ObjectData.thread_id`) and the physical registration, and moves
+///    their queued posted events to the target queue (`qobject.cpp:1794-1815`).
+/// 4. Re-arms the detached timers on the target thread.
 pub fn move_to_thread(
     object_data: &mut ObjectData,
     target_thread: ThreadId,
@@ -278,52 +290,50 @@ pub fn move_to_thread(
     }
 
     let mut all_ids = vec![object_data.id];
-    let descendants = collect_descendants(&object_data.children);
-    all_ids.extend(descendants);
+    all_ids.extend(collect_descendants(&object_data.children));
 
-    // 1. Stop active timers in source thread for this object and all descendants
-    for &id in &all_ids {
-        crate::timer::stop_timers_for_object(id);
-    }
-
-    // 2. Transfer posted events from source thread event queue to target thread event queue
-    let mut moved_events = Vec::new();
-    if let Some(source_sender) =
-        ThreadContext::current_sender().or_else(|| query_thread_sender(current_caller_thread))
-    {
-        if let Ok(mut q) = source_sender.queue.lock() {
-            let mut i = 0;
-            while i < q.events.len() {
-                if all_ids.contains(&q.events[i].receiver) {
-                    moved_events.push(q.remove_at(i));
-                } else {
-                    i += 1;
-                }
-            }
-        }
-    }
-
-    if let Some(target_sender) = query_thread_sender(target_thread) {
-        for ev in moved_events {
-            target_sender.send(ev);
-        }
-    }
-
-    // 3. Update thread_id for root and all descendants
-    object_data.thread_id = target_thread;
-    crate::object::register_object_thread(object_data.id, target_thread);
-    for child in &mut object_data.owned_children {
-        child.object_data_mut().thread_id = target_thread;
-    }
-
-    for &child_id in &all_ids[1..] {
-        crate::object::register_object_thread(child_id, target_thread);
-    }
-
-    // 4. Send ThreadChange event to root and all descendants
+    // 1. ThreadChange is sent before any change (`qobject.cpp:1749, 1785-1786`).
     for &id in &all_ids {
         let mut ev = Event::new(EventKind::ThreadChange);
         crate::object::send_event(id, &mut ev);
+    }
+
+    // 2. Detach timers from the source thread (`qobject.cpp:1490-1502`).
+    let timers = crate::timer::detach_timers_for_objects(&all_ids);
+
+    // 3. Affinity. The root is flipped directly. Descendants are flipped through the registry,
+    //    except owned children, which are reached via their parent's `owned_children`; this avoids
+    //    aliasing the caller's `&mut`. Runs before the physical flip, because `with_object_mut`
+    //    requires the registration to be on the current thread.
+    let mut visited = Vec::with_capacity(all_ids.len());
+    flip_owned(object_data, target_thread, &mut visited);
+    for &id in &all_ids[1..] {
+        if !visited.contains(&id) {
+            crate::object::with_object_mut(id, |obj| {
+                flip_owned(obj.object_data_mut(), target_thread, &mut visited);
+            });
+        }
+    }
+
+    // 4. Physical registration flip and queued-event transfer, in one critical section.
+    crate::event_loop::move_receivers_to_thread(&all_ids, target_thread, || {
+        for &id in &all_ids {
+            crate::object::qobject::set_registration_thread(id, target_thread);
+        }
+    });
+    for &id in &all_ids {
+        crate::object::register_object_thread(id, target_thread);
+    }
+
+    // 5. Re-arm the detached timers on the target thread (`qobject.cpp:1496-1500`).
+    if !timers.is_empty() {
+        crate::event_loop::post_event_to_thread(
+            target_thread,
+            ObjectId(0),
+            Event::new(EventKind::MetaCall(Box::new(move |_| {
+                crate::timer::adopt_timers(timers);
+            }))),
+        );
     }
     Ok(())
 }

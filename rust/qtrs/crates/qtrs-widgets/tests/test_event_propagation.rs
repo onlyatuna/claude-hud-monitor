@@ -132,6 +132,11 @@ impl Widget for Probe {
     }
     fn set_window_id(&self, window_id: Option<ObjectId>) {
         self.base.set_window_id(window_id);
+        // Frame::set_window_id propagates to every child (frame.rs:636-639); mirror it so a
+        // leaf knows the window it sits in.
+        for child in self.base.children() {
+            child.borrow().set_window_id(window_id);
+        }
     }
     fn children(&self) -> Vec<WidgetRef> {
         self.base.children()
@@ -598,6 +603,71 @@ mod window_level {
         );
         assert_eq!(log.borrow().first().map(String::as_str), Some("root:Close"));
         assert!(!win.is_visible());
+    }
+
+    /// `QWidget::setVisible` on a child of a shown window sends its own Show/Hide
+    /// (`qwidget.cpp:8401-8443`, `show_helper`/`hide_helper` at `:8074-8289`).
+    #[test]
+    fn child_set_visible_sends_hide_and_show_when_parent_is_shown() {
+        let log: Log = Default::default();
+        let (root, _m, leaf) = tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+        let mut win = window_with_root(root);
+        win.show();
+        log.borrow_mut().clear();
+
+        set_widget_visible(&leaf, false);
+        assert_eq!(
+            show_hide_only(&log),
+            vec!["leaf:Hide"],
+            "hiding a shown child sends its own Hide (hide_helper, qwidget.cpp:8238-8289)"
+        );
+        log.borrow_mut().clear();
+
+        set_widget_visible(&leaf, true);
+        assert_eq!(
+            show_hide_only(&log),
+            vec!["leaf:Show"],
+            "showing a child under a shown parent sends its Show (qwidget.cpp:8439-8440)"
+        );
+    }
+
+    /// A child under a window that is not shown gets no Show/Hide when toggled
+    /// (`qwidget.cpp:8439`: `isWindow() || parentWidget()->isVisible()`).
+    #[test]
+    fn child_set_visible_under_hidden_window_sends_nothing() {
+        let log: Log = Default::default();
+        let (root, _m, leaf) = tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+        let _win = window_with_root(root); // never shown
+        set_widget_visible(&leaf, false);
+        set_widget_visible(&leaf, true);
+        assert!(
+            show_hide_only(&log).is_empty(),
+            "no Show or Hide while the window is hidden"
+        );
+    }
+
+    /// A hidden ancestor hides its shown children and suppresses their own toggles until shown.
+    #[test]
+    fn hidden_ancestor_suppresses_child_show_hide() {
+        let log: Log = Default::default();
+        let (root, mid, leaf) = tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+        let mut win = window_with_root(root);
+        win.show();
+        log.borrow_mut().clear();
+
+        set_widget_visible(&mid, false);
+        assert_eq!(show_hide_only(&log), vec!["mid:Hide", "leaf:Hide"]);
+        log.borrow_mut().clear();
+
+        set_widget_visible(&leaf, false);
+        set_widget_visible(&leaf, true);
+        assert!(
+            show_hide_only(&log).is_empty(),
+            "leaf's parent is hidden: no event"
+        );
+
+        set_widget_visible(&mid, true);
+        assert_eq!(show_hide_only(&log), vec!["leaf:Show", "mid:Show"]);
     }
 
     #[test]

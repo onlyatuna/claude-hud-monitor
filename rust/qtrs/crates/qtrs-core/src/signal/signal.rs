@@ -426,9 +426,12 @@ impl<T> Signal<T> {
             if !sub.connected.load(Ordering::Acquire) {
                 continue;
             }
+            // Resolve the receiver thread at emit time: a receiver moved by `move_to_thread` after
+            // connect must be reached on its current thread. The connect-time value is only a fallback.
             let target_thread = sub
-                .receiver_thread
-                .or_else(|| sub.receiver_id.and_then(query_object_thread));
+                .receiver_id
+                .and_then(query_object_thread)
+                .or(sub.receiver_thread);
 
             let is_same_thread = target_thread.map_or(true, |thread| thread == current_thread);
 

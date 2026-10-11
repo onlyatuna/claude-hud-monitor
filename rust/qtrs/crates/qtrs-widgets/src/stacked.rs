@@ -101,10 +101,6 @@ impl Layout for StackedLayout {
         self.add_widget(widget);
     }
 
-    fn add_widget_with_stretch(&mut self, widget: WidgetRef, _stretch: u32) {
-        self.add_widget(widget);
-    }
-
     /// `QLayout::setAlignment`: finds the page, then does nothing visible, because
     /// `QStackedLayout::setGeometry` gives every page the whole rectangle with
     /// `widget->setGeometry(rect)` and never consults the item's alignment
@@ -194,11 +190,8 @@ impl Layout for StackedLayout {
             };
             let w = widget.borrow();
             w.set_geometry(child_rect);
-            let should_be_visible = idx == self.current_index;
-            if w.is_visible() != should_be_visible {
-                w.set_visible(should_be_visible);
-            }
             drop(w);
+            crate::widget::set_widget_visible(widget, idx == self.current_index);
             crate::layout::relayout_child_after_resize(widget, old_size);
         }
     }

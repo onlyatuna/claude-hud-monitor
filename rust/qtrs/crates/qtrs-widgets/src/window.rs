@@ -1,4 +1,4 @@
-use crate::widget::{EmptyWidget, WidgetRef};
+use crate::widget::{hide_children, show_children_first, EmptyWidget, WidgetRef};
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
@@ -25,6 +25,7 @@ struct WindowCore {
     render: std::rc::Rc<RenderState>,
     event_cb: WindowEventCallback,
     visible: std::rc::Rc<std::cell::Cell<bool>>,
+    id: ObjectId,
 }
 
 impl WindowCore {
@@ -90,17 +91,11 @@ impl WindowCore {
     }
 
     /// `QShowEvent`s: every child that is not explicitly hidden first, then the window itself.
+    /// The window is shown before any of them is sent, as `QWidget::isVisible` is true while
+    /// `show_helper` runs.
     fn show(&self) {
         if !self.visible.replace(true) {
-            fn show_children_first(widget: &WidgetRef) {
-                let children = widget.borrow().children();
-                for child in children {
-                    if child.borrow().is_visible() {
-                        show_children_first(&child);
-                        child.borrow_mut().event(&mut Event::new(EventKind::Show));
-                    }
-                }
-            }
+            crate::application::Application::set_window_visible(self.id, true);
             let root = self.root();
             show_children_first(&root);
             self.send_to_window(&mut Event::new(EventKind::Show));
@@ -112,15 +107,7 @@ impl WindowCore {
     fn hide(&self) {
         self.platform_window.borrow_mut().hide();
         if self.visible.replace(false) {
-            fn hide_children(widget: &WidgetRef) {
-                let children = widget.borrow().children();
-                for child in children {
-                    if child.borrow().is_visible() {
-                        child.borrow_mut().event(&mut Event::new(EventKind::Hide));
-                        hide_children(&child);
-                    }
-                }
-            }
+            crate::application::Application::set_window_visible(self.id, false);
             self.send_to_window(&mut Event::new(EventKind::Hide));
             hide_children(&self.root());
         }
@@ -128,8 +115,10 @@ impl WindowCore {
 
     /// `QWidget::close` / the system close request: the window may refuse by ignoring the
     /// `QCloseEvent`; otherwise it is hidden. The event is delivered whether or not the window is
-    /// visible.
+    /// visible. Only a window that was visible can end the application when it closes
+    /// (`qwindow.cpp:2722-2735`).
     fn close(&self, spontaneous: bool) -> bool {
+        let was_visible = self.visible.get();
         let mut ev = if spontaneous {
             Event::new_spontaneous(EventKind::Close)
         } else {
@@ -140,6 +129,9 @@ impl WindowCore {
             return false;
         }
         self.hide();
+        if was_visible {
+            crate::application::Application::maybe_last_window_closed();
+        }
         true
     }
 }
@@ -674,6 +666,7 @@ impl Window {
             render: std::rc::Rc::clone(&render_state),
             event_cb: std::rc::Rc::new(std::cell::RefCell::new(None)),
             visible: std::rc::Rc::new(std::cell::Cell::new(false)),
+            id: window_id,
         };
         let handler = WindowEventHandler {
             platform_window: pw_clone,

@@ -954,9 +954,7 @@ impl ProviderColumn {
         top.add_widget(name.clone());
         top.add_stretch(1);
 
-        let top_widget = make_widget(EmptyWidget::new());
-        top_widget.borrow_mut().set_layout(Box::new(top));
-        hv.add_widget(top_widget);
+        hv.add_layout(Box::new(top), 0);
 
         let badge = make_cell_label(" ", "HeaderBadge");
         hv.add_widget(badge.clone());

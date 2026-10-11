@@ -1,12 +1,15 @@
 use qtrs_core::event::{Event, EventKind};
-use qtrs_core::event_loop::EventQueue;
+use qtrs_core::event_loop::{post_event_to_thread, EventLoop};
 use qtrs_core::object::{
-    add_owned_child, move_to_thread, register_boxed_qobject, register_qobject, unregister_qobject,
-    ObjectData, ObjectId, QObject, QObjectExt, QPointer, SignalBlocker, ThreadContext, ThreadId,
+    add_owned_child, move_to_thread, query_object_thread, register_boxed_qobject, register_qobject,
+    unregister_qobject, ObjectData, ObjectId, QObject, QObjectExt, QPointer, SignalBlocker,
+    ThreadId,
 };
 use qtrs_core::signal::Signal;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::channel;
+use std::sync::Arc;
+use std::time::Duration;
 
 // --- Test Structures ---
 
@@ -266,68 +269,65 @@ fn test_object_hierarchy_search_find_child() {
 
 #[test]
 fn test_move_to_thread_cascades_children_and_events() {
-    let current_thread = ThreadId::current();
-    let target_thread = std::thread::spawn(ThreadId::current).join().unwrap();
-
-    // Setup source thread context and event sender
-    let source_queue = Arc::new(Mutex::new(EventQueue::new()));
-    let source_sender =
-        qtrs_core::object::EventSender::new(current_thread, source_queue.clone(), Arc::new(|| {}));
-    ThreadContext::init_current(false, Some(source_sender));
-
-    // Setup target thread sender
-    let target_queue = Arc::new(Mutex::new(EventQueue::new()));
-    let target_sender =
-        qtrs_core::object::EventSender::new(target_thread, target_queue.clone(), Arc::new(|| {}));
-    qtrs_core::object::register_thread_sender(target_thread, target_sender);
-
+    let source = ThreadId::current();
+    let (ran_tx, ran_rx) = channel::<ThreadId>();
     let mut parent = MockContainer::new("worker_root");
-    // SAFETY: parent stays on this thread and alive until cleanup below.
+    // SAFETY: parent stays on this thread and alive until the worker has unregistered it.
     unsafe { register_qobject(&mut parent) };
+    let parent_id = parent.data.id;
     let child = Box::new(MockContainer::new("worker_child"));
     let child_id = child.data.id;
     // SAFETY: child remains boxed and owned by parent at a stable address.
-    let _ = unsafe { add_owned_child(parent.data.id, child) }
+    let _ = unsafe { add_owned_child(parent_id, child) }
         .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
-    // Post an event to child in source thread queue
-    {
-        let mut q = source_queue.lock().unwrap();
-        q.post_event(child_id, Event::new(EventKind::UpdateRequest));
-    }
-    assert_eq!(source_queue.lock().unwrap().len(), 1);
-    assert_eq!(target_queue.lock().unwrap().len(), 0);
+    // Posted while the subtree is still on this thread: the event must follow the child.
+    let posted = Event::new(EventKind::MetaCall(Box::new(move |_| {
+        ran_tx.send(ThreadId::current()).unwrap()
+    })));
+    post_event_to_thread(source, child_id, posted);
 
-    // Execute cascading moveToThread
-    let result = move_to_thread(&mut parent.data, target_thread, current_thread);
-    assert_eq!(result, Ok(()));
+    let (tid_tx, tid_rx) = channel();
+    let (go_tx, go_rx) = channel::<()>();
+    let (done_tx, done_rx) = channel::<()>();
+    let worker = std::thread::spawn(move || {
+        tid_tx.send(ThreadId::current()).unwrap();
+        go_rx.recv().unwrap();
+        // The target thread has no loop until now: the moved event waits in its queue.
+        let el = EventLoop::new();
+        el.process_events(false);
+        // SAFETY: after the move this thread is the registration thread of both objects, and
+        // the test thread keeps them alive until `done` is received.
+        unsafe { unregister_qobject(child_id) };
+        unsafe { unregister_qobject(parent_id) };
+        done_tx.send(()).unwrap();
+    });
+    let target = tid_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("worker thread must report its id");
 
-    // Invariants:
-    // 1. Parent thread_id updated
-    assert_eq!(parent.data.thread_id, target_thread);
-    // 2. Child thread_id updated
+    assert_eq!(move_to_thread(&mut parent.data, target, source), Ok(()));
+
+    // Affinity and ThreadChange.
+    assert_eq!(parent.data.thread_id, target);
     assert_eq!(
         parent.data.owned_children[0].object_data().thread_id,
-        target_thread
+        target
     );
-    assert_eq!(
-        qtrs_core::object::query_object_thread(child_id),
-        Some(target_thread)
-    );
-
-    // 3. Queued event transferred from source to target
-    assert_eq!(source_queue.lock().unwrap().len(), 0);
-    assert_eq!(target_queue.lock().unwrap().len(), 1);
-    assert_eq!(target_queue.lock().unwrap().events()[0].receiver, child_id);
-
-    // 4. ThreadChange event received
+    assert_eq!(query_object_thread(child_id), Some(target));
     assert!(parent.thread_changed.load(Ordering::SeqCst));
 
-    // Clean up
-    // SAFETY: parent dispatch has ended on this registration thread.
-    unsafe { unregister_qobject(parent.data.id) };
-    ThreadContext::clear_current();
-    qtrs_core::object::unregister_thread_sender(target_thread);
+    // The queued event reaches the target thread's loop, not the source.
+    go_tx.send(()).unwrap();
+    let ran_on = ran_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("moved event must run on the target thread");
+    assert_eq!(ran_on, target);
+    done_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("worker thread must finish");
+    worker.join().expect("worker thread must not panic");
 }
+
 // --- 4. RAII Signal Blocker Tests ---
 
 #[test]

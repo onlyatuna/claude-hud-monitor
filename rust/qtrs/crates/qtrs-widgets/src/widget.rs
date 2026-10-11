@@ -53,6 +53,67 @@ pub(crate) enum EnabledNotice {
     Changed(WidgetRef),
 }
 
+/// `QWidget::setVisible` for a widget its owner holds: records the flag, then sends the events the
+/// change of shown state implies (qwidget.cpp:8401-8443). Showing sends `Show` to the children
+/// first, then to the widget (`show_helper`, qwidget.cpp:8074-8130); hiding sends `Hide` to the
+/// widget first, then to its children (`hide_helper`, qwidget.cpp:8238-8289). A change that leaves
+/// the widget's shown state as it was sends nothing, so a child of a hidden window gets no event.
+/// As in `set_widget_enabled`, a widget still borrowed by the caller gets no event.
+pub fn set_widget_visible(widget: &WidgetRef, visible: bool) {
+    let was_shown = is_shown(widget);
+    widget.borrow().set_visible(visible);
+    let now_shown = is_shown(widget);
+    if now_shown && !was_shown {
+        show_children_first(widget);
+        if let Ok(mut w) = widget.try_borrow_mut() {
+            w.event(&mut Event::new(EventKind::Show));
+        }
+    } else if was_shown && !now_shown {
+        if let Ok(mut w) = widget.try_borrow_mut() {
+            w.event(&mut Event::new(EventKind::Hide));
+        }
+        hide_children(widget);
+    }
+}
+
+/// `QWidget::isVisible`: the widget and its ancestors are shown, and so is the window it belongs
+/// to. A widget that belongs to no window counts as shown when it is visible.
+fn is_shown(widget: &WidgetRef) -> bool {
+    let w = widget.borrow();
+    let base = w.widget_base();
+    if !base.is_visible_in_tree() {
+        return false;
+    }
+    match base.window_id() {
+        Some(id) => crate::application::Application::is_window_visible(id),
+        None => true,
+    }
+}
+
+/// `show_helper`'s child loop (qwidget.cpp:8074-8130): every child that is not explicitly hidden
+/// gets its `Show` after its own children, before the parent's.
+pub(crate) fn show_children_first(widget: &WidgetRef) {
+    let children = widget.borrow().children();
+    for child in children {
+        if child.borrow().is_visible() {
+            show_children_first(&child);
+            child.borrow_mut().event(&mut Event::new(EventKind::Show));
+        }
+    }
+}
+
+/// `hide_helper`'s child loop (qwidget.cpp:8238-8289): every child that is not explicitly hidden
+/// gets its `Hide` before its own children do.
+pub(crate) fn hide_children(widget: &WidgetRef) {
+    let children = widget.borrow().children();
+    for child in children {
+        if child.borrow().is_visible() {
+            child.borrow_mut().event(&mut Event::new(EventKind::Hide));
+            hide_children(&child);
+        }
+    }
+}
+
 /// Points each of `children` at `parent`, so ancestor-dependent lookups (the style sheet
 /// cascade) can walk upwards.
 ///

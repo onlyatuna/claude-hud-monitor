@@ -368,3 +368,76 @@ fn test_widget_application_window_registry_and_focus() {
 
     drop(app);
 }
+
+// -----------------------------------------------------------------------------
+// G11.2.e / G11.2.g: window close and drop vs. quit-on-last-window-closed
+// -----------------------------------------------------------------------------
+
+/// Dropping a window is not a close: Qt's `~QWindow` never emits `lastWindowClosed` or quits
+/// (`qwindow.cpp:175-208`). Only the close path can end the application.
+#[test]
+fn dropping_a_window_while_running_does_not_quit() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    Application::reset_for_test();
+    let mut app = Application::new(vec!["drop_test".to_string()]);
+    qtrs_core::timer::Timer::single_shot(10, || {
+        let w = Window::new("w", Rect::new(0, 0, 100, 100), WindowFlags::NORMAL).expect("window");
+        drop(w);
+        qtrs_core::timer::Timer::single_shot(60, || Application::exit(7));
+    });
+    let code = app.exec();
+    assert_eq!(
+        code, 7,
+        "dropping a window must not quit; only the later timer may end exec"
+    );
+}
+
+#[cfg(windows)]
+mod close_quit {
+    use super::*;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_CLOSE};
+
+    /// Qt default: closing the last visible window quits (`qwindow.cpp:2722-2735`,
+    /// `qguiapplication.cpp:3933-3943`).
+    #[test]
+    fn closing_last_visible_window_quits_when_quit_on_last_window_closed_is_default() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        Application::reset_for_test();
+        let mut app = Application::new(vec!["close_test".to_string()]);
+        qtrs_core::timer::Timer::single_shot(10, || {
+            let mut win =
+                Window::new("w", Rect::new(0, 0, 100, 100), WindowFlags::NORMAL).expect("window");
+            win.show();
+            unsafe { SendMessageW(win.native_handle() as _, WM_CLOSE, 0, 0) };
+            std::mem::forget(win); // keep it alive so only the close path can end exec
+        });
+        qtrs_core::timer::Timer::single_shot(500, || Application::exit(9)); // watchdog
+        let code = app.exec();
+        assert_eq!(code, 0, "closing the last visible window quits");
+    }
+
+    /// `main.py:48` `setQuitOnLastWindowClosed(False)`: an accepted close keeps exec running.
+    #[test]
+    fn closing_last_window_with_quit_disabled_keeps_exec_running() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        Application::reset_for_test();
+        let mut app = Application::new(vec!["close_test".to_string()]);
+        qtrs_gui::application::GuiApplication::set_quit_on_last_window_closed(false);
+        qtrs_core::timer::Timer::single_shot(10, || {
+            let mut win =
+                Window::new("w", Rect::new(0, 0, 100, 100), WindowFlags::NORMAL).expect("window");
+            win.show();
+            unsafe { SendMessageW(win.native_handle() as _, WM_CLOSE, 0, 0) };
+            assert!(!win.is_visible(), "accepted close hides the window");
+            std::mem::forget(win);
+            qtrs_core::timer::Timer::single_shot(100, || Application::exit(5));
+        });
+        qtrs_core::timer::Timer::single_shot(500, || Application::exit(9)); // watchdog
+        let code = app.exec();
+        qtrs_gui::application::GuiApplication::set_quit_on_last_window_closed(true);
+        assert_eq!(
+            code, 5,
+            "quit_on_last_window_closed(false) keeps exec alive after the close"
+        );
+    }
+}

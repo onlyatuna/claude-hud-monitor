@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
 
@@ -14,6 +15,19 @@ use crate::object::{ObjectData, ObjectId, QObject};
 use crate::signal::Signal;
 
 static START_TIME: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// Process-wide timer id source. Ids must not repeat across thread registries, because a moved
+/// object's timers keep their ids on the target thread (Qt `reRegisterTimers`, qobject.cpp:1496-1500).
+static NEXT_TIMER_ID: AtomicU32 = AtomicU32::new(1);
+
+fn allocate_timer_id() -> TimerId {
+    loop {
+        let id = NEXT_TIMER_ID.fetch_add(1, Ordering::Relaxed);
+        if id != 0 {
+            return TimerId(id);
+        }
+    }
+}
 
 /// Returns monotonic timestamp in milliseconds.
 #[inline]
@@ -140,14 +154,12 @@ pub fn calculate_next_timeout(
 #[derive(Debug, Default)]
 pub struct TimerRegistry {
     entries: HashMap<TimerId, TimerEntry>,
-    next_id: u32,
 }
 
 impl TimerRegistry {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
-            next_id: 1,
         }
     }
 
@@ -167,12 +179,21 @@ impl TimerRegistry {
         timer_type: TimerType,
         single_shot: bool,
     ) -> TimerId {
-        let id = TimerId(self.next_id);
-        self.next_id = self.next_id.wrapping_add(1);
-        if self.next_id == 0 {
-            self.next_id = 1;
-        }
+        let id = allocate_timer_id();
+        self.register_with_id(id, receiver, interval_ms, timer_type, single_shot);
+        id
+    }
 
+    /// Registers `id` for `receiver`. A moved timer keeps its id on the target thread (Qt
+    /// `registerTimer` with an existing id, qobject.cpp:1496-1500); the phase restarts from now.
+    fn register_with_id(
+        &mut self,
+        id: TimerId,
+        receiver: ObjectId,
+        interval_ms: u64,
+        timer_type: TimerType,
+        single_shot: bool,
+    ) {
         let now = current_time_ms();
         let mut actual_type = timer_type;
         let (adjusted_interval, next_fire_ms) =
@@ -190,7 +211,6 @@ impl TimerRegistry {
         };
 
         self.entries.insert(id, entry);
-        id
     }
 
     pub fn unregister(&mut self, id: TimerId) -> Option<TimerEntry> {
@@ -291,6 +311,84 @@ pub fn stop_timers_for_object(receiver: ObjectId) -> usize {
     .unwrap_or(0)
 }
 
+/// Removes the timers whose receiver is in `receivers` and disarms their delivery sources, returning
+/// the entries so the target thread can re-register them under the same ids (Qt
+/// `QObjectPrivate::moveToThread_helper` timer handling: `unregisterTimers` on the source,
+/// qobject.cpp:1490-1502).
+pub(crate) fn detach_timers_for_objects(receivers: &[ObjectId]) -> Vec<TimerEntry> {
+    with_thread_timer_context(|ctx| {
+        let mut reg = ctx.registry.lock().unwrap();
+        let ids: Vec<TimerId> = reg
+            .entries
+            .iter()
+            .filter(|(_, entry)| receivers.contains(&entry.receiver))
+            .map(|(&id, _)| id)
+            .collect();
+        let mut detached = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some(entry) = reg.unregister(id) else {
+                continue;
+            };
+            #[cfg(windows)]
+            {
+                if entry.interval_ms > 0 && !ctx.internal_hwnd.is_null() {
+                    unsafe {
+                        windows_sys::Win32::UI::WindowsAndMessaging::KillTimer(
+                            ctx.internal_hwnd,
+                            id.0 as usize,
+                        );
+                    }
+                }
+            }
+            detached.push(entry);
+        }
+        detached
+    })
+    .unwrap_or_default()
+}
+
+/// Re-registers detached timers on the calling (target) thread under their original ids and re-arms
+/// their delivery sources (Qt `reRegisterTimers`, qobject.cpp:1496-1500). The phase restarts, as with
+/// Qt's `registerTimer`. Runs as a `MetaCall` queued to the target after the move. An entry whose
+/// receiver has moved on is forwarded to its current owner; one whose receiver was destroyed is
+/// dropped.
+pub(crate) fn adopt_timers(entries: Vec<TimerEntry>) {
+    let current = crate::object::ThreadId::current();
+    let mut local = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match crate::object::qobject::registration_thread_of(entry.receiver) {
+            Some(owner) if owner == current => local.push(entry),
+            Some(owner) => crate::event_loop::post_event_to_thread(
+                owner,
+                crate::object::ObjectId(0),
+                crate::event::Event::new(crate::event::EventKind::MetaCall(Box::new(move |_| {
+                    adopt_timers(vec![entry])
+                }))),
+            ),
+            None => {}
+        }
+    }
+    if local.is_empty() {
+        return;
+    }
+    let armed = with_thread_timer_context(|ctx| {
+        let mut reg = ctx.registry.lock().unwrap();
+        for entry in local {
+            reg.register_with_id(
+                entry.id,
+                entry.receiver,
+                entry.interval_ms,
+                entry.timer_type,
+                entry.single_shot,
+            );
+            arm_source(ctx, entry.id, entry.receiver, entry.interval_ms);
+        }
+    });
+    if armed.is_none() {
+        eprintln!("qtrs: cannot re-register moved timers: this thread has no timer context");
+    }
+}
+
 /// Registers a timer and arms its delivery source (`QObject::startTimer` → `registerTimer`,
 /// qeventdispatcher_win.cpp:345-381). Zero interval posts `ZeroTimer` (360-363); otherwise
 /// `SetTimer` on Windows. Shared by `Timer::start` and `start_object_timer`.
@@ -303,6 +401,15 @@ fn arm_in_context(
 ) -> TimerId {
     let mut reg = ctx.registry.lock().unwrap();
     let timer_id = reg.register(receiver, interval_ms, timer_type, single_shot);
+    arm_source(ctx, timer_id, receiver, interval_ms);
+    timer_id
+}
+
+/// Arms the delivery source of a registered timer: a zero interval posts `ZeroTimer`, otherwise
+/// `SetTimer` on Windows.
+fn arm_source(ctx: &ThreadTimerContext, timer_id: TimerId, receiver: ObjectId, interval_ms: u64) {
+    #[cfg(not(windows))]
+    let _ = ctx;
     if interval_ms == 0 {
         crate::event_loop::post_event_to_thread(
             crate::object::ThreadId::current(),
@@ -327,7 +434,6 @@ fn arm_in_context(
             }
         }
     }
-    timer_id
 }
 
 /// Removes a timer and disarms its delivery source (`QObject::killTimer` → `unregisterTimer`,

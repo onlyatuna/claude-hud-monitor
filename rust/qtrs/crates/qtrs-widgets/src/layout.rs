@@ -5,7 +5,7 @@ use crate::layout_engine::{
     q_max_exp_calc, setup_spacings, LayoutStruct, LAYOUT_SIZE_MAX,
 };
 use crate::size_policy::Policy;
-use crate::widget::{Widget, WidgetRef};
+use crate::widget::{EmptyWidget, Widget, WidgetRef};
 use qtrs_gui::geometry::primitives::{Margins, Rect, Size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +119,9 @@ pub struct LayoutItem {
     /// A `QSpacerItem`: it has no content of its own, so it takes no spacing. `widget` is then a
     /// placeholder that only records the spacer's rectangle.
     pub spacer: Option<SpacerItem>,
+    /// The item holds a child layout (`QLayout` as a `QLayoutItem`) rather than a widget: its
+    /// limits come from that layout, not from a widget's own size policy.
+    pub nested: bool,
 }
 
 pub trait Layout: 'static {
@@ -128,30 +131,14 @@ pub trait Layout: 'static {
 
     fn add_widget(&mut self, widget: WidgetRef);
 
-    fn add_widget_with_stretch(&mut self, widget: WidgetRef, stretch: u32);
-
     /// `QLayout::setAlignment(QWidget*, Qt::Alignment)`: sets the alignment of the item that holds
     /// `widget` (a direct child item only) and re-lays the layout out. Returns false when the
     /// layout has no such item.
     fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool;
 
-    fn add_stretch(&mut self, stretch: u32) {
-        let widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
-        widget.set_size_policy(crate::size_policy::QSizePolicy::new(
-            crate::size_policy::Policy::Expanding,
-            crate::size_policy::Policy::Expanding,
-        ));
-        let spacer = std::rc::Rc::new(std::cell::RefCell::new(
-            Box::new(widget) as Box<dyn crate::widget::Widget>,
-        ));
-        self.add_widget_with_stretch(spacer, stretch);
-    }
-
     fn widgets(&self) -> Vec<WidgetRef> {
         Vec::new()
     }
-
-
     fn set_margins(&mut self, margins: Margins);
 
     fn margins(&self) -> Margins;
@@ -164,6 +151,11 @@ pub trait Layout: 'static {
 
     /// The smallest size the layout can be squeezed to (`QLayout::minimumSize`).
     fn minimum_size(&self) -> Size;
+
+    /// `QLayout::maximumSize` (qlayout.cpp:912-914): unbounded unless the layout overrides it.
+    fn maximum_size(&self) -> Size {
+        Size::new(LAYOUT_SIZE_MAX, LAYOUT_SIZE_MAX)
+    }
 
     /// The directions the layout wants to grow in, as (horizontal, vertical)
     /// (`QLayout::expandingDirections`).
@@ -242,12 +234,12 @@ impl BoxLayout {
     }
 
     pub fn insert_widget(&mut self, index: usize, widget: WidgetRef, stretch: u32) {
-        self.insert_item(index, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: None });
+        self.insert_item(index, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: None, nested: false });
     }
 
     /// `QBoxLayout::addWidget(widget, stretch, alignment)`.
     pub fn add_widget_aligned(&mut self, widget: WidgetRef, stretch: u32, alignment: ItemAlignment) {
-        self.insert_item(usize::MAX, LayoutItem { widget, stretch, alignment, spacer: None });
+        self.insert_item(usize::MAX, LayoutItem { widget, stretch, alignment, spacer: None, nested: false });
     }
 
     pub fn remove_widget(&mut self, index: usize) -> Option<WidgetRef> {
@@ -260,8 +252,24 @@ impl BoxLayout {
         }
     }
 
+    /// `QBoxLayout::addStretch`: an empty, expanding spacer that takes no spacing.
     pub fn add_stretch(&mut self, stretch: u32) {
-        <Self as Layout>::add_stretch(self, stretch);
+        self.insert_stretch(usize::MAX, stretch);
+    }
+
+    /// `QBoxLayout::addWidget(widget, stretch)`: alignment NONE.
+    pub fn add_widget_with_stretch(&mut self, widget: WidgetRef, stretch: u32) {
+        self.add_widget_aligned(widget, stretch, ItemAlignment::NONE);
+    }
+
+    /// `QBoxLayout::addLayout(layout, stretch)`: the child layout is one item of this layout,
+    /// sized by the child's own `maximumSize`/`minimumSize`/`sizeHint`. The holder widget only
+    /// carries the child; it has no geometry or size policy of its own.
+    pub fn add_layout(&mut self, layout: Box<dyn Layout>, stretch: u32) {
+        let mut holder = EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
+        holder.set_layout(layout);
+        let widget: WidgetRef = std::rc::Rc::new(std::cell::RefCell::new(Box::new(holder)));
+        self.insert_item(usize::MAX, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: None, nested: true });
     }
 
     /// `QBoxLayout::insertSpacerItem`: the spacer goes in with stretch 0 (qboxlayout.cpp:894-902).
@@ -304,7 +312,7 @@ impl BoxLayout {
     fn insert_spacer(&mut self, index: usize, spacer: SpacerItem, stretch: u32) {
         let widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
         let widget: WidgetRef = std::rc::Rc::new(std::cell::RefCell::new(Box::new(widget)));
-        self.insert_item(index, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: Some(spacer) });
+        self.insert_item(index, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: Some(spacer), nested: false });
     }
 
     /// `QBoxLayout::setStretchFactor(QWidget*, int)`: sets the stretch of the item holding
@@ -357,10 +365,6 @@ impl Layout for BoxLayout {
         self.add_widget_with_stretch(widget, 0);
     }
 
-    fn add_widget_with_stretch(&mut self, widget: WidgetRef, stretch: u32) {
-        self.add_widget_aligned(widget, stretch, ItemAlignment::NONE);
-    }
-
     fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool {
         let Some(item) = self
             .items
@@ -372,11 +376,6 @@ impl Layout for BoxLayout {
         item.alignment = alignment;
         self.update_layout();
         true
-    }
-
-    /// `QBoxLayout::addStretch`: an empty, expanding spacer that takes no spacing.
-    fn add_stretch(&mut self, stretch: u32) {
-        self.insert_stretch(usize::MAX, stretch);
     }
 
     fn widgets(&self) -> Vec<WidgetRef> {
@@ -409,6 +408,11 @@ impl Layout for BoxLayout {
     fn minimum_size(&self) -> Size {
         self.ensure_geom();
         self.geom_cache.borrow().as_ref().unwrap().min
+    }
+
+    fn maximum_size(&self) -> Size {
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().max
     }
 
     fn expanding_directions(&self) -> (bool, bool) {
@@ -481,6 +485,7 @@ struct BoxGeom {
     /// Per item, what `item_set_geometry` bounds the item by (unused for spacers).
     limits: Vec<ItemLimits>,
     min: Size,
+    max: Size,
     hint: Size,
     expanding: (bool, bool),
 }
@@ -535,7 +540,13 @@ impl BoxLayout {
                 let policy = w.size_policy();
                 let swap = |s: Size| if horz { (s.width, s.height) } else { (s.height, s.width) };
                 let exp = item_expanding(&**w, item.alignment);
-                let item_limits = ItemLimits::of(&**w, item.alignment);
+                let mut item_limits = ItemLimits::of(&**w, item.alignment);
+                if item.nested {
+                    // `QLayoutItem::maximumSize` of a `QLayout` is that layout's own maximumSize.
+                    if let Some(inner) = w.layout_ref_mut() {
+                        item_limits.item_max = inner.maximum_size();
+                    }
+                }
                 (
                     swap(item_limits.item_max),
                     swap(item_minimum_size(&**w)),
@@ -593,9 +604,15 @@ impl BoxLayout {
             hint.max(min)
                 .min(max.max(min as i64).min(i32::MAX as i64) as i32)
         };
+        // `maxSize = QSize(maxw, maxh).expandedTo(minSize)`, then the margins, bounded to
+        // `QLAYOUTSIZE_MAX` (qboxlayout.cpp:347-357, 612-621).
+        let max_bounded = |max: i64, min: i32, extra: i32| {
+            (max.max(min as i64) + extra as i64).min(LAYOUT_SIZE_MAX as i64) as i32
+        };
         BoxGeom {
             chain,
             limits,
+            max: Size::new(max_bounded(max_w, min_w, extra.width), max_bounded(max_h, min_h, extra.height)),
             min: Size::new(min_w + extra.width, min_h + extra.height),
             hint: Size::new(
                 bounded(hint_w, min_w, max_w) + extra.width,
@@ -628,6 +645,15 @@ struct GridGeom {
 }
 
 /// Grid layout laying out widgets in a 2D grid of rows and columns (`QGridLayout`).
+///
+/// `QGridLayout` has no `addStretch`: the box-only API is not reachable from a grid, so a
+/// stretch request cannot silently append a row (qgridlayout.cpp:1383-1397 takes no stretch).
+///
+/// ```compile_fail
+/// use qtrs_widgets::{GridLayout, Layout};
+/// let mut grid = GridLayout::new();
+/// grid.add_stretch(1);
+/// ```
 pub struct GridLayout {
     geometry: Rect,
     margins: Margins,
@@ -672,6 +698,38 @@ impl GridLayout {
         col_span: usize,
     ) {
         self.add_widget_aligned(widget, row, column, row_span, col_span, ItemAlignment::NONE);
+    }
+
+    /// `QGridLayout::rowStretch` (qgridlayout.cpp:1506-1510). Rows never set read 0; Qt's
+    /// `QVector::at` would assert past the end instead.
+    pub fn row_stretch(&self, row: usize) -> u32 {
+        self.row_stretches.get(row).copied().unwrap_or(0)
+    }
+
+    /// `QGridLayout::columnStretch` (qgridlayout.cpp:1517-1520).
+    pub fn column_stretch(&self, col: usize) -> u32 {
+        self.col_stretches.get(col).copied().unwrap_or(0)
+    }
+
+    /// `QGridLayout::rowMinimumHeight` (qgridlayout.cpp:1566-1569).
+    pub fn row_minimum_height(&self, row: usize) -> i32 {
+        self.row_min_heights.get(row).copied().unwrap_or(0)
+    }
+
+    /// `QGridLayout::columnMinimumWidth` (qgridlayout.cpp:1589-1593).
+    pub fn column_minimum_width(&self, col: usize) -> i32 {
+        self.col_min_widths.get(col).copied().unwrap_or(0)
+    }
+
+    /// `QGridLayout::horizontalSpacing` (qgridlayout.cpp:1093-1101). Qt falls back to the style
+    /// when unset; this port always stores an explicit value (default 6).
+    pub fn horizontal_spacing(&self) -> i32 {
+        self.h_spacing
+    }
+
+    /// `QGridLayout::verticalSpacing` (qgridlayout.cpp:1121-1129).
+    pub fn vertical_spacing(&self) -> i32 {
+        self.v_spacing
     }
 
     /// `QGridLayout::addWidget(widget, row, column, rowSpan, columnSpan, alignment)`.
@@ -814,11 +872,6 @@ impl Layout for GridLayout {
         self.add_widget(widget, r, 0);
     }
 
-    fn add_widget_with_stretch(&mut self, widget: WidgetRef, _stretch: u32) {
-        let r = self.row_count();
-        self.add_widget(widget, r, 0);
-    }
-
     fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool {
         let Some(item) = self
             .items
@@ -831,7 +884,6 @@ impl Layout for GridLayout {
         self.update_layout();
         true
     }
-
 
     fn widgets(&self) -> Vec<WidgetRef> {
         self.items.iter().map(|it| it.widget.clone()).collect()
@@ -852,7 +904,13 @@ impl Layout for GridLayout {
     }
 
     fn spacing(&self) -> i32 {
-        self.h_spacing
+        // `QGridLayout::spacing` (qgridlayout.cpp:1150-1158): the common value, or -1 when the
+        // horizontal and vertical spacings differ.
+        if self.h_spacing == self.v_spacing {
+            self.h_spacing
+        } else {
+            -1
+        }
     }
 
     fn size_hint(&self) -> Size {

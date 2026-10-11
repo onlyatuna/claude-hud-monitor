@@ -23,7 +23,7 @@ impl PopupManager {
     /// Sets the active popup widget and acquires mouse grab.
     pub fn open_popup(&mut self, popup: WidgetRef, auto_dismiss: bool) {
         let id = popup.borrow().id();
-        popup.borrow_mut().set_visible(true);
+        crate::widget::set_widget_visible(&popup, true);
         self.active_popup = Some(popup);
         self.mouse_grabber = Some(id);
         self.auto_dismiss = auto_dismiss;
@@ -32,7 +32,7 @@ impl PopupManager {
     /// Explicitly closes the active popup.
     pub fn close_popup(&mut self) {
         if let Some(popup) = self.active_popup.take() {
-            popup.borrow_mut().set_visible(false);
+            crate::widget::set_widget_visible(&popup, false);
             popup.borrow_mut().update();
         }
         self.mouse_grabber = None;

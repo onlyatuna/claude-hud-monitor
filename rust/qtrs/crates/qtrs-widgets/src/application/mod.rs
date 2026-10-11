@@ -15,6 +15,7 @@ use crate::widget::WidgetRef;
 
 thread_local! {
     static TOP_LEVEL_WINDOWS: RefCell<Vec<ObjectId>> = const { RefCell::new(Vec::new()) };
+    static VISIBLE_WINDOWS: RefCell<Vec<ObjectId>> = const { RefCell::new(Vec::new()) };
     static ACTIVE_WINDOW_ID: RefCell<Option<ObjectId>> = const { RefCell::new(None) };
     static FOCUS_WIDGET: RefCell<Option<WidgetRef>> = const { RefCell::new(None) };
 }
@@ -129,25 +130,47 @@ impl Application {
         });
     }
 
-    /// Unregisters a top-level window when it is closed or destroyed.
+    /// Unregisters a top-level window when it is destroyed. Destroying a window is not closing it:
+    /// Qt's `~QWindow` neither emits `lastWindowClosed` nor quits (`qwindow.cpp:175-208`).
     pub fn unregister_window(window_id: ObjectId) {
-        let remaining_count = TOP_LEVEL_WINDOWS
-            .try_with(|wins| {
-                let mut list = wins.borrow_mut();
-                list.retain(|&id| id != window_id);
-                list.len()
-            })
-            .unwrap_or(0);
-
+        let _ = TOP_LEVEL_WINDOWS.try_with(|wins| wins.borrow_mut().retain(|&id| id != window_id));
+        let _ = VISIBLE_WINDOWS.try_with(|vis| vis.borrow_mut().retain(|&id| id != window_id));
         let _ = ACTIVE_WINDOW_ID.try_with(|act| {
             let mut curr = act.borrow_mut();
             if *curr == Some(window_id) {
                 *curr = None;
             }
         });
+    }
 
-        // Trigger quitOnLastWindowClosed logic if enabled
-        if remaining_count == 0 && GuiApplication::quit_on_last_window_closed() {
+    /// Records whether a top-level window is shown (`QWindow::isVisible`).
+    pub(crate) fn set_window_visible(window_id: ObjectId, visible: bool) {
+        let _ = VISIBLE_WINDOWS.try_with(|vis| {
+            let mut list = vis.borrow_mut();
+            list.retain(|&id| id != window_id);
+            if visible {
+                list.push(window_id);
+            }
+        });
+    }
+
+    /// Whether a top-level window is shown. An unregistered window is not.
+    pub(crate) fn is_window_visible(window_id: ObjectId) -> bool {
+        VISIBLE_WINDOWS
+            .try_with(|vis| vis.borrow().contains(&window_id))
+            .unwrap_or(false)
+    }
+
+    /// `QGuiApplicationPrivate::maybeLastWindowClosed` (qguiapplication.cpp:3933-3943), run after a
+    /// visible window has closed: when no visible top-level window is left and
+    /// `quitOnLastWindowClosed` is set, the application quits. `quit` does nothing outside `exec`,
+    /// as `canQuitAutomatically` requires (qcoreapplication.cpp:2074-2089). The `lastWindowClosed`
+    /// signal is not emitted here; see G11.2.f.
+    pub(crate) fn maybe_last_window_closed() {
+        let any_visible = VISIBLE_WINDOWS
+            .try_with(|vis| !vis.borrow().is_empty())
+            .unwrap_or(false);
+        if !any_visible && GuiApplication::quit_on_last_window_closed() {
             Self::quit();
         }
     }
@@ -269,6 +292,7 @@ impl Application {
     pub fn reset_for_test() {
         GuiApplication::reset_for_test();
         TOP_LEVEL_WINDOWS.with(|wins| wins.borrow_mut().clear());
+        VISIBLE_WINDOWS.with(|vis| vis.borrow_mut().clear());
         ACTIVE_WINDOW_ID.with(|act| *act.borrow_mut() = None);
         FOCUS_WIDGET.with(|fw| *fw.borrow_mut() = None);
         *GLOBAL_DOUBLE_CLICK_INTERVAL_MS.write().unwrap() = 400;
