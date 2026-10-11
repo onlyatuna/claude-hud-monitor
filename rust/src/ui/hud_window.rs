@@ -1747,6 +1747,35 @@ mod tests {
         assert_eq!(panel_alpha(&hud), alpha(hud.theme.panel_bg));
     }
 
+    /// An idle countdown pass in cards mode marks nothing for repaint: the countdowns are
+    /// day-granular so no text changes, and the hidden table page's dials are not visible, so
+    /// their `update()` is ignored as in Qt (`QWidgetPrivate::update`, qwidget.cpp:11367-11368).
+    /// (`update_clock` itself still repaints explicitly; that is G10.1.a.)
+    #[test]
+    fn idle_countdown_pass_in_cards_mode_marks_nothing_for_repaint() {
+        let (mut hud, _fetched) = hud_with_stubs();
+        assert_eq!(hud.config.lock().ui_mode, "cards");
+        let reset = chrono::Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(2);
+        for id in crate::providers::PROVIDER_IDS {
+            hud.on_data_fetched(&UsageMetrics {
+                provider_id: id.to_string(),
+                metric1_reset: Some(reset),
+                metric2_reset: Some(reset),
+                ..Default::default()
+            });
+        }
+        hud.update_clock();
+        for card in hud.cards.values_mut() {
+            card.update_countdown();
+        }
+        hud.table.update_countdowns();
+        let dirty = qtrs_widgets::window::collect_dirty_region(
+            &hud.window.root_widget(),
+            qtrs_gui::geometry::primitives::Point::new(0, 0),
+        );
+        assert_eq!(dirty, None, "an idle countdown pass marked a repaint");
+    }
+
     #[test]
     fn table_panel_is_translucent_over_an_installed_blur() {
         let hud = shown_table_hud(blur_installs);

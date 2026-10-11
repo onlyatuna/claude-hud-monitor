@@ -32,10 +32,7 @@ macro_rules! leaf_widget_common {
         }
 
         fn set_visible(&self, visible: bool) {
-            if self.base.visible.get() != visible {
-                self.base.visible.set(visible);
-                self.base.update_geometry();
-            }
+            self.base.set_visible(visible);
         }
 
         fn is_enabled(&self) -> bool {
@@ -205,24 +202,4 @@ pub(crate) fn dispatch_input_event<W: crate::widget::Widget + ?Sized>(
         }
         _ => false,
     }
-}
-
-/// Posts a repaint request for `dirty` (widget-local coordinates), mirroring `CheckBox::update`.
-pub(crate) fn request_update(
-    base: &crate::widget::WidgetBase,
-    dirty: qtrs_gui::geometry::primitives::Rect,
-) {
-    base.dirty.set(Some(dirty));
-    let target_receiver = base.window_id.get().unwrap_or(base.object_data.id);
-    qtrs_core::event_loop::post_event_to_thread(
-        qtrs_core::object::ThreadId::current(),
-        target_receiver,
-        qtrs_core::event::Event::new(qtrs_core::event::EventKind::UpdateRequest),
-    );
-}
-
-/// Local (0, 0)-anchored rectangle covering the whole widget.
-pub(crate) fn local_rect(base: &crate::widget::WidgetBase) -> qtrs_gui::geometry::primitives::Rect {
-    let g = base.geometry.get();
-    qtrs_gui::geometry::primitives::Rect::new(0, 0, g.width, g.height)
 }

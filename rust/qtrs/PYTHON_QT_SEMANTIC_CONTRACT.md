@@ -795,7 +795,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`PARTIAL`。`WidgetBase::update` 設 `dirty = Some(0,0,w,h)` 並 post `UpdateRequest` 給 `window_id`（`widget.rs`）；`Window::event(UpdateRequest)` 經 `RenderState::request_render` post 一個延後的 MetaCall；重入與借用衝突狀態機已實作；`UpdateRequest` 被壓縮；無事件迴圈時就地繪製。
 - **Known gap**
   - **G10.1.a [P1, READ]** `UpdateRequest` 只到達經 `unsafe Window::register()` 註冊的視窗；未註冊的接收者收到的非 MetaCall 事件被丟棄（`loop.rs`）。grep `.register()`、`register_qobject`、`bind_event_loop` 於 `rust/src` 為空 → **HUD 從不註冊視窗**，靠明確 `window.render_and_present()`（`hud_window.rs:531,637,725,738,761,775,788,831`、`main.rs:205-230`）與滑鼠事件後的 `has_pending_invalidation` 檢查繪製。從計時器或 worker 觸發的 widget `update()` **不會自行重繪**。
-  - **G10.1.b [P2]** `update()` 不看可見性。
+  - **G10.1.b [P2；HUD 會走到（卡片模式下隱藏的表格頁每秒 `update()` 弄髒 root）；已修復：RC-76]** （修復前）`update()` 不看可見性。
   - **G10.1.c [P2]** `Window::set_geometry`／`show`／`set_opacity`／`set_style_sheet` 同步繪製（Qt 延後）。
 - **Test**：既有（皆 `#![cfg(windows)]`）`test_resize_deferred_render.rs::{update_request_and_resize_share_one_gate, update_request_alone_is_deferred_through_the_gate, registered_paint_time_update_neither_recurses_nor_ping_pongs, borrow_conflict_retries_next_turn_and_recovers, borrow_conflict_is_bounded_then_rearmed_without_losing_repaint, registered_destroyed_window_deferred_render_is_a_noop}`。必要：**未註冊視窗（HUD 的建法）** 上 `child.update()` 後 `process_events` 恰好繪製一次；隱藏 widget 的 `update()` 不排程。
 - **HUD usage**：Python 只在 `usage_table.py:144` 呼叫 `update()`，從不 `repaint()`；Rust 明確 `render_and_present()`。
@@ -1270,7 +1270,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 374 項：D 12、P0 35、P1 169、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 103 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 374 項：D 12、P0 35、P1 169、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 104 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1494,7 +1494,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.7.a | P1 | harness 不在 CI、不是 `cargo test` |
 | G9.7.b | P1 | 涵蓋範圍如上 |
 | G10.1.a | P1, READ | `UpdateRequest` 只到達經 `unsafe Window::register()` 註冊的視窗 |
-| G10.1.b | P2 | `update()` 不看可見性 |
+| G10.1.b | P2；已修復：RC-76 | `update()` 不看可見性 |
 | G10.1.c | P2 | `Window::set_geometry`／`show`／`set_opacity`／`set_style_sheet` 同步繪製 |
 | G10.2.a | P2 | 無局部／立即重繪 API |
 | G10.2.b | P2 | 每個 widget 一個髒矩形，合併為一個外框 |
@@ -2736,4 +2736,25 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（本機 Windows）。
   - `qtrs-widgets/tests/test_widget_invalidation.rs::label_and_button_set_text_with_unchanged_text_requests_nothing`：修改前 FAIL（`Label::set_text with unchanged text requested a layout`，pending 1，預期 0）；修改後通過。同一測試也斷言文字改變時仍排 layout 並弄髒。
   - qtrs workspace（略過 `real_windows`）730 passed、0 failed；HUD 118 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check`（`rust/`）通過。
-- **Residual**：這一條只去掉 label 端。HUD 在卡片模式下仍每秒 present 一次：隱藏的表格頁（`StackedWidget` 非當前頁）的 `UsageDial::set_values` 每 tick `update()`，而 `collect_dirty_region` 不看可見性（G10.1.b），見 RC-76。
+- **Residual**：這一條只去掉 label 端；隱藏表格頁的 `UsageDial` 每 tick `update()` 見 RC-76（G10.1.b）；HUD 每秒手動整窗重繪見 G10.1.a。
+
+#### RC-76 隱藏 widget 的 `update()` 不重繪；隱藏時重繪讓出的區域
+
+- **Contract gaps**：G10.1.b。
+- **Qt 行為**：`QWidgetPrivate::update` 對 `!isVisible()` 的 widget 直接返回（`[QT-SRC widgets/kernel/qwidget.cpp:11367-11368]`）；`isVisible` 在任一祖先隱藏時為 false。隱藏時 `hide_sys` 在 widget 仍算可見時先 `invalidateBackingStore(q->rect())`（`[QT-SRC widgets/kernel/qwidget.cpp:8312-8319]`，`hide_helper` 先呼叫 `hide_sys` 再清 `WA_WState_Visible`，`:8253-8258`），所以讓出的區域會重繪。
+- **修改前**：`WidgetBase::update` 一律標髒並 post `UpdateRequest`；`collect_dirty_region` 不看可見性。HUD 卡片模式下，`StackedWidget` 的非當前頁（表格）在每秒 `update_clock` 經 `UsageDial::set_values` → `update()` 弄髒 root（RC-75 去掉 label 端之後仍在）。
+- **修正**（`qtrs-widgets/src/widget.rs`、`input_common.rs`、`progress_bar.rs`）：
+  - `WidgetBase::is_visible_in_tree`：自己與每個祖先都可見；正被借用的祖先（呼叫鏈上的 parent）視為可見。
+  - `update()` 在不可見時返回。
+  - `set_visible(false)` 在翻旗標**之前** `update()`（對應 `hide_sys`），之後 `update_geometry()`；顯示時 `update_geometry()` 照舊重繪自己。
+  - `EmptyWidget`、`input_common.rs` 的 `set_visible` 改為委派 `WidgetBase::set_visible`（原本各自複製一份）。
+- **Evidence**：`RAN`（本機 Windows）。修改前以「`update()` 不檢查可見性」模擬：
+  - `qtrs-widgets/tests/test_widget_invalidation.rs::update_under_a_hidden_parent_marks_nothing_until_the_parent_is_shown`：FAIL（`Button: update() under a hidden parent`，`Some(Rect 0,0,20,10)`，預期 `None`）。
+  - `rust/src/ui/hud_window.rs::idle_countdown_pass_in_cards_mode_marks_nothing_for_repaint`（卡片模式、以天為單位的倒數，跑一次卡片與表格的 `update_countdown` 後收集 root 髒區）：FAIL（`Some(Rect 79,160,217,194)`，預期 `None`）。
+  - `hiding_a_widget_repaints_the_area_it_leaves`（守住隱藏時的重繪）：修改前後皆通過。
+  - 修改後以上全通過。qtrs workspace（略過 `real_windows`）0 failed；HUD 118 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過。
+  - 修正時一併移除 `input_common::request_update`／`local_rect`：`ProgressBar::update` 經它直接標髒，繞過 `WidgetBase::update`（第一輪 after 測試因此在 `ProgressBar` FAIL）；改為委派 `WidgetBase::update`。
+- **Residual**：
+  - 未顯示的頂層視窗內的 widget 在 qtrs 仍會標髒（Qt 的 `isVisible` 對未顯示的視窗為 false）；視窗顯示時整窗重繪，像素結果相同。
+  - 祖先被借用時視為可見（保守，等同舊行為）。
+  - HUD 的 `update_clock` 仍每秒直接 `render_and_present()`（G10.1.a）；`do_render_and_present` 沒有髒區時以整窗為重繪區（`collect_dirty_region(..).unwrap_or(root_geom)`，等同 `QWidget::repaint()`），所以 HUD 仍每秒整窗 present 一次。要消除須讓 `update()` 自行到達視窗並移除 HUD 的手動呼叫（佇列 H）。

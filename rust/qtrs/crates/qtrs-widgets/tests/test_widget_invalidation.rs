@@ -202,6 +202,72 @@ fn set_visible_on_every_widget_type_requests_a_parent_layout_only_when_it_change
     }
 }
 
+/// `QWidgetPrivate::update` returns for a widget that is not visible, which includes one whose
+/// parent is hidden (qwidget.cpp:11367-11368): nothing is marked for repaint. Every widget type
+/// is checked under a hidden parent, and once the parent is shown again `update` repaints.
+#[test]
+fn update_under_a_hidden_parent_marks_nothing_until_the_parent_is_shown() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let parent: qtrs_widgets::WidgetRef = Rc::new(RefCell::new(Box::new(Frame::new())));
+    parent.borrow().set_visible(false);
+    for (name, widget) in every_widget_type() {
+        if name == "Menu" {
+            continue; // a popup window with its own `update`
+        }
+        widget.set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 20, 10));
+        widget.set_parent_widget(Some(Rc::downgrade(&parent)));
+        widget.clear_dirty();
+        widget.update();
+        assert_eq!(widget.dirty_rect(), None, "{name}: update() under a hidden parent");
+    }
+    parent.borrow().set_visible(true);
+    let child = Label::new("c");
+    child.set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 20, 10));
+    child.set_parent_widget(Some(Rc::downgrade(&parent)));
+    child.clear_dirty();
+    child.update();
+    assert!(
+        child.dirty_rect().is_some(),
+        "update() under a shown parent must repaint"
+    );
+}
+
+/// `hide_sys` invalidates the area the widget leaves before it stops counting as visible
+/// (qwidget.cpp:8312-8319), so its parent repaints there.
+#[test]
+fn hiding_a_widget_repaints_the_area_it_leaves() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let parent: qtrs_widgets::WidgetRef = Rc::new(RefCell::new(Box::new(Frame::new())));
+    parent
+        .borrow()
+        .set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 100, 50));
+    let child: qtrs_widgets::WidgetRef = Rc::new(RefCell::new(Box::new(Label::new("c"))));
+    child
+        .borrow()
+        .set_geometry(qtrs_gui::geometry::primitives::Rect::new(10, 5, 20, 10));
+    child
+        .borrow()
+        .set_parent_widget(Some(Rc::downgrade(&parent)));
+    parent.borrow_mut().add_child(Rc::clone(&child));
+    parent.borrow().clear_dirty();
+    child.borrow().clear_dirty();
+
+    child.borrow().set_visible(false);
+    let dirty = qtrs_widgets::window::collect_dirty_region(
+        &parent,
+        qtrs_gui::geometry::primitives::Point::new(0, 0),
+    );
+    assert_eq!(
+        dirty,
+        Some(qtrs_gui::geometry::primitives::Rect::new(10, 5, 20, 10)),
+        "the hidden child's area must be repainted"
+    );
+}
+
 #[cfg(windows)]
 mod pumped {
     //! Real `Window`, real event loop, one pump per observation.

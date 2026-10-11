@@ -458,8 +458,7 @@ impl Widget for ProgressBar {
     }
 
     fn update(&self) {
-        let rect = input_common::local_rect(&self.base);
-        input_common::request_update(&self.base, rect);
+        self.base.update();
     }
 
     fn focus_in_event(&mut self, _reason: FocusReason) {}

@@ -425,11 +425,37 @@ impl WidgetBase {
     }
 
     pub fn set_visible(&self, visible: bool) {
-        if self.visible.get() != visible {
-            self.visible.set(visible);
-            // `QWidget::setVisible` invalidates the parent layout (qwidget.cpp:8465-8468).
-            self.update_geometry();
+        if self.visible.get() == visible {
+            return;
         }
+        if !visible {
+            // `hide_sys` repaints the area the widget leaves while it still counts as visible
+            // (qwidget.cpp:8312-8319); once hidden, `update` does nothing.
+            self.update();
+        }
+        self.visible.set(visible);
+        // `QWidget::setVisible` invalidates the parent layout (qwidget.cpp:8465-8468); showing
+        // repaints the widget (`show_sys`).
+        self.update_geometry();
+    }
+
+    /// `QWidget::isVisible`: this widget and every ancestor are shown. An ancestor that is
+    /// mutably borrowed right now (it is driving this call) counts as shown.
+    fn is_visible_in_tree(&self) -> bool {
+        if !self.visible.get() {
+            return false;
+        }
+        let mut parent = self.parent_widget().and_then(|p| p.upgrade());
+        while let Some(p) = parent {
+            let Ok(p) = p.try_borrow() else {
+                return true;
+            };
+            if !p.is_visible() {
+                return false;
+            }
+            parent = p.widget_base().parent_widget().and_then(|w| w.upgrade());
+        }
+        true
     }
 
     pub fn is_enabled(&self) -> bool {
@@ -504,6 +530,10 @@ impl WidgetBase {
     }
 
     pub fn update(&self) {
+        // `QWidgetPrivate::update` ignores a widget that is not visible (qwidget.cpp:11367-11368).
+        if !self.is_visible_in_tree() {
+            return;
+        }
         let g = self.geometry.get();
         self.dirty.set(Some(Rect::new(0, 0, g.width, g.height)));
         let target_receiver = self.window_id.get().unwrap_or(self.object_data.id);
@@ -909,10 +939,7 @@ impl Widget for EmptyWidget {
     }
 
     fn set_visible(&self, visible: bool) {
-        if self.base.visible.get() != visible {
-            self.base.visible.set(visible);
-            self.base.update_geometry();
-        }
+        self.base.set_visible(visible);
     }
 
     fn is_enabled(&self) -> bool {
