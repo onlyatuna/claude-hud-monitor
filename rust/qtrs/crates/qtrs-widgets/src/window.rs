@@ -497,6 +497,43 @@ fn run_deferred_render(window_id: ObjectId) {
     state.render_phase();
 }
 
+/// `QRect::center`: the middle of the first and last pixel, `x + (w - 1) / 2` rounded toward
+/// zero (`qrect.h:253-257`). qtrs' `Rect::center` is `x + w / 2` (G11.4.e).
+fn qt_rect_centre(r: Rect) -> Point {
+    let mid = |a: i32, len: i32| ((2 * i64::from(a) + i64::from(len) - 1) / 2) as i32;
+    Point::new(mid(r.x, r.width), mid(r.y, r.height))
+}
+
+/// `QWindowPrivate::screenForGeometry` (`qwindow.cpp:1894-1910`): `current` if it holds the
+/// rect's centre, else the first screen that does, else the last screen the rect intersects,
+/// else `current`.
+fn screen_for_geometry(
+    rect: Rect,
+    current: Box<dyn qtrs_platform::screen::PlatformScreen>,
+) -> Box<dyn qtrs_platform::screen::PlatformScreen> {
+    let centre = qt_rect_centre(rect);
+    if current.geometry().contains(centre) {
+        return current;
+    }
+    let mut fallback = current;
+    for screen in platform().screens() {
+        if screen.geometry().contains(centre) {
+            return screen;
+        }
+        if screen.geometry().intersects(&rect) {
+            fallback = screen;
+        }
+    }
+    fallback
+}
+
+/// What a desktop rect on `screen` maps to native pixels with: the screen's top-left, which is
+/// the same point in logical and native coordinates (`qhighdpiscaling.cpp:713-721`), and its
+/// ratio.
+fn screen_mapping(screen: &dyn qtrs_platform::screen::PlatformScreen) -> (Point, f32) {
+    (screen.geometry().top_left(), screen.device_pixel_ratio())
+}
+
 pub struct Window {
     object_data: ObjectData,
     platform_window: std::rc::Rc<std::cell::RefCell<Box<dyn PlatformWindow>>>,
@@ -518,14 +555,14 @@ impl Window {
             let _t = qtrs_gui::startup_trace::span(|| "platform() first use".into());
             platform()
         };
-        // Where the window is placed is decided before it exists, so the primary screen's ratio
-        // positions it; the window's own ratio is read back from the created window below.
-        let placement_dpr = p.primary_screen().device_pixel_ratio();
-        let native_rect = if placement_dpr > 1.0 {
-            qtrs_platform::high_dpi::to_native_rect(geometry, placement_dpr)
-        } else {
-            geometry
-        };
+        // QWindowPrivate::create picks the screen for the requested geometry before the native
+        // window exists, starting from the primary screen (`qwindow.cpp:566-568`), and the
+        // Windows plugin creates it at `toNativePixels(geometry, window)` on that screen
+        // (`qwindowsintegration.cpp:299-300`).
+        let (origin, placement_dpr) =
+            screen_mapping(&*screen_for_geometry(geometry, p.primary_screen()));
+        let native_rect =
+            qtrs_platform::high_dpi::to_native_global_rect(geometry, origin, placement_dpr);
         let mut platform_win = {
             let _t = qtrs_gui::startup_trace::span(|| "create_window (native)".into());
             p.create_window(title, native_rect, flags)?
@@ -657,18 +694,27 @@ impl Window {
         self.platform_window.borrow().geometry()
     }
 
+    /// The screen top-left and ratio a move of this window to `rect` maps with:
+    /// `QWindow::setGeometry` uses `screenForGeometry(rect)` from the window's current screen
+    /// (`qwindow.cpp:1867-1870`). qtrs windows do not track their screen (G11.4.b), so the
+    /// current screen is the one `screenForGeometry` picks for the present geometry.
+    pub fn native_mapping_for(&self, rect: Rect) -> (Point, f32) {
+        let current = screen_for_geometry(self.geometry.get(), platform().primary_screen());
+        screen_mapping(&*screen_for_geometry(rect, current))
+    }
+
+    fn native_rect_for(&self, rect: Rect) -> Rect {
+        let (origin, dpr) = self.native_mapping_for(rect);
+        qtrs_platform::high_dpi::to_native_global_rect(rect, origin, dpr)
+    }
+
     pub fn set_geometry(&mut self, rect: Rect) {
+        let native_rect = self.native_rect_for(rect);
         let old_geom = self.geometry.get();
         let old_size = Size::new(old_geom.width, old_geom.height);
         self.geometry.set(rect);
         let size_changed = old_size.width != rect.width || old_size.height != rect.height;
 
-        let dpr = self.render_state.device_pixel_ratio.get();
-        let native_rect = if dpr > 1.0 {
-            qtrs_platform::high_dpi::to_native_rect(rect, dpr)
-        } else {
-            rect
-        };
         {
             self.render_state.within_set_geometry.set(true);
             let _guard = FlagGuard(&self.render_state.within_set_geometry);
@@ -706,12 +752,7 @@ impl Window {
     }
 
     pub fn set_geometry_silent(&mut self, rect: Rect) {
-        let dpr = self.render_state.device_pixel_ratio.get();
-        let native_rect = if dpr > 1.0 {
-            qtrs_platform::high_dpi::to_native_rect(rect, dpr)
-        } else {
-            rect
-        };
+        let native_rect = self.native_rect_for(rect);
         self.geometry.set(rect);
         self.platform_window.borrow_mut().set_geometry(native_rect);
     }
@@ -892,12 +933,14 @@ impl Window {
 
     /// Atomic geometry update and presentation for layered windows (e.g. cascading popup menus).
     /// Avoids SetWindowPos prior to painting, preventing visual jumping / tearing.
+    /// `rect` maps to native pixels as `set_geometry` maps it.
     pub fn present_custom_at<F: FnOnce(&mut Painter)>(&mut self, rect: Rect, f: F) {
         let dpr = self.render_state.device_pixel_ratio.get();
+        let target = self.native_rect_for(rect);
         self.geometry.set(rect);
         {
             let mut pw = self.platform_window.borrow_mut();
-            pw.set_target_pos(Some(Point::new(rect.x, rect.y)));
+            pw.set_target_pos(Some(Point::new(target.x, target.y)));
         }
         let mut bs = self.backing_store.borrow_mut();
         bs.resize(Size::new(rect.width, rect.height), dpr);

@@ -7,7 +7,7 @@ use crate::window_system_interface::{
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoopHandle;
 use qtrs_core::object::ObjectId;
-use qtrs_gui::geometry::primitives::{Rect, Size};
+use qtrs_gui::geometry::primitives::{Point, Rect, Size};
 #[allow(unused_imports)]
 use crate::presenter::SurfacePresenter;
 #[allow(unused_imports)]
@@ -565,6 +565,16 @@ pub fn get_window_dpr(hwnd: HWND) -> f32 {
     }
 }
 
+/// The logical desktop position of the window's physical top-left `native`: relative to the
+/// native top-left of the window's screen, scaled by the window's ratio `dpr`.
+#[cfg(windows)]
+fn window_global_position(hwnd: HWND, native: Point, dpr: f32) -> Point {
+    match crate::screen::win32_screen::window_screen_mapping(hwnd as isize) {
+        Some((origin, _)) => crate::high_dpi::from_native_global_point(native, origin, dpr),
+        None => crate::high_dpi::from_native_point(native, dpr),
+    }
+}
+
 #[cfg(windows)]
 fn get_x_lparam(lparam: LPARAM) -> i32 {
     (lparam as usize & 0xffff) as i16 as i32
@@ -726,12 +736,12 @@ unsafe fn native_window_proc_inner(
                 (logical_size.width as u32, logical_size.height as u32),
                 (phys_w as u32, phys_h as u32),
             );
+            // `fromNativeWindowGeometry` for a top-level window: the position maps against its
+            // screen's native top-left (`qwindowsysteminterface.cpp:298`,
+            // `qhighdpiscaling_p.h:254-260`).
             let mut r: RECT = unsafe { std::mem::zeroed() };
             let (x, y) = if unsafe { GetWindowRect(hwnd, &mut r) } != 0 {
-                let logical_pt = crate::high_dpi::from_native_point(
-                    qtrs_gui::geometry::primitives::Point::new(r.left, r.top),
-                    dpr,
-                );
+                let logical_pt = window_global_position(hwnd, Point::new(r.left, r.top), dpr);
                 (logical_pt.x, logical_pt.y)
             } else {
                 (0, 0)
@@ -754,10 +764,7 @@ unsafe fn native_window_proc_inner(
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);
             let phys_y = get_y_lparam(lparam);
-            let pos = crate::high_dpi::from_native_point(
-                qtrs_gui::geometry::primitives::Point::new(phys_x, phys_y),
-                dpr,
-            );
+            let pos = window_global_position(hwnd, Point::new(phys_x, phys_y), dpr);
             let mut r: RECT = unsafe { std::mem::zeroed() };
             let (w, h) = if unsafe { GetWindowRect(hwnd, &mut r) } != 0 {
                 let logical_size = crate::high_dpi::from_native_size(
@@ -888,7 +895,8 @@ unsafe fn native_window_proc_inner(
                 dpr,
             );
             let phys_global = get_cursor_global_pos();
-            let global_pos = crate::high_dpi::from_native_point(phys_global, dpr);
+            let global_pos =
+                crate::screen::win32_screen::from_native_global_point(phys_global, hwnd as isize);
             let button = match msg {
                 WM_LBUTTONDOWN => MouseButton::Left,
                 WM_RBUTTONDOWN => MouseButton::Right,
@@ -936,7 +944,8 @@ unsafe fn native_window_proc_inner(
                 dpr,
             );
             let phys_global = get_cursor_global_pos();
-            let global_pos = crate::high_dpi::from_native_point(phys_global, dpr);
+            let global_pos =
+                crate::screen::win32_screen::from_native_global_point(phys_global, hwnd as isize);
             let button = match msg {
                 WM_LBUTTONDBLCLK => MouseButton::Left,
                 WM_RBUTTONDBLCLK => MouseButton::Right,
@@ -984,7 +993,8 @@ unsafe fn native_window_proc_inner(
                 dpr,
             );
             let phys_global = get_cursor_global_pos();
-            let global_pos = crate::high_dpi::from_native_point(phys_global, dpr);
+            let global_pos =
+                crate::screen::win32_screen::from_native_global_point(phys_global, hwnd as isize);
             let button = match msg {
                 WM_LBUTTONUP => MouseButton::Left,
                 WM_RBUTTONUP => MouseButton::Right,
@@ -1039,7 +1049,8 @@ unsafe fn native_window_proc_inner(
                 dpr,
             );
             let phys_global = get_cursor_global_pos();
-            let global_pos = crate::high_dpi::from_native_point(phys_global, dpr);
+            let global_pos =
+                crate::screen::win32_screen::from_native_global_point(phys_global, hwnd as isize);
 
             dispatch_window_system_event(
                 Delivery::Default,
@@ -1064,7 +1075,8 @@ unsafe fn native_window_proc_inner(
             let global_x = get_x_lparam(lparam);
             let global_y = get_y_lparam(lparam);
             let phys_global = qtrs_gui::geometry::primitives::Point::new(global_x, global_y);
-            let global_pos = crate::high_dpi::from_native_point(phys_global, dpr);
+            let global_pos =
+                crate::screen::win32_screen::from_native_global_point(phys_global, hwnd as isize);
 
             let mut pt = windows_sys::Win32::Foundation::POINT {
                 x: global_x,
@@ -1813,21 +1825,14 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         let width = pixmap.physical_width();
         let height = pixmap.physical_height();
         let opacity = self.opacity;
+        // Native: the caller mapped it through the screen the window lands on.
         let target_pos = self.target_pos.take();
-        let dpr = get_window_dpr(self.hwnd);
-        let phys_target = target_pos.map(|p| {
-            if dpr > 1.0 {
-                crate::high_dpi::to_native_point(p, dpr)
-            } else {
-                p
-            }
-        });
         let dbg_t = crate::resize_debug::start();
         let res = match self.get_or_create_presenter(width, height) {
             Ok(p) => {
                 p.set_opacity(opacity);
                 if let crate::presenter::WindowsPresenter::Layered(lp) = p {
-                    if let Some(pos) = phys_target {
+                    if let Some(pos) = target_pos {
                         lp.set_target_pos(Some(windows_sys::Win32::Foundation::POINT { x: pos.x, y: pos.y }));
                     }
                 }
@@ -1842,7 +1847,7 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
             let p = self.get_or_create_presenter(width, height)?;
             p.set_opacity(opacity);
             if let crate::presenter::WindowsPresenter::Layered(lp) = p {
-                if let Some(pos) = phys_target {
+                if let Some(pos) = target_pos {
                     lp.set_target_pos(Some(windows_sys::Win32::Foundation::POINT { x: pos.x, y: pos.y }));
                 }
             }

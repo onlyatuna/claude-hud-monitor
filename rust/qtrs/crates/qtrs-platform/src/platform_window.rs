@@ -69,6 +69,7 @@ pub trait PlatformWindow: 'static {
         self.present_dirty(&mut clone, opacity, dirty.bounding_rect())
     }
     fn set_event_handler(&mut self, handler: Box<dyn WindowSystemEventHandler>);
+    /// The native desktop position the next `present_region` moves a layered window to.
     fn set_target_pos(&mut self, _pos: Option<qtrs_gui::geometry::Point>) {}
     fn native_handle(&self) -> isize;
     fn poll_events(&mut self) -> usize {

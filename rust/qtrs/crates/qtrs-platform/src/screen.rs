@@ -15,10 +15,61 @@ pub mod win32_screen {
     use windows_sys::core::BOOL;
     use windows_sys::Win32::Foundation::{LPARAM, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::{
-        EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, HDC, HMONITOR, MONITORINFO,
-        MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+        EnumDisplayMonitors, GetMonitorInfoW, MonitorFromPoint, MonitorFromWindow, HDC, HMONITOR,
+        MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
     };
     use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+
+    /// The monitor's effective DPI as a ratio, at least 1.0 (G11.4.d).
+    fn monitor_dpr(h_monitor: HMONITOR) -> f32 {
+        let mut dpi_x = 96u32;
+        let mut dpi_y = 96u32;
+        // SAFETY: valid out pointers; a stale monitor handle makes the call fail.
+        let hr = unsafe { GetDpiForMonitor(h_monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+        let dpr = if hr == 0 {
+            dpi_x as f32 / 96.0
+        } else {
+            // SAFETY: no arguments.
+            unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForSystem() as f32 / 96.0 }
+        };
+        dpr.max(1.0)
+    }
+
+    /// The monitor's physical top-left and ratio: what a desktop position on it maps with.
+    fn monitor_mapping(h_monitor: HMONITOR) -> Option<(Point, f32)> {
+        if h_monitor.is_null() {
+            return None;
+        }
+        // SAFETY: a zeroed MONITORINFO with cbSize set is a valid out parameter.
+        let rc = unsafe {
+            let mut info: MONITORINFO = std::mem::zeroed();
+            info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(h_monitor, &mut info) == 0 {
+                return None;
+            }
+            info.rcMonitor
+        };
+        Some((Point::new(rc.left, rc.top), monitor_dpr(h_monitor)))
+    }
+
+    /// The mapping of the screen a top-level window is on (`MonitorFromWindow`, as
+    /// `QWindowsWindow` finds its screen); `None` without a monitor.
+    pub fn window_screen_mapping(hwnd: isize) -> Option<(Point, f32)> {
+        // SAFETY: any handle value is accepted; an invalid one yields the nearest monitor or null.
+        monitor_mapping(unsafe { MonitorFromWindow(hwnd as _, MONITOR_DEFAULTTONEAREST) })
+    }
+
+    /// `QHighDpi::fromNativeGlobalPosition(pos, window)`: a desktop position maps through the
+    /// screen that contains it, else through the window's screen (`qhighdpiscaling.cpp:646-681,
+    /// 733-744`, used for mouse events at `qwindowsysteminterface.cpp:419-420`).
+    pub fn from_native_global_point(pt: Point, hwnd: isize) -> Point {
+        // SAFETY: plain value arguments.
+        let at = unsafe { MonitorFromPoint(POINT { x: pt.x, y: pt.y }, MONITOR_DEFAULTTONULL) };
+        match monitor_mapping(at).or_else(|| window_screen_mapping(hwnd)) {
+            Some((origin, dpr)) => crate::high_dpi::from_native_global_point(pt, origin, dpr),
+            None => pt,
+        }
+    }
 
     #[derive(Debug, Clone)]
     pub struct Win32Screen {
@@ -68,21 +119,12 @@ pub mod win32_screen {
                 }
                 let name = String::from_utf16_lossy(&info_ex.szDevice[..name_len]);
 
-                let mut dpi_x = 96u32;
-                let mut dpi_y = 96u32;
-                let hr = GetDpiForMonitor(h_monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y);
-                let dpr = if hr == 0 {
-                    dpi_x as f32 / 96.0
-                } else {
-                    windows_sys::Win32::UI::HiDpi::GetDpiForSystem() as f32 / 96.0
-                };
-
                 Some(Self {
                     name,
                     geometry,
                     available_geometry,
                     is_primary,
-                    dpr: dpr.max(1.0),
+                    dpr: monitor_dpr(h_monitor),
                 })
             }
         }

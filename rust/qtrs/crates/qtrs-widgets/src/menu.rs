@@ -597,17 +597,15 @@ impl Menu {
         self.present_popup(&mut window, root_origin, size);
 
         let mut chosen = None;
-        // The cursor position is in native pixels: the popup window's own ratio converts it.
-        let dpr = window.device_pixel_ratio();
+        // The cursor position is a native desktop position: it maps through the screen it is on.
         unsafe {
             let mut msg: MSG = std::mem::zeroed();
             while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) != 0 {
                 let mouse_pt = Point::new(msg.pt.x, msg.pt.y);
-                let mouse_screen = if dpr > 1.0 {
-                    qtrs_platform::high_dpi::from_native_point(mouse_pt, dpr)
-                } else {
-                    mouse_pt
-                };
+                let mouse_screen = qtrs_platform::screen::win32_screen::from_native_global_point(
+                    mouse_pt,
+                    hwnd as isize,
+                );
                 let local_pt = Point::new(mouse_screen.x - root_origin.x, mouse_screen.y - root_origin.y);
                 match msg.message {
                     WM_SETCURSOR => {
@@ -725,15 +723,15 @@ impl Menu {
 
     /// Repaints the popup window and sizes it to the menu plus its open sub-menus.
     ///
-    /// The window sits at the whole native pixel `round(x * dpr)` of its logical position, and
-    /// the menu is painted at the whole native pixel `round(root * dpr)`: the difference is a
-    /// whole number of device pixels, so the menu's own origin never moves relative to the pixel
-    /// grid when a sub-menu opens or closes and widens the window. A fractional logical shift
-    /// would round each glyph of every item differently and make the letter spacing jump.
+    /// The window sits at the whole native pixel its logical position maps to, and the menu is
+    /// painted at the whole native pixel its root maps to through the same screen: the
+    /// difference is a whole number of device pixels, so the menu's own origin never moves
+    /// relative to the pixel grid when a sub-menu opens or closes and widens the window. A
+    /// fractional logical shift would round each glyph of every item differently and make the
+    /// letter spacing jump.
     #[cfg(windows)]
     fn present_popup(&mut self, window: &mut crate::window::Window, root_origin: Point, min_size: Size) {
-        use qtrs_platform::high_dpi::to_native_point;
-        let dpr = window.device_pixel_ratio();
+        use qtrs_platform::high_dpi::to_native_global_point;
         let covered = self.covered_rect();
         let win_pos = Point::new(root_origin.x + covered.x, root_origin.y + covered.y);
         let win_rect = Rect::new(
@@ -742,8 +740,9 @@ impl Menu {
             covered.width.max(min_size.width),
             covered.height.max(min_size.height),
         );
-        let native_root = to_native_point(root_origin, dpr);
-        let native_win = to_native_point(win_pos, dpr);
+        let (origin, dpr) = window.native_mapping_for(win_rect);
+        let native_root = to_native_global_point(root_origin, origin, dpr);
+        let native_win = to_native_global_point(win_pos, origin, dpr);
         window.present_custom_at(win_rect, |painter| {
             painter.save();
             painter.translate_device(native_root.x - native_win.x, native_root.y - native_win.y);

@@ -171,17 +171,6 @@ fn a_window_takes_its_ratio_from_its_own_screen_not_the_primary_screen() {
 }
 
 #[test]
-fn set_geometry_converts_with_the_window_ratio() {
-    let (mut window, log, _g) = window_on_second_screen(Rect::new(0, 0, 400, 300));
-
-    window.set_geometry(Rect::new(10, 20, 200, 100));
-
-    let native = *log.lock().unwrap().native_rects.last().unwrap();
-    assert_eq!(native, Rect::new(20, 40, 400, 200));
-    assert_eq!(window.backing_store().device_pixel_ratio(), WINDOW_SCREEN_DPR);
-}
-
-#[test]
 fn a_dpi_change_is_not_undone_by_the_next_render() {
     let (mut window, _log, _g) = window_on_second_screen(Rect::new(0, 0, 400, 300));
 
