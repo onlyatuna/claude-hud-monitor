@@ -497,9 +497,9 @@ impl EventDispatcher for UnixEventDispatcher {
         self.reactor.unregister_socket_notifier(notifier);
     }
 
-    fn send_timer_events(&mut self, registry: &mut TimerRegistry) {
+    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
         let now_ms = crate::timer::current_time_ms();
-        let mut expired_ids = registry.expired_timers(now_ms);
+        let mut expired_ids = registry.lock().unwrap().expired_timers(now_ms);
 
         let pending = std::mem::take(&mut *self.pending_timers.lock().unwrap());
         for id in pending {
@@ -509,25 +509,11 @@ impl EventDispatcher for UnixEventDispatcher {
         }
 
         for id in expired_ids {
-            let Some(entry) = registry.get(id) else {
+            let Some((receiver, single_shot)) =
+                crate::timer::begin_timer_delivery(registry, id, now_ms)
+            else {
                 continue;
             };
-            if entry.in_timer_event {
-                continue;
-            }
-            let receiver = entry.receiver;
-            let single_shot = entry.single_shot;
-            let interval_ms = entry.interval_ms;
-            let mut timer_type = entry.timer_type;
-
-            if let Some(entry) = registry.get_mut(id) {
-                entry.in_timer_event = true;
-                let (adjusted, next_fire) =
-                    crate::timer::calculate_next_timeout(&mut timer_type, interval_ms, now_ms);
-                entry.timer_type = timer_type;
-                entry.interval_ms = adjusted;
-                entry.next_fire_ms = next_fire;
-            }
 
             let handled = crate::object::with_object_mut(receiver, |obj| {
                 let mut event = crate::event::Event::new(crate::event::EventKind::Timer {
@@ -540,10 +526,11 @@ impl EventDispatcher for UnixEventDispatcher {
                 crate::timer::dispatch_single_shot_callback(receiver);
             }
 
+            let mut reg = registry.lock().unwrap();
             if single_shot {
-                registry.unregister(id);
+                reg.unregister(id);
                 self.reactor.unregister_timer(id);
-            } else if let Some(entry) = registry.get_mut(id) {
+            } else if let Some(entry) = reg.get_mut(id) {
                 entry.in_timer_event = false;
             }
         }

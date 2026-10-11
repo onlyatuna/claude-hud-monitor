@@ -395,10 +395,7 @@ impl EventLoop {
         let effective_wait = can_wait && !self.exit_requested.load(Ordering::SeqCst);
 
         let res = self.dispatcher.process_events(effective_wait, next_timeout);
-        {
-            let mut reg = self.timer_registry.lock().unwrap();
-            self.dispatcher.send_timer_events(&mut reg);
-        }
+        self.dispatcher.send_timer_events(&self.timer_registry);
         if let DispatchResult::Quit(code) = res {
             self.exit_requested.store(true, Ordering::SeqCst);
             self.return_code.store(code, Ordering::SeqCst);

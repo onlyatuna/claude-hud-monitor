@@ -2877,6 +2877,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Evidence**：`RAN`（本機 Windows）。`timer.rs::tests`：
   - `zero_timer_repeats_each_iteration`：修改前 FAIL（`got 1`）；修改後通過。
   - `zero_single_shot_leaves_registry_empty` 與補上 registry 斷言的 `test_zero_timer_immediate_dispatch`（§0 規則 4）：修改前行程以 `0xc0000409` 中止（WndProc 內 panic），修改後通過。
+- **CI 修正（同 RC）**：第一次推送（run 38152960982）ubuntu 與 macOS 的 `qtrs_core`（`set_single_shot_true_on_active_timer_fires_once`）與 `layered_tests`（`test_level3_timer_and_event_loop_exit`）逾時 120 s。根因：unix／cocoa 的 `send_timer_events` 在持有 `timer_registry` 鎖時送出計時器事件，單發的 `timer_event` 現在呼叫 `stop()` → `disarm_in_context` 再鎖同一個 `Mutex` → 死結（slot 內 `stop()` 早已有同樣的潛在死結）。Qt 送計時器事件時不持有任何計時器清單鎖（`[QT-SRC corelib/kernel/qtimerinfo_unix.cpp:374-427]`）。修正：`EventDispatcher::send_timer_events` 改收 `&Mutex<TimerRegistry>`；共用 `timer::begin_timer_delivery` 只在記帳時短暫上鎖，送事件時不持鎖；unix、cocoa、Windows 三個 dispatcher 與 `EventLoop::process_events` 同步改；Windows 測試改以 `Mutex` 包 registry。本機 `cargo check --tests` 對 `x86_64-unknown-linux-gnu`、`aarch64-apple-darwin` 通過；unix 執行結果以 CI 為準。
 - **Residual**：unix／macOS 路徑只在 CI 執行；本機未驗證 unix 每次 `process_events` 只送一次 `[INFERENCE]`。覆寫 `QObject::event` 而不呼叫預設 `ZeroTimer` 分支的物件不會 repost（與 Qt 覆寫 `event` 不呼叫基底時相同）。
 
 #### RC-85 啟動中的 `set_interval`／`set_single_shot`

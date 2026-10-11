@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WAIT_TIMEOUT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -344,7 +344,7 @@ impl Win32EventDispatcher {
         &mut self,
         can_wait: bool,
         next_timer_timeout: Option<Duration>,
-        registry: &mut TimerRegistry,
+        registry: &Mutex<TimerRegistry>,
     ) -> DispatchResult {
         let result = self.process_events(can_wait, next_timer_timeout);
         self.send_timer_events(registry);
@@ -376,33 +376,18 @@ impl Win32EventDispatcher {
         }
     }
 
-    pub fn send_timer_events(&mut self, registry: &mut TimerRegistry) {
+    pub fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
         let pending = PENDING_WM_TIMERS.with(|q| std::mem::take(&mut *q.borrow_mut()));
         for raw_id in pending {
             let id = TimerId(raw_id);
-
-            let Some(entry) = registry.get(id) else {
+            let Some((receiver, single_shot)) =
+                crate::timer::begin_timer_delivery(registry, id, current_time_ms())
+            else {
                 continue;
             };
-            if entry.in_timer_event {
-                continue;
-            }
-            let receiver = entry.receiver;
-            let interval_ms = entry.interval_ms;
-            let mut timer_type = entry.timer_type;
-            let single_shot = entry.single_shot;
-
-            if let Some(entry) = registry.get_mut(id) {
-                entry.in_timer_event = true;
-                let (adjusted, next_fire) =
-                    calculate_next_timeout(&mut timer_type, interval_ms, current_time_ms());
-                entry.timer_type = timer_type;
-                entry.interval_ms = adjusted;
-                entry.next_fire_ms = next_fire;
-            }
 
             if single_shot {
-                registry.unregister(id);
+                registry.lock().unwrap().unregister(id);
                 unsafe {
                     KillTimer(self.internal_hwnd, raw_id as usize);
                 }
@@ -418,9 +403,13 @@ impl Win32EventDispatcher {
             }
 
             if !single_shot {
-                if let Some(entry) = registry.get_mut(id) {
-                    entry.in_timer_event = false;
-                } else {
+                let still_registered = registry
+                    .lock()
+                    .unwrap()
+                    .get_mut(id)
+                    .map(|entry| entry.in_timer_event = false)
+                    .is_some();
+                if !still_registered {
                     unsafe {
                         KillTimer(self.internal_hwnd, raw_id as usize);
                     }
@@ -493,7 +482,7 @@ impl EventDispatcher for Win32EventDispatcher {
         self.unregister_timer(entry);
     }
 
-    fn send_timer_events(&mut self, registry: &mut TimerRegistry) {
+    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
         self.send_timer_events(registry);
     }
 }
@@ -620,9 +609,12 @@ mod tests {
             data: ObjectData::new(ObjectId(7)),
             hits: Arc::clone(&hits),
         };
-        let mut registry = TimerRegistry::new();
-        let id = registry.register(ObjectId(7), 20, TimerType::Precise, true);
-        let entry = registry.get(id).unwrap().clone();
+        let registry = Mutex::new(TimerRegistry::new());
+        let id = registry
+            .lock()
+            .unwrap()
+            .register(ObjectId(7), 20, TimerType::Precise, true);
+        let entry = registry.lock().unwrap().get(id).unwrap().clone();
 
         let mut dispatcher = Win32EventDispatcher::new();
         dispatcher.register_timer(&entry);
@@ -633,7 +625,7 @@ mod tests {
             let _ = dispatcher.process_events_with_timers(
                 true,
                 Some(Duration::from_millis(50)),
-                &mut registry,
+                &registry,
             );
         }
 
@@ -641,9 +633,10 @@ mod tests {
         assert!(!fired.is_empty(), "expected at least one WM_TIMER dispatch");
         assert!(fired.iter().all(|&h| h == id.0 as u64));
 
-        if let Some(entry) = registry.get(id).cloned() {
+        let leftover = registry.lock().unwrap().get(id).cloned();
+        if let Some(entry) = leftover {
             dispatcher.unregister_timer(&entry);
-            registry.unregister(id);
+            registry.lock().unwrap().unregister(id);
         }
     }
 

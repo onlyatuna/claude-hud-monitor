@@ -674,6 +674,30 @@ impl Timer {
     }
 }
 
+/// Marks timer `id` as in delivery and schedules its next deadline, under a short registry lock.
+/// Returns the receiver and the single-shot flag, or `None` when the timer is gone or already in
+/// delivery. The lock is released before the caller sends the event: Qt sends the timer event with
+/// no registry lock held (`QTimerInfoList::activateTimers`, qtimerinfo_unix.cpp:374-427), so a slot
+/// may stop, restart or start timers.
+pub(crate) fn begin_timer_delivery(
+    registry: &Mutex<TimerRegistry>,
+    id: TimerId,
+    now_ms: u64,
+) -> Option<(ObjectId, bool)> {
+    let mut reg = registry.lock().unwrap();
+    let entry = reg.get_mut(id)?;
+    if entry.in_timer_event {
+        return None;
+    }
+    entry.in_timer_event = true;
+    let mut timer_type = entry.timer_type;
+    let (adjusted, next_fire) = calculate_next_timeout(&mut timer_type, entry.interval_ms, now_ms);
+    entry.timer_type = timer_type;
+    entry.interval_ms = adjusted;
+    entry.next_fire_ms = next_fire;
+    Some((entry.receiver, entry.single_shot))
+}
+
 /// Re-posts a zero-interval repeating timer after its slot ran (Qt re-arms zero timers each
 /// loop iteration). Skips the repost when the timer was stopped, restarted, or made single-shot
 /// inside the slot, since the registry entry for `timer_id` is then gone or changed.
@@ -894,7 +918,7 @@ mod tests {
     #[cfg(windows)]
     fn spin_until(
         dispatcher: &mut crate::event_loop::Win32EventDispatcher,
-        registry: &mut TimerRegistry,
+        registry: &Mutex<TimerRegistry>,
         timeout: std::time::Duration,
         mut condition: impl FnMut() -> bool,
     ) -> bool {
@@ -917,7 +941,7 @@ mod tests {
         use std::time::Duration;
 
         let mut dispatcher = Win32EventDispatcher::new();
-        let mut registry = TimerRegistry::new();
+        let registry = Mutex::new(TimerRegistry::new());
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
@@ -929,12 +953,12 @@ mod tests {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        unsafe { timer.start_with(&mut registry, &mut dispatcher) };
+        unsafe { timer.start_with(&mut registry.lock().unwrap(), &mut dispatcher) };
         assert!(timer.is_active());
 
         let ok = spin_until(
             &mut dispatcher,
-            &mut registry,
+            &registry,
             Duration::from_millis(500),
             || counter.load(Ordering::SeqCst) >= 1,
         );
@@ -943,7 +967,7 @@ mod tests {
         assert_eq!(counter.load(Ordering::SeqCst), 1);
 
         std::thread::sleep(Duration::from_millis(50));
-        dispatcher.process_events_with_timers(false, None, &mut registry);
+        dispatcher.process_events_with_timers(false, None, &registry);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
         assert!(
             !timer.is_active(),
@@ -959,7 +983,7 @@ mod tests {
         use std::time::Duration;
 
         let mut dispatcher = Win32EventDispatcher::new();
-        let mut registry = TimerRegistry::new();
+        let registry = Mutex::new(TimerRegistry::new());
 
         let counter = Arc::new(AtomicU32::new(0));
         let counter_clone = counter.clone();
@@ -970,14 +994,14 @@ mod tests {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        unsafe { timer.start_with(&mut registry, &mut dispatcher) };
+        unsafe { timer.start_with(&mut registry.lock().unwrap(), &mut dispatcher) };
 
-        timer.stop_with(&mut registry, &mut dispatcher);
+        timer.stop_with(&mut registry.lock().unwrap(), &mut dispatcher);
         assert!(!timer.is_active());
 
         let start = std::time::Instant::now();
         while start.elapsed() < Duration::from_millis(100) {
-            dispatcher.process_events_with_timers(false, None, &mut registry);
+            dispatcher.process_events_with_timers(false, None, &registry);
             std::thread::sleep(Duration::from_millis(5));
         }
 

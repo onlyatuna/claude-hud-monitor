@@ -11,7 +11,7 @@
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use crate::event::{NativeEventFilter, NativeEventFilterChain, NativeMessage};
@@ -491,28 +491,15 @@ impl EventDispatcher for CocoaEventDispatcher {
 
     fn unregister_timer(&mut self, _entry: &TimerEntry) {}
 
-    fn send_timer_events(&mut self, registry: &mut TimerRegistry) {
+    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
         let now_ms = crate::timer::current_time_ms();
-        for id in registry.expired_timers(now_ms) {
-            let Some(entry) = registry.get(id) else {
+        let expired_ids = registry.lock().unwrap().expired_timers(now_ms);
+        for id in expired_ids {
+            let Some((receiver, single_shot)) =
+                crate::timer::begin_timer_delivery(registry, id, now_ms)
+            else {
                 continue;
             };
-            if entry.in_timer_event {
-                continue;
-            }
-            let receiver = entry.receiver;
-            let single_shot = entry.single_shot;
-            let interval_ms = entry.interval_ms;
-            let mut timer_type = entry.timer_type;
-
-            if let Some(entry) = registry.get_mut(id) {
-                entry.in_timer_event = true;
-                let (adjusted, next_fire) =
-                    crate::timer::calculate_next_timeout(&mut timer_type, interval_ms, now_ms);
-                entry.timer_type = timer_type;
-                entry.interval_ms = adjusted;
-                entry.next_fire_ms = next_fire;
-            }
 
             let handled = crate::object::with_object_mut(receiver, |obj| {
                 let mut event = crate::event::Event::new(crate::event::EventKind::Timer {
@@ -525,9 +512,10 @@ impl EventDispatcher for CocoaEventDispatcher {
                 crate::timer::dispatch_single_shot_callback(receiver);
             }
 
+            let mut reg = registry.lock().unwrap();
             if single_shot {
-                registry.unregister(id);
-            } else if let Some(entry) = registry.get_mut(id) {
+                reg.unregister(id);
+            } else if let Some(entry) = reg.get_mut(id) {
                 entry.in_timer_event = false;
             }
         }

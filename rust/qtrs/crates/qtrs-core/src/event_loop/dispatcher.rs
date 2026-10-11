@@ -1,7 +1,7 @@
 use crate::event::{NativeEventFilter, NativeEventFilterChain, NativeMessage};
 use crate::timer::{TimerEntry, TimerRegistry};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +47,9 @@ pub trait EventDispatcher: Send + Sync {
     ) -> DispatchResult;
     fn register_timer(&mut self, entry: &TimerEntry);
     fn unregister_timer(&mut self, entry: &TimerEntry);
-    fn send_timer_events(&mut self, registry: &mut TimerRegistry);
+    /// Delivers due timers. Implementations lock `registry` only around bookkeeping, never while
+    /// the timer event is sent, so a slot may stop or restart timers.
+    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>);
     fn register_socket_notifier(&mut self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
     fn unregister_socket_notifier(&mut self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
     /// The concrete dispatcher's type name, like Qt's
@@ -140,7 +142,7 @@ impl EventDispatcher for GenericEventDispatcher {
 
     fn unregister_timer(&mut self, _entry: &TimerEntry) {}
 
-    fn send_timer_events(&mut self, _registry: &mut TimerRegistry) {}
+    fn send_timer_events(&mut self, _registry: &Mutex<TimerRegistry>) {}
 }
 
 /// Which creation path an event loop comes from, which decides its dispatcher, as in Qt:
@@ -256,7 +258,7 @@ impl EventDispatcher for DarwinEventDispatcher {
     fn unregister_timer(&mut self, entry: &TimerEntry) {
         self.inner_mut().unregister_timer(entry);
     }
-    fn send_timer_events(&mut self, registry: &mut TimerRegistry) {
+    fn send_timer_events(&mut self, registry: &Mutex<TimerRegistry>) {
         self.inner_mut().send_timer_events(registry);
     }
     fn register_socket_notifier(&mut self, notifier: &Arc<crate::event_loop::SocketNotifier>) {
