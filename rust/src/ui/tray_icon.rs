@@ -7,6 +7,7 @@ use crate::autostart::{is_autostart_enabled, set_autostart};
 use qtrs_gui::paint::pixmap::Pixmap;
 use qtrs_gui::tiny_skia::Color;
 use qtrs_platform::menu::{create_platform_menu, PlatformMenu};
+use qtrs_platform::platform_tray::TrayMessageIcon;
 use qtrs_platform::tray_icon::TrayIcon;
 
 use super::hud_window::HUDWindow;
@@ -570,6 +571,44 @@ pub fn build_hud_context_menu(cfg: &Config) -> qtrs_widgets::menu::Menu {
     menu
 }
 
+/// Balloon sink: Python `tray_icon.showMessage(title, text, icon, msecs)`. The shell sink is
+/// `TrayIcon::show_message`; tests record the calls instead.
+pub(crate) type ShowMessage<'a> = &'a mut dyn FnMut(&str, &str, TrayMessageIcon, u32);
+
+/// Python `HUDWindow.toggle_click_through` (`hud_window.py:534-536`). The tray action and the
+/// global hotkey both reach it through `HUDTrayIcon::toggle_click_through`.
+pub(crate) fn run_click_through_toggle(hud: &mut HUDWindow, show_message: ShowMessage<'_>) {
+    hud.toggle_click_through();
+    if hud.is_click_through {
+        show_message(
+            "👻 滑鼠穿透模式已啟用",
+            "點擊將直接穿透 HUD。\n如需調整設定或移動，請按 Alt+Shift+C 或右鍵點擊系統匣圖示取消。",
+            TrayMessageIcon::Information,
+            4000,
+        );
+    }
+}
+
+/// Python `_toggle_autostart` (`tray_icon.py:144-151`).
+pub(crate) fn run_autostart_toggle(
+    config: &Mutex<Config>,
+    is_enabled: impl FnOnce() -> bool,
+    set_enabled: impl FnOnce(bool) -> bool,
+    show_message: ShowMessage<'_>,
+) {
+    let new_val = !is_enabled();
+    if set_enabled(new_val) {
+        crate::config::ConfigManager::update_and_save(config, |cfg| cfg.autostart = new_val);
+    } else {
+        show_message(
+            "開機啟動",
+            "設定失敗，請檢查系統權限",
+            TrayMessageIcon::Information,
+            10000,
+        );
+    }
+}
+
 pub struct HUDTrayIcon {
     pub tray: Box<TrayIcon>,
     pub config: Arc<Mutex<Config>>,
@@ -592,6 +631,29 @@ impl HUDTrayIcon {
     pub fn update_menu_state(&mut self) {
         // Dynamic on-demand menu: build_hud_context_menu(&cfg) is built whenever
         // requested, ensuring perfect parity with the HUD right-click menu without Win32 GDI caching.
+    }
+
+    /// The one place a click-through toggle happens: the tray action and the global hotkey both
+    /// call this, so the balloon follows the new state the same way for both.
+    pub fn toggle_click_through(&mut self, hud: &mut HUDWindow) {
+        let tray = &mut self.tray;
+        run_click_through_toggle(hud, &mut |title, msg, icon, ms| {
+            let _ = tray.show_message(title, msg, icon, ms);
+        });
+        self.update_menu_state();
+    }
+
+    fn toggle_autostart(&mut self) {
+        let tray = &mut self.tray;
+        run_autostart_toggle(
+            &self.config,
+            is_autostart_enabled,
+            set_autostart,
+            &mut |title, msg, icon, ms| {
+                let _ = tray.show_message(title, msg, icon, ms);
+            },
+        );
+        self.update_menu_state();
     }
 
     pub fn handle_action(&mut self, action_id: u32, hud: &mut HUDWindow) -> bool {
@@ -656,8 +718,7 @@ impl HUDTrayIcon {
                 self.update_menu_state();
             }
             ACTION_CLICK_THROUGH => {
-                hud.toggle_click_through();
-                self.update_menu_state();
+                self.toggle_click_through(hud);
             }
             ACTION_ALWAYS_ON_TOP => {
                 hud.toggle_always_on_top();
@@ -710,9 +771,7 @@ impl HUDTrayIcon {
                 self.update_menu_state();
             }
             ACTION_AUTOSTART => {
-                let enabled = is_autostart_enabled();
-                let _ = set_autostart(!enabled);
-                self.update_menu_state();
+                self.toggle_autostart();
             }
             ACTION_OPEN_LOGS => {
                 crate::logger::open_log_dir();
@@ -746,6 +805,7 @@ impl HUDTrayIcon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::{Cell, RefCell};
 
     #[test]
     fn test_context_menu_parity_cards_and_table_modes() {
@@ -879,5 +939,133 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Python's balloon texts, byte for byte (`hud_window.py:525-526`, `tray_icon.py:150`).
+    const GHOST_NOTICE_TITLE: &str = "👻 滑鼠穿透模式已啟用";
+    const GHOST_NOTICE_TEXT: &str =
+        "點擊將直接穿透 HUD。\n如需調整設定或移動，請按 Alt+Shift+C 或右鍵點擊系統匣圖示取消。";
+    const AUTOSTART_FAILED_TITLE: &str = "開機啟動";
+    const AUTOSTART_FAILED_TEXT: &str = "設定失敗，請檢查系統權限";
+
+    /// One balloon as the shell sink receives it: title, text, icon, duration in ms.
+    type Balloon = (String, String, TrayMessageIcon, u32);
+
+    #[test]
+    fn tray_click_through_action_balloons_only_when_enabling() {
+        let cfg = Arc::new(Mutex::new(Config {
+            click_through: false,
+            ..Config::default()
+        }));
+        let refresh = Arc::new(Mutex::new(
+            crate::refresh_controller::RefreshController::new(60),
+        ));
+        let mut hud = HUDWindow::with_providers(
+            Arc::clone(&cfg),
+            refresh,
+            crate::providers::stub::stub_providers(),
+        )
+        .expect("HUDWindow::with_providers");
+        let balloons = RefCell::new(Vec::<Balloon>::new());
+        let mut sink = |title: &str, text: &str, icon: TrayMessageIcon, ms: u32| {
+            balloons
+                .borrow_mut()
+                .push((title.to_string(), text.to_string(), icon, ms));
+        };
+        let ghost_notice = (
+            GHOST_NOTICE_TITLE.to_string(),
+            GHOST_NOTICE_TEXT.to_string(),
+            TrayMessageIcon::Information,
+            4000,
+        );
+
+        run_click_through_toggle(&mut hud, &mut sink);
+        assert!(
+            hud.is_click_through,
+            "the first toggle enables click-through"
+        );
+        assert_eq!(*balloons.borrow(), vec![ghost_notice]);
+
+        run_click_through_toggle(&mut hud, &mut sink);
+        assert!(
+            !hud.is_click_through,
+            "the second toggle disables click-through"
+        );
+        assert_eq!(balloons.borrow().len(), 1, "disabling must not balloon");
+    }
+
+    #[test]
+    fn tray_autostart_action_balloons_and_keeps_config_when_setting_fails() {
+        let cfg = Arc::new(Mutex::new(Config {
+            autostart: false,
+            ..Config::default()
+        }));
+        let balloons = RefCell::new(Vec::<Balloon>::new());
+        let mut sink = |title: &str, text: &str, icon: TrayMessageIcon, ms: u32| {
+            balloons
+                .borrow_mut()
+                .push((title.to_string(), text.to_string(), icon, ms));
+        };
+        let requested = Cell::new(None);
+
+        run_autostart_toggle(
+            &cfg,
+            || false,
+            |enable| {
+                requested.set(Some(enable));
+                false
+            },
+            &mut sink,
+        );
+
+        assert_eq!(requested.get(), Some(true));
+        assert_eq!(
+            *balloons.borrow(),
+            vec![(
+                AUTOSTART_FAILED_TITLE.to_string(),
+                AUTOSTART_FAILED_TEXT.to_string(),
+                TrayMessageIcon::Information,
+                10000,
+            )]
+        );
+        assert!(
+            !cfg.lock().autostart,
+            "a failed switch must not change config.autostart"
+        );
+    }
+
+    #[test]
+    fn tray_autostart_action_persists_new_value_without_balloon_when_setting_succeeds() {
+        let cfg = Arc::new(Mutex::new(Config {
+            autostart: false,
+            ..Config::default()
+        }));
+        let balloons = RefCell::new(Vec::<Balloon>::new());
+        let mut sink = |title: &str, text: &str, icon: TrayMessageIcon, ms: u32| {
+            balloons
+                .borrow_mut()
+                .push((title.to_string(), text.to_string(), icon, ms));
+        };
+        let requested = Cell::new(None);
+
+        run_autostart_toggle(
+            &cfg,
+            || false,
+            |enable| {
+                requested.set(Some(enable));
+                true
+            },
+            &mut sink,
+        );
+
+        assert_eq!(requested.get(), Some(true));
+        assert!(
+            balloons.borrow().is_empty(),
+            "a successful switch shows no balloon"
+        );
+        assert!(
+            cfg.lock().autostart,
+            "config.autostart must follow the new value"
+        );
     }
 }

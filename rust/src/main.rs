@@ -476,7 +476,12 @@ fn main() -> std::process::ExitCode {
                                 hud.borrow_mut().toggle_visibility();
                             }
                             if hk.poll_clickthrough() {
-                                hud.borrow_mut().toggle_click_through();
+                                MAIN_TRAY.with(|t_cell| {
+                                    if let Some(tray) = t_cell.borrow().as_ref() {
+                                        tray.borrow_mut()
+                                            .toggle_click_through(&mut hud.borrow_mut());
+                                    }
+                                });
                             }
                         }
                     });

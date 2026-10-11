@@ -1189,7 +1189,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.k [P1] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 修復 |
 | G12.5.l [P0, READ；= G11.4.a；已修復：RC-13] | 螢幕選擇／脫離螢幕還原規則 | G11.4.a | 修復 |
 | G12.5.m [P1] | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu | `tray_icon.py:54-122` vs `rust/src/ui/tray_icon.rs:73-240` | 需決定 |
-| G12.5.n [P1] | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 | `main.rs:503`、`main.rs:486-488`、`hud_window.rs:526-532`、`tray_icon.rs:686-690` | 修復 |
+| G12.5.n [P1；已修復：RC-12（hotkey 失敗）、RC-77（ghost 啟用、autostart 失敗）] | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 | `main.rs:503`、`main.rs:486-488`、`hud_window.rs:526-532`、`tray_icon.rs:686-690` | 修復 |
 | G12.5.o [P1] | QMenu 外觀為寫死數值，非 QSS | G8.5.f | 修復或核准 |
 | G12.5.p [P1] | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** | `usage_table.rs` vs `usage_table.py:88` | 已修復（`qtrs_gui::color::darker`，PySide6 逐位元比對；圖例像素與 PySide6 相同） |
 | G12.5.q [P1] | `UsageDial` 最小尺寸 0 vs 84。**已修復：RC-29** | G8.3.e | 已修復（`minimum_size()` 84×84；PySide6 oracle 比對擠壓後的 dial 尺寸） |
@@ -1270,7 +1270,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 374 項：D 12、P0 35、P1 169、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 104 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 374 項：D 12、P0 35、P1 169、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 105 項：G2.1.a、G2.5.a、G3.2.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1618,7 +1618,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.k | P1 | `--smoke-test` 不檢查設定持久化 |
 | G12.5.l | P0, READ；= G11.4.a；已修復：RC-13 | 螢幕選擇／脫離螢幕還原規則 |
 | G12.5.m | P1 | 托盤選單：Python 的托盤選單沒有鎖定／不透明度／間隔／重設／隱藏等項目；Rust 托盤選單是完整的 context menu |
-| G12.5.n | P1 | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 |
+| G12.5.n | P1, RAN；已修復：RC-12、RC-77 | 托盤通知：Rust 只有「ghost paused」；缺 hotkey 失敗、ghost 啟用、autostart 失敗 |
 | G12.5.o | P1 | QMenu 外觀為寫死數值，非 QSS |
 | G12.5.p | P1；已修復：RC-25 | `QColor.darker(110)` 缺失：Rust 用原色。**已修復：RC-25** |
 | G12.5.q | P1；已修復：RC-29 | `UsageDial` 最小尺寸 0 vs 84 |
@@ -2758,3 +2758,23 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - 未顯示的頂層視窗內的 widget 在 qtrs 仍會標髒（Qt 的 `isVisible` 對未顯示的視窗為 false）；視窗顯示時整窗重繪，像素結果相同。
   - 祖先被借用時視為可見（保守，等同舊行為）。
   - HUD 的 `update_clock` 仍每秒直接 `render_and_present()`（G10.1.a）；`do_render_and_present` 沒有髒區時以整窗為重繪區（`collect_dirty_region(..).unwrap_or(root_geom)`，等同 `QWidget::repaint()`），所以 HUD 仍每秒整窗 present 一次。要消除須讓 `update()` 自行到達視窗並移除 HUD 的手動呼叫（佇列 H）。
+
+#### RC-77 托盤通知：啟用滑鼠穿透、開機啟動失敗
+
+- **Contract gaps**：G12.5.n（hotkey 失敗通知已由 RC-12 補上；本條補剩下兩則）。
+- **Python 行為**：
+  - `toggle_click_through`（`hud_window.py:534-536`，托盤選單 `tray_icon.py:99` 與熱鍵 `main.py:75` 都接它）→ `set_click_through(enable, notify=True)`；只在**啟用**時 `showMessage("👻 滑鼠穿透模式已啟用", …, icon, 4000)`（`hud_window.py:523-529`）。啟動時的 `_safe_init_click_through` 用 `notify=False`。
+  - `_toggle_autostart`（`tray_icon.py:144-151`）：成功時 `config.set("autostart", new)`；失敗時 `showMessage("開機啟動", "設定失敗，請檢查系統權限")`，即 Qt 預設 `Information`、10000 ms（`[QT-SRC widgets/util/qsystemtrayicon.h:69-71]`）。
+- **修改前**：托盤動作與熱鍵直接呼叫 `HUDWindow::toggle_click_through`，沒有通知；`ACTION_AUTOSTART` 丟掉 `set_autostart` 的回傳值，也不寫 `config.autostart`。
+- **修正**（`rust/src/ui/tray_icon.rs`、`rust/src/main.rs`）：
+  - `run_click_through_toggle(hud, show_message)`：切換後若為啟用就送通知；`HUDTrayIcon::toggle_click_through` 是托盤動作與熱鍵（`main.rs` 經 `MAIN_TRAY`）共用的唯一入口。啟動撤銷路徑不變（不通知）。
+  - `run_autostart_toggle(config, is_enabled, set_enabled, show_message)`：成功時 `ConfigManager::update_and_save` 寫 `autostart`，失敗時送通知。
+  - 通知圖示用 `TrayMessageIcon::Information`：Python 的 👻 通知帶 `tray.icon()`（自訂圖示），qtrs 不支援自訂圖示（G11.8.b）。
+- **Evidence**：`RAN`（本機 Windows）。測試以記錄用的 sink 取代 `TrayIcon::show_message`、以閉包取代登錄機碼讀寫：
+  - `tray_click_through_action_balloons_only_when_enabling`：修改前 FAIL（`left: []`，預期一則 👻 通知、Information、4000）；修改後通過，第二次切換（停用）不通知。
+  - `tray_autostart_action_balloons_and_keeps_config_when_setting_fails`：修改前 FAIL（`left: []`）；修改後通過，`config.autostart` 不變。
+  - `tray_autostart_action_persists_new_value_without_balloon_when_setting_succeeds`：修改前 FAIL（`config.autostart must follow the new value`）；修改後通過。
+  - HUD 全套 121 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過。
+- **Residual**：
+  - `HUDTrayIcon::new` 會建立真的 `Shell_NotifyIcon`，測試因此只走到共用函式，`ACTION_*` 分支與 `main.rs` 熱鍵閉包本身沒有被測試執行。
+  - 既有 `test_tray_and_hud_menu_unified_parity` 會建立真的托盤圖示（未改）。
