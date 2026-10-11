@@ -172,20 +172,23 @@ pub mod win32_screen {
             self.name.clone()
         }
 
+        /// `QScreenPrivate::updateGeometry` maps `rcMonitor` and `rcWork` with
+        /// `fromNativeGlobalPosition` against this screen's native top-left (`qscreen.cpp:65-69`,
+        /// `qhighdpiscaling.cpp:713-721`), so the screen keeps its native top-left.
         fn geometry(&self) -> Rect {
-            if self.dpr > 1.0 {
-                crate::high_dpi::from_native_rect(self.geometry, self.dpr)
-            } else {
-                self.geometry
-            }
+            crate::high_dpi::from_native_global_rect(
+                self.geometry,
+                self.geometry.top_left(),
+                self.dpr,
+            )
         }
 
         fn available_geometry(&self) -> Rect {
-            if self.dpr > 1.0 {
-                crate::high_dpi::from_native_rect(self.available_geometry, self.dpr)
-            } else {
-                self.available_geometry
-            }
+            crate::high_dpi::from_native_global_rect(
+                self.available_geometry,
+                self.geometry.top_left(),
+                self.dpr,
+            )
         }
 
         fn is_primary(&self) -> bool {
@@ -194,6 +197,79 @@ pub mod win32_screen {
 
         fn device_pixel_ratio(&self) -> f32 {
             self.dpr
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn screen(native: Rect, work: Rect, dpr: f32) -> Win32Screen {
+            Win32Screen {
+                name: String::new(),
+                geometry: native,
+                available_geometry: work,
+                is_primary: false,
+                dpr,
+            }
+        }
+
+        // QScreenPrivate::updateGeometry maps rcMonitor and rcWork with fromNativeGlobalPosition,
+        // relative to the screen's native top-left (qscreen.cpp:65-69, qhighdpiscaling.cpp:720),
+        // so a screen keeps its native top-left and only its size scales.
+
+        #[test]
+        fn a_scaled_screen_right_of_the_primary_keeps_its_native_origin() {
+            // 150% screen right of a 1920 px primary, taskbar of 72 native px at its bottom.
+            let s = screen(
+                Rect::new(1920, 0, 2880, 1620),
+                Rect::new(1920, 0, 2880, 1548),
+                1.5,
+            );
+            assert_eq!(s.geometry(), Rect::new(1920, 0, 1920, 1080));
+            assert_eq!(s.available_geometry(), Rect::new(1920, 0, 1920, 1032));
+        }
+
+        #[test]
+        fn a_scaled_screen_left_of_the_primary_keeps_its_negative_origin() {
+            let s = screen(
+                Rect::new(-2880, 0, 2880, 1620),
+                Rect::new(-2880, 0, 2880, 1620),
+                1.5,
+            );
+            assert_eq!(s.geometry(), Rect::new(-2880, 0, 1920, 1080));
+            assert_eq!(s.available_geometry(), Rect::new(-2880, 0, 1920, 1080));
+        }
+
+        #[test]
+        fn a_work_area_offset_from_the_screen_origin_scales_relative_to_that_origin() {
+            // 150% screen below the primary with a 48 native px taskbar at its top: rcWork starts
+            // 48 px below rcMonitor, which is 32 logical px.
+            let s = screen(
+                Rect::new(0, 1080, 2880, 1620),
+                Rect::new(0, 1128, 2880, 1572),
+                1.5,
+            );
+            assert_eq!(s.geometry(), Rect::new(0, 1080, 1920, 1080));
+            assert_eq!(s.available_geometry(), Rect::new(0, 1112, 1920, 1048));
+        }
+
+        #[test]
+        fn a_scaled_screen_at_the_desktop_origin_and_an_unscaled_screen_beside_it() {
+            let primary = screen(
+                Rect::new(0, 0, 2880, 1620),
+                Rect::new(0, 0, 2880, 1572),
+                1.5,
+            );
+            assert_eq!(primary.geometry(), Rect::new(0, 0, 1920, 1080));
+            assert_eq!(primary.available_geometry(), Rect::new(0, 0, 1920, 1048));
+            let side = screen(
+                Rect::new(2880, 0, 1920, 1080),
+                Rect::new(2880, 0, 1920, 1032),
+                1.0,
+            );
+            assert_eq!(side.geometry(), Rect::new(2880, 0, 1920, 1080));
+            assert_eq!(side.available_geometry(), Rect::new(2880, 0, 1920, 1032));
         }
     }
 }

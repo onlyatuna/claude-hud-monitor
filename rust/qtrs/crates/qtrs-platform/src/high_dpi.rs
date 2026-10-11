@@ -109,3 +109,20 @@ pub fn to_native_rect(rect: Rect, dpr: f32) -> Rect {
         )
     }
 }
+
+/// Converts a physical rect in desktop coordinates to logical coordinates on the screen whose
+/// physical top-left is `screen_origin`. Matches `QHighDpi::fromNative(rect, factor, origin)`
+/// (`qhighdpiscaling_p.h:270-274`, `scale` at `:150-158`): the top-left moves relative to the
+/// screen origin, so the origin itself is the same in both systems; the size only scales.
+/// `qRound` rounds half away from zero, as `f64::round` does.
+#[inline]
+pub fn from_native_global_rect(rect: Rect, screen_origin: Point, dpr: f32) -> Rect {
+    let factor = 1.0 / f64::from(dpr);
+    let scale = |v: i32| (f64::from(v) * factor).round() as i32;
+    Rect::new(
+        screen_origin.x + scale(rect.x - screen_origin.x),
+        screen_origin.y + scale(rect.y - screen_origin.y),
+        scale(rect.width),
+        scale(rect.height),
+    )
+}
