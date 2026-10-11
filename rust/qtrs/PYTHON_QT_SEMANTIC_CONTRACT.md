@@ -251,7 +251,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G3.4.a [P1, RAN；已修復：RC-78]** （修復前）`notify_helper` 迭代 filter id 的**快照**；被前一個 filter 移除的 filter 仍會被呼叫（Qt 跳過）。現有測試只測「在自己 callback 內移除自己」。
   - **G3.4.b [P2, READ]** filter 物件正被借用（例如 parent 在 `event()` 中對它過濾的 child 送事件）時，filter 被靜默跳過，事件無過濾遞送。
-  - **G3.4.c [P1, READ]** Windows 計時器遞送不經 `notify_helper`／`event()`（見 C5.2）。
+  - **G3.4.c [P1, RAN；已修復：RC-87]** （修復前）Windows 計時器遞送不經 `notify_helper`／`event()`（見 C5.2）。
   - **G3.4.d [D]** 跨執行緒 `send_event` 回 false 且不做事（Qt 會在呼叫端執行緒遞送並警告）。理由：同 G2.7.b。
   - **G3.4.e [P2, READ]** `install_event_filter` 拒絕自己與直接環（Qt 允許）。
   - **G3.4.f [P2, READ]** filter 吃掉事件時 `send_event`／`notify_helper` 回 false；Qt `notify_helper` 回 `filtered = true`（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1285-1295]`），`sendEvent` 因而回 true。既有 `loop.rs::test_notify_helper_pipeline_and_safe_removal` 釘住 false。HUD 不裝 QObject filter。
@@ -357,7 +357,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：到期計時器 MUST 走與其他事件相同的 notify 管線；同一計時器 MUST 不重入。
 - **Current implementation**：重入保護與重算：`IMPLEMENTED`（`dispatcher_win.rs`）。
 - **Known gap**
-  - **G5.2.a [P1, READ]** Windows 路徑直接呼叫 `obj.timer_event(id)`，不建 `Event`、不經 `notify_helper`/`event()`。unix／cocoa 建了 `EventKind::Timer` 並呼叫 `event()`，仍繞過 filter。三個平台彼此不一致。對借用中或未註冊物件的 tick 被丟棄，不重試。
+  - **G5.2.a [P1, RAN；已修復：RC-87]** （修復前）Windows 路徑直接呼叫 `obj.timer_event(id)`，不建 `Event`、不經 `notify_helper`/`event()`。unix／cocoa 建了 `EventKind::Timer` 並呼叫 `event()`，仍繞過 filter。三個平台彼此不一致。對借用中或未註冊物件的 tick 被丟棄，不重試。
   - **G5.2.b [P2, READ]** `send_timer_events` 持有 registry mutex 的同時遞送；其中的 slot 若啟動／停止計時器會在同一執行緒重入 `std::sync::Mutex`（潛在死鎖，未重現；僅在 `WM_TIMER` 先於 timer context 到達時走這條路）。
 - **Test**：必要：`timer_event_passes_event_filter`；`timer_event_reaches_event_override`。
 - **HUD usage**：HUD 只用 `timeout` 信號，觀察不到。
@@ -1185,7 +1185,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.x [P2] | `Power::Resume`／`Suspend`（`WM_POWERBROADCAST`）目前沒有 toolkit consumer：`qtrs-widgets` `Window::handle_window_event` 的 `_ => {}` 丟棄 `WindowSystemEvent::Power`，HUD 也未連接 `TrayIcon::on_power_event`。Qt 本身沒有 suspend/resume 事件（`qwindowscontext.cpp` 只處理 `PBT_POWERSETTINGCHANGE`，顯示器喚醒時 `InvalidateRect`），所以這是 qtrs 擴充，與 RC-18 無關 | `window.rs:1126`、`window.rs`(widgets):1508；`qwindowscontext.cpp:271-298` | 待決策 |
 | G12.5.f [P0, READ；已修復：RC-06] | `Window` 沒有 mouse-release／double-click／move／close 的 handler；雙擊在 Rust 會重新開始視窗移動，Python 是刷新 | `window.rs:1025`（platform 有發 release）；`window.rs:771-815` | 修復 |
 | G12.5.g [P0, READ；= G11.2.b；已修復：RC-06] | Alt+F4 / `CloseRequest` 被吞 | G11.2.b | 修復 |
-| G12.5.h [P1；部分修復：RC-73] | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms（啟動後 trim）。修復前 Rust 在 `hide()` 立即 trim、Alt+F4 不 trim、busy→idle 不 trim，只有 2500 ms。RC-73 修了 150 與 1000 ms。**殘餘**：(1) 300 ms：Python 建構時視窗可互動，300 ms 後先檢查 click-through 熱鍵再套用穿透（`hud_window.py:106-108,426-437`）；Rust 建構時就依設定套用穿透，`main.rs` 的熱鍵檢查之後才可能撤銷（`main.rs:510-525`），影響啟動期間滑鼠是否作用於 HUD，持續時間未量測，嚴重度待定。(2) 2500 ms 的起點不同（Python `HUDWindow.__init__` 結尾，Rust `main.rs:573` 在托盤與熱鍵之後），差距未量測，不稱等價。 | `hud_window.py:108,114,459,617` vs `hud_window.rs:168-177,502,638-646`、`main.rs:510-525,573` | 300 ms 待量測後修復或核准；2500 ms 低優先 |
+| G12.5.h [P1；部分修復：RC-73] | 單發時序：Python 300 ms（啟動 click-through）、150 ms（hide 後 trim）、1000 ms（busy→idle 後 trim）、2500 ms（啟動後 trim）。修復前 Rust 在 `hide()` 立即 trim、Alt+F4 不 trim、busy→idle 不 trim，只有 2500 ms。RC-73 修了 150 與 1000 ms。**殘餘**：(1) 300 ms：Python 建構時視窗可互動，300 ms 後先檢查 click-through 熱鍵再套用穿透（`hud_window.py:106-108,426-437`）；Rust 建構時就依設定套用穿透（`hud_window.rs` 建構時加 `WindowFlags::CLICK_THROUGH`），熱鍵檢查不通過時在 `main.rs` 的啟動閘門同步撤銷，**在 `exec()` 之前**完成（`main.rs:517-530`，`exec` 在 `:583`），之後沒有其他撤銷路徑，所以不會鎖死；兩邊的閘門條件相同（`hotkey.rs` `click_through_startup_allowed`）。差異只在啟動最初約 300 ms：Python 可互動、Rust 已穿透（熱鍵可用時）。決定：不改（要對齊須改視窗建立旗標、ghost label 與托盤狀態時序並處理 300 ms 內熱鍵切換的競態，風險大於收益），記為已知時序偏差。(2) 2500 ms 的起點不同（Python `HUDWindow.__init__` 結尾，Rust `main.rs:573` 在托盤與熱鍵之後），差距未量測，不稱等價。 | `hud_window.py:108,114,459,617` vs `hud_window.rs:168-177,502,638-646`、`main.rs:510-525,573` | 300 ms 待量測後修復或核准；2500 ms 低優先 |
 | G12.5.i [P0, READ；= G8.8.a；已修復：HUD tooltip 接線] | 所有 widget tooltip 缺失（錯誤與過期資料以 tooltip 顯示） | G8.8.a | 修復 |
 | G12.5.j [P0, READ；= G11.9.a；已修復：RC-12] | 熱鍵註冊失敗不被回報；鎖定防護失效 | G11.9.a | 修復 |
 | G12.5.k [P1] | `--smoke-test` 不檢查設定持久化 | `smoke_check.py:26-29` vs `main.rs:89-114` | 修復 |
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 120 項：G2.1.a、G2.1.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.d、G7.1.a、G7.1.c、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 122 項：G2.1.a、G2.1.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.d、G7.1.a、G7.1.c、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1320,7 +1320,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.3.e | D | `Quit{exit_code}` 是 qtrs 擴充 |
 | G3.4.a | P1, RAN；已修復：RC-78 | `notify_helper` 迭代 filter id 的**快照** |
 | G3.4.b | P2, READ | filter 物件正被借用 |
-| G3.4.c | P1, READ | Windows 計時器遞送不經 `notify_helper`／`event()` |
+| G3.4.c | P1, RAN；已修復：RC-87 | Windows 計時器遞送不經 `notify_helper`／`event()` |
 | G3.4.d | D | 跨執行緒 `send_event` 回 false 且不做事 |
 | G3.4.e | P2, READ | `install_event_filter` 拒絕自己與直接環 |
 | G3.4.f | P2, READ | filter 吃掉事件時 `send_event` 回 false（Qt 回 true） |
@@ -1350,7 +1350,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G5.1.d | P2, READ | 執行緒沒有 timer context 時 `start` 靜默回 `TimerId::INVALID` |
 | G5.1.e | P2, READ | `timeout` 是公開 `Signal<()>` 欄位，不在 meta-object 上 |
 | G5.1.f | P1, RAN；已修復：RC-11a | 重啟已啟動的 `Timer` 後 `timeout` 不再觸發（重新註冊物件時 liveness 被自己殺死） |
-| G5.2.a | P1, READ | Windows 路徑直接呼叫 `obj.timer_event(id)`，不建 `Event`、不經 `notify_helper`/`event()` |
+| G5.2.a | P1, RAN；已修復：RC-87 | Windows 路徑直接呼叫 `obj.timer_event(id)`，不建 `Event`、不經 `notify_helper`/`event()` |
 | G5.2.b | P2, READ | `send_timer_events` 持有 registry mutex 的同時遞送 |
 | G5.3.a | P1, RAN；已修復：RC-84 | 單發 0 ms 計時器觸發後 **registry 項殘留**：重現 `fired=1 registry_len=1 next_timeout=Some(0ns)` |
 | G5.3.b | P1, RAN；已修復：RC-84 | 重複 0 ms 計時器只觸發一次 |
@@ -2873,7 +2873,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Contract gaps**：G5.3.a、G5.3.b。
 - **Qt 行為**：`QTimer::timerEvent` 單發時先 `stop()` 再發 `timeout`（`[QT-SRC corelib/kernel/qtimer.cpp:326-334]`）；`QZeroTimerEvent` 送出後若計時器仍登記且未重啟，post 下一個 `QZeroTimerEvent`（`[QT-SRC corelib/kernel/qeventdispatcher_win.cpp:886-900]`）。
 - **修改前**：`Timer::timer_event` 單發時只把 `id` 設為 INVALID，registry 項殘留，`next_timeout()` 永遠 0（`exec` 空轉）；重複 0 ms 計時器只觸發一次；`expired_timers` 也回傳 0 ms 項（unix 以 poll 再送一次）。
-- **修正**：`Timer::timer_event` 單發時呼叫 `stop()`；`QObject::event` 的 `ZeroTimer` 分支在 `timer_event` 後呼叫 `repost_zero_timer`（只在 registry 項仍為同一 receiver、interval 0、非單發時 post），`Timer` 與物件計時器共用；`expired_timers` 排除 interval 0。
+- **修正**：`Timer::timer_event` 單發時呼叫 `stop()`；`QObject::event` 的 `ZeroTimer` 分支在 `timer_event` 後呼叫 `repost_zero_timer`（RC-87 已把這段移到 `notify_helper`）（只在 registry 項仍為同一 receiver、interval 0、非單發時 post），`Timer` 與物件計時器共用；`expired_timers` 排除 interval 0。
 - **Evidence**：`RAN`（本機 Windows）。`timer.rs::tests`：
   - `zero_timer_repeats_each_iteration`：修改前 FAIL（`got 1`）；修改後通過。
   - `zero_single_shot_leaves_registry_empty` 與補上 registry 斷言的 `test_zero_timer_immediate_dispatch`（§0 規則 4）：修改前行程以 `0xc0000409` 中止（WndProc 內 panic），修改後通過。
@@ -2915,3 +2915,18 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `Menu::update` 仍 post 到自身 id（popup 由 `present_custom_at` 繪製，不經 dirty 追蹤）。
   - 跨執行緒 `update()` 仍退回 post `UpdateRequest`（既有行為）。
   - DpiChanged 仍直接 `do_render_and_present`。
+
+#### RC-87 計時器 tick 經過 filter 與 `event()`（G3.4.c、G5.2.a）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qeventdispatcher_win.cpp:398-425]` `sendTimerEvent` 以 `QCoreApplication::sendEvent(t->obj, &e)` 遞送 `QTimerEvent`，經 application filter → object filter → `event()`（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1252-1300]`）。`[QT-SRC corelib/kernel/qeventdispatcher_win.cpp:360-363, 879-899]` 0 ms 計時器把 `QZeroTimerEvent` post 給 dispatcher（不是計時器物件，故 object filter 看不到它），dispatcher 以 `sendEvent` 送出 `QTimerEvent`，之後不論 filter 結果都重新 post。
+- **修正**：
+  - `loop.rs` 把 filter 走訪拆成 `app_filters_consumed`／`object_filters_consumed`，`notify_helper` 共用。新增 `deliver_timer_event(receiver, timer_id) -> TimerDelivery {Filtered, Delivered, NotDeliverable}`：app filter → object filter → `event()`。
+  - Windows `send_timer_events` 與 `dispatch_thread_timer`、unix 與 cocoa `send_timer_events` 都改用 `deliver_timer_event`；只有 `NotDeliverable` 時才走單發 callback 退路。三個平台一致。
+  - `ZeroTimer` 改在 `notify_helper` 的 app filter 之後處理：`deliver_timer_event` 後呼叫 `repost_zero_timer`；刪除 `QObject::event` 的 `ZeroTimer` 分支（RC-84 的重 post 移到這裡）。
+- **驗證**：
+  - `test_timer_restart.rs` 新增 `timer_event_passes_event_filter`、`timer_event_reaches_event_override`、`zero_timer_keeps_repeating_when_filter_consumes_ticks`。修正前 FAIL：filter 看到 0 個 Timer 事件（物件收到 1 次 tick）；`event()` 沒收到 Timer；consuming filter 看到 0 個 Timer。修正後 11 passed。
+  - qtrs workspace（略過 `real_windows`）102 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 `x86_64-unknown-linux-gnu`、`aarch64-apple-darwin` 無錯誤無警告。unix／cocoa 路徑只經編譯與 CI，本機未執行。
+- **行為變化**：Windows 上覆寫 `event()` 的物件現在會收到 `Timer`（如 `key_sequence_edit.rs`）；`repost_zero_timer` 在 receiver `NotDeliverable` 時也會執行（內部檢查 registry 狀態）。
+- **Residual**：
+  - 借用中或未註冊物件的 tick 仍被丟棄（`with_object_mut` 回 `None` 時把兩種狀態合併為 `NotDeliverable`）。
+  - application filter 看到的 `ZeroTimer` receiver 是計時器物件，Qt 是 dispatcher 物件。
+  - G5.2.b（`dispatch_thread_timer` 內聯 guard）與 G3.4.f（filter 吃掉事件時的回傳值）未動。

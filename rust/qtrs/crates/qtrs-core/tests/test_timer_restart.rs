@@ -6,6 +6,7 @@
 //! `timer_event` and the restarted timer never fired.
 #![cfg(windows)]
 
+use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoop;
 use qtrs_core::object::{register_qobject, unregister_qobject, ObjectData, ObjectId, QObject};
 use qtrs_core::timer::{Timer, TimerType};
@@ -243,4 +244,173 @@ fn zero_interval_object_timer_fires_repeatedly() {
     );
     obj.kill_timer(id);
     unsafe { unregister_qobject(obj.object_data().id) };
+}
+
+/// Object filter that counts `Timer` events it sees and optionally consumes them.
+struct FilterSpy {
+    data: ObjectData,
+    seen: Arc<AtomicU32>,
+    consume: bool,
+}
+
+impl FilterSpy {
+    fn new(seen: Arc<AtomicU32>, consume: bool) -> Self {
+        Self {
+            data: ObjectData::new(ObjectId::next()),
+            seen,
+            consume,
+        }
+    }
+}
+
+impl QObject for FilterSpy {
+    fn object_data(&self) -> &ObjectData {
+        &self.data
+    }
+    fn object_data_mut(&mut self) -> &mut ObjectData {
+        &mut self.data
+    }
+    fn as_qobject_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+    fn as_qobject_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    fn event_filter(&mut self, _watched: ObjectId, event: &mut Event) -> bool {
+        if matches!(event.kind, EventKind::Timer { .. }) {
+            self.seen.fetch_add(1, Ordering::SeqCst);
+            return self.consume;
+        }
+        false
+    }
+}
+
+/// QObject that overrides `event()` and counts `Timer` events.
+struct EventSpy {
+    data: ObjectData,
+    timers: Arc<AtomicU32>,
+}
+
+impl EventSpy {
+    fn new(timers: Arc<AtomicU32>) -> Self {
+        Self {
+            data: ObjectData::new(ObjectId::next()),
+            timers,
+        }
+    }
+}
+
+impl QObject for EventSpy {
+    fn object_data(&self) -> &ObjectData {
+        &self.data
+    }
+    fn object_data_mut(&mut self) -> &mut ObjectData {
+        &mut self.data
+    }
+    fn as_qobject_any(&self) -> Option<&dyn std::any::Any> {
+        Some(self)
+    }
+    fn as_qobject_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+    }
+    fn event(&mut self, event: &mut Event) -> bool {
+        if matches!(event.kind, EventKind::Timer { .. }) {
+            self.timers.fetch_add(1, Ordering::SeqCst);
+            return true;
+        }
+        false
+    }
+}
+
+#[test]
+fn timer_event_passes_event_filter() {
+    let mut el = EventLoop::new();
+    let ticks = Arc::new(AtomicU32::new(0));
+    let seen = Arc::new(AtomicU32::new(0));
+    let mut obj = Box::new(TickObject::new(Arc::clone(&ticks)));
+    let mut filter = Box::new(FilterSpy::new(Arc::clone(&seen), false));
+    // SAFETY: both boxes are not moved until unregistered below.
+    unsafe {
+        register_qobject(&mut *obj);
+        register_qobject(&mut *filter);
+    }
+    let filter_id = filter.object_data().id;
+    obj.object_data_mut().install_event_filter(filter_id);
+
+    let id = obj.start_timer(20, TimerType::Precise);
+    assert!(pump_until(&mut el, Duration::from_secs(2), || ticks
+        .load(Ordering::SeqCst)
+        >= 1));
+    obj.kill_timer(id);
+    obj.object_data_mut().remove_event_filter(filter_id);
+    assert!(
+        seen.load(Ordering::SeqCst) >= 1,
+        "timer tick must pass the object event filter; filter saw {} timer events, object got {} ticks",
+        seen.load(Ordering::SeqCst),
+        ticks.load(Ordering::SeqCst)
+    );
+    unsafe {
+        unregister_qobject(obj.object_data().id);
+        unregister_qobject(filter.object_data().id);
+    }
+}
+
+#[test]
+fn timer_event_reaches_event_override() {
+    let mut el = EventLoop::new();
+    let timers = Arc::new(AtomicU32::new(0));
+    let mut obj = Box::new(EventSpy::new(Arc::clone(&timers)));
+    // SAFETY: `obj` is boxed and not moved until unregistered below.
+    unsafe { register_qobject(&mut *obj) };
+
+    let id = obj.start_timer(20, TimerType::Precise);
+    assert!(pump_until(&mut el, Duration::from_secs(2), || timers
+        .load(Ordering::SeqCst)
+        >= 1));
+    obj.kill_timer(id);
+    assert!(
+        timers.load(Ordering::SeqCst) >= 1,
+        "QObject::event must receive Timer; got {} Timer events",
+        timers.load(Ordering::SeqCst)
+    );
+    unsafe { unregister_qobject(obj.object_data().id) };
+}
+
+/// Qt posts `QZeroTimerEvent` to the dispatcher, not to the timer object, so object filters never
+/// see it. Each delivered `QTimerEvent` is sent through filters, and the zero timer is reposted
+/// after the send regardless of the filter result (qeventdispatcher_win.cpp:886-899). A filter that
+/// consumes every tick therefore must not stop the zero-interval timer.
+#[test]
+fn zero_timer_keeps_repeating_when_filter_consumes_ticks() {
+    let mut el = EventLoop::new();
+    let ticks = Arc::new(AtomicU32::new(0));
+    let seen = Arc::new(AtomicU32::new(0));
+    let mut obj = Box::new(TickObject::new(Arc::clone(&ticks)));
+    let mut filter = Box::new(FilterSpy::new(Arc::clone(&seen), true));
+    // SAFETY: both boxes are not moved until unregistered below.
+    unsafe {
+        register_qobject(&mut *obj);
+        register_qobject(&mut *filter);
+    }
+    let filter_id = filter.object_data().id;
+    obj.object_data_mut().install_event_filter(filter_id);
+
+    let id = obj.start_timer(0, TimerType::Coarse);
+    assert!(
+        pump_until(&mut el, Duration::from_secs(2), || seen.load(Ordering::SeqCst)
+            >= 5),
+        "zero-interval timer must keep repeating after a filter consumes ticks; filter saw {} Timer events",
+        seen.load(Ordering::SeqCst)
+    );
+    obj.kill_timer(id);
+    obj.object_data_mut().remove_event_filter(filter_id);
+    assert_eq!(
+        ticks.load(Ordering::SeqCst),
+        0,
+        "a consuming filter must stop the tick reaching timer_event"
+    );
+    unsafe {
+        unregister_qobject(obj.object_data().id);
+        unregister_qobject(filter.object_data().id);
+    }
 }

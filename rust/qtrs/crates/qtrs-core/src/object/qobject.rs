@@ -962,13 +962,6 @@ pub trait QObject: std::any::Any {
                 self.timer_event(*timer_id);
                 true
             }
-            EventKind::ZeroTimer { timer_id } => {
-                let timer_id = *timer_id;
-                let receiver = self.object_data().id;
-                self.timer_event(timer_id);
-                crate::timer::repost_zero_timer(receiver, timer_id);
-                true
-            }
             EventKind::DynamicPropertyChange { property_name } => {
                 let name = property_name.clone();
                 self.dynamic_property_change(&name);

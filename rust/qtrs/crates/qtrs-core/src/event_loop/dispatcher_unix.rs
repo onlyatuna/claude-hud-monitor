@@ -515,14 +515,10 @@ impl EventDispatcher for UnixEventDispatcher {
                 continue;
             };
 
-            let handled = crate::object::with_object_mut(receiver, |obj| {
-                let mut event = crate::event::Event::new(crate::event::EventKind::Timer {
-                    timer_id: id.0 as u64,
-                });
-                obj.event(&mut event);
-            })
-            .is_some();
-            if !handled {
+            if matches!(
+                crate::event_loop::deliver_timer_event(receiver, id.0 as u64),
+                crate::event_loop::TimerDelivery::NotDeliverable
+            ) {
                 crate::timer::dispatch_single_shot_callback(receiver);
             }
 

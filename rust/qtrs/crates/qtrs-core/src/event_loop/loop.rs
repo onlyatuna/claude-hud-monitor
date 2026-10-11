@@ -62,20 +62,64 @@ fn consumed_by_filter_chain(
     false
 }
 
-pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
+/// Application event filters (`sendThroughApplicationEventFilters`, qcoreapplication.cpp:1237-1247).
+fn app_filters_consumed(receiver: ObjectId, event: &mut Event) -> bool {
     let app_slot =
         |index: usize| APPLICATION_EVENT_FILTERS.with(|filters| filters.borrow().slot_at(index));
-    if consumed_by_filter_chain(app_slot, receiver, event) {
-        return false;
-    }
+    consumed_by_filter_chain(app_slot, receiver, event)
+}
 
+/// The receiver's object event filters (`sendThroughObjectEventFilters`, qcoreapplication.cpp:1252-1268).
+fn object_filters_consumed(receiver: ObjectId, event: &mut Event) -> bool {
     let object_slot = |index: usize| {
         crate::object::with_object(receiver, |obj| {
             obj.object_data().event_filters.slot_at(index)
         })
         .flatten()
     };
-    if consumed_by_filter_chain(object_slot, receiver, event) {
+    consumed_by_filter_chain(object_slot, receiver, event)
+}
+
+/// Outcome of delivering a timer tick to its receiver.
+pub enum TimerDelivery {
+    /// An application or object filter consumed the `Timer` event; `event()` did not run.
+    Filtered,
+    /// `event()` ran on the receiver.
+    Delivered,
+    /// The receiver is not registered on this thread, or is currently borrowed.
+    NotDeliverable,
+}
+
+/// Delivers a `QTimerEvent` for `timer_id` to `receiver` through application filters → object
+/// filters → `event()` (qcoreapplication.cpp:1275-1300; qeventdispatcher_win.cpp:414-415).
+pub fn deliver_timer_event(receiver: ObjectId, timer_id: u64) -> TimerDelivery {
+    let mut event = Event::new(EventKind::Timer { timer_id });
+    if app_filters_consumed(receiver, &mut event) || object_filters_consumed(receiver, &mut event) {
+        return TimerDelivery::Filtered;
+    }
+    match crate::object::with_object_mut(receiver, |obj| obj.event(&mut event)) {
+        Some(_) => TimerDelivery::Delivered,
+        None => TimerDelivery::NotDeliverable,
+    }
+}
+
+pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
+    if app_filters_consumed(receiver, event) {
+        return false;
+    }
+
+    // Qt posts QZeroTimerEvent to the dispatcher, not to the timer object, so object filters never
+    // see it. The dispatcher sends a QTimerEvent through sendEvent, then reposts the zero timer
+    // whatever the filter result (qeventdispatcher_win.cpp:879-899). Top-level delivery
+    // (loop.rs process_events) holds no object borrow here.
+    if let EventKind::ZeroTimer { timer_id } = &event.kind {
+        let timer_id = *timer_id;
+        let _ = deliver_timer_event(receiver, timer_id);
+        crate::timer::repost_zero_timer(receiver, timer_id);
+        return true;
+    }
+
+    if object_filters_consumed(receiver, event) {
         return false;
     }
 

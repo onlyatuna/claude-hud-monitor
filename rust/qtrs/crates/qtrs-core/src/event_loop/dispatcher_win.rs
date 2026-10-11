@@ -128,11 +128,10 @@ fn dispatch_thread_timer(raw_id: u32, internal_hwnd: HWND) {
         remove_posted_timer_event(internal_hwnd, raw_id);
     }
 
-    let handled = crate::object::with_object_mut(receiver, |obj| {
-        obj.timer_event(raw_id as u64);
-    })
-    .is_some();
-    if !handled {
+    if matches!(
+        crate::event_loop::deliver_timer_event(receiver, raw_id as u64),
+        crate::event_loop::TimerDelivery::NotDeliverable
+    ) {
         crate::timer::dispatch_single_shot_callback(receiver);
     }
 
@@ -394,11 +393,10 @@ impl Win32EventDispatcher {
                 remove_posted_timer_event(self.internal_hwnd, raw_id);
             }
 
-            let handled = crate::object::with_object_mut(receiver, |obj| {
-                obj.timer_event(raw_id as u64);
-            })
-            .is_some();
-            if !handled {
+            if matches!(
+                crate::event_loop::deliver_timer_event(receiver, raw_id as u64),
+                crate::event_loop::TimerDelivery::NotDeliverable
+            ) {
                 crate::timer::dispatch_single_shot_callback(receiver);
             }
 
