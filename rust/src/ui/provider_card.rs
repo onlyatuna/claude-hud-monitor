@@ -906,6 +906,7 @@ mod tests {
 
     #[test]
     fn test_inspect_card_layout_with_data() {
+        let mut el = qtrs_core::event_loop::EventLoop::new();
         let config =
             std::sync::Arc::new(parking_lot::Mutex::new(crate::config::ConfigManager::load()));
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
@@ -956,6 +957,9 @@ mod tests {
             ..Default::default()
         };
         hud.on_data_fetched(&codex_data);
+        // Qt lays out on the LayoutRequest / UpdateRequest pass of the event loop, not inside the
+        // setters; let that pass run before reading geometry.
+        el.process_events(false);
 
         let c = &hud.cards["claude"];
         println!("CLAUDE title: {:?}", c.title.borrow().geometry());

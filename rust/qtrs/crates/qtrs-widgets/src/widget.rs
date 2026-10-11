@@ -537,6 +537,11 @@ impl WidgetBase {
         let g = self.geometry.get();
         self.dirty.set(Some(Rect::new(0, 0, g.width, g.height)));
         let target_receiver = self.window_id.get().unwrap_or(self.object_data.id);
+        // Direct path: the window's render state queues its deferred render without a QObject
+        // dispatch. Falls back to `UpdateRequest` when this thread has no window render state.
+        if crate::window::schedule_widget_update(target_receiver) {
+            return;
+        }
         post_event_to_thread(
             ThreadId::current(),
             target_receiver,

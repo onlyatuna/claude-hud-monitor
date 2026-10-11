@@ -304,8 +304,6 @@ mod pumped {
             )
             .expect("create window"),
         );
-        // SAFETY: boxed (stable address), single thread, `Drop` unregisters.
-        unsafe { win.register() };
 
         let first: WidgetRef = Rc::new(RefCell::new(first));
         let second: WidgetRef = Rc::new(RefCell::new(second));

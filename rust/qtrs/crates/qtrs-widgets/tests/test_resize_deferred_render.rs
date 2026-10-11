@@ -1,6 +1,6 @@
 //! Native `Resize` events are never coalesced, but layout activation, paint and present are
-//! deferred to one event-loop render phase that uses the latest geometry. `UpdateRequest`
-//! (registered windows) and `Resize` share the same `RenderState` gate.
+//! deferred to one event-loop render phase that uses the latest geometry. Widget `update()`
+//! and `Resize` share the same `RenderState` gate.
 #![cfg(windows)]
 
 use std::cell::{Cell, RefCell};
@@ -17,7 +17,7 @@ use qtrs_widgets::window::Window;
 
 struct Fixture {
     el: EventLoop,
-    /// Boxed so a registered window keeps a stable address.
+    /// Boxed so the window keeps a stable address.
     win: Box<Window>,
     hwnd: windows_sys::Win32::Foundation::HWND,
     resize_cb_count: Arc<AtomicU32>,
@@ -27,8 +27,7 @@ struct Fixture {
 }
 
 /// `paint_updates`: number of initial paints that call `root.update()`.
-/// `registered`: register the window as a QObject receiver so `UpdateRequest` reaches it.
-fn fixture(paint_updates: u32, registered: bool) -> Fixture {
+fn fixture(paint_updates: u32) -> Fixture {
     let el = EventLoop::new();
     let mut win = Box::new(
         Window::new(
@@ -38,11 +37,6 @@ fn fixture(paint_updates: u32, registered: bool) -> Fixture {
         )
         .expect("create window"),
     );
-    if registered {
-        // SAFETY: the window is boxed (stable address), lives on this thread, and its
-        // `Drop` unregisters it; no callbacks run after drop.
-        unsafe { win.register() };
-    }
     let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
 
     let resize_cb_count = Arc::new(AtomicU32::new(0));
@@ -114,8 +108,8 @@ fn pump_idle(fx: &mut Fixture) -> usize {
     turns
 }
 
-fn ten_resizes_one_render(registered: bool) {
-    let mut fx = fixture(0, registered);
+fn ten_resizes_one_render() {
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
 
     for i in 0..10 {
@@ -165,18 +159,13 @@ fn ten_resizes_one_render(registered: bool) {
 }
 
 #[test]
-fn resize_events_are_not_coalesced_but_render_is_unregistered() {
-    ten_resizes_one_render(false);
+fn resize_events_are_not_coalesced_but_render_is_deferred() {
+    ten_resizes_one_render();
 }
 
 #[test]
-fn resize_events_are_not_coalesced_but_render_is_registered() {
-    ten_resizes_one_render(true);
-}
-
-#[test]
-fn registered_separate_turns_render_separately() {
-    let mut fx = fixture(0, true);
+fn separate_turns_render_separately() {
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
 
     resize(&fx, 350);
@@ -196,7 +185,7 @@ fn registered_separate_turns_render_separately() {
 
 #[test]
 fn update_request_and_resize_share_one_gate() {
-    let mut fx = fixture(0, true);
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
     let root = fx.win.root_widget();
 
@@ -213,22 +202,25 @@ fn update_request_and_resize_share_one_gate() {
 }
 
 #[test]
-fn update_request_alone_is_deferred_through_the_gate() {
-    let mut fx = fixture(0, true);
+fn update_alone_is_deferred_through_the_gate() {
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
     let root = fx.win.root_widget();
 
     for _ in 0..5 {
         root.borrow().update();
     }
-    // Turn 1 delivers the (compressed) UpdateRequest: it only queues the deferred render.
-    fx.el.process_events(false);
+    // `QWidget::update` only marks dirty and posts (qwidget.cpp:11380-11382,
+    // qwidgetrepaintmanager.cpp:356-363): nothing is painted inside `update()`.
     assert_eq!(fx.win.render_stats().render_count, before.render_count);
     assert_eq!(
         fx.paint_calls.get(),
         0,
-        "UpdateRequest must not render synchronously"
+        "update() must not render synchronously"
     );
+    // The next pass of the loop paints once for all five calls.
+    fx.el.process_events(false);
+    assert_eq!(fx.paint_calls.get(), 1);
     pump_idle(&mut fx);
 
     let after = fx.win.render_stats();
@@ -237,13 +229,14 @@ fn update_request_alone_is_deferred_through_the_gate() {
         after.deferred_render_schedule_count - before.deferred_render_schedule_count,
         1
     );
+    assert_eq!(after.direct_render_count, before.direct_render_count);
     assert_eq!(fx.paint_calls.get(), 1);
 }
 
 #[test]
-fn registered_paint_time_update_neither_recurses_nor_ping_pongs() {
+fn paint_time_update_neither_recurses_nor_ping_pongs() {
     // The first paint calls update(): exactly one follow-up render, then it settles.
-    let mut fx = fixture(1, true);
+    let mut fx = fixture(1);
     let before = fx.win.render_stats();
 
     resize(&fx, 350);
@@ -278,7 +271,7 @@ fn registered_paint_time_update_neither_recurses_nor_ping_pongs() {
 
 #[test]
 fn borrow_conflict_retries_next_turn_and_recovers() {
-    let mut fx = fixture(0, false);
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
     let bs = fx.win.backing_store_handle();
 
@@ -305,7 +298,7 @@ fn borrow_conflict_retries_next_turn_and_recovers() {
 
 #[test]
 fn borrow_conflict_is_bounded_then_rearmed_without_losing_repaint() {
-    let mut fx = fixture(0, false);
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
     let bs = fx.win.backing_store_handle();
 
@@ -327,19 +320,25 @@ fn borrow_conflict_is_bounded_then_rearmed_without_losing_repaint() {
     );
     assert_eq!(s.borrow_skipped_count - before.borrow_skipped_count, 2);
 
-    // Parked (dirty kept). Releasing the borrow and rendering synchronously re-arms it.
+    // Parked (dirty kept). A synchronous render paints the latest geometry, which settles the
+    // parked repaint: no second, deferred render follows it.
     drop(held);
     fx.win.render_and_present();
     pump_idle(&mut fx);
     let s = fx.win.render_stats();
+    assert_eq!(s.direct_render_count - before.direct_render_count, 1);
     assert_eq!(
-        s.render_count - before.render_count,
-        1,
+        *fx.painted_widths.borrow(),
+        vec![350],
         "parked repaint was recovered"
+    );
+    assert_eq!(
+        s.render_count, before.render_count,
+        "the synchronous render already painted it"
     );
 
     // A fresh invalidation also recovers a parked window.
-    let mut fx = fixture(0, false);
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
     let bs = fx.win.backing_store_handle();
     resize(&fx, 350);
@@ -356,8 +355,8 @@ fn borrow_conflict_is_bounded_then_rearmed_without_losing_repaint() {
 }
 
 #[test]
-fn registered_set_geometry_adds_no_deferred_render() {
-    let mut fx = fixture(0, true);
+fn set_geometry_adds_no_deferred_render() {
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
 
     fx.win.set_geometry(Rect::new(0, 0, 350, 200));
@@ -381,8 +380,8 @@ fn registered_set_geometry_adds_no_deferred_render() {
 }
 
 #[test]
-fn registered_destroyed_window_deferred_render_is_a_noop() {
-    let fx = fixture(0, true);
+fn destroyed_window_deferred_render_is_a_noop() {
+    let fx = fixture(0);
     resize(&fx, 350);
     assert_eq!(fx.painted_widths.borrow().len(), 0);
 
@@ -414,8 +413,8 @@ fn interactive(fx: &Fixture, start: bool) {
     dispatch_window_system_event(Delivery::Default, fx.hwnd, ev);
 }
 
-fn interactive_five_resizes(registered: bool) {
-    let mut fx = fixture(0, registered);
+fn interactive_five_resizes() {
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
 
     interactive(&fx, true);
@@ -458,18 +457,13 @@ fn interactive_five_resizes(registered: bool) {
 }
 
 #[test]
-fn interactive_resize_renders_synchronously_unregistered() {
-    interactive_five_resizes(false);
-}
-
-#[test]
-fn interactive_resize_renders_synchronously_registered() {
-    interactive_five_resizes(true);
+fn interactive_resize_renders_synchronously() {
+    interactive_five_resizes();
 }
 
 #[test]
 fn normal_resize_still_defers_after_interactive_loop_ends() {
-    let mut fx = fixture(0, true);
+    let mut fx = fixture(0);
     interactive(&fx, true);
     interactive(&fx, false);
     let before = fx.win.render_stats();
@@ -496,7 +490,7 @@ fn normal_resize_still_defers_after_interactive_loop_ends() {
 
 #[test]
 fn queued_deferred_render_before_interactive_start_does_not_double_render() {
-    let mut fx = fixture(0, true);
+    let mut fx = fixture(0);
     let before = fx.win.render_stats();
 
     resize(&fx, 340); // normal: MetaCall queued
@@ -515,7 +509,7 @@ fn queued_deferred_render_before_interactive_start_does_not_double_render() {
 
 #[test]
 fn interactive_paint_time_update_does_not_recurse() {
-    let mut fx = fixture(1, true);
+    let mut fx = fixture(1);
     let before = fx.win.render_stats();
 
     interactive(&fx, true);
@@ -532,7 +526,7 @@ fn interactive_paint_time_update_does_not_recurse() {
 
 #[test]
 fn enter_resize_exit_ends_with_latest_geometry_and_clean_state() {
-    let mut fx = fixture(0, true);
+    let mut fx = fixture(0);
     interactive(&fx, true);
     resize(&fx, 377);
     interactive(&fx, false);
@@ -546,7 +540,7 @@ fn enter_resize_exit_ends_with_latest_geometry_and_clean_state() {
 
 #[test]
 fn interactive_borrow_conflict_is_recovered_on_exit() {
-    let mut fx = fixture(0, false);
+    let mut fx = fixture(0);
     let bs = fx.win.backing_store_handle();
     interactive(&fx, true);
     let held = bs.borrow_mut();

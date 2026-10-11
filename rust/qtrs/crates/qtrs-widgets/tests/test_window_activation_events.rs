@@ -38,8 +38,6 @@ fn fixture() -> Fixture {
         )
         .expect("create window"),
     );
-    // SAFETY: boxed (stable address), single thread, `Drop` unregisters.
-    unsafe { win.register() };
     let hwnd = win.native_handle() as windows_sys::Win32::Foundation::HWND;
     let seen = Rc::new(RefCell::new(Vec::new()));
     let log = Rc::clone(&seen);

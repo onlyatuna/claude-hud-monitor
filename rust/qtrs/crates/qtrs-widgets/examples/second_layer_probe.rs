@@ -39,8 +39,6 @@ mod probe {
         let flags = WindowFlags::FRAMELESS | WindowFlags::LAYERED | WindowFlags::CUSTOM_FRAMELESS;
         let mut win =
             Box::new(Window::new("SLTEST", Rect::new(200, 150, 500, 400), flags).expect("window"));
-        // SAFETY: boxed, single thread, `Drop` unregisters.
-        unsafe { win.register() };
         let root = win.root_widget();
         if let Some(empty) = root.borrow_mut().as_any_mut().downcast_mut::<EmptyWidget>() {
             empty.set_paint_handler(move |p| {

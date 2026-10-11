@@ -202,7 +202,6 @@ fn main() -> std::process::ExitCode {
         hud.apply_ui_mode("table");
         hud.update_clock();
         let _ = qtrs_core::application::CoreApplication::process_events(false);
-        hud.window.render_and_present();
         let table_path = out_dir.join("hud_table_mode.png");
         hud.window
             .save_png(&table_path)
@@ -213,7 +212,6 @@ fn main() -> std::process::ExitCode {
         hud.apply_cards_layout_mode("horizontal");
         hud.update_clock();
         let _ = qtrs_core::application::CoreApplication::process_events(false);
-        hud.window.render_and_present();
         let cards_h_path = out_dir.join("hud_cards_horizontal.png");
         hud.window
             .save_png(&cards_h_path)
@@ -227,7 +225,6 @@ fn main() -> std::process::ExitCode {
         hud.apply_cards_layout_mode("vertical");
         hud.update_clock();
         let _ = qtrs_core::application::CoreApplication::process_events(false);
-        hud.window.render_and_present();
         let cards_v_path = out_dir.join("hud_cards_vertical.png");
         hud.window
             .save_png(&cards_v_path)

@@ -796,7 +796,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：`update()` MUST 不同步繪製；重複呼叫 MUST 合併成一次繪製；繪製期間的 `update()` MUST 恰好引發一次後續繪製；隱藏 widget 的 `update()` SHOULD 為 no-op；widget `update()` MUST **不需 app 手動呼叫 `render_and_present()`** 就到達視窗。
 - **Current implementation**：`PARTIAL`。`WidgetBase::update` 設 `dirty = Some(0,0,w,h)` 並 post `UpdateRequest` 給 `window_id`（`widget.rs`）；`Window::event(UpdateRequest)` 經 `RenderState::request_render` post 一個延後的 MetaCall；重入與借用衝突狀態機已實作；`UpdateRequest` 被壓縮；無事件迴圈時就地繪製。
 - **Known gap**
-  - **G10.1.a [P1, READ]** `UpdateRequest` 只到達經 `unsafe Window::register()` 註冊的視窗；未註冊的接收者收到的非 MetaCall 事件被丟棄（`loop.rs`）。grep `.register()`、`register_qobject`、`bind_event_loop` 於 `rust/src` 為空 → **HUD 從不註冊視窗**，靠明確 `window.render_and_present()`（`hud_window.rs:531,637,725,738,761,775,788,831`、`main.rs:205-230`）與滑鼠事件後的 `has_pending_invalidation` 檢查繪製。從計時器或 worker 觸發的 widget `update()` **不會自行重繪**。
+  - **G10.1.a [P1, RAN；已修復：RC-86]** （修復前）`UpdateRequest` 只到達經 `unsafe Window::register()` 註冊的視窗；未註冊的接收者收到的非 MetaCall 事件被丟棄（`loop.rs`）。grep `.register()`、`register_qobject`、`bind_event_loop` 於 `rust/src` 為空 → **HUD 從不註冊視窗**，靠明確 `window.render_and_present()`（`hud_window.rs:531,637,725,738,761,775,788,831`、`main.rs:205-230`）與滑鼠事件後的 `has_pending_invalidation` 檢查繪製。從計時器或 worker 觸發的 widget `update()` **不會自行重繪**。
   - **G10.1.b [P2；HUD 會走到（卡片模式下隱藏的表格頁每秒 `update()` 弄髒 root）；已修復：RC-76]** （修復前）`update()` 不看可見性。
   - **G10.1.c [P2]** `Window::set_geometry`／`show`／`set_opacity`／`set_style_sheet` 同步繪製（Qt 延後）。
 - **Test**：既有（皆 `#![cfg(windows)]`）`test_resize_deferred_render.rs::{update_request_and_resize_share_one_gate, update_request_alone_is_deferred_through_the_gate, registered_paint_time_update_neither_recurses_nor_ping_pongs, borrow_conflict_retries_next_turn_and_recovers, borrow_conflict_is_bounded_then_rearmed_without_losing_repaint, registered_destroyed_window_deferred_render_is_a_noop}`。必要：**未註冊視窗（HUD 的建法）** 上 `child.update()` 後 `process_events` 恰好繪製一次；隱藏 widget 的 `update()` 不排程。
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 119 項：G2.1.a、G2.1.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.d、G7.1.a、G7.1.c、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 120 項：G2.1.a、G2.1.b、G2.5.a、G3.2.a、G3.2.b、G3.4.a、G4.1.a、G4.1.b、G4.1.d、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G6.1.a、G6.1.b、G6.1.f、G6.2.c、G6.4.a、G6.4.d、G7.1.a、G7.1.c、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.5.c、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.n、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1496,7 +1496,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.6.b | P2 | `set_spacing` 為 no-op |
 | G9.7.a | P1 | harness 不在 CI、不是 `cargo test` |
 | G9.7.b | P1 | 涵蓋範圍如上 |
-| G10.1.a | P1, READ | `UpdateRequest` 只到達經 `unsafe Window::register()` 註冊的視窗 |
+| G10.1.a | P1, RAN；已修復：RC-86 | `UpdateRequest` 只到達經 `unsafe Window::register()` 註冊的視窗 |
 | G10.1.b | P2；已修復：RC-76 | `update()` 不看可見性 |
 | G10.1.c | P2 | `Window::set_geometry`／`show`／`set_opacity`／`set_style_sheet` 同步繪製 |
 | G10.2.a | P2 | 無局部／立即重繪 API |
@@ -2892,3 +2892,26 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `set_single_shot_true_on_active_timer_fires_once`：修改前後皆通過（行為由 RC-84 的 `stop()` 保證），守住此方向。
   - 三個 RC 合併後：qtrs workspace（略過 `real_windows`）101 個 test binary 全 ok、0 failed；HUD 121 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過。
 - **Residual**：無。
+
+#### RC-86 widget `update()` 自行到達視窗；HUD 移除手動整窗重繪
+
+- **Contract gaps**：G10.1.a。
+- **Qt 行為**：`QWidget::update()` → `QWidgetPrivate::update` 對不可見 widget 直接返回（`[QT-SRC widgets/kernel/qwidget.cpp:11367-11368]`），否則 `markDirty(..., UpdateLater)`（`:11380-11382`）；`UpdateLater` post 一個 `UpdateRequest`，以 `updateRequestSent` 合併（`[QT-SRC widgets/kernel/qwidgetrepaintmanager.cpp:356-363]`），在下一輪事件迴圈只重繪髒區。`update()` 本身不繪製；應用程式不需呼叫任何 present。`QWidget::setStyleSheet` 沒有相等值早退，已有 proxy 時 `repolish`（`qwidget.cpp` `QWidget::setStyleSheet`），所以 Python 每秒的 `dial.update()`（`usage_table.py:144`）與 `m2_val.setStyleSheet`（`:368`）在 Qt 也會每秒重繪這兩塊。
+- **修改前**：`WidgetBase::update` post `UpdateRequest` 給視窗 id；只有經 `unsafe Window::register()` 註冊的視窗收得到，HUD 從不註冊，事件被丟棄。HUD 因此在 `update_clock`、`on_data_fetched`、`set_theme`、`set_busy`、`apply_ui_mode_internal`、`set_opacity`、`reset_geometry` 與 `main.rs` 三個 snapshot 處手動 `render_and_present()`；沒有髒 widget 時 `do_render_and_present` 以整窗為重繪區，所以 HUD 每秒整窗 present 一次。
+- **修正**（`qtrs-widgets/src/window.rs`、`widget.rs`，`rust/src`）：
+  - `window::schedule_widget_update(window_id)`：以 thread-local `RENDER_STATES` 找視窗，標 dirty 並排一個延後 render（`render_pending` 合併）；不經 QObject registry、不在 `update()` 內繪製。無事件迴圈時只保留 dirty。`WidgetBase::update` 先走它，找不到視窗時才退回 post `UpdateRequest`。
+  - 刪除 `Window::register()`（含 tooltip、8 個測試／範例的呼叫）與 `Window::event` 的 `UpdateRequest` 分支（已無可達的生產者）；`Window::drop` 不再 `unregister_qobject`。
+  - 繪製中（`currently_rendering`）或緊接著就要同步繪製時（新增 `render_follows`：`Window::set_geometry` 與原生 Resize 的步驟 1-3），`update()` 只留下 widget 髒區由該次繪製收集，不再排第二次 render；render 結束時以 `has_pending_invalidation()`（含 widget 髒區）決定是否補排。`render_and_present` 同樣以 `currently_rendering` 包住，開始時清掉視窗 dirty（它畫的是最新狀態），結束後同樣補排。
+  - `RenderStats::last_painted_region`（`do_render_and_present` 改回傳實際繪製的邏輯區域）。
+  - HUD：移除 10 處手動 `render_and_present()`（`main.rs` snapshot 3 處；`hud_window.rs` 7 處）；保留 `show()`（backdrop 安裝後）與 `set_click_through()` 兩處。
+- **Evidence**：`RAN`（本機 Windows）。
+  - `test_update_reaches_window.rs::widget_update_schedules_window_render_without_register_or_direct_render`、`repeated_widget_updates_coalesce_into_one_render`：修改前 FAIL（render_count 不變，`UpdateRequest` 被丟棄）；修改後通過。另有 `hidden_widget_update_renders_nothing`、`window_moved_after_construction_still_receives_updates`（視窗值移動後仍收得到，修改前後皆通過）。
+  - HUD `idle_clock_tick_in_table_mode_dirties_only_dials_and_weekly_values`（新增）與 `idle_countdown_pass_in_cards_mode_marks_nothing_for_repaint`（加 `direct_render_count` 斷言）：暫時放回 `update_clock` 的 `render_and_present()` 時 FAIL（`left: 5 right: 4`、`left: 3 right: 2`）；修改後通過。表格模式 tick 只標髒各欄的 dial 與週值 label。
+  - 改寫（§0 規則 4）：`test_resize_deferred_render.rs` 去掉 registered／unregistered 兩種 fixture；`update_request_alone_is_deferred_through_the_gate` 釘住「UpdateRequest 要兩輪」的舊實作，改為 `update_alone_is_deferred_through_the_gate`（`update()` 內不繪製、下一輪繪製一次）；`borrow_conflict_is_bounded_then_rearmed_without_losing_repaint` 的「同步 render 後再補一次延後 render」改為斷言同步 render 已畫出 350 寬、不再補畫。`provider_card.rs::test_inspect_card_layout_with_data` 在讀幾何前跑一輪事件迴圈（Qt 也在事件迴圈處理 LayoutRequest，不在 setter 內）。
+  - qtrs workspace（略過 `real_windows`）102 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過。`--snapshot` 實跑：表格、卡片橫／直、右鍵選單四張 PNG 內容完整。
+  - `cargo check --target x86_64-unknown-linux-gnu／aarch64-apple-darwin` 對 qtrs-widgets 在本機無法完成（`tinyfiledialogs` 需 C 編譯器）；非 Windows 以 CI 為準。
+- **Residual**：
+  - Expose：生產環境沒有呼叫 `bind_event_loop`，`WM_PAINT` 不會變成 `Expose`；預設的 DirectComposition presenter 保留內容，GDI layered 退路被遮蓋後可能要等下一次變更才重繪（未驗證）。
+  - `Menu::update` 仍 post 到自身 id（popup 由 `present_custom_at` 繪製，不經 dirty 追蹤）。
+  - 跨執行緒 `update()` 仍退回 post `UpdateRequest`（既有行為）。
+  - DpiChanged 仍直接 `do_render_and_present`。

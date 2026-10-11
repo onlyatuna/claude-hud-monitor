@@ -437,9 +437,7 @@ impl ToolTip {
                     return;
                 };
                 window.set_root_widget(label.clone());
-                let mut window = Box::new(window);
-                // SAFETY: boxed (stable address) and owned by this thread-local; `Drop` unregisters.
-                unsafe { window.register() };
+                let window = Box::new(window);
                 *slot = Some(Tip { window, label, widget, text: String::new() });
             }
             let tip = slot.as_mut().expect("created above");

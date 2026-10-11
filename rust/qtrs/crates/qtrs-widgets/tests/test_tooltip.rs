@@ -623,8 +623,6 @@ mod real_windows {
         root.borrow().set_geometry(Rect::new(0, 0, 400, 300));
         adopt_tree(&root);
         win.set_root_widget(root.clone());
-        // SAFETY: boxed (stable address), single thread, `Drop` unregisters.
-        unsafe { win.register() };
         win.show();
         let hwnd = win.native_handle();
         Fixture { win, hwnd, root }

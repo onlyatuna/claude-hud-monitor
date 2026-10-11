@@ -40,8 +40,6 @@ fn fixture() -> Fixture {
         )
         .expect("create window"),
     );
-    // SAFETY: boxed (stable address), single thread, `Drop` unregisters.
-    unsafe { win.register() };
     let hwnd = win.native_handle() as HWND;
     // The platform layer posts window events (Close/Move/Resize/...) to this receiver.
     qtrs_platform::window::register_window_event_binding(hwnd, el.handle(), win.id());
@@ -139,6 +137,7 @@ fn drag(interactive: bool, n: i32) -> Delta {
         event_resize_count: after.event_resize_count - before.event_resize_count,
         direct_render_count: after.direct_render_count - before.direct_render_count,
         direct_present_count: after.direct_present_count - before.direct_present_count,
+        last_painted_region: after.last_painted_region,
     };
     println!(
         "interactive={interactive} N={n}: WM_SIZE={wm_size} resize_semantic={} callbacks={} \

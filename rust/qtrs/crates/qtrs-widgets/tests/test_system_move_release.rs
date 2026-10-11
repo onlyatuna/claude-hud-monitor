@@ -40,8 +40,6 @@ fn fixture() -> Fixture {
         Window::new("System Move Release", Rect::new(0, 0, 200, 200), WindowFlags::empty())
             .expect("create window"),
     );
-    // SAFETY: boxed (stable address), single thread, `Drop` unregisters.
-    unsafe { win.register() };
     let hwnd = win.native_handle() as HWND;
     qtrs_platform::window::register_window_event_binding(hwnd, el.handle(), win.id());
     let releases = Rc::new(Cell::new(0u32));

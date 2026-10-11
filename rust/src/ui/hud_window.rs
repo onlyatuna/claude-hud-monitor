@@ -838,7 +838,6 @@ impl HUDWindow {
         );
         self.window.set_geometry(Rect::new(nx, ny, w, h));
         self.cards_container.borrow().update_layout();
-        self.window.render_and_present();
     }
 
     pub fn apply_cards_layout_mode(&mut self, mode: &str) {
@@ -903,7 +902,6 @@ impl HUDWindow {
             Arc::clone(&self.config),
             Rc::clone(&self.vibrant),
         );
-        self.window.render_and_present();
     }
 
     pub fn on_data_fetched(&mut self, data: &UsageMetrics) {
@@ -919,7 +917,6 @@ impl HUDWindow {
         );
         self.refresh_status_dot();
         self.cards_container.borrow().update_layout();
-        self.window.render_and_present();
     }
 
     /// Python `_on_system_appearance_changed`: under `appearance = "auto"` the UI follows the
@@ -942,7 +939,6 @@ impl HUDWindow {
         if busy != self.busy {
             self.busy = busy;
             self.refresh_status_dot();
-            self.window.render_and_present();
         }
     }
 
@@ -959,7 +955,6 @@ impl HUDWindow {
             card.update_countdown();
         }
         self.table.update_countdowns();
-        self.window.render_and_present();
     }
 
     /// One 1000 ms clock tick (Python `_update_all_countdowns`): refreshes the countdowns, and when the
@@ -1010,7 +1005,6 @@ impl HUDWindow {
             cfg.opacity = val;
         });
         self.window.set_opacity(val);
-        self.window.render_and_present();
     }
 
     pub fn set_refresh_interval(&mut self, seconds: u64) {
@@ -1052,7 +1046,6 @@ impl HUDWindow {
 
         self.window.set_geometry(Rect::new(nx, ny, w, h));
         self.persist_geometry();
-        self.window.render_and_present();
     }
 }
 
@@ -1750,7 +1743,6 @@ mod tests {
     /// An idle countdown pass in cards mode marks nothing for repaint: the countdowns are
     /// day-granular so no text changes, and the hidden table page's dials are not visible, so
     /// their `update()` is ignored as in Qt (`QWidgetPrivate::update`, qwidget.cpp:11367-11368).
-    /// (`update_clock` itself still repaints explicitly; that is G10.1.a.)
     #[test]
     fn idle_countdown_pass_in_cards_mode_marks_nothing_for_repaint() {
         let (mut hud, _fetched) = hud_with_stubs();
@@ -1764,16 +1756,83 @@ mod tests {
                 ..Default::default()
             });
         }
+        let root = hud.window.root_widget();
+        let origin = qtrs_gui::geometry::primitives::Point::new(0, 0);
+        // Settle: drop everything the data pass marked.
+        let _ = qtrs_widgets::window::collect_dirty_region(&root, origin);
+        let direct_before = hud.window.render_stats().direct_render_count;
         hud.update_clock();
-        for card in hud.cards.values_mut() {
-            card.update_countdown();
+        assert_eq!(
+            hud.window.render_stats().direct_render_count,
+            direct_before,
+            "a clock tick must reach the window through widget update, not render_and_present"
+        );
+        let dirty = qtrs_widgets::window::collect_dirty_region(&root, origin);
+        assert_eq!(dirty, None, "an idle countdown pass marked a repaint");
+    }
+
+    /// G10.1.a: an idle clock tick in table mode repaints through widget `update()` only, and
+    /// only the widgets Python's `update_countdown` touches every second: the dial (`update()`,
+    /// `usage_table.py:144`) and the weekly value label (`setStyleSheet`, `usage_table.py:368`,
+    /// which Qt repolishes on every call). No full-window `render_and_present`.
+    #[test]
+    fn idle_clock_tick_in_table_mode_dirties_only_dials_and_weekly_values() {
+        let (mut hud, _fetched) = hud_with_stubs();
+        hud.apply_ui_mode("table");
+        let reset = chrono::Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(2);
+        for id in crate::providers::PROVIDER_IDS {
+            hud.on_data_fetched(&UsageMetrics {
+                provider_id: id.to_string(),
+                metric1_val: Some(40.0),
+                metric1_reset: Some(reset),
+                metric2_val: Some(60.0),
+                metric2_reset: Some(reset),
+                ..Default::default()
+            });
         }
-        hud.table.update_countdowns();
-        let dirty = qtrs_widgets::window::collect_dirty_region(
-            &hud.window.root_widget(),
+        let root = hud.window.root_widget();
+        // Settle: drop everything the data pass marked.
+        let _ = qtrs_widgets::window::collect_dirty_region(
+            &root,
             qtrs_gui::geometry::primitives::Point::new(0, 0),
         );
-        assert_eq!(dirty, None, "an idle countdown pass marked a repaint");
+        let direct_before = hud.window.render_stats().direct_render_count;
+
+        hud.update_clock();
+
+        assert_eq!(
+            hud.window.render_stats().direct_render_count,
+            direct_before,
+            "a clock tick must reach the window through widget update, not render_and_present"
+        );
+        fn dirty_widgets(w: &WidgetRef, out: &mut Vec<WidgetRef>) {
+            let b = w.borrow();
+            if b.dirty_rect().is_some() {
+                out.push(Rc::clone(w));
+            }
+            for child in b.children() {
+                dirty_widgets(&child, out);
+            }
+        }
+        let mut dirty = Vec::new();
+        dirty_widgets(&root, &mut dirty);
+        let expected: Vec<WidgetRef> = hud
+            .table
+            .columns
+            .values()
+            .flat_map(|c| [Rc::clone(&c.dial), Rc::clone(&c.m2_val)])
+            .collect();
+        assert!(
+            !dirty.is_empty(),
+            "the dial repaints every tick, as in Python"
+        );
+        for w in &dirty {
+            assert!(
+                expected.iter().any(|e| Rc::ptr_eq(e, w)),
+                "an idle tick dirtied a widget other than a dial or weekly value: {:?}",
+                w.borrow().geometry()
+            );
+        }
     }
 
     #[test]

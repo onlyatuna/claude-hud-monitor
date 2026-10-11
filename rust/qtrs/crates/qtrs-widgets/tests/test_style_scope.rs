@@ -70,8 +70,6 @@ fn fixture(title: &str) -> Fx {
     let mut win = Box::new(
         Window::new(title, Rect::new(0, 0, 400, 120), WindowFlags::empty()).expect("create window"),
     );
-    // SAFETY: boxed (stable address), single thread, `Drop` unregisters.
-    unsafe { win.register() };
     win.set_root_widget(Rc::clone(&root));
 
     let mut fx = Fx { el: EventLoop::new(), win, label, root };

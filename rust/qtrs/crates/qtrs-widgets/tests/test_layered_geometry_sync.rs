@@ -65,8 +65,6 @@ fn run(frame_flags: WindowFlags, n: i32) -> Vec<Iter> {
         )
         .expect("create window"),
     );
-    // SAFETY: boxed, single thread, `Drop` unregisters.
-    unsafe { win.register() };
     let hwnd = win.native_handle() as HWND;
     win.render_and_present();
     el.process_events(false);
