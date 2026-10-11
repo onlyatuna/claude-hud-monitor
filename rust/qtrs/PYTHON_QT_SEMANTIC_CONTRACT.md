@@ -930,11 +930,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`PARTIAL`（HUD 端 RC-13 已完成）。`Win32Screen`（`geometry`、`available_geometry`＝`rcWork`、`dpr`、`all_screens`）；`ensure_within_screens`／`clamp_window_rect_to_screens` 是 qtrs 自己的 helper（Qt 沒有對應 API），規則與 Python 不同（最大交集面積選螢幕、32×32 門檻、完全離開時置中），HUD **不使用**。HUD 的放置規則在 `rust/src/ui/placement.rs`（`restore_or_default_position`、`ensure_within_screen`、`reset_position`，純函式，以 `QRect` 的 inclusive `right()/bottom()/center()` 語意實作）。
 - **Known gap**
   - **G11.4.a [P0, READ；已修復：RC-13]** Rust HUD 啟動時用 `primary_screen().geometry()` 與 `ensure_within_screen`（`hud_window.rs:178-193,640-662`），且與 `:823-824` 的 `available_geometry()` 不一致；**從不使用 `clamp_window_rect_to_screens`**；沒有以中心選螢幕、沒有「脫離所有螢幕就停靠右上」、沒有 50×30 門檻。修復：三個放置點（啟動還原、`apply_ui_mode_internal`、`reset_geometry`）改用 `placement.rs`。額外發現並一併修正（同一組規則）：(1) 啟動時 Rust 把位置夾進螢幕，Python 只在「至少 50×30 可見」時原樣 `move(x,y)`，不夾；(2) 只有一個座標存在時 Python 視為沒有儲存位置；(3) 模式切換時 Rust 以**舊尺寸**的視窗中心選螢幕，Python 在 `resize` 之後（新尺寸）；(4) `reset_geometry` Python 不夾，Rust 夾；(5) Rust 用 `geometry()`（含工作列），Python 用 `availableGeometry()`。證據：`rust/tools/gen_hud_placement_oracle.py` 以**未修改的 Python** `_ensure_within_screen`／`_restore_or_default_position`／`_reset_geometry` 對假螢幕（只假造螢幕清單）產生 3751 筆 oracle（`rust/src/ui/placement_oracle.txt`；6 種螢幕配置含負座標與上下堆疊、含「視窗中心在螢幕邊緣 ±1 px」），Rust 三個函式逐筆相同。舊算法（重新實作的算術，不是出貨程式碼）對同一 oracle 的結果：E 案例 1623／2714 筆不同、R 案例 959／992 筆不同（略過無主螢幕的案例；舊邏輯以主螢幕工作區近似，舊程式碼實際用含工作列的 `geometry()`），因此 oracle 能區分新舊；**沒有 before-FAIL**（舊邏輯內嵌在需要真實視窗的方法裡，無法呼叫）。變異檢查（不是 before-FAIL）：`right()` 改成 `x+width`、`center()` 改成 `x+width/2`、50×30 門檻改成 32×32，各使 oracle 測試 FAIL。Win32 煙霧測試（單螢幕 1536×864 邏輯，工作區 816 高）：儲存位置 (-3000,300) 與只露出 36 px 的 (1500,100) 都落到預設位置 (1216,50)；(1400,100)（露出 136 px）原樣保留，舊程式碼會夾到 x=846。多螢幕只以假螢幕 oracle 驗證，本機只有一個螢幕。  - **G11.4.b [P1, READ]** `Window` 無 `screen()`；`screen_changed` 只在 `WM_DISPLAYCHANGE` 發射，無訂閱者。RC-13 的 `Screens::window_screen` 以「完整幾何與視窗交集面積最大的螢幕」近似 `QWidget.screen()`；無交集時 Qt 用 `MonitorFromWindow(…NEAREST)`，近似版回到主螢幕。此 gap 仍開著。
-  - **G11.4.c [P1, INFERENCE]** `Win32Screen::geometry` 以 dpr 除原點（`high_dpi::from_native_rect`），在 DPI 不同的副螢幕上不是 Qt 的虛擬桌面映射。
+  - **G11.4.c [P1, RAN；已修復：RC-71]** `Win32Screen::geometry` 以 dpr 除原點（`high_dpi::from_native_rect`），在 DPI 不同的副螢幕上不是 Qt 的虛擬桌面映射。
   - **G11.4.d [P2]** `Win32Screen::primary()` 寫死 `MonitorFromPoint(0,0)`；DPR 夾到最小 1.0。
   - **G11.4.e [P1, READ]** `qtrs_gui::Rect::right()`／`bottom()` 回傳 `x + width`／`y + height`，`QRect::right()`／`bottom()` 是 `x + width - 1`（`qrect.h:199-203`）；`center()` 是 `x + width / 2`，`QRect::center()` 是 `(x1 + x2) / 2`（`qrect.h:253-257`）。`contains`／`intersects` 的半開語意與 `QRect` 一致，只有這幾個存取器不同，名稱相同而數值差 1，移植 Python 程式碼時會靜默偏 1 px。qtrs 非測試程式碼約 83 處使用 `.right()`／`.bottom()`，**未修**（改語意影響全部呼叫者，是獨立 RC）；RC-13 的 `placement.rs` 不使用它們。
   - **G11.4.f [P2, INFERENCE]** 設定載入（`config.rs` sanitize）把 `window_x/y` 超出 −5000..10000 的值改為 `None`；Python 的 `hud_window.py` 沒有這個範圍檢查（未檢查 Python 設定模組）。
-  - **G11.4.g [P2, INFERENCE]** 混合 DPI 多螢幕的工作區座標經 `high_dpi::from_native_rect`（G11.4.c）；RC-13 的 oracle 使用合成的單一座標系，本機只有一個螢幕，真實多螢幕、混合 DPI 未驗證。
+  - **G11.4.g [P2, INFERENCE]** 混合 DPI 多螢幕的工作區座標經 `high_dpi::from_native_rect`（G11.4.c）；RC-13 的 oracle 使用合成的單一座標系，本機只有一個螢幕，真實多螢幕、混合 DPI 未驗證。（RC-71 之後工作區以螢幕原點換算，換算本身有單元測試；實機仍未驗證。）
+  - **G11.4.h [P2, READ]** `Win32Screen::screen_at`（`screen.rs`）把邏輯座標直接交給 `MonitorFromPoint`，而 `MonitorFromPoint` 吃的是原生座標。Qt 的 `QGuiApplication::screenAt` 以各螢幕的邏輯 `geometry()` 判斷（`qguiapplication.cpp:1147-1164`）。縮放大於 100% 時，邏輯範圍之外、原生範圍之內的點也會得到螢幕。目前沒有非測試呼叫者（`grep '.screen_at('`），未修。
 - **Test**：既有 `test_power_events_and_screen_clamping`、`test_platform_screen_primary_and_multi_screens`（只練 helper，沒呼叫 HUD 邏輯）。必要：以「儲存位置在所有螢幕之外」與「在第二螢幕」兩種情況驅動 HUD 還原，斷言 Python 的停靠規則。
 - **HUD usage**：Python `hud_window.py:376-424,856-858`；Rust `rust/src/ui/placement.rs`（被 `hud_window.rs` 的三個放置點呼叫）。
 
@@ -1268,7 +1269,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 372 項：D 12、P0 35、P1 168、P2 152、test gap 5（計數含已修復項；標籤含「已修復」者共 92 項：G2.1.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.5.c、G10.7.a、G10.7.e、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 373 項：D 12、P0 35、P1 168、P2 153、test gap 5（計數含已修復項；標籤含「已修復」者共 93 項：G2.1.a、G3.2.b、G4.3.a、G5.1.f、G6.1.a、G6.1.b、G6.2.c、G6.4.a、G6.4.d、G7.2.a、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.d、G8.1.e、G8.2.a、G8.3.b、G8.3.e、G8.4.a、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.2.a、G9.3.c、G9.4.b、G9.5.a、G9.6.a、G10.5.c、G10.7.a、G10.7.e、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.8.c、G11.9.a、G11.13.d、G11.13.a、G11.13.b、G11.13.c、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.b、G12.5.a、G12.5.b、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.l、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1537,11 +1538,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.3.c | P1, READ | `NativeWindow::geometry()` 回實體 `GetWindowRect`，`Window::geometry()` 為邏輯 |
 | G11.4.a | P0, READ；已修復：RC-13 | Rust HUD 啟動時用 `primary_screen().geometry()` 與 `ensure_within_screen` |
 | G11.4.b | P1, READ | `Window` 無 `screen()` |
-| G11.4.c | P1, INFERENCE | `Win32Screen::geometry` 以 dpr 除原點 |
+| G11.4.c | P1, RAN；已修復：RC-71 | `Win32Screen::geometry` 以 dpr 除原點 |
 | G11.4.d | P2 | `Win32Screen::primary()` 寫死 `MonitorFromPoint(0,0)` |
 | G11.4.e | P1, READ | qtrs `Rect::right/bottom/center` 與 `QRect` 差 1（`x+w` vs `x+w-1`） |
 | G11.4.f | P2, INFERENCE | 設定載入把 window_x/y 超出 ±範圍者改為 None，Python 沒有 |
 | G11.4.g | P2, INFERENCE | 混合 DPI 多螢幕未驗證 |
+| G11.4.h | P2, READ | `Win32Screen::screen_at` 把邏輯座標交給 `MonitorFromPoint` |
 | G11.5.a | P0（條件式：僅 DComp 可用的機器）, READ；本機 RAN：選到 Layered，未重現；已修復：RC-09 implementation complete / DirectComposition hardware verification pending | **DComp 路徑丟棄 opacity**：`present_dirty_ref(&mut self, pixmap, _opacity, dirty)` |
 | G11.5.b | P2 | 非分層視窗 `SetLayeredWindowAttributes` 失敗時靜默 |
 | G11.5.c | test gap, RAN；部分處理：RC-09 新增明確標為 ignore 的 DComp 測試，既有 test_dcomp_* 仍靜默 skip | `test_dcomp_*` |
@@ -2574,6 +2576,29 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - run 38089952648：新版 0/960 失敗；計時器最晚 2015.4 ms 觸發，檢查點在 2150 ms 以後。
 - **Status**：**已修復（測試）**。
 - **Residual**：run 38088237821 那 1 次新版失敗沒有追蹤資料，原因未查（`[INFERENCE]` CI VM 偶爾讓計時器延遲超過 150 ms）。qtrs 一律用 `SetTimer`，沒有照 Qt 依 timer type 選 `timeSetEvent`／`SetCoalescableTimer`。這是另一個差異，本項不處理。
+
+#### RC-71 Win32 螢幕的幾何與工作區不保留螢幕原點
+
+- **Contract gaps**：G11.4.c（已修復）。新增 G11.4.h（P2，`screen_at` 的座標系，未修）。總數 372 → 373，P2 152 → 153，已修復 92 → 93。
+- **為何選這一項**：多螢幕座標的三個 P1（G11.4.c、G10.7.d、G11.8.a）先各自建立驗證矩陣，再依證據分組。這一項只靠純換算就能證明，是另外兩項的前提：視窗定位與選單夾限都拿螢幕的邏輯矩形當參考。
+- **Qt behavior** `[QT-SRC gui/kernel/qscreen.cpp:65-69; gui/kernel/qhighdpiscaling.cpp:583-590, 713-721; gui/kernel/qhighdpiscaling_p.h:150-158, 238-244]`：`QScreenPrivate::updateGeometry` 以 `fromNativeGlobalPosition` 換算平台螢幕的 `geometry()` 與 `availableGeometry()`。原點是該螢幕的**原生**左上角，左上角以 `O + (P − O) / s` 換算，所以螢幕本身的邏輯左上角等於原生左上角，只有尺寸除以 s；工作區的左上角相對於螢幕原點換算。Windows 外掛的螢幕幾何取 `rcMonitor`、工作區取 `rcWork`（`qwindowsscreen.cpp:293-294`）。
+- **qtrs root**：`Win32Screen::geometry`／`available_geometry` 以 `high_dpi::from_native_rect` 把 x、y、寬、高各自除以 DPR，沒有原點。150% 的副螢幕在 1920 px 主螢幕右側時，邏輯 x 變成 1280，與主螢幕重疊；在左側時 −2880 變成 −1920；在下方時 y 1080 變成 720。只有原點為 (0, 0) 的螢幕（含所有單螢幕）不受影響。
+- **修正**：
+  - `high_dpi::from_native_global_rect(rect, screen_origin, dpr)`，對應 `QHighDpi::fromNative(rect, factor, origin)`：左上角相對螢幕原點換算，尺寸只縮放，`qRound` 以 `f64::round`（遠離零）實作。
+  - `Win32Screen` 的兩個存取器改用它，原點取 `rcMonitor` 的左上角。共用的 `from_native_rect` 沒有改語意（它的呼叫者只有這兩處；視窗座標屬 RC-72）。
+- **Evidence**：`RAN`（本機 Windows；GitHub Actions 三平台）。
+  - 新測試（`screen.rs` 的 `win32_screen::tests`，直接建構 `Win32Screen` 並呼叫 `PlatformScreen` 的兩個存取器，不需要第二台螢幕）。修改前本機三項失敗：
+    - `a_scaled_screen_right_of_the_primary_keeps_its_native_origin`：(1280, 0, 1920, 1080)，預期 (1920, 0, 1920, 1080)；
+    - `a_scaled_screen_left_of_the_primary_keeps_its_negative_origin`：x −1920，預期 −2880；
+    - `a_work_area_offset_from_the_screen_origin_scales_relative_to_that_origin`：(0, 720, …)，預期 (0, 1080, …)；工作區（螢幕頂端 48 px 工作列）預期 (0, 1112, 1920, 1048)。
+    - `a_scaled_screen_at_the_desktop_origin_and_an_unscaled_screen_beside_it` 修改前後都通過（保護性：原點為 (0, 0) 與 100% 的螢幕不變）。
+  - 修改後本機四項通過；qtrs workspace（略過 `real_windows`）全部通過。修改後 run 38132135487（`ci/qtrs-tests`，手動觸發）三平台全部成功；唯一一則 warning 來自 CI 設定（手動觸發時 paths-filter 沒有 `before`），已在 `0801843` 修正，與本 RC 無關。
+- **Status**：**已修復**（換算）。
+- **Residual**：
+  - 沒有多螢幕實機驗證；`EnumDisplayMonitors`／`GetMonitorInfoW` 的實際值未以第二台螢幕觀察。
+  - RC-71 單獨上線時，視窗定位仍不看原點（G10.7.d，RC-72 修），兩者在非 (0, 0) 原點、縮放不同的螢幕上暫時不一致 `[INFERENCE]`。
+  - G11.4.h（`screen_at`）與 G11.4.d（`primary()` 寫死 (0, 0)、DPR 夾到 1.0）未改。
+  - G11.8.a（托盤）未改、未重新分類。
 
 ### D.2 HUD 應用層 root cause（`rust/src`，不由 qtrs 修）
 
