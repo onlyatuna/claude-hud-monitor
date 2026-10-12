@@ -1155,7 +1155,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.t [P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending] | DComp 路徑 opacity 無效（待實測） | G11.5.a | 實測後修復 |
 | G12.5.u [P2] | 色彩／字型解析細節 | G12.3.e–h | 驗證 |
 | G12.5.v [P1, RAN；已修復：RC-128] | 發佈 profile `panic = "abort"` vs Python excepthook | G7.9.b | 已依 Python 修正（RC-128） |
-| G12.5.w [P2] | `rust/README.md` 仍描述 egui/eframe/reqwest | `rust/README.md:3,27,95` | 文件修正 |
+| G12.5.w [P2；已修復：RC-162] | `rust/README.md` 仍描述 egui/eframe/reqwest | `rust/README.md:3,27,95` | 已依 qtrs 架構重寫（RC-162） |
 
 ### C12.6 既有的對照 harness 與未涵蓋範圍
 - **`DIFF`（需要 PySide6 與真實平台 plugin）**：`qt_layout_compare.py`（layout，見 C9.7）；`qt_advance_compare.py`（`QFontMetricsF.horizontalAdvance` vs `FontMetrics::horizontal_advance_exact`）；`qt_glyph_compare.py`（字形覆蓋）；`qt_lcd_dump.py`（Qt 文字畫到不同目的地；傾印作為 `test_lcd_text_parity.rs` 的像素 fixture：`lcd_segoe12`、`lcd_jhenghei12`）。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 220 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 221 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1595,7 +1595,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.6.d | P1, RAN | 字型來源與缺字型替換規則與 Qt（fontconfig／CoreText／GDI）不同 |
 | G12.5.u | P2 | 色彩／字型解析細節 |
 | G12.5.v | P1, RAN；已修復：RC-128 | 發佈 profile `panic = "abort"` vs Python excepthook |
-| G12.5.w | P2 | `rust/README.md` 仍描述 egui/eframe/reqwest |
+| G12.5.w | P2；已修復：RC-162 | `rust/README.md` 仍描述 egui/eframe/reqwest |
 | G12.8.a | P1, RAN；已修復：RC-14 | 指標值字級：Python widget-local `font-size: 14px`；Rust 只有 `set_font(14)`，被 app sheet `QLabel#MetricValue { font-size: 16px }` 蓋過（符合 Qt：樣式表字級勝過 `setFont`），有效字級 16，`sizeHint` 高度 19 vs 17。RC-14 的第一個分歧 |
 | G12.8.b | P1, RAN；已修復：RC-14 | 橫向 body spacing：Python 8（`hud_window.py:337`），Rust 預設 6；卡片寬 213 vs 211 |
 | G12.8.c | P1, RAN；已修復：RC-16 | 直向容器 policy／stretch：Python 不設；Rust `stack`／`cards_container` `Expanding`、根 stretch 1、卡片 stretch。RC-16 的延伸 |
@@ -3435,4 +3435,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：`hud_window.rs` 的 `with_providers` 在建立 `Window` 後，立即依初始 `ui_mode` 與 `layout_mode` 呼叫 `window.set_minimum_size(min_w, min_h)`。
 - **驗證**：更新測試 `test_window_default_and_minimum_sizes_match_pyside6`。修改前 FAIL：`src\ui\hud_window.rs:1094:13 assertion left == right failed: horizontal initial minimum size on construction (G12.8.q) left: (0, 0) right: (540, 125)`。修改後 PASS。HUD 135 項測試全過；clippy 0 warning；`cargo fmt --check` 通過。`--snapshot` 比對版面 0 px 差異。
 - **HUD 影響**：無負面影響。HUD 於剛啟動未經任何模式切換前即具備正確之視窗最小尺寸限制。
+- **Residual**：無。
+
+#### RC-162 更新 `rust/README.md` 架構文件至 qtrs 工具包（G12.5.w）
+- **依據**：`rust/README.md` 原先殘留早期的 egui/eframe/reqwest 描述（行 3、27、95）。
+- **根因**：HUD 遷移至 qtrs（Qt/PySide6 語意 toolkit）後，文件未及時更新架構圖與模組說明。
+- **修正**：在 commit `4cfa62c` 及本 RC 中全面重寫 `rust/README.md`，詳述 in-repo `qtrs` 工具包、Win32/macOS/Linux 支援邊界、以及與 Python 版本之記憶體／啟動速度對比，完全移除所有 egui/eframe/reqwest 殘留描述。
+- **驗證**：全文搜尋確認 `rust/README.md` 零 egui/eframe/reqwest 出現，正確反映目前的 qtrs 模組架構。
+- **HUD 影響**：純文件修正，無程式碼行為變更。
 - **Residual**：無。
