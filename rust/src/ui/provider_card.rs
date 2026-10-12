@@ -211,13 +211,13 @@ impl ProviderCardWidget {
         header_layout.add_stretch(1);
 
         let mut badge_lbl = Label::new("--");
-        badge_lbl.set_font(Font::new("Consolas", 9.0).with_weight(FontWeight::Bold));
+        badge_lbl.set_font(Font::new("Consolas", 9.0));
         let badge = make_widget(badge_lbl);
         badge.borrow_mut().set_object_name("Badge");
         header_layout.add_widget(badge.clone());
 
         let mut badge2_lbl = Label::new("");
-        badge2_lbl.set_font(Font::new("Consolas", 9.0).with_weight(FontWeight::Bold));
+        badge2_lbl.set_font(Font::new("Consolas", 9.0));
         let badge2 = make_widget(badge2_lbl);
         badge2.borrow_mut().set_object_name("Badge");
         badge2.borrow_mut().set_visible(false);
@@ -662,6 +662,18 @@ mod tests {
                 "badge height at DPR {dpr} (PySide6: {expected}); hint {hint:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_badge_font_weight_matches_python() {
+        let card = ProviderCardWidget::new("claude");
+        let b = card.badge.borrow();
+        let lbl = b.as_any().downcast_ref::<Label>().unwrap();
+        assert_eq!(
+            lbl.font().weight,
+            FontWeight::Normal,
+            "Badge font weight must be Normal (400) matching Python (G12.8.e)"
+        );
     }
 
     // Expected values are PySide6 measurements taken with the Windows fonts (Microsoft JhengHei UI,
