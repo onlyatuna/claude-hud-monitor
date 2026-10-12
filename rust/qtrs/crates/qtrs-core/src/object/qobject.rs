@@ -600,16 +600,26 @@ impl ObjectData {
         unsafe { unregister_qobject(self.id) };
     }
 
-    /// Sets a dynamic property value. Returns true if the value was added or changed.
+    /// Sets a dynamic property value (`QObject::setProperty` dynamic fallback).
+    ///
+    /// If `value` is `Variant::Invalid`:
+    /// - If the property exists, it is removed and `true` (changed) is returned.
+    /// - If the property does not exist, `false` (unchanged) is returned.
+    ///
+    /// If `value` is valid:
+    /// - If the property already exists with the same value, `false` (unchanged) is returned.
+    /// - Otherwise (new property or changed value), it is stored and `true` (changed) is returned.
     pub fn set_property(&mut self, name: &str, value: Variant) -> bool {
-        let changed = match self.dynamic_properties.get(name) {
-            Some(existing) => existing != &value,
-            None => true,
-        };
-        if changed {
-            self.dynamic_properties.insert(name.to_string(), value);
+        if !value.is_valid() {
+            return self.dynamic_properties.remove(name).is_some();
         }
-        changed
+        match self.dynamic_properties.get(name) {
+            Some(existing) if existing == &value => false,
+            _ => {
+                self.dynamic_properties.insert(name.to_string(), value);
+                true
+            }
+        }
     }
 
     /// Retrieves a dynamic property by name.
@@ -1169,7 +1179,11 @@ pub trait QObject: std::any::Any {
     }
 
     /// Sets property value, prioritizing static MetaProperty then fallback to dynamic property (`QObject::setProperty`).
-    /// Returns true if property value changed or set successfully.
+    ///
+    /// Qt semantic (`qobject.cpp:4541-4583`):
+    /// - Static declared property: returns `true` if writable and write succeeds, `false` if read-only or write fails.
+    /// - Dynamic property (not declared in meta-object): returns `false` (both on add/change and removal).
+    ///   A `DynamicPropertyChange` event is dispatched if the dynamic property was added, modified, or removed.
     fn set_property(&mut self, name: &str, value: Variant) -> bool {
         let mo = self.meta_object();
         if let Some(idx) = mo.index_of_property(name) {
@@ -1191,7 +1205,7 @@ pub trait QObject: std::any::Any {
             });
             self.event(&mut ev);
         }
-        changed
+        false
     }
 
     /// Dynamically invokes a method by signature or name (`QMetaObject::invokeMethod`).

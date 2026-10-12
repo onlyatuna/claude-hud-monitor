@@ -154,7 +154,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### C2.6 動態／宣告屬性
 - **已遷移**：要求見 `QTRS_SPEC.md` §02（R-00027～R-00031、R-00045）。本節只保留缺陷（G）與 HUD 使用位置；Qt behavior、qtrs required、Current implementation、Test 以新規格為準。
-- **Known gap**：**G2.6.a [P2, READ]** 新動態屬性回 `true`（Qt 回 false）；**G2.6.b [P2, READ]** `Variant::Invalid` 不移除；**G2.6.c [P1, RAN；已修復：RC-100]** （修復前）notify signal 從不發射（derive 寫死 `notify_signal = None`）；**G2.6.d [P2, READ]** 沒有 `as_qobject_any` 時 meta 路徑靜默落到動態 map。
+- **Known gap**：**G2.6.a [P2, READ；已修復：RC-173]** set_property 對未宣告動態屬性回 false（qobject.cpp:4574, RC-173）；**G2.6.b [P2, READ；已修復：RC-173]** Variant::Invalid 移除動態屬性且回 false（qobject.cpp:4554-4574, RC-173）；**G2.6.c [P1, RAN；已修復：RC-100]** （修復前）notify signal 從不發射（derive 寫死 `notify_signal = None`）；**G2.6.d [P2, READ]** 沒有 `as_qobject_any` 時 meta 路徑靜默落到動態 map。
 - **HUD usage**：Python `widget.setProperty("state", …)` + `unpolish/polish`（`usage_table.py:256-260`）供 `QLabel[state="muted"]`。Rust 走 widget 層 `set_property(&str,&str)`（`usage_table.rs:879`），因樣式每次 lazily 解析，不需 polish（見 C8.5）。
 
 ### C2.7 Registry、借用排他、重入
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 232 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 234 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1253,8 +1253,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.4.c | P2, RAN；部分修復：RC-97 | unregister 後封鎖靜默失效 |
 | G2.5.a | P1, RAN；已修復：RC-11a | 重複 `register_qobject` 同一物件會把它標死：`register_object_metadata` 對被取代的 record 呼叫 `liveness.store |
 | G2.5.b | P2 | `QPointer` 無法解參考，只攜帶 `id()` |
-| G2.6.a | P2, READ | 新動態屬性回 `true` |
-| G2.6.b | P2, READ | `Variant::Invalid` 不移除 |
+| G2.6.a | P2, READ；已修復：RC-173 | set_property 對未宣告動態屬性回 false（qobject.cpp:4574） |
+| G2.6.b | P2, READ；已修復：RC-173 | Variant::Invalid 移除動態屬性且回 false（qobject.cpp:4554-4574） |
 | G2.6.c | P1, RAN；已修復：RC-100 | notify signal 從不發射 |
 | G2.6.d | P2, READ | 沒有 `as_qobject_any` 時 meta 路徑靜默落到動態 map |
 | G2.7.a | P1, RAN；已修復：RC-123 | 對已被借用的物件送事件會**無聲丟失** |
@@ -3617,4 +3617,28 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：在 `rust/qtrs/crates/qtrs-core/src/signal/signal.rs` 增加 `Signal::with_owner_parts`；在 `ObjectData` 增加 owner-bound 之 `object_name_changed: Signal<String>`；於 `set_object_name` 比較 `prev != name`，不同時賦值並 `self.object_name_changed.emit(&name)`；在 `QObject` trait 暴露 `fn object_name_changed(&self) -> &Signal<String>`。
 - **驗證**：在 `rust/qtrs/crates/qtrs-core/tests/test_qobject_lifecycle_and_hierarchy.rs` 新增 `test_object_name_changed_signal`，驗證設定 `a, a, '', ''` 時僅於名稱變更時發射 `vec!["a", ""]`。修復前編譯失敗（`no method named object_name_changed found`）。修復後 PASS。qtrs-core 326 項測試全過；跨平台 target（linux/mac）0 警告；HUD 135 項全過；clippy 0 警告；rustfmt 格式檢查通過；--snapshot 0 像素差異。
 - **HUD 影響**：無負面影響。提升 QObject 相容層之信號完整性。
+- **Residual**：無。
+
+#### RC-173 QObject::setProperty 動態屬性回傳 false 與 Variant::Invalid 移除語意（G2.6.a, G2.6.b, R-00028, R-00030, R-00061）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:4541-4583]`（`QObject::doSetProperty`）：
+  - 未在 `metaObject` 宣告的名稱進入 dynamic property 分支：新增或修改動態屬性均回傳 `false`（`:4574`）。
+  - 若 `value` 為無效值（`!value.isValid()`，即 `Variant::Invalid`）：若屬性存在則移除它，若不存在回傳 `false` 不動作（`:4554-4559`）；移除成功時送出 `QDynamicPropertyChangeEvent`（`:4571-4572`）並回傳 `false`。
+  - PySide6 實測（`spec02_qobject.py`）：`R-00028: undeclared setProperty returns False, False`；`R-00030: set None on existing -> False, property None, names [], events +1; set None on absent -> False, events +0`。
+- **根因**：
+  - `ObjectData::set_property` 將新動態屬性加入或修改時回傳 `true`，且未處理 `Variant::Invalid` 移除邏輯。
+  - `QObject::set_property` 直接轉發 `ObjectData::set_property` 的回傳值，導致未宣告動態屬性回傳 `true`（G2.6.a）；設定 `Variant::Invalid` 時未將屬性從 `dynamic_properties` 中移除（G2.6.b）。
+- **修正**：
+  - `crates/qtrs-core/src/object/qobject.rs`：
+    - `ObjectData::set_property`：若 `!value.is_valid()`，執行 `dynamic_properties.remove(name).is_some()`；若 valid 則依是否變更插入並回傳 `changed`。
+    - `QObject::set_property`：動態屬性分支在變更時派發 `DynamicPropertyChange` 事件，並依 Qt 規範一律回傳 `false`。
+- **驗證**：
+  - 單元測試：`crates/qtrs-core/tests/test_core_runtime_extensions.rs:98-146`（`test_qobject_dynamic_properties_and_events`）。
+  - **修改前 FAIL**：`:100:5: Setting undeclared property must return false (qobject.cpp:4574 / R-00028 / G2.6.a)`。
+  - **修改後 PASS**：`test test_qobject_dynamic_properties_and_events ... ok`；驗證新增動態屬性回 `false`、屬性讀回正確、相同值不發事件、`Variant::Invalid` 移除既有屬性並觸發事件回 `false`、不存在屬性設 `Variant::Invalid` 不動作回 `false`。
+- **全套回歸**：
+  - `qtrs-core` 全套 326 項測試通過（40 suites, 0.10s）。
+  - `qtrs` workspace 1018 項測試通過（4 ignored, 3 filtered, 0.13s）。
+  - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
+  - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
+  - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
 - **Residual**：無。

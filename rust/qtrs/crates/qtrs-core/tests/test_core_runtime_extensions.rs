@@ -95,9 +95,12 @@ fn test_qobject_dynamic_properties_and_events() {
 
     assert!(obj.property("custom_color").is_none());
 
-    // Setting a new property returns true and emits DynamicPropertyChange
+    // Setting an undeclared property creates it, emits DynamicPropertyChange, and returns false (qobject.cpp:4574 / R-00028 / G2.6.a)
     let changed = obj.set_property("custom_color", Variant::Color(255, 128, 0, 255));
-    assert!(changed);
+    assert!(
+        !changed,
+        "Setting undeclared property must return false (qobject.cpp:4574 / R-00028 / G2.6.a)"
+    );
     assert_eq!(
         obj.property("custom_color"),
         Some(Variant::Color(255, 128, 0, 255))
@@ -115,8 +118,35 @@ fn test_qobject_dynamic_properties_and_events() {
     let names = obj.dynamic_property_names();
     assert!(names.contains(&"custom_color".to_string()));
     assert!(names.contains(&"opacity".to_string()));
-}
 
+    // Setting Variant::Invalid on absent dynamic property returns false, does not emit event, does not create property (R-00061)
+    let r_absent = obj.set_property("absent_prop", Variant::Invalid);
+    assert!(!r_absent);
+    assert_eq!(obj.property("absent_prop"), None);
+    assert!(!obj
+        .dynamic_property_names()
+        .contains(&"absent_prop".to_string()));
+    assert_eq!(*count.borrow(), 2);
+
+    // Setting Variant::Invalid on existing dynamic property removes it, emits DynamicPropertyChange, and returns false (qobject.cpp:4554-4574 / R-00030 / G2.6.b)
+    let r_remove = obj.set_property("custom_color", Variant::Invalid);
+    assert!(
+        !r_remove,
+        "Removing dynamic property with Variant::Invalid must return false (qobject.cpp:4574 / R-00030 / G2.6.b)"
+    );
+    assert_eq!(
+        obj.property("custom_color"),
+        None,
+        "Dynamic property must be removed after setting Variant::Invalid (qobject.cpp:4557 / R-00030 / G2.6.b)"
+    );
+    assert!(
+        !obj.dynamic_property_names()
+            .contains(&"custom_color".to_string()),
+        "Dynamic property name must be removed from list (R-00030 / G2.6.b)"
+    );
+    assert_eq!(*last_prop.borrow(), Some("custom_color".to_string()));
+    assert_eq!(*count.borrow(), 3, "Event must be emitted on removal");
+}
 // -----------------------------------------------------------------------------
 // 2. Test Signal connect_to and Object Thread Affinity
 // -----------------------------------------------------------------------------
