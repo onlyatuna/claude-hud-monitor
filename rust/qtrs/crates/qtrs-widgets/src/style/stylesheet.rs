@@ -373,6 +373,21 @@ fn apply_declaration(style: &mut ResolvedStyle, decl: &QCssDeclaration) {
                 style.margin = Some(e);
             }
         }
+        QCssProperty::MarginTop
+        | QCssProperty::MarginRight
+        | QCssProperty::MarginBottom
+        | QCssProperty::MarginLeft => {
+            if let QCssValue::Length(v) = decl.value {
+                // [top, right, bottom, left]
+                let side = match decl.property {
+                    QCssProperty::MarginTop => 0,
+                    QCssProperty::MarginRight => 1,
+                    QCssProperty::MarginBottom => 2,
+                    _ => 3,
+                };
+                style.margin.get_or_insert([0.0; 4])[side] = v;
+            }
+        }
         QCssProperty::TextAlign => {
         if let QCssValue::Identifier(s) = &decl.value {
                 style.text_align = Some(s.clone());
