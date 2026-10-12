@@ -949,21 +949,26 @@ impl Window {
         self.platform_window.borrow().minimum_size()
     }
 
-    /// Top-level minimum from the root layout (`qlayout.cpp:1035-1048`, `:1078-1092`, applied through
-    /// `setMinimumSize` at `:1108-1113`). An axis without an explicit minimum takes the root's
-    /// minimum size hint; an explicit axis keeps its value. Returns the size the window must grow
-    /// to when it is smaller than the minimum (`qwidget.cpp:4013-4016`).
+    /// Top-level bounds from the root layout's size constraint (`qlayout.cpp:1006-1095`, applied
+    /// through `setMinimumSize` / `setMaximumSize` at `:1096-1122`). With the default constraint an
+    /// axis without an explicit minimum takes the root layout's minimum size and an explicit axis
+    /// keeps its value. Returns the size the window must take when it is outside the bounds
+    /// (`qwidget.cpp:4013-4016`, `:4073-4076`). The platform has no maximum size, so a maximum only
+    /// shrinks the window here.
     fn sync_top_level_minimum(&mut self) -> Option<Size> {
         let root = std::rc::Rc::clone(&self.root_widget);
-        let hint = {
-            let root_ref = root.borrow();
-            root_ref.layout_ref_mut()?;
-            root_ref.minimum_size_hint()
-        };
         let (cur_w, cur_h) = self.minimum_size();
-        let (explicit_w, explicit_h) = self.explicit_min;
-        let target_w = if explicit_w { cur_w } else { hint.width };
-        let target_h = if explicit_h { cur_h } else { hint.height };
+        let (min, max) = {
+            let root_ref = root.borrow();
+            let layout = root_ref.layout_ref_mut()?;
+            crate::widget::size_constraint_bounds(
+                &**layout,
+                true,
+                self.explicit_min,
+                Size::new(cur_w, cur_h),
+            )
+        };
+        let (target_w, target_h) = min.map_or((cur_w, cur_h), |m| (m.width, m.height));
         if (target_w, target_h) != (cur_w, cur_h) {
             // Written straight to the platform: the explicit flags belong to the caller
             // (`qlayout.cpp:1126-1129` restores them after the layout's own `setMinimumSize`).
@@ -972,11 +977,14 @@ impl Window {
                 .set_minimum_size(target_w, target_h);
         }
         let geom = self.geometry.get();
-        let (grow_w, grow_h) = (geom.width.max(target_w), geom.height.max(target_h));
-        if (grow_w, grow_h) == (geom.width, geom.height) {
+        let (mut w, mut h) = (geom.width.max(target_w), geom.height.max(target_h));
+        if let Some(max) = max {
+            (w, h) = (w.min(max.width), h.min(max.height));
+        }
+        if (w, h) == (geom.width, geom.height) {
             None
         } else {
-            Some(Size::new(grow_w, grow_h))
+            Some(Size::new(w, h))
         }
     }
 

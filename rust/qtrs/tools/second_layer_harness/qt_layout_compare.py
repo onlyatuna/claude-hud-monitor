@@ -482,33 +482,6 @@ def write_lines(path, lines):
         f.write("\n".join(lines) + "\n")
 
 
-OWN_W_REASON = (
-    "own=W (parentless window container): Qt's SetDefaultConstraint gives a window the layout's "
-    "total minimum size (qlayout.cpp:1035-1092) and setMinimumSize grows the window "
-    "(qwidget.cpp:4013-4020), so the layout runs on a larger rectangle; qtrs keeps the requested size"
-)
-OWN_W_KNOWN = {
-    "V 4 1 155 25 own=W | S2;{H 10 0 0 0 | 77,16,0,0,16777215,16777215,MinimumExpanding,Minimum,1,0,0,0,1,1,0,0,36,16;48,10,96,0,16777215,16777215,Minimum,Fixed,0,0,0,0,1,1,0,0,7,13;S0;94,43,0,0,16777215,102,Minimum,Preferred,0,0,0,0,1,1,0,65,0,0;107,39,0,0,16777215,16777215,Maximum,Expanding,2,0,0,0,1,1,0,0,0,0}:0": OWN_W_REASON,
-    "H 1 0 23 257 um own=W | S1;55,54,70,0,16777215,16777215,Preferred,Ignored,1,0,0,0,1,1,0,34,25,17;87,34,13,23,16777215,16777215,Preferred,Fixed,1,0,0,0,1,1,0,32,9,25;115,33,0,22,16777215,16777215,Minimum,Preferred,0,0,0,0,1,1,0,0,0,0;88,18,99,0,16777215,47,Expanding,Minimum,1,0,0,0,1,1,0,64,0,0": OWN_W_REASON,
-    "G2 0 10 27 121 us own=W | 77,55,0,0,56,69,Maximum,Maximum,1,0,0,0,1,1,0,34,31,15;2,10,0,5,16777215,16777215,Maximum,Fixed,0,0,0,1,1,1,0,0,0,0": OWN_W_REASON,
-    "G3 6 0 150 44 hs=12 vs=5 rmin=0:14 um own=W | 119,8,0,19,153,16777215,Ignored,Preferred,0,0,0,0,1,2,2,66,0,0;71,29,0,20,63,16777215,Maximum,Preferred,2,0,1,0,1,2,2,66,0,0;13,49,0,0,165,16777215,Minimum,MinimumExpanding,0,0,0,2,1,1,0,0,0,0;97,11,73,0,16777215,16777215,Expanding,MinimumExpanding,1,0,1,2,1,1,0,0,0,0": OWN_W_REASON,
-    "H 4 1 86 132 own=W | 60,52,93,17,192,29,Ignored,Preferred,2,0,0,0,1,1,0,128,0,0;63,38,0,0,16777215,64,Maximum,Maximum,0,0,0,0,1,1,0,66,0,0": OWN_W_REASON,
-    "H 0 0 21 67 um us own=W | {H 2 0 0 0 | S1;76,49,43,0,16777215,31,Preferred,Preferred,0,0,0,0,1,1,0,0,0,0}:0;5,9,56,0,16777215,16777215,Maximum,Ignored,2,0,0,0,1,1,0,68,0,0": OWN_W_REASON,
-    "G3 0 0 27 138 us own=W | 97,37,0,0,16777215,16777215,Ignored,Preferred,2,0,0,0,1,1,0,36,11,23;29,28,0,36,39,16777215,Expanding,Ignored,0,0,0,1,1,2,0,0,8,22;2,40,0,0,16777215,16777215,Expanding,MinimumExpanding,1,1,1,0,2,1,2,129,48,9;106,41,42,0,124,106,Ignored,Preferred,0,0,1,1,1,2,0,66,0,0;31,24,0,26,87,16777215,Expanding,Expanding,0,0,2,1,2,1,1,64,52,18;57,20,66,0,16777215,16777215,Maximum,Expanding,1,1,2,2,1,1,2,66,29,6;80,46,0,0,16777215,55,Minimum,Minimum,0,1,3,0,1,1,1,34,0,0": OWN_W_REASON,
-    "G3 5 9 58 212 hs=6 vs=0 own=W | 104,27,8,0,16777215,63,Fixed,Maximum,3,0,0,0,2,2,0,0,0,0;13,58,25,0,16777215,16777215,Minimum,Minimum,1,0,0,2,1,1,0,0,28,16;29,10,68,0,16777215,62,Maximum,Minimum,3,0,1,2,2,1,0,0,50,9;21,0,0,0,128,16777215,Fixed,Maximum,3,0,2,0,1,1,0,0,0,0": OWN_W_REASON,
-    "V 0 9 473 55 m=4,6,7,4 us own=W | {V 0 0 0 0 um us | S0;64,37,0,20,28,20,Minimum,MinimumExpanding,0,0,0,0,1,1,0,0,0,0;103,17,0,0,188,8,Expanding,Ignored,0,0,0,0,1,1,0,0,0,0;72,43,0,0,16777215,114,MinimumExpanding,Minimum,0,0,0,0,1,1,0,1,0,0;120,7,0,0,162,50,Ignored,Maximum,0,0,0,0,1,1,0,36,0,0}:0;S0": OWN_W_REASON,
-    "V 10 2 169 139 own=W | 84,18,0,0,139,16777215,MinimumExpanding,Expanding,0,0,0,0,1,1,0,1,0,0;104,32,6,0,26,72,Minimum,Maximum,3,0,0,0,1,1,0,130,0,0;46,46,0,0,116,16777215,Fixed,MinimumExpanding,1,0,0,0,1,1,0,32,0,0;53,27,0,0,39,16777215,Minimum,Preferred,2,0,0,0,1,1,0,1,0,0;{V 0 10 0 0 us | 110,55,0,0,16777215,16777215,Ignored,Preferred,0,0,0,0,1,1,0,0,18,0;51,16,0,35,76,16777215,Minimum,Preferred,0,0,0,0,1,1,0,0,17,23;S0;101,49,0,0,57,16777215,Maximum,Fixed,1,0,0,0,1,1,0,0,55,13}:0": OWN_W_REASON,
-    "V 0 1 383 73 m=1,7,7,12 us own=W | 6,47,0,4,16777215,16777215,MinimumExpanding,Maximum,0,0,0,0,1,1,0,33,0,0;S2;25,13,14,39,16777215,16777215,Ignored,Preferred,1,0,0,0,1,1,0,2,0,0;37,11,0,0,179,16777215,Preferred,Ignored,1,0,0,0,1,1,0,128,18,28": OWN_W_REASON,
-    "H 7 6 73 351 m=1,2,0,4 own=W | {H 0 0 0 0 um us | 89,3,29,0,16777215,16777215,Fixed,MinimumExpanding,0,0,0,0,1,1,0,1,0,0;58,16,0,0,16777215,70,MinimumExpanding,Ignored,3,0,0,0,1,1,0,129,0,0;21,43,0,0,16777215,16777215,Preferred,MinimumExpanding,1,1,0,0,1,1,0,0,0,0}:0;{V 7 2 0 0 | 63,52,0,0,198,73,Preferred,Ignored,1,1,0,0,1,1,0,36,57,2;96,49,0,0,16777215,16777215,Minimum,Maximum,3,0,0,0,1,1,0,128,36,20}:0;67,43,24,49,16777215,16777215,Expanding,Minimum,0,0,0,0,1,1,0,0,0,0": OWN_W_REASON,
-    "G2 12 10 60 278 cmin=0:55 own=W | 108,40,0,0,96,73,Expanding,Ignored,0,0,0,0,2,1,0,128,13,14": OWN_W_REASON,
-    "V 2 10 118 140 own=W | 114,39,0,0,16777215,16777215,Expanding,Expanding,1,0,0,0,1,1,0,0,0,0;58,31,0,44,22,44,Minimum,Preferred,3,0,0,0,1,1,0,0,0,0;115,25,0,0,112,16777215,MinimumExpanding,Ignored,0,0,0,0,1,1,0,65,0,0;68,56,0,0,16777215,16777215,Expanding,Ignored,1,0,0,0,1,1,0,0,0,0": OWN_W_REASON,
-    "G3 9 6 48 65 m=2,1,6,2 hs=6 vs=1 rmin=1:43 cmin=1:29 own=W | 17,52,0,22,16777215,16777215,Preferred,Minimum,0,0,0,0,1,1,0,0,50,13;90,28,0,0,9,93,MinimumExpanding,Fixed,1,0,0,1,1,1,0,2,0,0;76,7,50,0,50,31,Minimum,MinimumExpanding,1,0,1,0,1,2,0,0,38,26": OWN_W_REASON,
-    "G3 8 8 304 47 hs=10 vs=8 cmin=2:50 own=W | 54,34,0,21,172,119,Fixed,Expanding,1,0,0,0,1,1,0,0,0,0;26,26,0,0,68,118,MinimumExpanding,Preferred,0,1,0,1,1,1,0,0,0,0;29,9,0,0,134,16777215,Expanding,Maximum,1,0,1,0,1,2,0,0,24,26;59,10,0,26,35,26,Fixed,Minimum,1,0,0,2,1,1,0,66,47,11;70,13,0,0,16777215,16777215,Ignored,Minimum,2,0,2,0,1,2,0,0,0,0;4,4,0,0,16777215,16777215,Preferred,Preferred,1,1,1,2,1,1,0,130,0,0": OWN_W_REASON,
-    "G3 1 0 150 343 hs=9 vs=3 rmin=0:53 um own=W | 20,33,95,0,16777215,14,Fixed,Maximum,1,0,0,0,1,1,1,0,59,16;89,4,0,10,104,27,Preferred,MinimumExpanding,3,0,0,1,1,1,0,32,0,0;110,28,0,0,16777215,16777215,MinimumExpanding,Minimum,3,0,1,0,2,2,1,34,0,0;97,38,0,21,76,16777215,MinimumExpanding,Expanding,1,0,0,2,1,1,1,130,16,2;55,25,0,0,16777215,39,Maximum,Expanding,0,0,1,2,1,1,2,68,0,0;120,18,60,19,16777215,16777215,Preferred,Minimum,3,0,2,2,2,1,2,0,0,0": OWN_W_REASON,
-    "K 0 0 31 346 own=W | 101,37,0,0,16777215,16777215,Expanding,Expanding,0,0,0,0,1,1,0,66,0,0;3,43,9,0,16777215,16777215,Expanding,Maximum,0,0,0,0,1,1,0,64,0,0;14,36,35,6,113,16777215,Ignored,Minimum,1,0,0,0,1,1,0,36,0,0;60,28,0,24,16777215,16777215,Fixed,Maximum,3,0,0,0,1,1,0,34,0,0": OWN_W_REASON,
-    "K 0 1 384 55 own=W | 117,59,62,0,16777215,118,Preferred,Minimum,0,0,0,0,1,1,0,0,48,24": OWN_W_REASON,
-}
-
 def record(path, cases, seed):
     app = QApplication([])
     parent = QWidget()
@@ -539,7 +512,7 @@ def record(path, cases, seed):
         for item, rect in zip(widget_items(case), rects):
             expect.append("-" if item["hidden"] else "{},{},{},{}".format(*rect))
         line = "{}\t{}".format(probe_line(case), ";".join(expect))
-        reason = case.get("known") or OWN_W_KNOWN.get(probe_line(case))
+        reason = case.get("known")
         if reason is not None:
             known.append("# known: " + reason)
             known.append(line)

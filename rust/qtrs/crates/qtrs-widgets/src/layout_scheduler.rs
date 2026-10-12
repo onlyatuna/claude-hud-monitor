@@ -104,10 +104,17 @@ impl LayoutScheduler {
                         // Already borrowed on the current stack; its layout pass is already active.
                         continue;
                     };
+                    let dirty = widget
+                        .layout_ref_mut()
+                        .is_some_and(|layout| layout.is_dirty());
+                    if dirty {
+                        // `QLayout::activate` bounds the owner by the size constraint first
+                        // (qlayout.cpp:996-1129); fitting an activated layout is `doResize`.
+                        crate::widget::apply_size_constraint(&**widget);
+                    }
                     let g = widget.geometry();
                     let mut metrics_rebuilt = false;
                     if let Some(mut layout) = widget.layout_ref_mut() {
-                        let dirty = layout.is_dirty();
                         if dirty || layout.geometry().size() != Size::new(g.width, g.height) {
                             layout.set_geometry(Rect::new(0, 0, g.width, g.height));
                             metrics_rebuilt = dirty;

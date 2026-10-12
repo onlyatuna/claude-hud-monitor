@@ -1,4 +1,4 @@
-use crate::layout::Layout;
+use crate::layout::{Layout, SizeConstraint};
 use crate::widget::{Widget, WidgetBase, WidgetRef, WidgetWeak};
 use qtrs_core::event::Event;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
@@ -13,6 +13,10 @@ pub struct StackedLayout {
     widgets: Vec<WidgetRef>,
     current_index: usize,
     dirty: bool,
+    /// `QLayoutPrivate::horizontalConstraint` / `verticalConstraint` (both axes alike).
+    size_constraint: SizeConstraint,
+    /// An item of another layout (`set_nested`).
+    nested: bool,
 }
 
 impl StackedLayout {
@@ -24,6 +28,8 @@ impl StackedLayout {
             widgets: Vec::new(),
             current_index: 0,
             dirty: true,
+            size_constraint: SizeConstraint::SetDefaultConstraint,
+            nested: false,
         }
     }
 
@@ -118,14 +124,23 @@ impl Layout for StackedLayout {
         self.margins
     }
 
+    fn set_nested(&mut self) {
+        self.nested = true;
+    }
+
+    fn is_nested(&self) -> bool {
+        self.nested
+    }
+
     fn set_spacing(&mut self, _spacing: i32) {}
 
     fn spacing(&self) -> i32 {
         0
     }
 
-    /// `QStackedLayout::sizeHint` (qstackedlayout.cpp:406-421): the component-wise maximum over
-    /// every page, current or not; an `Ignored` axis counts as 0.
+    /// `QStackedLayout::sizeHint` (qstackedlayout.cpp:417-433): the component-wise maximum over
+    /// every page, current or not; an `Ignored` axis counts as 0. The contents margins are not
+    /// added.
     fn size_hint(&self) -> Size {
         let mut page = Size::new(0, 0);
         for widget in &self.widgets {
@@ -136,24 +151,18 @@ impl Layout for StackedLayout {
             let height = if policy.vertical == crate::size_policy::Policy::Ignored { 0 } else { hint.height };
             page = Size::new(page.width.max(width), page.height.max(height));
         }
-        Size::new(
-            page.width + self.margins.left + self.margins.right,
-            page.height + self.margins.top + self.margins.bottom,
-        )
+        page
     }
 
-    /// `QStackedLayout::minimumSize` (qstackedlayout.cpp:427-438): the maximum of `qSmartMinSize`
-    /// over every page.
+    /// `QStackedLayout::minimumSize` (qstackedlayout.cpp:438-448): the maximum of `qSmartMinSize`
+    /// over every page. The contents margins are not added.
     fn minimum_size(&self) -> Size {
         let mut page = Size::new(0, 0);
         for widget in &self.widgets {
             let min = crate::layout_engine::smart_min_size(&**widget.borrow());
             page = Size::new(page.width.max(min.width), page.height.max(min.height));
         }
-        Size::new(
-            page.width + self.margins.left + self.margins.right,
-            page.height + self.margins.top + self.margins.bottom,
-        )
+        page
     }
 
     fn expanding_directions(&self) -> (bool, bool) {
@@ -168,6 +177,17 @@ impl Layout for StackedLayout {
 
     fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    fn size_constraint(&self) -> SizeConstraint {
+        self.size_constraint
+    }
+
+    fn set_size_constraint(&mut self, constraint: SizeConstraint) {
+        if self.size_constraint != constraint {
+            self.size_constraint = constraint;
+            self.invalidate();
+        }
     }
 
     /// `QStackedLayout::setGeometry` (qstackedlayout.cpp:453-468), StackOne mode: only the current

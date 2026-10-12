@@ -150,6 +150,103 @@ pub fn adopt_tree(root: &WidgetRef) {
     }
 }
 
+/// The minimum and maximum `QLayout::activate` gives the owner of top-level layout `layout`
+/// (qlayout.cpp:1006-1095); `None` leaves that bound alone. `window` is `mw->isWindow()`;
+/// `explicit_min` and `current_min` are the owner's explicit minimum axes and current minimum,
+/// which `SetDefaultConstraint` keeps. The layout's total sizes are its own sizes: qtrs widgets
+/// have no contents margins or menu bar to add (qlayout.cpp:615-678).
+pub(crate) fn size_constraint_bounds(
+    layout: &dyn Layout,
+    window: bool,
+    explicit_min: (bool, bool),
+    current_min: Size,
+) -> (Option<Size>, Option<Size>) {
+    use crate::layout::SizeConstraint::*;
+    // `QLayout::totalSizeHint`: a height-for-width layout's hint height is its height at the hint
+    // width (qlayout.cpp:648-650).
+    let total_size_hint = || {
+        let hint = layout.size_hint();
+        if layout.has_height_for_width() {
+            Size::new(hint.width, layout.height_for_width(hint.width))
+        } else {
+            hint
+        }
+    };
+    let total_maximum_size = || {
+        let max = layout.maximum_size();
+        Size::new(
+            max.width.min(crate::layout_engine::LAYOUT_SIZE_MAX),
+            max.height.min(crate::layout_engine::LAYOUT_SIZE_MAX),
+        )
+    };
+    match layout.size_constraint() {
+        SetFixedSize => {
+            let hint = total_size_hint();
+            (Some(hint), Some(hint))
+        }
+        SetMinimumSize => (Some(layout.minimum_size()), None),
+        SetMaximumSize => (None, Some(total_maximum_size())),
+        SetMinAndMaxSize => (Some(layout.minimum_size()), Some(total_maximum_size())),
+        SetDefaultConstraint => {
+            let derived = if window {
+                layout.minimum_size()
+            } else {
+                Size::new(0, 0)
+            };
+            let width = if explicit_min.0 {
+                current_min.width
+            } else {
+                derived.width
+            };
+            let height = if explicit_min.1 {
+                current_min.height
+            } else {
+                derived.height
+            };
+            (Some(Size::new(width, height)), None)
+        }
+        SetNoConstraint => (None, None),
+    }
+}
+
+/// The bounding step of `QLayout::activate` (qlayout.cpp:996-1129) for `owner`'s top-level layout:
+/// the size constraint's minimum and maximum go through `set_minimum_size` / `set_maximum_size`
+/// (`set_fixed_size` when they are equal), which grow or shrink `owner`, and the explicit flags
+/// are put back afterwards, so the bounds stay the layout's. A widget without a parent is a window
+/// (`isWindow`). The root of a native [`Window`](crate::window::Window) is bounded by the window
+/// instead (`Window::sync_top_level_minimum`), since its size is the native window's. The holder of
+/// a nested layout is not an owner (`!topLevel`, qlayout.cpp:985-986).
+pub fn apply_size_constraint<W: Widget + ?Sized>(owner: &W) {
+    let window = owner.parent_widget().is_none();
+    if window && owner.window_id().is_some() {
+        return;
+    }
+    let base = owner.widget_base();
+    let (explicit_min, explicit_max) = (base.explicit_min.get(), base.explicit_max.get());
+    let (min, max) = {
+        let Some(layout) = owner.layout_ref_mut() else {
+            return;
+        };
+        if layout.is_nested() {
+            return;
+        }
+        size_constraint_bounds(&**layout, window, explicit_min, base.min_size.get())
+    };
+    match (min, max) {
+        (Some(min), Some(max)) if min == max => owner.set_fixed_size(min),
+        _ => {
+            if let Some(min) = min {
+                owner.set_minimum_size(min);
+            }
+            if let Some(max) = max {
+                owner.set_maximum_size(max);
+            }
+        }
+    }
+    base.explicit_min.set(explicit_min);
+    base.explicit_max.set(explicit_max);
+}
+
 /// Sends `StyleChange` (`WidgetBase::style_changed`) to every widget below `children`, depth
 /// first: `QStyleSheetStyle::updateObjects` (qstylesheetstyle.cpp:2780).
 ///
@@ -200,14 +297,20 @@ pub trait Widget: QObject + 'static {
         self.widget_base().max_size.get()
     }
 
-    /// `QWidget::setMinimumSize` (qwidget.cpp:4005-4028): stores the bound, runs `updateGeometry`,
-    /// and grows the widget to the bound if it is currently smaller.
+    /// `QWidget::setMinimumSize` (qwidget.cpp:4005-4028): stores the bound, marks each non-zero axis
+    /// explicit (qwidget.cpp:3971), runs `updateGeometry`, and grows the widget to the bound if it
+    /// is currently smaller. An unchanged bound is a no-op (qwidget.cpp:3967-3968).
     fn set_minimum_size(&self, size: Size) {
         let min = Size::new(
             size.width.clamp(0, WIDGET_SIZE_MAX),
             size.height.clamp(0, WIDGET_SIZE_MAX),
         );
-        self.widget_base().min_size.set(min);
+        let base = self.widget_base();
+        if base.min_size.get() == min {
+            return;
+        }
+        base.min_size.set(min);
+        base.explicit_min.set((min.width != 0, min.height != 0));
         self.update_geometry();
         let g = self.geometry();
         if min.width > g.width || min.height > g.height {
@@ -220,14 +323,21 @@ pub trait Widget: QObject + 'static {
         }
     }
 
-    /// `QWidget::setMaximumSize`: stores the bound (negatives clamp to 0), runs `updateGeometry`,
-    /// and shrinks the widget to the bound if it is currently larger.
+    /// `QWidget::setMaximumSize` (qwidget.cpp:4065-4087): stores the bound (negatives clamp to 0),
+    /// marks each bounded axis explicit (qwidget.cpp:4053-4054), runs `updateGeometry`, and shrinks
+    /// the widget to the bound if it is currently larger. An unchanged bound is a no-op.
     fn set_maximum_size(&self, size: Size) {
         let max = Size::new(
             size.width.clamp(0, WIDGET_SIZE_MAX),
             size.height.clamp(0, WIDGET_SIZE_MAX),
         );
-        self.widget_base().max_size.set(max);
+        let base = self.widget_base();
+        if base.max_size.get() == max {
+            return;
+        }
+        base.max_size.set(max);
+        base.explicit_max
+            .set((max.width != WIDGET_SIZE_MAX, max.height != WIDGET_SIZE_MAX));
         self.update_geometry();
         let g = self.geometry();
         if max.width < g.width || max.height < g.height {
@@ -321,7 +431,11 @@ pub trait Widget: QObject + 'static {
         id.is_some() && id == crate::application::Application::active_window()
     }
 
+    /// `QLayout::activate` on this widget's top-level layout (qlayout.cpp:980-1133): the layout's
+    /// size constraint bounds this widget first ([`apply_size_constraint`]), then the layout runs on
+    /// the resulting rectangle. Child widgets with layouts follow.
     fn update_layout(&self) {
+        apply_size_constraint(self);
         let g = self.geometry();
         if let Some(mut layout) = self.layout_ref_mut() {
             layout.set_default_margin(owner_layout_margin(self.parent_widget().is_some()));
@@ -513,9 +627,15 @@ pub struct WidgetBase {
     pub always_show_tool_tips: Cell<bool>,
     /// `WA_MouseTracking`: buttonless mouse moves are delivered to this widget.
     pub mouse_tracking: Cell<bool>,
-    /// `QWidget::minimumSize` / `maximumSize` explicit bounds (`setMinimumSize`, `setMaximumSize`).
+    /// `QWidget::minimumSize` / `maximumSize` (`setMinimumSize`, `setMaximumSize`, and the owner's
+    /// layout through its size constraint).
     pub min_size: Cell<Size>,
     pub max_size: Cell<Size>,
+    /// `QWidgetPrivate::extra->explicitMinSize` / `explicitMaxSize` (qwidget_p.h:156-157) as
+    /// (horizontal, vertical): the axes the user bounded. A bound the owner's layout sets is not
+    /// explicit (qlayout.cpp:1126-1129).
+    pub explicit_min: Cell<(bool, bool)>,
+    pub explicit_max: Cell<(bool, bool)>,
 }
 
 impl WidgetBase {
@@ -544,6 +664,8 @@ impl WidgetBase {
             mouse_tracking: Cell::new(false),
             min_size: Cell::new(Size::new(0, 0)),
             max_size: Cell::new(Size::new(WIDGET_SIZE_MAX, WIDGET_SIZE_MAX)),
+            explicit_min: Cell::new((false, false)),
+            explicit_max: Cell::new((false, false)),
         }
     }
 

@@ -1689,7 +1689,9 @@ mod tests {
 
     /// A table squeezed below its minimum keeps every dial at 84x84. PySide6 6.11.2 oracle with
     /// `QGridLayout::setGeometry`: 426x200 gives the dial a height of 84, 300x312 a width of 84,
-    /// 200x150 a size of 84x84 (the grid overflows rather than shrinking the dial).
+    /// 200x150 a size of 84x84 (the grid overflows rather than shrinking the dial). The table is a
+    /// page of the HUD's stack, a child widget, so activating its layout does not grow it to the
+    /// layout minimum as it would a window (`qlayout.cpp:1044-1046`).
     #[cfg(windows)]
     #[test]
     fn test_squeezed_table_keeps_the_dial_at_its_minimum() {
@@ -1700,6 +1702,10 @@ mod tests {
         ] {
             let table = table_mode_table();
             let container = table.widget();
+            let stack = make_widget(EmptyWidget::new());
+            container
+                .borrow()
+                .set_parent_widget(Some(Rc::downgrade(&stack)));
             container.borrow_mut().set_geometry(Rect::new(0, 0, w, h));
             container.borrow().update_layout();
             for pid in PROVIDER_ORDER {

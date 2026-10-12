@@ -74,6 +74,27 @@ impl std::ops::BitOr for ItemAlignment {
     }
 }
 
+/// `QLayout::SizeConstraint` (qlayout.h): how `QLayout::activate` constrains the owner widget of a
+/// top-level layout (qlayout.cpp:1015-1095). Nested layouts ignore it.
+#[allow(clippy::enum_variant_names)] // Qt's names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SizeConstraint {
+    /// A window's minimum becomes the layout's total minimum size; a child widget's becomes 0. An
+    /// axis with an explicit minimum (`set_minimum_size`) keeps it.
+    #[default]
+    SetDefaultConstraint,
+    /// The owner is not constrained.
+    SetNoConstraint,
+    /// The owner's minimum becomes the layout's total minimum size.
+    SetMinimumSize,
+    /// The owner's minimum and maximum become the layout's total size hint.
+    SetFixedSize,
+    /// The owner's maximum becomes the layout's total maximum size.
+    SetMaximumSize,
+    /// The owner's minimum and maximum become the layout's total minimum and maximum sizes.
+    SetMinAndMaxSize,
+}
+
 /// `QSpacerItem`: a blank box with a size hint and a size policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpacerItem {
@@ -154,6 +175,10 @@ pub trait Layout: 'static {
     /// An explicit margin still wins.
     fn set_nested(&mut self) {}
 
+    /// `!QLayoutPrivate::topLevel`: `set_nested` ran, so this layout is an item of another layout
+    /// and its holder is not an owner its size constraint applies to (qlayout.cpp:985-986).
+    fn is_nested(&self) -> bool;
+
     fn set_spacing(&mut self, spacing: i32);
 
     fn spacing(&self) -> i32;
@@ -220,6 +245,13 @@ pub trait Layout: 'static {
         self.invalidate();
         self.activate();
     }
+
+    /// `QLayout::sizeConstraint` (qlayout.cpp:1345-1349).
+    fn size_constraint(&self) -> SizeConstraint;
+
+    /// `QLayout::setSizeConstraint` (qlayout.cpp:1323-1343): both axes; a change invalidates the
+    /// layout. It takes effect when the owner activates this layout as its top-level layout.
+    fn set_size_constraint(&mut self, constraint: SizeConstraint);
 }
 
 /// Linear box layout arranging items horizontally or vertically (`QBoxLayout`).
@@ -239,6 +271,10 @@ pub struct BoxLayout {
     metric_dirty: Cell<bool>,
     needs_activation: Cell<bool>,
     geom_cache: RefCell<Option<BoxGeom>>,
+    /// `QLayoutPrivate::horizontalConstraint` / `verticalConstraint` (both axes alike).
+    size_constraint: SizeConstraint,
+    /// An item of another layout (`set_nested`).
+    nested: bool,
 }
 
 impl BoxLayout {
@@ -255,6 +291,8 @@ impl BoxLayout {
             metric_dirty: Cell::new(true),
             needs_activation: Cell::new(true),
             geom_cache: RefCell::new(None),
+            size_constraint: SizeConstraint::SetDefaultConstraint,
+            nested: false,
         }
     }
 
@@ -535,6 +573,11 @@ impl Layout for BoxLayout {
     fn set_nested(&mut self) {
         self.set_default_margin(0);
         self.margins_explicit = true;
+        self.nested = true;
+    }
+
+    fn is_nested(&self) -> bool {
+        self.nested
     }
 
     fn margins(&self) -> Margins {
@@ -627,6 +670,17 @@ impl Layout for BoxLayout {
 
     fn is_dirty(&self) -> bool {
         self.needs_activation.get()
+    }
+
+    fn size_constraint(&self) -> SizeConstraint {
+        self.size_constraint
+    }
+
+    fn set_size_constraint(&mut self, constraint: SizeConstraint) {
+        if self.size_constraint != constraint {
+            self.size_constraint = constraint;
+            self.invalidate();
+        }
     }
 
     /// `QBoxLayout::setGeometry`.
@@ -990,6 +1044,10 @@ pub struct GridLayout {
     metric_dirty: Cell<bool>,
     needs_activation: Cell<bool>,
     geom_cache: RefCell<Option<GridGeom>>,
+    /// `QLayoutPrivate::horizontalConstraint` / `verticalConstraint` (both axes alike).
+    size_constraint: SizeConstraint,
+    /// An item of another layout (`set_nested`).
+    nested: bool,
 }
 impl GridLayout {
     pub fn new() -> Self {
@@ -1009,6 +1067,8 @@ impl GridLayout {
             metric_dirty: Cell::new(true),
             needs_activation: Cell::new(true),
             geom_cache: RefCell::new(None),
+            size_constraint: SizeConstraint::SetDefaultConstraint,
+            nested: false,
         }
     }
     pub fn add_widget(&mut self, widget: WidgetRef, row: usize, column: usize) {
@@ -1415,6 +1475,11 @@ impl Layout for GridLayout {
     fn set_nested(&mut self) {
         self.set_default_margin(0);
         self.margins_explicit = true;
+        self.nested = true;
+    }
+
+    fn is_nested(&self) -> bool {
+        self.nested
     }
 
     fn margins(&self) -> Margins {
@@ -1518,6 +1583,17 @@ impl Layout for GridLayout {
 
     fn is_dirty(&self) -> bool {
         self.needs_activation.get()
+    }
+
+    fn size_constraint(&self) -> SizeConstraint {
+        self.size_constraint
+    }
+
+    fn set_size_constraint(&mut self, constraint: SizeConstraint) {
+        if self.size_constraint != constraint {
+            self.size_constraint = constraint;
+            self.invalidate();
+        }
     }
 
     /// `QGridLayoutPrivate::distribute`.
