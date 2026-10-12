@@ -17,6 +17,8 @@ pub struct StackedLayout {
     size_constraint: SizeConstraint,
     /// An item of another layout (`set_nested`).
     nested: bool,
+    /// `QLayoutPrivate::insideSpacing`: the explicit spacing, -1 when unset (qlayout.cpp:246-262).
+    spacing: i32,
 }
 
 impl StackedLayout {
@@ -30,6 +32,7 @@ impl StackedLayout {
             dirty: true,
             size_constraint: SizeConstraint::SetDefaultConstraint,
             nested: false,
+            spacing: -1,
         }
     }
 
@@ -84,6 +87,17 @@ impl StackedLayout {
     pub fn current_widget(&self) -> Option<WidgetRef> {
         self.widgets.get(self.current_index).cloned()
     }
+
+    /// `QLayout::setSpacing` (qlayout.cpp:257-262).
+    pub fn set_spacing(&mut self, spacing: i32) {
+        self.spacing = spacing;
+        self.update_layout();
+    }
+
+    /// `QLayout::spacing` (qlayout.cpp:246-255).
+    pub fn spacing(&self) -> i32 {
+        self.spacing
+    }
 }
 
 impl Default for StackedLayout {
@@ -132,10 +146,12 @@ impl Layout for StackedLayout {
         self.nested
     }
 
-    fn set_spacing(&mut self, _spacing: i32) {}
+    fn set_spacing(&mut self, spacing: i32) {
+        self.set_spacing(spacing);
+    }
 
     fn spacing(&self) -> i32 {
-        0
+        self.spacing()
     }
 
     /// `QStackedLayout::sizeHint` (qstackedlayout.cpp:417-433): the component-wise maximum over

@@ -725,7 +725,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：MUST 與 Qt 相同。
 - **Current implementation**：`IMPLEMENTED-UNTESTED`（幾何）。`StackedLayout::size_hint`／`minimum_size`／`expanding_directions` **只用當前頁**；（修復前）`activate` 把每頁都設成同一矩形並切換可見性（RC-152 後只放當前頁，見 G9.6.c）；`set_current_index` 只在索引改變且在範圍內時發 `current_changed`。
 - **Known gap**：**G9.6.a [P1, READ；決議：不在 P0 階段修，不標 D；已修復：RC-24]** `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值（`Ignored` 策略的軸取 0），`minimumSize` 取所有頁 `qSmartMinSize` 的最大值；qtrs（`stacked.rs:123-147`）只看當前頁。目前 HUD 不依賴。 頁面大小不同時，視窗 hint／最小值在切換卡片↔表格時會跳動，與 Qt 不同。**注意：Python HUD 不用 `QStackedWidget`**（grep 為空）；它重建 `inner_layout`（`hud_window.py:272-347`）。所以這是 Rust HUD 的設計偏離（`hud_window.rs:301-309,585-606`），不是移植錯誤；須決定「改成與 Python 相同的重建」或「讓 StackedLayout 符合 Qt 並證明結果等價」。**G9.6.b [P2]** `set_spacing` 為 no-op。 **已修復：RC-24**。`[QT-SRC qstackedlayout.cpp:417-436,438-448]` `sizeHint`＝所有頁 `widget->sizeHint()` 的逐分量最大值（某軸 policy 為 `Ignored` 則該軸以 0 計），`minimumSize`＝所有頁 `qSmartMinSize` 的最大值，與目前頁無關。PySide6 實測（`QStackedLayout`，頁面覆寫 `sizeHint`／`minimumSizeHint`）：頁 100×50＋60×80 → hint (100,80)，目前頁 0 或 1 皆同；明確 min (30,10)＋(20,40) → min (30,40)；Fixed 頁（hint 100×50、minHint 70×30）即使非目前頁 → min (100,50)；Ignored 水平的頁 → hint (60,50)；兩軸 Ignored → 該頁對 hint 與 min 皆為 0；空 → (0,0)。修復：`stacked.rs` 的 `size_hint`／`minimum_size` 改為遍歷所有頁（沿用 qtrs 既有「layout 的 size_hint 含 margins」慣例，與 Qt 的 `QLayout::totalSizeHint` 一致）。測試 `tests/test_stacked_layout_hint.rs` 5 項，其中 3 項修復前 FAIL（hint (100,50) vs (100,80)；min (30,10) vs (30,40)；Ignored (100,50) vs (60,50)）。**HUD 影響**：HUD 的 `StackedWidget` 同時裝著卡片頁與表格頁，stack 的 hint 現在含兩者；HUD 測試（含 RC-16 的 header／卡片幾何）全數仍過，並新增 `test_default_vertical_window_layout_matches_pyside6_with_the_table_page_in_the_stack`（預設 280×410：header 33、卡片 109、間距 122，取自 PySide6）。**未修**：`expanding_directions` 仍只看目前頁（Qt `QStackedLayout` 沒有覆寫，用 `QLayout` 的預設）；`activate` 仍給每一頁 geometry（Qt `StackOne` 只給目前頁，`qstackedlayout.cpp:453-467`）；Qt `sizeHint` 不含 margins 而 qtrs 含（margins 預設 0，HUD 為 0）。
-- **Known gap**：**G9.6.d [P1, RAN；已修復：RC-154]** （修復前）`StackedLayout::size_hint`／`minimum_size` 加上 contents margin；Qt `QStackedLayout::sizeHint`／`minimumSize`（`qstackedlayout.cpp:417-448`）不加。
+- **Known gap**：**G9.6.b [P2；已修復：RC-167]** （修復前）`StackedLayout::set_spacing` 為 no-op 且 `spacing()` 恆回傳 0。RC-167 依 Qt `QLayout::setSpacing` 與 `QLayout::spacing`（`qlayout.cpp:246-262`）實作儲存與回傳 spacing（初始為 -1）。\r\n- **Known gap**：**G9.6.d [P1, RAN；已修復：RC-154]** （修復前）`StackedLayout::size_hint`／`minimum_size` 加上 contents margin；Qt `QStackedLayout::sizeHint`／`minimumSize`（`qstackedlayout.cpp:417-448`）不加。
 - **Known gap**：**G9.6.c [P1, RAN；已修復：RC-152]** （修復前）`StackedLayout::activate` 把每一頁都設成扣掉 contents margin 的同一矩形，也不依頁面自己的 min／max 夾住；Qt（`qstackedlayout.cpp:453-468`，StackOne）只對當前頁 `widget->setGeometry(rect)`：不扣 margin、非當前頁的幾何不動，大小由 `QWidget::setGeometry` 依該頁的 min／max 夾住。PySide6 oracle 44 筆 `K` 紀錄。
 - **Test**：既有 `test_stacked_widget_page_switching`（索引／信號）。必要：`stacked_size_hint_is_max_over_all_pages`；`stacked_hides_non_current_page_and_hit_test_skips_it`；切換 layout 後的視窗大小與 Python 逐項比對。
 - **HUD usage**：Rust `hud_window.rs:301-309,585-606`。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 225 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 226 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1452,7 +1452,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.5.d | P1, RAN；已修復：RC-133 | 頂層最小尺寸不從 layout 導出 |
 | G9.5.e | P1, RAN；已修復：RC-75 | `Label`／`Button::set_text` 相同文字仍排 layout 與重繪 |
 | G9.6.a | P1, READ；決議：不在 P0 階段修，不標 D；已修復：RC-24 | `[QT-SRC qstackedlayout.cpp:417-448]`：Qt 的 `sizeHint` 取**所有頁面**的最大值 **已修復：RC-24**（見 C9.6） |
-| G9.6.b | P2 | `set_spacing` 為 no-op |
+| G9.6.b | P2；已修復：RC-167 | StackedLayout::set_spacing 儲存並回傳 spacing（qlayout.cpp:246-262） |
 | G9.6.c | P1, RAN；已修復：RC-152 | `activate` 把每頁都設成扣掉 margin 的同一矩形，且不依頁面 min／max 夾住 |
 | G9.6.d | P1, RAN；已修復：RC-154 | `StackedLayout` 的 sizeHint／minimumSize 加上 contents margin |
 | G9.7.a | P1；已修復：RC-148 | harness 不在 CI、不是 `cargo test` |
@@ -3499,4 +3499,25 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   4. `EmptyWidget::minimum_size_hint(&self)` 在無 layout 時回傳 `Size::new(-1, -1)`。
 - **驗證**：新增測試 `test_widget_default_size_hint.rs`（2 個測試項目）。修改前 FAIL：`crates\qtrs-widgets\tests\test_widget_default_size_hint.rs:13:5 left: Size { width: 100, height: 30 } right: Size { width: -1, height: -1 }`，`crates\qtrs-widgets\tests\test_widget_default_size_hint.rs:23:5 left: Size { width: 0, height: 0 } right: Size { width: -1, height: -1 }`。修改後 PASS。qtrs-widgets 414 項測試全過；HUD 135 項全過；clippy 0 warning；`cargo fmt --check` 通過；`--snapshot` 比對版面 0 px 差異。
 - **HUD 影響**：無負面影響。HUD 中所有容器皆有 layout 或顯式自訂尺寸。
+- **Residual**：無。
+
+#### RC-167 StackedLayout::set_spacing 與 spacing 符合 Qt 規範（G9.6.b）
+- **Qt 依據**：`[QT-SRC qlayout.cpp:246-262]`：
+  ```cpp
+  int QLayout::spacing() const {
+      Q_D(const QLayout);
+      if (d->insideSpacing >= 0) return d->insideSpacing;
+      return qSmartSpacing(this, QStyle::PM_LayoutHorizontalSpacing);
+  }
+  void QLayout::setSpacing(int spacing) {
+      Q_D(QLayout);
+      d->insideSpacing = spacing;
+      invalidate();
+  }
+  ```
+  `QStackedLayout` 繼承 `QLayout`。PySide6 實測：無 parent 的 `QStackedLayout` 初始 `spacing()` 為 -1；呼叫 `setSpacing(10)` 後 `spacing()` 回傳 10。
+- **根因**：qtrs `StackedLayout` 雖然實作了 `Layout` trait，但其 `set_spacing(&mut self, _spacing: i32)` 為空實作（no-op），且 `spacing(&self) -> i32` 恆回傳 0，未記錄使用者設定的 spacing 數值。
+- **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/stacked.rs` 的 `StackedLayout` 結構體新增 `spacing: i32` 欄位（初始值 -1），新增 inherent 與 trait 的 `set_spacing(&mut self, spacing: i32)`（儲存 spacing 並標記 dirty）及 `spacing(&self) -> i32`（回傳儲存值）。
+- **驗證**：新增測試 `test_stacked_layout_spacing.rs`（2 個測試項目，分別驗證 inherent 方法與 `Layout` trait 物件上的 `set_spacing` 與 `spacing`）。修改前 FAIL：`crates\qtrs-widgets\tests\test_stacked_layout_spacing.rs:13:5 left: 0 right: -1`、`crates\qtrs-widgets\tests\test_stacked_layout_spacing.rs:29:5 left: 0 right: -1`。修改後 PASS。qtrs-widgets 416 項測試全過；HUD 135 項全過；clippy 0 warning；`cargo fmt --check` 通過；`--snapshot` 比對版面 0 px 差異。
+- **HUD 影響**：無負面影響。
 - **Residual**：無。
