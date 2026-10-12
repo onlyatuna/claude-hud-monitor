@@ -139,8 +139,8 @@ fn test_level1_event_filter_lifo_intercept_and_tombstone() {
     let handled = qtrs_core::object::send_event(target.data.id, &mut ev);
 
     assert!(
-        !handled,
-        "Event should be intercepted and consumed by filter"
+        handled,
+        "Event intercepted and consumed by filter returns true in Qt (qcoreapplication.cpp:1293-1294)"
     );
     assert!(!target.event_called, "Target event() must not be called");
 

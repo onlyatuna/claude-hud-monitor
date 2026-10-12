@@ -207,7 +207,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G3.4.c [P1, RAN；已修復：RC-87]** （修復前）Windows 計時器遞送不經 `notify_helper`／`event()`（見 C5.2）。
   - **G3.4.d [D]** 跨執行緒 `send_event` 回 false 且不做事（Qt 會在呼叫端執行緒遞送並警告）。理由：同 G2.7.b。
   - **G3.4.e [P2, READ]** `install_event_filter` 拒絕自己與直接環（Qt 允許）。
-  - **G3.4.f [P2, READ]** filter 吃掉事件時 `send_event`／`notify_helper` 回 false；Qt `notify_helper` 回 `filtered = true`（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1285-1295]`），`sendEvent` 因而回 true。既有 `loop.rs::test_notify_helper_pipeline_and_safe_removal` 釘住 false。HUD 不裝 QObject filter。
+  - **G3.4.f [P2, READ；已修復：RC-168]** （修復前）filter 吃掉事件時 `send_event`／`notify_helper` 回 false。RC-168 依 Qt `notify_helper`（`qcoreapplication.cpp:1285-1295`）實作：application filter 或 object filter 攔截消費事件時回傳 true。
 - **Test**：`loop.rs::tests::{filter_removed_by_earlier_filter_is_not_called, app_filter_removed_by_earlier_filter_is_not_called, filter_installed_during_dispatch_follows_qt_index_walk, app_filter_installed_during_dispatch_follows_qt_index_walk}`（RC-78）。必要：`timer_event_passes_event_filter`。
 - **HUD usage**：Python 無 `installEventFilter`；Rust 只裝 native filter（`WakeFilter`，`main.rs:57-83,322`）。
 
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 226 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 227 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1279,7 +1279,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.4.c | P1, RAN；已修復：RC-87 | Windows 計時器遞送不經 `notify_helper`／`event()` |
 | G3.4.d | D | 跨執行緒 `send_event` 回 false 且不做事 |
 | G3.4.e | P2, READ | `install_event_filter` 拒絕自己與直接環 |
-| G3.4.f | P2, READ | filter 吃掉事件時 `send_event` 回 false（Qt 回 true） |
+| G3.4.f | P2, READ；已修復：RC-168 | filter 吃掉事件時 send_event 回 true（qcoreapplication.cpp:1285-1295） |
 | G3.5.a | P1, RAN；已修復：RC-93 | 無 scope level：同 handler 內 `process_events` 會刪 |
 | G3.5.b | P1, RAN；已修復：RC-94 | `EventLoop::exec` 結束沒有 cleanup flush |
 | G3.5.c | P1, RAN；已修復：RC-92 | widgets 的 `delete_later` 時機比 Qt 早 |
@@ -3520,4 +3520,25 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/stacked.rs` 的 `StackedLayout` 結構體新增 `spacing: i32` 欄位（初始值 -1），新增 inherent 與 trait 的 `set_spacing(&mut self, spacing: i32)`（儲存 spacing 並標記 dirty）及 `spacing(&self) -> i32`（回傳儲存值）。
 - **驗證**：新增測試 `test_stacked_layout_spacing.rs`（2 個測試項目，分別驗證 inherent 方法與 `Layout` trait 物件上的 `set_spacing` 與 `spacing`）。修改前 FAIL：`crates\qtrs-widgets\tests\test_stacked_layout_spacing.rs:13:5 left: 0 right: -1`、`crates\qtrs-widgets\tests\test_stacked_layout_spacing.rs:29:5 left: 0 right: -1`。修改後 PASS。qtrs-widgets 416 項測試全過；HUD 135 項全過；clippy 0 warning；`cargo fmt --check` 通過；`--snapshot` 比對版面 0 px 差異。
 - **HUD 影響**：無負面影響。
+- **Residual**：無。
+
+#### RC-168 事件過濾器攔截消費事件時 send_event／notify_helper 回傳 true 符合 Qt 規範（G3.4.f）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:1285-1295]`：
+  ```cpp
+  if (sendThroughApplicationEventFilters(receiver, event)) {
+      filtered = true;
+      return filtered;
+  }
+  if (sendThroughObjectEventFilters(receiver, event)) {
+      filtered = true;
+      return filtered;
+  }
+  ```
+  PySide6 實測：安裝 `eventFilter` 並回傳 `True` 消費事件時，`QCoreApplication.sendEvent(receiver, event)` 回傳 `True`。
+- **根因**：qtrs `qtrs-core/src/event_loop/loop.rs` 的 `notify_helper` 中，在 `if app_filters_consumed(receiver, event)` 與 `if object_filters_consumed(receiver, event)` 時皆回傳 `false`。舊有單元測試 `test_notify_helper_pipeline_and_safe_removal` 誤將 `false` 釘住，與 Qt `sendEvent` 語意相悖。
+- **修正**：在 `rust/qtrs/crates/qtrs-core/src/event_loop/loop.rs`：
+  1. `app_filters_consumed` 與 `object_filters_consumed` 為真時改為回傳 `true`；
+  2. 更新 `loop.rs::test_notify_helper_pipeline_and_safe_removal` 與 `layered_tests.rs::test_level1_event_filter_lifo_intercept_and_tombstone` 的斷言為 `assert!(handled)`。
+- **驗證**：新增測試 `crates/qtrs-core/tests/test_filter_consumed_returns_true.rs`（2 個測試項目，分別驗證 application filter 與 object filter 攔截消費時 `send_event` 回傳 `true` 且 target 未被呼叫）。修改前 FAIL：`send_event must return true when consumed by application filter`、`send_event must return true when consumed by object filter`。修改後 PASS。qtrs-core 319 項測試全過；qtrs workspace 1009 項測試全過；HUD 135 項全過；clippy 0 warning；`cargo fmt --check` 通過；`--snapshot` 比對版面 0 px 差異。
+- **HUD 影響**：無負面影響。HUD 僅使用 native filter，不依賴 QObject filter 回傳值。
 - **Residual**：無。

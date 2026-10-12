@@ -155,7 +155,7 @@ pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
         }
     }
     if app_filters_consumed(receiver, event) {
-        return false;
+        return true;
     }
 
     // Qt posts QZeroTimerEvent to the dispatcher, not to the timer object, so object filters never
@@ -182,7 +182,7 @@ pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
     }
 
     if object_filters_consumed(receiver, event) {
-        return false;
+        return true;
     }
 
     // The application object's Quit runs after the filters, then the window veto and exit
@@ -1815,7 +1815,7 @@ mod tests {
         trace.lock().unwrap().clear();
         let mut event3 = Event::new(EventKind::UpdateRequest);
         let handled3 = send_event(target.data.id, &mut event3);
-        assert!(!handled3);
+        assert!(handled3);
         assert_eq!(*trace.lock().unwrap(), vec!["app_filter"]);
 
         clear_application_event_filters();
