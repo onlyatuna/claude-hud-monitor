@@ -660,6 +660,7 @@ fn test_window_resize_event_reuses_layout_metric_cache() {
 #[test]
 fn test_window_resize_through_a_stacked_widget_reuses_the_page_metric_cache() {
     let mut page_layout = BoxLayout::vertical();
+    page_layout.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
     let (p1, h1, _, _, _) = MetricCountingProbe::new(50, 30);
     page_layout.add_widget(Rc::clone(&p1));
     let page: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
@@ -675,6 +676,7 @@ fn test_window_resize_through_a_stacked_widget_reuses_the_page_metric_cache() {
         s.set_current_index(0);
     }
     let mut root_layout = BoxLayout::vertical();
+    root_layout.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
     root_layout.add_widget(Rc::clone(&stack));
     let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
     root.borrow_mut().set_layout(Box::new(root_layout));
@@ -841,12 +843,14 @@ fn test_a_changed_size_hint_reaches_an_aligned_item() {
 fn test_a_resize_keeps_the_ancestor_metric_caches_of_a_nested_layout() {
     let (leaf, leaf_hint, leaf_min, leaf_max, _) = MetricCountingProbe::new(50, 30);
     let mut mid_layout = BoxLayout::vertical();
+    mid_layout.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
     mid_layout.add_widget(Rc::clone(&leaf));
     let mid: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
     mid.borrow_mut().set_layout(Box::new(mid_layout));
 
     let (sibling, sib_hint, sib_min, sib_max, _) = MetricCountingProbe::new(40, 20);
     let mut root_layout = BoxLayout::vertical();
+    root_layout.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
     root_layout.add_widget(Rc::clone(&mid));
     root_layout.add_widget(Rc::clone(&sibling));
     let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));

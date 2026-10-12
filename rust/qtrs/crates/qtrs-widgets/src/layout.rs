@@ -145,6 +145,15 @@ pub trait Layout: 'static {
 
     fn margins(&self) -> Margins;
 
+    /// The margin an owner gives a layout with no explicit margin (`QLayoutPrivate::getMargin`,
+    /// qlayout.cpp:117-129): 11 for a window, 9 for a child widget, 0 for a nested layout. Ignored
+    /// once `set_margins` has set an explicit margin. Layouts without margins ignore it.
+    fn set_default_margin(&mut self, _margin: i32) {}
+    /// Marks this layout as nested in another layout: it has no owner widget, so its margin is 0
+    /// (`QLayoutPrivate::getMargin`, qlayout.cpp:117-129) and later owner defaults are ignored.
+    /// An explicit margin still wins.
+    fn set_nested(&mut self) {}
+
     fn set_spacing(&mut self, spacing: i32);
 
     fn spacing(&self) -> i32;
@@ -218,6 +227,8 @@ pub struct BoxLayout {
     direction: Direction,
     geometry: Rect,
     margins: Margins,
+    /// True once `set_margins` ran; an owner's default margin no longer applies (qlayout.cpp:117-129).
+    margins_explicit: bool,
     /// `QBoxLayoutPrivate::spacing`: the explicit spacing, -1 when unset (qboxlayout.cpp:580-585).
     spacing: i32,
     /// The `qSmartSpacing` value used while the explicit spacing is unset (qlayoutengine.cpp:390-401).
@@ -236,6 +247,7 @@ impl BoxLayout {
             direction,
             geometry: Rect::new(0, 0, 0, 0),
             margins: Margins::new(0, 0, 0, 0),
+            margins_explicit: false,
             spacing: -1,
             smart_spacing: -1,
             alignment: ItemAlignment::NONE,
@@ -313,6 +325,10 @@ impl BoxLayout {
         // `qSmartSpacing` of a nested layout is its parent layout's `spacing()` (qlayoutengine.cpp:390-401).
         let spacing = self.spacing_value();
         if let Some(mut child) = holder.layout_ref_mut() {
+            // A nested layout has no owner widget: its margin is 0, not the owner default
+            // (`QLayoutPrivate::getMargin`, qlayout.cpp:117-129).
+            // Owner defaults no longer reach a nested layout (`set_nested`).
+            child.set_nested();
             child.set_smart_spacing(spacing);
         }
         let widget: WidgetRef = std::rc::Rc::new(std::cell::RefCell::new(Box::new(holder)));
@@ -501,7 +517,24 @@ impl Layout for BoxLayout {
 
     fn set_margins(&mut self, margins: Margins) {
         self.margins = margins;
+        self.margins_explicit = true;
         self.update_layout();
+    }
+
+    fn set_default_margin(&mut self, margin: i32) {
+        if self.margins_explicit {
+            return;
+        }
+        let margins = Margins::new(margin, margin, margin, margin);
+        if self.margins != margins {
+            self.margins = margins;
+            self.update_layout();
+        }
+    }
+
+    fn set_nested(&mut self) {
+        self.set_default_margin(0);
+        self.margins_explicit = true;
     }
 
     fn margins(&self) -> Margins {
@@ -939,6 +972,8 @@ struct GridGeom {
 pub struct GridLayout {
     geometry: Rect,
     margins: Margins,
+    /// True once `set_margins` ran; an owner's default margin no longer applies (qlayout.cpp:117-129).
+    margins_explicit: bool,
     /// `QGridLayoutPrivate::horizontal_spacing`: the explicit spacing, -1 while unset.
     h_spacing: i32,
     /// `QGridLayoutPrivate::vertical_spacing`: the explicit spacing, -1 while unset.
@@ -961,6 +996,7 @@ impl GridLayout {
         Self {
             geometry: Rect::new(0, 0, 0, 0),
             margins: Margins::new(0, 0, 0, 0),
+            margins_explicit: false,
             h_spacing: -1,
             v_spacing: -1,
             smart_spacing: -1,
@@ -1069,6 +1105,10 @@ impl GridLayout {
         holder.set_layout(layout);
         let spacing = self.spacing();
         if let Some(mut child) = holder.layout_ref_mut() {
+            // A nested layout has no owner widget: its margin is 0, not the owner default
+            // (`QLayoutPrivate::getMargin`, qlayout.cpp:117-129).
+            // Owner defaults no longer reach a nested layout (`set_nested`).
+            child.set_nested();
             child.set_smart_spacing(spacing);
             child.set_layout_alignment(alignment);
         }
@@ -1357,7 +1397,24 @@ impl Layout for GridLayout {
     }
     fn set_margins(&mut self, margins: Margins) {
         self.margins = margins;
+        self.margins_explicit = true;
         self.update_layout();
+    }
+
+    fn set_default_margin(&mut self, margin: i32) {
+        if self.margins_explicit {
+            return;
+        }
+        let margins = Margins::new(margin, margin, margin, margin);
+        if self.margins != margins {
+            self.margins = margins;
+            self.update_layout();
+        }
+    }
+
+    fn set_nested(&mut self) {
+        self.set_default_margin(0);
+        self.margins_explicit = true;
     }
 
     fn margins(&self) -> Margins {

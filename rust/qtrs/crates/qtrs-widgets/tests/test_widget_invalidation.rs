@@ -309,6 +309,7 @@ mod pumped {
         let second: WidgetRef = Rc::new(RefCell::new(second));
         let mut layout = BoxLayout::horizontal();
         layout.set_spacing(6);
+        layout.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
         layout.add_widget(Rc::clone(&first));
         layout.add_widget(Rc::clone(&second));
         let container: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
@@ -461,6 +462,7 @@ mod pumped {
         inner.set_font(Font::new("Segoe UI", 12.0));
         let inner: WidgetRef = Rc::new(RefCell::new(Box::new(inner)));
         let mut wrapper_layout = BoxLayout::horizontal();
+        wrapper_layout.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
         wrapper_layout.add_widget(Rc::clone(&inner));
         let mut wrapper = EmptyWidget::new();
         wrapper.set_layout(Box::new(wrapper_layout));
@@ -533,6 +535,7 @@ mod pumped {
             .borrow()
             .set_size_policy(QSizePolicy::new(Policy::Expanding, Policy::Preferred));
         let mut inner_layout = BoxLayout::horizontal();
+        inner_layout.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
         inner_layout.add_widget(Rc::clone(&alpha));
         let mut inner_widget = EmptyWidget::new();
         inner_widget.set_layout(Box::new(inner_layout));

@@ -121,6 +121,7 @@ fn test_reentrant_layout_request_during_callback() {
 
     let mut layout = Box::new(BoxLayout::new(Direction::TopToBottom));
     layout.set_spacing(5);
+    layout.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
 
     let btn1: WidgetRef = Rc::new(RefCell::new(Box::new(Button::new("Button 1"))));
     btn1.borrow().set_geometry(Rect::new(0, 0, 100, 30));

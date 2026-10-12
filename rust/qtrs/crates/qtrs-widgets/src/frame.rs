@@ -10,7 +10,7 @@ use qtrs_gui::tiny_skia::Color;
 
 use crate::focus::FocusPolicy;
 use crate::layout::Layout;
-use crate::layout_engine::WIDGET_LAYOUT_SPACING;
+use crate::layout_engine::{owner_layout_margin, WIDGET_LAYOUT_SPACING};
 use crate::size_policy::{Policy, QSizePolicy};
 use crate::widget::{Widget, WidgetBase, WidgetRef, WidgetWeak};
 
@@ -618,6 +618,7 @@ impl Widget for Frame {
     }
 
     fn set_layout(&mut self, mut layout: Box<dyn Layout>) {
+        layout.set_default_margin(owner_layout_margin(self.base.parent_widget().is_some()));
         layout.set_geometry(self.contents_rect());
         layout.set_smart_spacing(WIDGET_LAYOUT_SPACING);
         *self.base.layout.get_mut() = Some(layout);
@@ -629,7 +630,12 @@ impl Widget for Frame {
     }
 
     fn set_parent_widget(&self, parent: Option<WidgetWeak>) {
+        let has_parent = parent.is_some();
         self.base.set_parent_widget(parent);
+        // The owner margin depends on whether this frame is a window (`QLayoutPrivate::getMargin`).
+        if let Some(mut layout) = self.layout_ref_mut() {
+            layout.set_default_margin(owner_layout_margin(has_parent));
+        }
     }
 
     fn window_id(&self) -> Option<ObjectId> {

@@ -19,6 +19,22 @@ pub const WIDGET_SIZE_MAX: i32 = (1 << 24) - 1;
 /// `qSmartSpacing` of a widget's layout: the style's layout spacing (`PM_LayoutHorizontalSpacing`,
 /// qcommonstyle.cpp:4746-4748, 6 at 96 dpi).
 pub const WIDGET_LAYOUT_SPACING: i32 = 6;
+/// `PM_LayoutLeftMargin`/`TopMargin`/`RightMargin`/`BottomMargin` for a window: 11 (qcommonstyle.cpp:4732-4750).
+pub const WINDOW_LAYOUT_MARGIN: i32 = 11;
+/// The same pixel metrics for a child widget: 9 (qcommonstyle.cpp:4732-4750).
+pub const CHILD_LAYOUT_MARGIN: i32 = 9;
+
+/// `QLayoutPrivate::getMargin` (qlayout.cpp:117-129) for an owner without an explicit margin: the
+/// owner style's margin, 11 for a window (no parent) and 9 for a child. These are unscaled: Qt's
+/// `qstylehelper::dpiScaled` multiplies by `dpi / 96` (qstylehelper.cpp:61-96), and the logical DPI
+/// is 96 on the Windows setup probed (PySide6 6.11.2, logicalDotsPerInch 96.0), so the scale is 1.
+pub fn owner_layout_margin(has_parent: bool) -> i32 {
+    if has_parent {
+        CHILD_LAYOUT_MARGIN
+    } else {
+        WINDOW_LAYOUT_MARGIN
+    }
+}
 
 /// `QLayoutStruct`: one row, column or box of a layout chain.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

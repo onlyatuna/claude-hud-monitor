@@ -700,7 +700,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required**：依賴 Qt 預設的 layout MUST 得到相同值（至少 Windows style）。
 - **Current implementation**：具體常數：`BoxLayout::new` spacing 6、margin 0；`GridLayout::new` spacing 6/6、margin 0。無 sentinel、不問 style、無 parent 繼承。
 - **Known gap**
-  - **G9.4.a [P1, READ；部分修復：RC-150（grid 預設 spacing -1）]** 依賴 Qt 預設的 layout（頂層 margin 9/11、繼承 spacing）會不同。HUD 幾乎全部明確設定。
+  - **G9.4.a [P1, RAN；部分修復：RC-150（grid 預設 spacing -1）、RC-151（預設 margin 11／9／0、box spacing 6）]** 依賴 Qt 預設的 layout（頂層 margin 9/11、繼承 spacing）會不同。HUD 幾乎全部明確設定。
   - **G9.4.b [P0, 已讀兩側原始碼確認；已修復：RC-14]** **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)`（`provider_card.py:27`）vs Rust `root_layout.set_spacing(2)`（`provider_card.rs:159`）。程式碼無註解說明；`[INFERENCE]` 會改變卡片高度。
 - **Test**：必要：`default_margins_and_spacing_match_windows_style`（PySide6 參考）；`sublayout_inherits_parent_spacing`；`provider_card_geometry_matches_python`。
 - **HUD usage**：Python `setContentsMargins`（`hud_window.py:136,144,169`；`provider_card.py:26`；`usage_table.py:115,274,385,412`）。
@@ -1438,7 +1438,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.3.a | P1, RAN；已修復：RC-111 | wrapper 是 QWidget item：其 `maximum_size` 為 16777215，而巢狀 `QLayout` 回報其子項最大值之和 |
 | G9.3.b | P2；部分修復：RC-147 | wrapper 多一個 child widget 進入 hit-test／paint 樹 |
 | G9.3.c | P0, READ；已修復：RC-16 | HUD 的 `header_widget` 額外被設為 `Expanding/Fixed` |
-| G9.4.a | P1, READ；部分修復：RC-150 | 依賴 Qt 預設的 layout |
+| G9.4.a | P1, RAN；部分修復：RC-150、RC-151 | 依賴 Qt 預設的 layout |
 | G9.4.b | P0, 已讀兩側原始碼確認；已修復：RC-14 | **卡片根 layout spacing 不同**：Python `layout.setSpacing(5)` |
 | G9.5.a | P1, READ；已修復：RC-28 | 無向上傳遞：葉節點的 hint 變更不會爬到祖先 layout。**已修復：RC-28** |
 | G9.5.b | P1, RAN；已修復：RC-05、RC-26 | `Button::set_text/set_font`、`Label::set_font/set_alignment`、`set_style_sheet`、`set_propert |
@@ -3341,3 +3341,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **驗證**：`parentless_grid_spacing_is_minus_one_and_follows_the_axes` 停用時仍通過（pin，不是修改前 FAIL）。
 - **Residual**：有 parent 時問 style 的值（9／6、DPI 縮放）與 box 的預設 margin 屬 G9.4.a 其餘部分（DraftAV）。
 - **共同驗證（RC-140..150）**：qtrs workspace（略過 `real_windows`）全部 test binary ok、無 FAILED；HUD 134 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 與 `snap_base_AQ` 比較，只剩時間文字差異。X11／Wayland／Cocoa 的 `WindowSystemEvent::Minimize` 只經 CI 編譯。
+
+#### RC-151 layout 預設 margin（11／9／0）與有 owner 時的 box spacing（G9.4.a 部分）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qlayout.cpp:117-129]` `QLayoutPrivate::getMargin`：沒有明確 margin 時，owner 是 window 取 style 的 `PM_LayoutLeftMargin` 等，owner 是子 widget 取 child 值，沒有 owner（巢狀 layout）為 0；`[QT-SRC widgets/styles/qcommonstyle.cpp:4732-4750]` window 11、child 9、`PM_LayoutHorizontalSpacing`／`VerticalSpacing` 6；`[QT-SRC widgets/styles/qstylehelper.cpp:61-96]` `dpiScaled` 依 logical DPI／96 縮放。`[PYSIDE-RUN 6.11.2 windows Win11-26200 dpr=1.25 logicalDpi=96 windows11 style]`：window margin 11、spacing 6、child margin 9；200×100 頂層的 item `(11,11,178,78)`，300×200 parent 內的 child item `(9,9,182,82)`。logical DPI 為 96，所以常數不縮放。
+- **根因**：`BoxLayout`／`GridLayout` 的 margin 一律 0，owner 不提供預設值。（有 owner 的 spacing 6 在修改前已由 `set_smart_spacing(WIDGET_LAYOUT_SPACING)` 提供，本 RC 只補測試。）
+- **修正**：`Layout::set_default_margin`／`set_nested`（`layout.rs`）；`margins_explicit` 讓 `set_margins` 永遠優先；`add_layout` 對巢狀 layout 呼叫 `set_nested`（margin 0，之後不再接受 owner 預設）；owner（`Widget::update_layout`、`EmptyWidget`、`Frame` 的 `set_layout`／`set_parent_widget`）推入 `owner_layout_margin(has_parent)`（`layout_engine.rs`，11／9）。HUD：`hud_window.rs` 兩種卡片 layout 明確 margin 0（垂直另設 spacing 6，對應 `hud_window.py:169-170`），`geometry_audit.rs` 巢狀 layout 明確 margin 0。
+- **驗證**：新 test binary `qtrs-widgets/tests/test_layout_default_metrics.rs`（8 項）。修改前 FAIL（值由執行者記錄；行號是當時版本，現行斷言位置在括號內）：`top_level_owner_default_margin_is_11` left (0,0) right (11,11)（:58）；`child_owner_default_margin_is_9` (0,0) vs (9,9)（:79）；`nested_layout_default_margin_is_0` holder (0,0) vs (11,11)（:98）；`owned_box_spacing_is_style_6` 106 vs 128（:138；差值全來自 margin，spacing 部分是釘住）。釘住（修改前就通過）：`sublayout_inherits_parent_spacing`、`explicit_inner_spacing_wins_over_parent`、`parentless_box_spacing_is_minus_one`、`explicit_margins_win_over_owner_default`。改寫：`layout_qt_oracle.rs`、`test_widget_invalidation.rs`、`test_layout_metric_caching.rs`、`test_reentrancy_and_deferred.rs` 中假設 margin 0 的 fixture 改為明確 `set_margins(0)`。qtrs workspace（略過 `real_windows`）無 FAILED；HUD 134 passed、5 ignored；clippy、`cargo fmt --check` 通過；修改檔的 rustfmt 差異數與 HEAD 相同。`--snapshot` 與修改前基準比對：卡片橫／直、表格只有時鐘與重置時間文字不同，選單完全相同。
+- **HUD 影響**：無可見變化（快照）。
+- **Residual**：(1) `isWindow()` 以「沒有 parent widget」近似；有 parent 的 popup／tooltip 類視窗在 Qt 取 11，qtrs 取 9。(2) 有 owner 的 `GridLayout` 取 style spacing 6 未單獨測試。(3) 巢狀 layout 的 item 座標仍是 holder 座標（RC-147 的決定，Qt 為 owner 座標）。(4) logical DPI 不是 96 的環境沒有實測。

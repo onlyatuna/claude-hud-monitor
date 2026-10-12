@@ -169,6 +169,7 @@ fn apply_python_structure(hud: &mut HUDWindow, horizontal: bool) {
         qtrs_widgets::layout::Direction::TopToBottom
     });
     nl.set_spacing(if horizontal { 8 } else { 6 });
+    nl.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
     for w in items {
         let is_card = hud
             .cards

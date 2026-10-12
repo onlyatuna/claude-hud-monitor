@@ -2,7 +2,7 @@ use crate::accessibility::{AccessibleAction, AccessibleRole};
 use crate::style::stylesheet::QStyleSheetStyle;
 use crate::focus::FocusPolicy;
 use crate::layout::Layout;
-use crate::layout_engine::{WIDGET_LAYOUT_SPACING, WIDGET_SIZE_MAX};
+use crate::layout_engine::{owner_layout_margin, WIDGET_LAYOUT_SPACING, WIDGET_SIZE_MAX};
 pub use crate::size_policy::{Policy, QSizePolicy};
 use qtrs_core::event::{Event, EventKind, FocusReason};
 use qtrs_core::event_loop::{filters_consume, notify_borrowed, post_event_to_thread};
@@ -324,6 +324,7 @@ pub trait Widget: QObject + 'static {
     fn update_layout(&self) {
         let g = self.geometry();
         if let Some(mut layout) = self.layout_ref_mut() {
+            layout.set_default_margin(owner_layout_margin(self.parent_widget().is_some()));
             layout.set_geometry(Rect::new(0, 0, g.width, g.height));
             layout.activate();
         }
@@ -1170,6 +1171,7 @@ impl Widget for EmptyWidget {
     }
     fn set_layout(&mut self, mut layout: Box<dyn Layout>) {
         let g = self.base.geometry.get();
+        layout.set_default_margin(owner_layout_margin(self.base.parent.borrow().is_some()));
         layout.set_geometry(Rect::new(0, 0, g.width, g.height));
         layout.set_smart_spacing(WIDGET_LAYOUT_SPACING);
         if let Some(win_id) = self.base.window_id.get() {
@@ -1186,7 +1188,12 @@ impl Widget for EmptyWidget {
     }
 
     fn set_parent_widget(&self, parent: Option<WidgetWeak>) {
+        let has_parent = parent.is_some();
         *self.base.parent.borrow_mut() = parent;
+        // The owner margin depends on whether this widget is a window (`QLayoutPrivate::getMargin`).
+        if let Some(mut layout) = self.layout_ref_mut() {
+            layout.set_default_margin(owner_layout_margin(has_parent));
+        }
     }
 
     fn window_id(&self) -> Option<ObjectId> {

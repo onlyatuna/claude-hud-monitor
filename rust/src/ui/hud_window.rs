@@ -592,12 +592,17 @@ impl HUDWindow {
     ) {
         let is_horizontal = layout_mode == "horizontal";
         let mut layout = if is_horizontal {
-            // `body_layout.setSpacing(8)` (`hud_window.py:337`); the vertical layout keeps Qt's default.
+            // `body_layout.setSpacing(8)` (`hud_window.py:337`); nested body, margin 0.
             let mut body = BoxLayout::horizontal();
+            body.set_margins(Margins::new(0, 0, 0, 0));
             body.set_spacing(8);
             body
         } else {
-            BoxLayout::vertical()
+            // `cards_layout` margin 0, spacing 6 (`hud_window.py:169-170`).
+            let mut column = BoxLayout::vertical();
+            column.set_margins(Margins::new(0, 0, 0, 0));
+            column.set_spacing(6);
+            column
         };
 
         // Card order of the Python HUD (`provider_ids` in `_apply_cards_layout`); the table
