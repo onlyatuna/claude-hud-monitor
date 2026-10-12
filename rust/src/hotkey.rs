@@ -210,6 +210,7 @@ impl HotkeyManager {
     }
 
     /// Timeout matching Python's `self._ready_event.wait(timeout=1.5)` (hotkey.py:116).
+    #[allow(dead_code)]
     pub const START_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 
     pub fn start(hotkey_str: &str) -> Result<Self, String> {
