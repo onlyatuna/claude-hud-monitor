@@ -95,6 +95,11 @@ impl Label {
         &self.font
     }
 
+    /// Returns the effective font including stylesheet styling (`QWidget::font`).
+    pub fn effective_font(&self) -> Font {
+        self.styled_font(&self.resolved_style())
+    }
+
     pub fn set_font(&mut self, font: Font) {
         self.font = font;
         // FontChange (qwidget.cpp:4894-4895) is sent before `QWidget::event` does its update and
@@ -272,9 +277,14 @@ impl Label {
         }
         if let Some(w) = style.font_weight {
             font.weight = match w {
-                800..=900 => qtrs_gui::text::FontWeight::Black,
-                700..=799 => qtrs_gui::text::FontWeight::Bold,
-                600..=699 => qtrs_gui::text::FontWeight::SemiBold,
+                851..=1000 => qtrs_gui::text::FontWeight::Black,
+                751..=850 => qtrs_gui::text::FontWeight::ExtraBold,
+                651..=750 => qtrs_gui::text::FontWeight::Bold,
+                551..=650 => qtrs_gui::text::FontWeight::SemiBold,
+                451..=550 => qtrs_gui::text::FontWeight::Medium,
+                251..=350 => qtrs_gui::text::FontWeight::Light,
+                151..=250 => qtrs_gui::text::FontWeight::ExtraLight,
+                0..=150 => qtrs_gui::text::FontWeight::Thin,
                 _ => qtrs_gui::text::FontWeight::Normal,
             };
         }

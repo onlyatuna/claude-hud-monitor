@@ -1101,7 +1101,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **G12.3.c [P1, RAN；已修復：RC-74（面板色依 `vibrant` 選擇；樣式表本身不畫面板）]** （修復前）表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_solid`；Rust 不接受 `vibrant`，一律以 `panel_bg_vibrant` 自繪（`styles.rs:371`、`hud_window.rs:88-92`）。
 - **G12.3.d [P1, RAN；已修復：RC-127]** （修復前；QLabel→QFrame、QPushButton→QAbstractButton 的繼承 RC-32 已涵蓋，殘餘的 QObject／QToolTip 由 RC-127 修正；Label `:hover` 仍未處理）型別比對無繼承；Label 的 `pseudo_states` 為空（`:hover/:disabled` 對 label 不成立）。
 - **G12.3.e [P2]** `font-family` 清單以一個原始字串存、查找時才拆；generic（`sans-serif`/`monospace`）被跳過而非映射到系統字型，`'Consolas', monospace` 在沒有 Consolas 時沒有等寬退路。**Qt 依據**：Linux 的 `QFontconfigDatabase::resolveFontFamilyAlias` 把家族字串交給 `FcConfigSubstitute`（`qfontconfigdatabase.cpp:970-995`），`fallbacksForFamily` 另把 style hint 轉成 fontconfig 的 `sans-serif`／`monospace` 等（`getFcFamilyForStyleHint`，`:347-367`）；macOS 無此家族時依 style hint 取 Menlo 等（`qcoretextfontdatabase.mm:625-640`）；Windows 取 Courier New 等（`qwindowsfontdatabasebase.cpp:939-961`）。與 G12.6.d 同一根因（字型來源與缺字型規則），一起處理，不單獨修。CSS 的 generic 名稱在 Qt 內經哪一條路徑變成 style hint，尚未追到 `qcssparser.cpp`／`qstylesheetstyle.cpp`，`[INFERENCE]`。
-- **G12.3.f [P2, INFERENCE]** `font-weight: 800` 映射到 `FontWeight::Black`；列舉無 ExtraBold，字型選擇只分 regular／bold（`font_database.rs`）；Qt 的數值映射未驗證。
+- **G12.3.f [P2；已修復：RC-184]** FontWeight 支援 ExtraLight(200) 與 ExtraBold(800) 並符合 Qt QFont::Weight（qfont.h:72, RC-184）；列舉無 ExtraBold，字型選擇只分 regular／bold（`font_database.rs`）；Qt 的數值映射未驗證。
 - **G12.3.g [P2]** `font-size` px 取整（`test_label_box_model.rs::qss_pixel_sizes_are_rounded_like_qt`）；`letter-spacing` 於 `label.rs`。
 - **G12.3.h [P2, INFERENCE；已修復：RC-160]** （修復前）色彩：8 位數十六進位被當 `#RRGGBBAA`（`qcssparser.rs`），Qt 的 `QColor` 形式是 `#AARRGGBB`。RC-160 依 `QCss::Parser::parseHexColor` 改為 `#AARRGGBB`。
 - Rust 以 `set_label_color`（`ui/mod.rs:86-109`）與 `set_status_dot_color`（`hud_window.rs:69-83`）模擬 Python `setStyleSheet(color: …)` 的 widget 內聯覆蓋。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 245 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.3.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.4.c、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.c、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.e、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.b、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.9.g、G11.10.c、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 246 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.3.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.4.c、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.c、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.e、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.b、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.9.g、G11.10.c、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.f、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1565,7 +1565,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.3.c | P1, RAN；已修復：RC-74 | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |
 | G12.3.d | P1, RAN；已修復：RC-127 | 型別比對無繼承 |
 | G12.3.e | P2 | `font-family` 清單以一個原始字串存、查找時才拆 |
-| G12.3.f | P2, INFERENCE | `font-weight: 800` 映射到 `FontWeight::Black` |
+| G12.3.f | P2；已修復：RC-184 | FontWeight 支援 ExtraBold(800) 並與 QFont::Weight 一致 |
 | G12.3.g | P2 | `font-size` px 取整 |
 | G12.3.h | P2, INFERENCE；已修復：RC-160 | 色彩：8 位數十六進位被當 `#RRGGBBAA` |
 | G12.5.a | P0, READ；= G12.3.b；已修復：RC-15 | Badge `max-height: 15px` 只在 Rust |
@@ -3801,5 +3801,24 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **全套回歸**：
   - HUD 全套 136 項測試通過（5 ignored, 0.00s）。
   - `cargo clippy -j 1 -- -D warnings` 0 warning，`fmt --check` 0 diff。
+  - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
+- **Residual**：無。
+
+#### RC-184 FontWeight 支援 ExtraLight 與 ExtraBold，font-weight: 800 正確映射（G12.3.f）
+- **Qt 依據**：`[QT-SRC gui/text/qfont.h:64-74]`（`QFont::Weight`）：`ExtraLight = 200`、`ExtraBold = 800`；`[QT-SRC gui/text/qcssparser.cpp:1230-1245]`：CSS 數值字重直接映射至 `QFont::Weight`，800 映射至 `ExtraBold`。
+- **根因**：`qtrs-gui` 之 `FontWeight` enum 過去缺乏 `ExtraLight(200)` 與 `ExtraBold(800)`，`Label`、`Button` 及 HTML markup 解析器將 800 粗暴映射至 `Black(900)`（G12.3.f）。
+- **修正**：
+  - `crates/qtrs-gui/src/text/font.rs`：`FontWeight` enum 加入 `ExtraLight = 200` 與 `ExtraBold = 800`。
+  - `crates/qtrs-gui/src/text/markup.rs`、`advance_dump.rs`、`crates/qtrs-widgets/src/label.rs` 與 `button.rs`：字重區間完整支援 ExtraLight 與 ExtraBold，使 800 映射為 `FontWeight::ExtraBold`。
+  - `crates/qtrs-widgets/src/label.rs`：提供 `effective_font(&self) -> Font` 以便查詢結合樣式表之最終字型屬性。
+- **驗證**：
+  - 單元測試：`crates/qtrs-widgets/tests/test_stylesheet_style.rs:50-61`（`test_stylesheet_style_resolution_and_specificity`）。
+  - **修改前 FAIL**：`assertion left == right failed: QSS font-weight 800 must map to FontWeight::ExtraBold; left: Normal (or Black), right: ExtraBold`。
+  - **修改後 PASS**：`test test_stylesheet_style_resolution_and_specificity ... ok`。
+- **全套回歸**：
+  - `qtrs-core` 全套 330 項測試通過（40 suites, 0.11s）。
+  - `qtrs-widgets` 全套測試通過。
+  - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
+  - HUD 全套測試：136 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
   - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
 - **Residual**：無。

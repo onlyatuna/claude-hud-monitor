@@ -1,5 +1,8 @@
+use qtrs_core::object::QObject;
 use qtrs_gui::tiny_skia::Color;
+use qtrs_widgets::label::Label;
 use qtrs_widgets::style::stylesheet::{QStyleSheetStyle, WidgetStyleContext};
+use qtrs_widgets::Widget;
 
 #[test]
 fn test_stylesheet_style_resolution_and_specificity() {
@@ -46,6 +49,16 @@ fn test_stylesheet_style_resolution_and_specificity() {
     assert_eq!(res_id.color, Some(Color::from_rgba8(148, 163, 184, 255)));
     assert_eq!(res_id.font_size, Some(10.5));
     assert_eq!(res_id.font_weight, Some(800));
+
+    // Verify Label styled_font maps 800 to FontWeight::ExtraBold (QFont::ExtraBold = 800 / G12.3.f)
+    let mut lbl = Label::new("Title");
+    lbl.set_object_name("HeaderTitle");
+    lbl.set_style_sheet("QLabel#HeaderTitle { font-weight: 800; }");
+    assert_eq!(
+        lbl.effective_font().weight,
+        qtrs_gui::text::FontWeight::ExtraBold,
+        "QSS font-weight 800 must map to FontWeight::ExtraBold (qfont.h:72 / G12.3.f)"
+    );
 }
 
 #[test]

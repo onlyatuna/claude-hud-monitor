@@ -587,11 +587,13 @@ fn parse_font_weight(value: &str) -> Option<FontWeight> {
             let w: u16 = n.parse().ok()?;
             Some(match w {
                 0..=150 => FontWeight::Thin,
-                151..=350 => FontWeight::Light,
+                151..=250 => FontWeight::ExtraLight,
+                251..=350 => FontWeight::Light,
                 351..=450 => FontWeight::Normal,
                 451..=550 => FontWeight::Medium,
                 551..=650 => FontWeight::SemiBold,
-                651..=800 => FontWeight::Bold,
+                651..=750 => FontWeight::Bold,
+                751..=850 => FontWeight::ExtraBold,
                 _ => FontWeight::Black,
             })
         }

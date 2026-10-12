@@ -118,12 +118,14 @@ impl From<Arc<Vec<u8>>> for SharedFontData {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum FontWeight {
     Thin = 100,
+    ExtraLight = 200,
     Light = 300,
     #[default]
     Normal = 400,
     Medium = 500,
     SemiBold = 600,
     Bold = 700,
+    ExtraBold = 800,
     Black = 900,
 }
 

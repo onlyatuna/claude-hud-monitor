@@ -163,9 +163,14 @@ impl Button {
         }
         if let Some(w) = style.font_weight {
             font.weight = match w {
-                800..=900 => qtrs_gui::text::FontWeight::Black,
-                700..=799 => qtrs_gui::text::FontWeight::Bold,
-                600..=699 => qtrs_gui::text::FontWeight::SemiBold,
+                851..=1000 => qtrs_gui::text::FontWeight::Black,
+                751..=850 => qtrs_gui::text::FontWeight::ExtraBold,
+                651..=750 => qtrs_gui::text::FontWeight::Bold,
+                551..=650 => qtrs_gui::text::FontWeight::SemiBold,
+                451..=550 => qtrs_gui::text::FontWeight::Medium,
+                251..=350 => qtrs_gui::text::FontWeight::Light,
+                151..=250 => qtrs_gui::text::FontWeight::ExtraLight,
+                0..=150 => qtrs_gui::text::FontWeight::Thin,
                 _ => qtrs_gui::text::FontWeight::Normal,
             };
         }

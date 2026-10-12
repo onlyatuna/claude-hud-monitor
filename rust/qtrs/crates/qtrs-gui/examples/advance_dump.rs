@@ -9,12 +9,14 @@ use std::io::BufRead;
 
 fn weight(w: u32) -> FontWeight {
     match w {
-        ..=199 => FontWeight::Thin,
-        200..=349 => FontWeight::Light,
+        ..=149 => FontWeight::Thin,
+        150..=249 => FontWeight::ExtraLight,
+        250..=349 => FontWeight::Light,
         350..=449 => FontWeight::Normal,
         450..=549 => FontWeight::Medium,
         550..=649 => FontWeight::SemiBold,
-        650..=799 => FontWeight::Bold,
+        650..=749 => FontWeight::Bold,
+        750..=849 => FontWeight::ExtraBold,
         _ => FontWeight::Black,
     }
 }
