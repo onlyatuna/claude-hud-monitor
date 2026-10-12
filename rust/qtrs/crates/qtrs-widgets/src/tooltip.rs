@@ -30,7 +30,8 @@ use qtrs_core::event::{Event, EventKind};
 use qtrs_core::object::ObjectId;
 use qtrs_core::timer::Timer;
 use qtrs_gui::geometry::primitives::{Point, Rect, Size};
-use qtrs_gui::paint::palette::{ColorGroup, ColorRole};
+use qtrs_gui::paint::palette::{ColorGroup, ColorRole, Palette};
+use qtrs_gui::text::Font;
 use qtrs_platform::window::WindowFlags;
 use std::cell::{Cell, RefCell};
 use std::pin::Pin;
@@ -44,7 +45,10 @@ pub const QUICK_WAKE_UP_DELAY_MS: u64 = 20;
 /// `QTipLabel::hideTip` waits this long before hiding (qtooltip.cpp:176-180).
 pub const HIDE_DELAY_MS: u64 = 300;
 /// `QPlatformCursor::size` default (qplatformcursor.h), used for the tip's offset from the cursor.
-pub const CURSOR_SIZE: Size = Size { width: 16, height: 16 };
+pub const CURSOR_SIZE: Size = Size {
+    width: 16,
+    height: 16,
+};
 
 /// `QTipLabel::restartExpireTimer` (qtooltip.cpp:117-126): how long a tip stays, in ms. `msec > 0`
 /// is the caller's duration; otherwise `10000 + 40 * max(0, length - 100)`, the length being the
@@ -102,7 +106,11 @@ fn tip_screen(pos: Point) -> Rect {
         .iter()
         .map(|s| s.geometry())
         .find(|g| g.contains(pos))
-        .unwrap_or_else(|| qtrs_platform::integration::platform().primary_screen().geometry())
+        .unwrap_or_else(|| {
+            qtrs_platform::integration::platform()
+                .primary_screen()
+                .geometry()
+        })
 }
 
 /// `QTipLabel::instance`: the window that shows the current tip.
@@ -112,6 +120,7 @@ struct Tip {
     /// The widget the tip was shown for (`QTipLabel::widget`).
     widget: Option<ObjectId>,
     text: String,
+    rect: Option<Rect>,
 }
 
 /// `QApplicationPrivate`'s tool tip state, and `QTipLabel`'s timers.
@@ -124,6 +133,8 @@ struct Controller {
     tip: RefCell<Option<Tip>>,
     expire: RefCell<Pin<Box<Timer>>>,
     hide: RefCell<Pin<Box<Timer>>>,
+    custom_font: RefCell<Option<Font>>,
+    custom_palette: RefCell<Option<Palette>>,
 }
 
 fn single_shot_timer(on_timeout: fn()) -> RefCell<Pin<Box<Timer>>> {
@@ -159,10 +170,11 @@ impl Controller {
             tip: RefCell::new(None),
             expire: single_shot_timer(hide_tip_immediately),
             hide: single_shot_timer(hide_tip_immediately),
+            custom_font: RefCell::new(None),
+            custom_palette: RefCell::new(None),
         }
     }
 }
-
 thread_local! {
     static CONTROLLER: Controller = Controller::new();
 }
@@ -231,7 +243,10 @@ pub(crate) fn user_input(kind: &EventKind) {
 fn wake_up_fired() {
     let (widget, pos, global_pos) = CONTROLLER.with(|c| {
         (
-            c.tool_tip_widget.borrow().as_ref().and_then(|w| w.upgrade()),
+            c.tool_tip_widget
+                .borrow()
+                .as_ref()
+                .and_then(|w| w.upgrade()),
             c.tool_tip_pos.get(),
             c.tool_tip_global_pos.get(),
         )
@@ -344,11 +359,13 @@ fn tip_is_visible(c: &Controller) -> bool {
 /// The tip's label: `QPalette::ToolTipBase` and `ToolTipText` of the inactive group, since tool
 /// tips are not active windows (qtooltip.cpp:64-65). Appearance beyond that is the style's.
 fn new_tip_label(text: &str) -> Label {
-    let palette = crate::application::Application::palette();
+    let palette = ToolTip::palette();
     let mut label = Label::new(text);
-    label.set_background_color(Some(palette.color(ColorGroup::Inactive, ColorRole::ToolTipBase)));
+    label.set_background_color(Some(
+        palette.color(ColorGroup::Inactive, ColorRole::ToolTipBase),
+    ));
     label.set_color(palette.color(ColorGroup::Inactive, ColorRole::ToolTipText));
-    label.set_font(qtrs_gui::text::Font::new(crate::label::APP_DEFAULT_FAMILY, 12.0));
+    label.set_font(ToolTip::font());
     label.set_type_name("QToolTip");
     // `QTipLabel` margin: `1 + PM_ToolTipLabelFrameWidth` (qtooltip.cpp:107). Windows gives 2.
     label.set_margin(2);
@@ -367,6 +384,17 @@ impl ToolTip {
     /// `widget` is the widget the tip is for (it only has to identify it); `msec_display_time <= 0`
     /// derives the display time from the text length ([`expire_time_ms`]).
     pub fn show_text(pos: Point, text: &str, widget: Option<ObjectId>, msec_display_time: i32) {
+        Self::show_text_rect(pos, text, widget, None, msec_display_time);
+    }
+
+    /// `QToolTip::showText(pos, text, w, rect, msecDisplayTime)` (qtooltip.cpp:414).
+    pub fn show_text_rect(
+        pos: Point,
+        text: &str,
+        widget: Option<ObjectId>,
+        rect: Option<Rect>,
+        msec_display_time: i32,
+    ) {
         let visible = CONTROLLER.with(tip_is_visible);
         if visible {
             if text.is_empty() {
@@ -377,16 +405,63 @@ impl ToolTip {
                 c.tip
                     .borrow()
                     .as_ref()
-                    .is_some_and(|t| t.text != text || t.widget != widget)
+                    .is_some_and(|t| t.text != text || t.widget != widget || t.rect != rect)
             });
             if changed {
-                Self::place(pos, text, widget, msec_display_time);
+                Self::place(pos, text, widget, rect, msec_display_time);
             }
             return;
         }
         if !text.is_empty() {
-            Self::place(pos, text, widget, msec_display_time);
+            Self::place(pos, text, widget, rect, msec_display_time);
         }
+    }
+
+    /// Returns the active tooltip palette (`QToolTip::palette`).
+    pub fn palette() -> Palette {
+        CONTROLLER.with(|c| {
+            c.custom_palette
+                .borrow()
+                .clone()
+                .unwrap_or_else(crate::application::Application::palette)
+        })
+    }
+
+    /// Sets the active tooltip palette (`QToolTip::setPalette`).
+    pub fn set_palette(palette: Palette) {
+        CONTROLLER.with(|c| {
+            *c.custom_palette.borrow_mut() = Some(palette.clone());
+            if let Some(tip) = c.tip.borrow().as_ref() {
+                if let Some(lbl) = tip.label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+                    lbl.set_background_color(Some(
+                        palette.color(ColorGroup::Inactive, ColorRole::ToolTipBase),
+                    ));
+                    lbl.set_color(palette.color(ColorGroup::Inactive, ColorRole::ToolTipText));
+                }
+            }
+        });
+    }
+
+    /// Returns the active tooltip font (`QToolTip::font`).
+    pub fn font() -> Font {
+        CONTROLLER.with(|c| {
+            c.custom_font
+                .borrow()
+                .clone()
+                .unwrap_or_else(|| Font::new(crate::label::APP_DEFAULT_FAMILY, 12.0))
+        })
+    }
+
+    /// Sets the active tooltip font (`QToolTip::setFont`).
+    pub fn set_font(font: Font) {
+        CONTROLLER.with(|c| {
+            *c.custom_font.borrow_mut() = Some(font.clone());
+            if let Some(tip) = c.tip.borrow().as_ref() {
+                if let Some(lbl) = tip.label.borrow_mut().as_any_mut().downcast_mut::<Label>() {
+                    lbl.set_font(font);
+                }
+            }
+        });
     }
 
     /// `QToolTip::hideText`: the same as `showText` with an empty text.
@@ -424,27 +499,38 @@ impl ToolTip {
 
     /// Shows or moves the tip: `reuseTip` + `placeTip` (qtooltip.cpp:128-142, 296-370) for a tip
     /// that is up, `QTipLabel`'s constructor and `showNormal` for a new one.
-    fn place(pos: Point, text: &str, widget: Option<ObjectId>, msec_display_time: i32) {
+    fn place(
+        pos: Point,
+        text: &str,
+        widget: Option<ObjectId>,
+        rect: Option<Rect>,
+        msec_display_time: i32,
+    ) {
         CONTROLLER.with(|c| {
             let mut slot = c.tip.borrow_mut();
             if slot.is_none() {
                 let mut label = new_tip_label(text);
                 label.set_text(text);
                 let label: WidgetRef = std::rc::Rc::new(RefCell::new(Box::new(label)));
-                let Ok(mut window) = Window::new(
-                    "tooltip",
-                    Rect::new(0, 0, 1, 1),
-                    WindowFlags::TOOLTIP,
-                ) else {
+                let Ok(mut window) =
+                    Window::new("tooltip", Rect::new(0, 0, 1, 1), WindowFlags::TOOLTIP)
+                else {
                     return;
                 };
                 window.set_root_widget(label.clone());
                 let window = Box::new(window);
-                *slot = Some(Tip { window, label, widget, text: String::new() });
+                *slot = Some(Tip {
+                    window,
+                    label,
+                    widget,
+                    rect,
+                    text: String::new(),
+                });
             }
             let tip = slot.as_mut().expect("created above");
             tip.text = text.to_string();
             tip.widget = widget;
+            tip.rect = rect;
             let screen = tip_screen(pos);
             let size = {
                 let mut label = tip.label.borrow_mut();
@@ -468,7 +554,8 @@ impl ToolTip {
             // `QTipLabel::updateSize` adds one pixel of width (qtooltip.cpp:159).
             let size = Size::new(size.width + 1, size.height);
             let origin = place_tip(pos, size, CURSOR_SIZE, screen);
-            tip.window.set_geometry(Rect::new(origin.x, origin.y, size.width, size.height));
+            tip.window
+                .set_geometry(Rect::new(origin.x, origin.y, size.width, size.height));
             // `restartExpireTimer`: a new expiry cancels a pending hide.
             start_timer(&c.expire, expire_time_ms(text, msec_display_time));
             stop_timer(&c.hide);

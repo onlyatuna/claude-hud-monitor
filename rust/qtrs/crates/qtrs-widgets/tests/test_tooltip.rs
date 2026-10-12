@@ -31,17 +31,41 @@ use qtrs_widgets::*;
 fn tip_lifetime_follows_text_length() {
     let text = |n: usize| "a".repeat(n);
     assert_eq!(expire_time_ms(&text(0), -1), 10_000);
-    assert_eq!(expire_time_ms(&text(100), -1), 10_000, "up to 100 characters: 10 s");
-    assert_eq!(expire_time_ms(&text(101), -1), 10_040, "each further character adds 40 ms");
+    assert_eq!(
+        expire_time_ms(&text(100), -1),
+        10_000,
+        "up to 100 characters: 10 s"
+    );
+    assert_eq!(
+        expire_time_ms(&text(101), -1),
+        10_040,
+        "each further character adds 40 ms"
+    );
     assert_eq!(expire_time_ms(&text(250), -1), 16_000);
-    assert_eq!(expire_time_ms(&text(250), 1234), 1234, "an explicit duration wins");
-    assert_eq!(expire_time_ms(&text(250), 0), 16_000, "zero is not a duration");
+    assert_eq!(
+        expire_time_ms(&text(250), 1234),
+        1234,
+        "an explicit duration wins"
+    );
+    assert_eq!(
+        expire_time_ms(&text(250), 0),
+        16_000,
+        "zero is not a duration"
+    );
     // `QString::size` counts UTF-16 code units: a character outside the BMP is two.
     assert_eq!(expire_time_ms(&"\u{1F600}".repeat(51), -1), 10_000 + 40 * 2);
 }
 
-const SCREEN: Rect = Rect { x: 0, y: 0, width: 1000, height: 800 };
-const TIP: Size = Size { width: 120, height: 30 };
+const SCREEN: Rect = Rect {
+    x: 0,
+    y: 0,
+    width: 1000,
+    height: 800,
+};
+const TIP: Size = Size {
+    width: 120,
+    height: 30,
+};
 
 #[test]
 fn tip_sits_right_of_and_below_the_cursor() {
@@ -68,11 +92,21 @@ fn tip_flips_above_the_cursor_at_the_bottom_edge() {
 #[test]
 fn tip_is_clamped_into_the_screen() {
     // Flipped left (x -= 4 + 1100) the tip would start at 10 + 2 - 1104 < 0.
-    let p = place_tip(Point::new(10, 790), Size::new(1100, 30), CURSOR_SIZE, SCREEN);
+    let p = place_tip(
+        Point::new(10, 790),
+        Size::new(1100, 30),
+        CURSOR_SIZE,
+        SCREEN,
+    );
     assert_eq!(p.x, 0, "wider than the screen: left edge");
     // Taller than the screen: flipped above, raised to the top, then pushed back up by the
     // bottom clamp, which is the last word (qtooltip.cpp:362-364).
-    let p = place_tip(Point::new(100, 10), Size::new(120, 900), CURSOR_SIZE, SCREEN);
+    let p = place_tip(
+        Point::new(100, 10),
+        Size::new(120, 900),
+        CURSOR_SIZE,
+        SCREEN,
+    );
     assert_eq!(p.y, 800 - 900);
     // A secondary screen offset from the origin.
     let second = Rect::new(1000, 0, 500, 400);
@@ -135,7 +169,12 @@ fn two_leaves() -> (WidgetRef, WidgetRef, WidgetRef) {
 }
 
 fn hover(d: &mut EventTreeDispatcher, root: &WidgetRef, x: i32, y: i32) {
-    d.dispatch_mouse_move(root, Point::new(x, y), Point::new(300 + x, 300 + y), NO_BUTTON);
+    d.dispatch_mouse_move(
+        root,
+        Point::new(x, y),
+        Point::new(300 + x, 300 + y),
+        NO_BUTTON,
+    );
 }
 
 fn visible() -> bool {
@@ -152,7 +191,10 @@ fn hover_shows_the_widgets_tool_tip_after_the_wake_up_delay() {
 
     hover(&mut d, &root, 10, 10);
 
-    assert!(!pump_until(&mut el, Duration::from_millis(300), visible), "shown before the wake-up delay");
+    assert!(
+        !pump_until(&mut el, Duration::from_millis(300), visible),
+        "shown before the wake-up delay"
+    );
     let shown = time_until(&mut el, 3000, visible).expect("the tip never appeared");
     assert!(
         shown + Duration::from_millis(300) >= Duration::from_millis(650),
@@ -167,7 +209,12 @@ fn a_move_with_a_button_down_does_not_start_the_wake_up() {
     let (root, _a, _b) = two_leaves();
     let mut d = EventTreeDispatcher::new();
 
-    d.dispatch_mouse_move(&root, Point::new(10, 10), Point::new(310, 310), MouseButtons::LEFT);
+    d.dispatch_mouse_move(
+        &root,
+        Point::new(10, 10),
+        Point::new(310, 310),
+        MouseButtons::LEFT,
+    );
 
     assert!(!pump_until(&mut el, Duration::from_millis(1200), visible));
 }
@@ -195,7 +242,10 @@ fn moving_to_another_widget_restarts_the_wake_up_for_that_widget() {
     pump_for(&mut el, 500);
     hover(&mut d, &root, 210, 10);
     // 500 ms after the first move is past where A's tip would have come: the restart cancelled it.
-    assert!(!pump_until(&mut el, Duration::from_millis(300), visible), "A's wake-up was not cancelled");
+    assert!(
+        !pump_until(&mut el, Duration::from_millis(300), visible),
+        "A's wake-up was not cancelled"
+    );
     assert!(pump_until(&mut el, Duration::from_millis(2000), visible));
     assert_eq!(ToolTip::text(), "tip B");
 }
@@ -210,9 +260,16 @@ fn user_input_cancels_the_wake_up_and_hides_a_visible_tip() {
     pump_for(&mut el, 100);
     d.dispatch_event(
         &root,
-        &mut Event::new_spontaneous(EventKind::MouseButtonPress { x: 10, y: 10, button: 1 }),
+        &mut Event::new_spontaneous(EventKind::MouseButtonPress {
+            x: 10,
+            y: 10,
+            button: 1,
+        }),
     );
-    assert!(!pump_until(&mut el, Duration::from_millis(1000), visible), "press did not cancel the wake-up");
+    assert!(
+        !pump_until(&mut el, Duration::from_millis(1000), visible),
+        "press did not cancel the wake-up"
+    );
 
     hover(&mut d, &root, 12, 12);
     assert!(pump_until(&mut el, Duration::from_millis(2000), visible));
@@ -228,7 +285,10 @@ fn user_input_cancels_the_wake_up_and_hides_a_visible_tip() {
             modifiers: 0,
         }),
     );
-    assert!(!visible(), "input hides the tip at once, not after the 300 ms hide delay");
+    assert!(
+        !visible(),
+        "input hides the tip at once, not after the 300 ms hide delay"
+    );
 }
 
 #[test]
@@ -243,7 +303,10 @@ fn leaving_hides_the_tip_after_the_hide_delay() {
     assert!(visible(), "hidden at once; Qt waits 300 ms");
     pump_for(&mut el, 100);
     assert!(visible(), "hidden before the 300 ms hide delay");
-    assert!(pump_until(&mut el, Duration::from_millis(1500), || !visible()), "tip never hid");
+    assert!(
+        pump_until(&mut el, Duration::from_millis(1500), || !visible()),
+        "tip never hid"
+    );
 }
 
 // ---- fall-asleep -----------------------------------------------------------------------------
@@ -263,7 +326,10 @@ fn after_an_accepted_tip_the_next_widget_wakes_up_quickly() {
     assert!(took < Duration::from_millis(400), "took {took:?}");
     // The tip was reused in place: the pending hide from leaving A was cancelled.
     pump_for(&mut el, 500);
-    assert!(visible(), "the tip for B was hidden by the hide timer started when leaving A");
+    assert!(
+        visible(),
+        "the tip for B was hidden by the hide timer started when leaving A"
+    );
 }
 
 #[test]
@@ -275,7 +341,9 @@ fn the_tip_falls_asleep_after_two_seconds() {
     assert!(pump_until(&mut el, Duration::from_millis(2000), visible));
     let shown_at = Instant::now();
     d.handle_mouse_leave();
-    assert!(pump_until(&mut el, Duration::from_millis(1500), || !visible()));
+    assert!(pump_until(&mut el, Duration::from_millis(1500), || {
+        !visible()
+    }));
     // The fall-asleep timer starts when the tip appears. Qt starts it as a coarse timer
     // (qbasictimer.cpp:146), which on Windows may fire up to 5% late (qeventdispatcher_win.cpp:
     // 312-326, 374); wait that long plus a timer tick past it.
@@ -283,7 +351,10 @@ fn the_tip_falls_asleep_after_two_seconds() {
     pump_until(&mut el, asleep, || shown_at.elapsed() >= asleep);
 
     hover(&mut d, &root, 210, 10);
-    assert!(!pump_until(&mut el, Duration::from_millis(300), visible), "still awake: woke up in under 300 ms");
+    assert!(
+        !pump_until(&mut el, Duration::from_millis(300), visible),
+        "still awake: woke up in under 300 ms"
+    );
     assert!(pump_until(&mut el, Duration::from_millis(2000), visible));
 }
 
@@ -296,13 +367,18 @@ fn user_input_puts_tool_tips_to_sleep() {
     assert!(pump_until(&mut el, Duration::from_millis(2000), visible));
     d.dispatch_event(
         &root,
-        &mut Event::new_spontaneous(EventKind::KeyPress { key: 65, modifiers: 0, is_repeat: false }),
+        &mut Event::new_spontaneous(EventKind::KeyPress {
+            key: 65,
+            modifiers: 0,
+            is_repeat: false,
+        }),
     );
 
     // Tip A is still up (a key press hides a tip only on macOS); B's must not wake up quickly.
     hover(&mut d, &root, 210, 10);
     assert!(
-        !pump_until(&mut el, Duration::from_millis(300), || ToolTip::text() == "tip B"),
+        !pump_until(&mut el, Duration::from_millis(300), || ToolTip::text()
+            == "tip B"),
         "a key press must end the quick wake-up"
     );
 }
@@ -326,7 +402,12 @@ struct Probe {
 
 impl Probe {
     fn new(name: &'static str, g: Rect, resp: Resp, log: &Log) -> Self {
-        Self { base: WidgetBase::with_geometry(g), name, resp, log: Rc::clone(log) }
+        Self {
+            base: WidgetBase::with_geometry(g),
+            name,
+            resp,
+            log: Rc::clone(log),
+        }
     }
 }
 
@@ -338,12 +419,19 @@ impl QObject for Probe {
         &mut self.base.object_data
     }
     fn event(&mut self, event: &mut Event) -> bool {
-        let EventKind::ToolTip { x, y, global_x, global_y } = event.kind else {
+        let EventKind::ToolTip {
+            x,
+            y,
+            global_x,
+            global_y,
+        } = event.kind
+        else {
             return false;
         };
-        self.log
-            .borrow_mut()
-            .push(format!("{}:ToolTip({x},{y};{global_x},{global_y})", self.name));
+        self.log.borrow_mut().push(format!(
+            "{}:ToolTip({x},{y};{global_x},{global_y})",
+            self.name
+        ));
         match self.resp {
             Resp::Accept => {
                 event.accept();
@@ -407,7 +495,10 @@ impl Widget for Probe {
         self.base.children.borrow_mut().push(child);
     }
     fn remove_child(&mut self, child_id: ObjectId) {
-        self.base.children.borrow_mut().retain(|c| c.borrow().id() != child_id);
+        self.base
+            .children
+            .borrow_mut()
+            .retain(|c| c.borrow().id() != child_id);
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -439,7 +530,8 @@ fn wake_up(el: &mut EventLoop, d: &mut EventTreeDispatcher, root: &WidgetRef, lo
     let before = log.borrow().len();
     d.dispatch_mouse_move(root, Point::new(60, 40), Point::new(560, 440), NO_BUTTON);
     assert!(
-        pump_until(el, Duration::from_millis(3000), || log.borrow().len() > before),
+        pump_until(el, Duration::from_millis(3000), || log.borrow().len()
+            > before),
         "no ToolTip event after a hover"
     );
 }
@@ -474,7 +566,10 @@ fn an_accepted_tool_tip_stops_at_the_accepting_widget() {
     wake_up(&mut el, &mut d, &root, &log);
     pump_for(&mut el, 100);
 
-    assert_eq!(*log.borrow(), vec!["leaf:ToolTip(10,10;560,440)", "mid:ToolTip(40,30;560,440)"]);
+    assert_eq!(
+        *log.borrow(),
+        vec!["leaf:ToolTip(10,10;560,440)", "mid:ToolTip(40,30;560,440)"]
+    );
 }
 
 #[test]
@@ -491,7 +586,11 @@ fn a_widget_that_does_not_handle_the_event_gets_the_default_tool_tip_behaviour()
     hover(&mut d, &root, 20, 20); // inside `inner`, whose own tip is empty
 
     assert!(pump_until(&mut el, Duration::from_millis(3000), visible));
-    assert_eq!(ToolTip::text(), "tip A", "an empty tool tip falls through to the parent's");
+    assert_eq!(
+        ToolTip::text(),
+        "tip A",
+        "an empty tool tip falls through to the parent's"
+    );
 }
 
 #[test]
@@ -506,7 +605,8 @@ fn a_tool_tip_that_nobody_accepts_does_not_start_the_quick_wake_up() {
     // No tip was shown, so the fall-asleep timer is not running: the next wake-up takes 700 ms.
     d.dispatch_mouse_move(&root, Point::new(61, 41), Point::new(561, 441), NO_BUTTON);
     assert!(
-        !pump_until(&mut el, Duration::from_millis(300), || log.borrow().len() > after_first),
+        !pump_until(&mut el, Duration::from_millis(300), || log.borrow().len()
+            > after_first),
         "an unaccepted help event started the fall-asleep period"
     );
 }
@@ -524,27 +624,74 @@ fn show_text_places_and_replaces_the_tip() {
     let g1 = ToolTip::geometry().expect("visible");
 
     ToolTip::show_text(p2, "first", None, -1);
-    assert_eq!(ToolTip::geometry(), Some(g1), "the same text for the same widget does not move the tip");
+    assert_eq!(
+        ToolTip::geometry(),
+        Some(g1),
+        "the same text for the same widget does not move the tip"
+    );
 
     ToolTip::show_text(p2, "second, longer", None, -1);
     assert_eq!(ToolTip::text(), "second, longer");
     let g2 = ToolTip::geometry().expect("visible");
-    assert_ne!((g2.x, g2.y), (g1.x, g1.y), "a changed text moves the tip to the new position");
+    assert_ne!(
+        (g2.x, g2.y),
+        (g1.x, g1.y),
+        "a changed text moves the tip to the new position"
+    );
+
+    // show_text_rect replaces tip when rect changes (qtooltip.cpp:428 / G8.8.b)
+    let rect1 = Rect::new(10, 10, 50, 50);
+    ToolTip::show_text_rect(p2, "rect tip", None, Some(rect1), -1);
+    let gr1 = ToolTip::geometry().expect("visible");
+    let rect2 = Rect::new(20, 20, 60, 60);
+    ToolTip::show_text_rect(p1, "rect tip", None, Some(rect2), -1);
+    let gr2 = ToolTip::geometry().expect("visible");
+    assert_ne!(
+        (gr2.x, gr2.y),
+        (gr1.x, gr1.y),
+        "different rect moves/replaces the tip"
+    );
+
+    // QToolTip font and palette API (G8.8.b)
+    let f = ToolTip::font();
+    assert_eq!(f.size, 12.0);
+    let new_f = qtrs_gui::text::Font::new("Consolas", 14.0);
+    ToolTip::set_font(new_f.clone());
+    assert_eq!(ToolTip::font().family, "Consolas");
+    assert_eq!(ToolTip::font().size, 14.0);
+
+    let pal = ToolTip::palette();
+    ToolTip::set_palette(pal.clone());
+    assert_eq!(ToolTip::palette(), pal);
 }
 
 #[test]
 fn a_tip_shown_near_the_screen_corner_flips_inside_the_screen() {
     let _el = EventLoop::new();
-    let screen = qtrs_platform::integration::platform().primary_screen().geometry();
+    let screen = qtrs_platform::integration::platform()
+        .primary_screen()
+        .geometry();
     let pos = Point::new(screen.x + screen.width - 5, screen.y + screen.height - 5);
 
     ToolTip::show_text(pos, "corner", None, -1);
 
     let g = ToolTip::geometry().expect("visible");
-    assert!(g.x >= screen.x && g.x + g.width <= screen.x + screen.width, "{g:?} not inside {screen:?}");
-    assert!(g.y >= screen.y && g.y + g.height <= screen.y + screen.height, "{g:?} not inside {screen:?}");
-    assert!(g.x + g.width <= pos.x, "flipped to the left of the cursor: {g:?} vs {pos:?}");
-    assert!(g.y + g.height <= pos.y, "flipped above the cursor: {g:?} vs {pos:?}");
+    assert!(
+        g.x >= screen.x && g.x + g.width <= screen.x + screen.width,
+        "{g:?} not inside {screen:?}"
+    );
+    assert!(
+        g.y >= screen.y && g.y + g.height <= screen.y + screen.height,
+        "{g:?} not inside {screen:?}"
+    );
+    assert!(
+        g.x + g.width <= pos.x,
+        "flipped to the left of the cursor: {g:?} vs {pos:?}"
+    );
+    assert!(
+        g.y + g.height <= pos.y,
+        "flipped above the cursor: {g:?} vs {pos:?}"
+    );
 }
 
 #[test]
@@ -555,7 +702,12 @@ fn an_explicit_duration_ends_the_tip() {
 
     pump_for(&mut el, 200);
     assert!(ToolTip::is_visible(), "gone before its 400 ms");
-    assert!(pump_until(&mut el, Duration::from_millis(1500), || !ToolTip::is_visible()), "never expired");
+    assert!(
+        pump_until(&mut el, Duration::from_millis(1500), || {
+            !ToolTip::is_visible()
+        }),
+        "never expired"
+    );
     assert_eq!(ToolTip::text(), "");
 }
 
@@ -565,7 +717,9 @@ fn an_empty_text_hides_the_tip_after_the_hide_delay() {
     ToolTip::show_text(Point::new(300, 300), "bye", None, -1);
     ToolTip::show_text(Point::new(300, 300), "", None, -1);
     assert!(ToolTip::is_visible(), "QTipLabel::hideTip waits 300 ms");
-    assert!(pump_until(&mut el, Duration::from_millis(1500), || !ToolTip::is_visible()));
+    assert!(pump_until(&mut el, Duration::from_millis(1500), || {
+        !ToolTip::is_visible()
+    }));
 }
 // Tip text geometry: QToolTip::updateSize (qtooltip.cpp:143-160) and QLabel::sizeForWidth.
 
@@ -634,7 +788,12 @@ mod real_windows {
     impl CursorOver {
         fn new(hwnd: isize) -> Self {
             let mut saved = POINT { x: 0, y: 0 };
-            let mut r = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+            let mut r = RECT {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
             unsafe {
                 GetCursorPos(&mut saved);
                 GetWindowRect(hwnd as _, &mut r);
@@ -766,10 +925,16 @@ mod real_windows {
         // like real motion that starts the wake-up timer.
         let (x, y) = cursor_in_client(&f);
         mouse_move(&f, x, y, MK_LBUTTON);
-        assert!(!pump_until(&mut el, Duration::from_millis(1200), visible), "MK_LBUTTON move started a tip");
+        assert!(
+            !pump_until(&mut el, Duration::from_millis(1200), visible),
+            "MK_LBUTTON move started a tip"
+        );
 
         mouse_move(&f, x + 2, y, 0);
-        assert!(pump_until(&mut el, Duration::from_millis(3000), visible), "a plain native move never showed the tip");
+        assert!(
+            pump_until(&mut el, Duration::from_millis(3000), visible),
+            "a plain native move never showed the tip"
+        );
         assert_eq!(ToolTip::text(), "tip");
     }
 
@@ -787,7 +952,11 @@ mod real_windows {
         mouse_move(&f, 50, 50, 0);
         assert!(pump_until(&mut el, Duration::from_millis(3000), visible));
 
-        assert_eq!(foreground(), f.hwnd, "showing the tool tip took the foreground from its window");
+        assert_eq!(
+            foreground(),
+            f.hwnd,
+            "showing the tool tip took the foreground from its window"
+        );
         // Wiring only: the native cursor position reaches the help event and `showText`. The
         // expected value is spelled out here, not recomputed with `place_tip`; Qt-geometry parity
         // is established by the hand-derived pure `place_tip` tests above, not by this test.
@@ -796,7 +965,9 @@ mod real_windows {
         unsafe { GetCursorPos(&mut pt) };
         let cursor = qtrs_platform::high_dpi::from_native_point(Point::new(pt.x, pt.y), dpr);
         let tip = ToolTip::geometry().expect("visible");
-        let screen = qtrs_platform::integration::platform().primary_screen().geometry();
+        let screen = qtrs_platform::integration::platform()
+            .primary_screen()
+            .geometry();
         assert!(
             cursor.x + 2 + tip.width <= screen.x + screen.width
                 && cursor.y + 16 + tip.height <= screen.y + screen.height,
@@ -823,21 +994,36 @@ mod real_windows {
         settle(&mut el, &owner);
 
         mouse_move(&owner, 50, 50, 0);
-        assert!(!pump_until(&mut el, Duration::from_millis(1200), visible), "an inactive window showed a tip");
+        assert!(
+            !pump_until(&mut el, Duration::from_millis(1200), visible),
+            "an inactive window showed a tip"
+        );
 
         // `WA_AlwaysShowToolTips` on the window widget.
         owner.root.borrow().set_always_show_tool_tips(true);
         mouse_move(&owner, 52, 50, 0);
-        assert!(pump_until(&mut el, Duration::from_millis(3000), visible), "WA_AlwaysShowToolTips was ignored");
-        assert_eq!(foreground(), other.hwnd, "the tip changed the foreground window");
+        assert!(
+            pump_until(&mut el, Duration::from_millis(3000), visible),
+            "WA_AlwaysShowToolTips was ignored"
+        );
+        assert_eq!(
+            foreground(),
+            other.hwnd,
+            "the tip changed the foreground window"
+        );
         ToolTip::hide_text();
-        assert!(pump_until(&mut el, Duration::from_millis(1500), || !visible()));
+        assert!(pump_until(&mut el, Duration::from_millis(1500), || {
+            !visible()
+        }));
 
         // Without the attribute the window shows tips once it is active.
         owner.root.borrow().set_always_show_tool_tips(false);
         assert!(take_foreground(owner.hwnd));
         mouse_move(&owner, 54, 50, 0);
-        assert!(pump_until(&mut el, Duration::from_millis(3000), visible), "the active window showed no tip");
+        assert!(
+            pump_until(&mut el, Duration::from_millis(3000), visible),
+            "the active window showed no tip"
+        );
         assert_eq!(foreground(), owner.hwnd);
         drop((owner.win, other.win));
     }
