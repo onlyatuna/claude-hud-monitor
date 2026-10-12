@@ -37,6 +37,26 @@ pub enum HighDpiScaleFactorRoundingPolicy {
     PassThrough,
 }
 
+/// Applies the global `HighDpiScaleFactorRoundingPolicy` to a raw screen scale factor and
+/// clamps the result to at least 1, mirroring `QHighDpiScaling::roundScaleFactor`
+/// (`qtbase/src/gui/kernel/qhighdpiscaling.cpp:322-361`).
+pub fn round_scale_factor(raw: f64) -> f64 {
+    let rounded = match GuiApplication::high_dpi_scale_factor_rounding_policy() {
+        HighDpiScaleFactorRoundingPolicy::Round => raw.round(),
+        HighDpiScaleFactorRoundingPolicy::Ceil => raw.ceil(),
+        HighDpiScaleFactorRoundingPolicy::Floor => raw.floor(),
+        HighDpiScaleFactorRoundingPolicy::RoundPreferFloor => {
+            if raw - raw.floor() < 0.75 {
+                raw.floor()
+            } else {
+                raw.ceil()
+            }
+        }
+        HighDpiScaleFactorRoundingPolicy::PassThrough => raw,
+    };
+    rounded.max(1.0)
+}
+
 /// Global system style hints matching `QStyleHints`.
 #[derive(Debug, Clone)]
 pub struct StyleHints {

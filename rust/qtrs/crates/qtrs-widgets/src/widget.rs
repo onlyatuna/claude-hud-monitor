@@ -5,7 +5,7 @@ use crate::layout::Layout;
 use crate::layout_engine::WIDGET_SIZE_MAX;
 pub use crate::size_policy::{Policy, QSizePolicy};
 use qtrs_core::event::{Event, EventKind, FocusReason};
-use qtrs_core::event_loop::post_event_to_thread;
+use qtrs_core::event_loop::{filters_consume, notify_borrowed, post_event_to_thread};
 use qtrs_core::object::{ObjectData, ObjectId, QObject, ThreadId};
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
 use qtrs_gui::paint::Painter;
@@ -39,7 +39,7 @@ pub fn set_widget_enabled(widget: &WidgetRef, enabled: bool) {
             EnabledNotice::FocusLost(state) => crate::focus::move_lost_focus_now(&state),
             EnabledNotice::Changed(w) => {
                 if let Ok(mut w) = w.try_borrow_mut() {
-                    w.event(&mut Event::new(EventKind::EnabledChange));
+                    notify_borrowed(&mut **w, &mut Event::new(EventKind::EnabledChange));
                 }
             }
         }
@@ -67,11 +67,11 @@ pub fn set_widget_visible(widget: &WidgetRef, visible: bool) {
     if now_shown && !was_shown {
         show_children_first(widget);
         if let Ok(mut w) = widget.try_borrow_mut() {
-            w.event(&mut Event::new(EventKind::Show));
+            notify_borrowed(&mut **w, &mut Event::new(EventKind::Show));
         }
     } else if was_shown && !now_shown {
         if let Ok(mut w) = widget.try_borrow_mut() {
-            w.event(&mut Event::new(EventKind::Hide));
+            notify_borrowed(&mut **w, &mut Event::new(EventKind::Hide));
         }
         hide_children(widget);
     }
@@ -98,7 +98,8 @@ pub(crate) fn show_children_first(widget: &WidgetRef) {
     for child in children {
         if child.borrow().is_visible() {
             show_children_first(&child);
-            child.borrow_mut().event(&mut Event::new(EventKind::Show));
+            let mut w = child.borrow_mut();
+            notify_borrowed(&mut **w, &mut Event::new(EventKind::Show));
         }
     }
 }
@@ -109,7 +110,10 @@ pub(crate) fn hide_children(widget: &WidgetRef) {
     let children = widget.borrow().children();
     for child in children {
         if child.borrow().is_visible() {
-            child.borrow_mut().event(&mut Event::new(EventKind::Hide));
+            {
+                let mut w = child.borrow_mut();
+                notify_borrowed(&mut **w, &mut Event::new(EventKind::Hide));
+            }
             hide_children(&child);
         }
     }
@@ -150,12 +154,19 @@ pub fn adopt_tree(root: &WidgetRef) {
 /// first: `QStyleSheetStyle::updateObjects` (qstylesheetstyle.cpp:2780).
 ///
 /// A widget that is mutably borrowed is the one currently being driven; it is skipped, as
-/// `resolve_style` also stops at it. Its caller is the one changing it.
+/// `resolve_style` also stops at it. Its caller is the one changing it. A widget that is only
+/// shared-borrowed still gets its layout invalidated, but no `StyleChange` event: `event()` needs
+/// `&mut`, so the event is not delivered to it (G8.5.l residual).
 pub fn style_changed_below(children: Vec<WidgetRef>) {
     for child in children {
-        let Ok(widget) = child.try_borrow() else { continue };
-        widget.widget_base().style_changed();
-        style_changed_below(widget.children());
+        if let Ok(mut widget) = child.try_borrow_mut() {
+            notify_borrowed(&mut **widget, &mut Event::new(EventKind::StyleChange));
+            widget.widget_base().style_changed();
+            style_changed_below(widget.children());
+        } else if let Ok(widget) = child.try_borrow() {
+            widget.widget_base().style_changed();
+            style_changed_below(widget.children());
+        }
     }
 }
 
@@ -414,6 +425,9 @@ pub trait Widget: QObject + 'static {
     /// qstylesheetstyle.cpp:2780).
     fn set_style_sheet(&self, qss: &str) {
         self.widget_base().set_style_sheet(qss);
+        // This widget gets its StyleChange through `&self`, so only its filters see it here (the
+        // widget's own `event()` needs `&mut`; residual G8.5.l-adjacent, recorded).
+        filters_consume(self.object_data(), &mut Event::new(EventKind::StyleChange));
         style_changed_below(self.children());
     }
 
@@ -435,6 +449,7 @@ pub trait Widget: QObject + 'static {
     /// reports as a `StyleChange` (`update(); updateGeometry(); layout->invalidate()`).
     fn repolish(&self) {
         self.widget_base().style_changed();
+        filters_consume(self.object_data(), &mut Event::new(EventKind::StyleChange));
     }
 
     fn property(&self, name: &str) -> Option<String> {

@@ -32,7 +32,7 @@ pub mod win32_screen {
             // SAFETY: no arguments.
             unsafe { windows_sys::Win32::UI::HiDpi::GetDpiForSystem() as f32 / 96.0 }
         };
-        dpr.max(1.0)
+        qtrs_gui::round_scale_factor(dpr as f64) as f32
     }
 
     /// The monitor's physical top-left and ratio: what a desktop position on it maps with.

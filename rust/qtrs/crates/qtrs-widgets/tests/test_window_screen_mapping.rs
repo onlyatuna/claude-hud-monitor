@@ -12,6 +12,7 @@
 
 use qtrs_gui::geometry::primitives::{Point, Rect};
 use qtrs_gui::paint::Pixmap;
+use qtrs_gui::{round_scale_factor, GuiApplication, HighDpiScaleFactorRoundingPolicy};
 use qtrs_platform::platform_window::PlatformWindow;
 use qtrs_platform::screen::PlatformScreen;
 use qtrs_platform::window_system_interface::WindowSystemEventHandler;
@@ -355,4 +356,83 @@ fn present_custom_at_places_the_window_through_the_screen_under_the_rect() {
         Point::new(2040, 150),
         "native position for the layered window"
     );
+}
+
+// --- screen tracking: QWindow::screen(), screenChanged, ratio follows the screen -----------------
+
+/// Restores Qt's default (`Unset`, which behaves as `PassThrough`) when a test ends.
+struct PolicyGuard;
+
+impl Drop for PolicyGuard {
+    fn drop(&mut self) {
+        GuiApplication::set_high_dpi_scale_factor_rounding_policy(
+            HighDpiScaleFactorRoundingPolicy::PassThrough,
+        );
+    }
+}
+
+#[test]
+fn each_rounding_policy_rounds_a_screen_scale_factor_as_qt_does_and_keeps_it_at_least_one() {
+    // qhighdpiscaling.cpp:322-361: the policy picks the rounding, then `qMax(rounded, 1)`.
+    let _guard = PolicyGuard;
+    let set = HighDpiScaleFactorRoundingPolicy::Round;
+    GuiApplication::set_high_dpi_scale_factor_rounding_policy(set);
+    assert_eq!(round_scale_factor(1.4), 1.0);
+    assert_eq!(round_scale_factor(1.5), 2.0);
+
+    GuiApplication::set_high_dpi_scale_factor_rounding_policy(
+        HighDpiScaleFactorRoundingPolicy::Ceil,
+    );
+    assert_eq!(round_scale_factor(1.2), 2.0);
+
+    GuiApplication::set_high_dpi_scale_factor_rounding_policy(
+        HighDpiScaleFactorRoundingPolicy::Floor,
+    );
+    assert_eq!(round_scale_factor(1.9), 1.0);
+    assert_eq!(round_scale_factor(0.5), 1.0);
+
+    GuiApplication::set_high_dpi_scale_factor_rounding_policy(
+        HighDpiScaleFactorRoundingPolicy::RoundPreferFloor,
+    );
+    assert_eq!(round_scale_factor(1.7), 1.0);
+    assert_eq!(round_scale_factor(1.8), 2.0);
+
+    GuiApplication::set_high_dpi_scale_factor_rounding_policy(
+        HighDpiScaleFactorRoundingPolicy::PassThrough,
+    );
+    assert_eq!(round_scale_factor(1.25), 1.25);
+}
+
+#[test]
+fn a_window_moved_to_a_screen_of_another_ratio_takes_that_ratio_and_signals_the_screen() {
+    let d = Desktop::new(&[PRIMARY_100, RIGHT_150]);
+    let mut w = d.window(Rect::new(100, 100, 400, 300));
+    assert_eq!(w.device_pixel_ratio(), 1.0);
+
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let seen_cb = Arc::clone(&seen);
+    let _ = w
+        .screen_changed()
+        .connect(move |s: &Box<dyn PlatformScreen>| {
+            seen_cb.lock().push((s.geometry(), s.device_pixel_ratio()));
+        });
+
+    w.set_geometry(Rect::new(2000, 100, 400, 300));
+    assert_eq!(w.device_pixel_ratio(), 1.5);
+    assert_eq!(w.screen().geometry(), RIGHT_150.logical());
+    assert_eq!(*seen.lock(), vec![(RIGHT_150.logical(), 1.5)]);
+
+    // Still on the same screen: no new signal, and the ratio stays.
+    w.set_geometry(Rect::new(2100, 100, 400, 300));
+    assert_eq!(w.device_pixel_ratio(), 1.5);
+    assert_eq!(seen.lock().len(), 1);
+}
+
+#[test]
+fn present_custom_at_onto_another_screen_takes_that_screens_ratio() {
+    let d = Desktop::new(&[PRIMARY_100, RIGHT_150]);
+    let mut w = d.window(Rect::new(100, 100, 400, 300));
+    w.present_custom_at(Rect::new(2000, 100, 400, 300), |_| {});
+    assert_eq!(w.device_pixel_ratio(), 1.5);
+    assert_eq!(w.screen().geometry(), RIGHT_150.logical());
 }

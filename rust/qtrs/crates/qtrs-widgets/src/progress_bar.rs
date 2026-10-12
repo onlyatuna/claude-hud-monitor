@@ -6,7 +6,8 @@
 //! placeholders. When `minimum == maximum` the bar is in busy (indeterminate)
 //! mode and animates a moving chunk driven by [`ProgressBar::advance_busy_indicator`].
 
-use qtrs_core::event::{Event, FocusReason};
+use qtrs_core::event::{Event, EventKind, FocusReason};
+use qtrs_core::event_loop::notify_borrowed;
 use qtrs_core::object::QObject;
 use qtrs_core::signal::Signal;
 use qtrs_gui::geometry::primitives::{PointF, Rect, RectF, Size};
@@ -224,6 +225,8 @@ impl ProgressBar {
 
     pub fn set_font(&mut self, font: Font) {
         self.font = font;
+        // FontChange (qwidget.cpp:4894-4895) precedes the update work (qwidget.cpp:9502).
+        notify_borrowed(self, &mut Event::new(EventKind::FontChange));
         self.update_geometry();
         self.update();
     }
@@ -361,24 +364,26 @@ impl ProgressBar {
 
     pub fn resolved_groove_style(&self) -> crate::style::stylesheet::ResolvedStyle {
         let mut buf = [""; 4];
+        let props = self.base.properties.borrow();
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QProgressBar",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),
             pseudo_states: self.base.style_pseudo_states(false, false, &mut buf),
             sub_control: None,
-            attributes: &[],
+            attributes: props.as_slice(),
         };
         self.base.resolve_style(&ctx)
     }
 
     pub fn resolved_chunk_style(&self) -> crate::style::stylesheet::ResolvedStyle {
         let mut buf = [""; 4];
+        let props = self.base.properties.borrow();
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QProgressBar",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),
             pseudo_states: self.base.style_pseudo_states(false, false, &mut buf),
             sub_control: Some("chunk"),
-            attributes: &[],
+            attributes: props.as_slice(),
         };
         self.base.resolve_style(&ctx)
     }

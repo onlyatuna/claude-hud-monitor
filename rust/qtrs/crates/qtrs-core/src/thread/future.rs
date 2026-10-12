@@ -5,6 +5,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant};
 
+use crate::event::{Event, EventKind};
+use crate::event_loop::post_event_to_thread;
+use crate::object::{ObjectId, ThreadId};
 use crate::signal::Signal;
 
 pub(crate) struct FutureShared<T> {
@@ -20,20 +23,44 @@ pub(crate) struct FutureShared<T> {
 }
 
 pub(crate) struct FutureWatcherSignals<T> {
-    pub(crate) finished: Signal<T>,
+    /// Thread that owns the watcher (Qt: QObject thread affinity, qobject.cpp:991-993).
+    thread: ThreadId,
+    /// Cleared by `FutureWatcher::drop`; posted callouts check it (Qt: removePostedEvents, qfuturewatcher.cpp:480-483).
+    alive: AtomicBool,
+    pub(crate) finished: Signal<()>,
+    pub(crate) result_ready: Signal<T>,
     pub(crate) canceled: Signal<()>,
     pub(crate) progress_changed: Signal<i32>,
     pub(crate) progress_range_changed: Signal<(i32, i32)>,
 }
 
-impl<T: Clone + Send + 'static> Default for FutureWatcherSignals<T> {
-    fn default() -> Self {
+impl<T: Clone + Send + 'static> FutureWatcherSignals<T> {
+    fn new(thread: ThreadId) -> Self {
         Self {
+            thread,
+            alive: AtomicBool::new(true),
             finished: Signal::new(),
+            result_ready: Signal::new(),
             canceled: Signal::new(),
             progress_changed: Signal::new(),
             progress_range_changed: Signal::new(),
         }
+    }
+
+    /// Queues `deliver` to the watcher's thread (Qt: postCallOutEvent, qfuturewatcher.cpp:468-478).
+    fn post(self: &Arc<Self>, deliver: impl FnOnce(&Self) + Send + 'static) {
+        let w = Arc::clone(self);
+        post_event_to_thread(
+            self.thread,
+            ObjectId(0),
+            Event::new(EventKind::MetaCall(Box::new(
+                move |_: &mut dyn std::any::Any| {
+                    if w.alive.load(Ordering::SeqCst) {
+                        deliver(&*w);
+                    }
+                },
+            ))),
+        );
     }
 }
 
@@ -50,6 +77,12 @@ impl<T> FutureShared<T> {
             wakers: Mutex::new(Vec::new()),
             watchers: Mutex::new(Vec::new()),
         }
+    }
+
+    fn live_watchers(&self) -> Vec<Arc<FutureWatcherSignals<T>>> {
+        let mut list = self.watchers.lock().unwrap();
+        list.retain(|w| w.alive.load(Ordering::SeqCst));
+        list.clone()
     }
 }
 
@@ -90,9 +123,9 @@ impl<T: Clone + Send + 'static> Promise<T> {
         }
         self.shared.cond.notify_all();
 
-        let watchers = self.shared.watchers.lock().unwrap().clone();
-        for w in watchers {
-            w.finished.emit(&value);
+        for w in self.shared.live_watchers() {
+            let v = value.clone();
+            w.post(move |s| s.result_ready.emit(&v));
         }
     }
 
@@ -107,9 +140,8 @@ impl<T: Clone + Send + 'static> Promise<T> {
         self.shared.progress_min.store(min, Ordering::SeqCst);
         self.shared.progress_max.store(max, Ordering::SeqCst);
 
-        let watchers = self.shared.watchers.lock().unwrap().clone();
-        for w in watchers {
-            w.progress_range_changed.emit(&(min, max));
+        for w in self.shared.live_watchers() {
+            w.post(move |s| s.progress_range_changed.emit(&(min, max)));
         }
     }
 
@@ -117,9 +149,8 @@ impl<T: Clone + Send + 'static> Promise<T> {
     pub fn set_progress_value(&self, value: i32) {
         self.shared.progress_value.store(value, Ordering::SeqCst);
 
-        let watchers = self.shared.watchers.lock().unwrap().clone();
-        for w in watchers {
-            w.progress_changed.emit(&value);
+        for w in self.shared.live_watchers() {
+            w.post(move |s| s.progress_changed.emit(&value));
         }
     }
 
@@ -128,9 +159,8 @@ impl<T: Clone + Send + 'static> Promise<T> {
         self.shared.is_canceled.store(true, Ordering::SeqCst);
         self.shared.cond.notify_all();
 
-        let watchers = self.shared.watchers.lock().unwrap().clone();
-        for w in watchers {
-            w.canceled.emit(&());
+        for w in self.shared.live_watchers() {
+            w.post(|s| s.canceled.emit(&()));
         }
     }
 
@@ -141,8 +171,15 @@ impl<T: Clone + Send + 'static> Promise<T> {
 
     /// Marks the computation finished.
     pub fn finish(&self) {
-        self.shared.is_finished.store(true, Ordering::SeqCst);
+        // Qt: reportFinished guards on !isFinished() (qfutureinterface.cpp:461).
+        if self.shared.is_finished.swap(true, Ordering::SeqCst) {
+            return;
+        }
         self.shared.cond.notify_all();
+
+        for w in self.shared.live_watchers() {
+            w.post(|s| s.finished.emit(&()));
+        }
 
         let wakers = {
             let mut w = self.shared.wakers.lock().unwrap();
@@ -229,9 +266,8 @@ impl<T: Clone + Send + 'static> Future<T> {
         self.shared.is_canceled.store(true, Ordering::SeqCst);
         self.shared.cond.notify_all();
 
-        let watchers = self.shared.watchers.lock().unwrap().clone();
-        for w in watchers {
-            w.canceled.emit(&());
+        for w in self.shared.live_watchers() {
+            w.post(|s| s.canceled.emit(&()));
         }
     }
 
@@ -250,7 +286,7 @@ impl<T: Clone + Send + 'static> Future<T> {
 
     /// Creates a `FutureWatcher` attached to this future.
     pub fn watcher(&self) -> FutureWatcher<T> {
-        let signals = Arc::new(FutureWatcherSignals::default());
+        let signals = Arc::new(FutureWatcherSignals::new(ThreadId::current()));
         self.shared
             .watchers
             .lock()
@@ -288,10 +324,21 @@ pub struct FutureWatcher<T: Clone + Send + 'static> {
     pub(crate) signals: Arc<FutureWatcherSignals<T>>,
 }
 
+impl<T: Clone + Send + 'static> Drop for FutureWatcher<T> {
+    fn drop(&mut self) {
+        self.signals.alive.store(false, Ordering::SeqCst);
+    }
+}
+
 impl<T: Clone + Send + 'static> FutureWatcher<T> {
-    /// Signal emitted when a result is produced or finished.
-    pub fn finished(&self) -> &Signal<T> {
+    /// Signal emitted once when the computation finishes (Qt: `QFutureWatcher::finished`, value-less).
+    pub fn finished(&self) -> &Signal<()> {
         &self.signals.finished
+    }
+
+    /// Signal emitted for each reported result, carrying the value (Rust analogue of Qt's `resultReadyAt`).
+    pub fn result_ready(&self) -> &Signal<T> {
+        &self.signals.result_ready
     }
 
     /// Signal emitted when computation is canceled.

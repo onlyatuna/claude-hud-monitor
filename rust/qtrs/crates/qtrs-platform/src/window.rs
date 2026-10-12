@@ -609,7 +609,7 @@ pub fn get_window_dpr(hwnd: HWND) -> f32 {
     unsafe {
         let dpi = windows_sys::Win32::UI::HiDpi::GetDpiForWindow(hwnd);
         if dpi > 0 {
-            dpi as f32 / 96.0
+            qtrs_gui::round_scale_factor(dpi as f64 / 96.0) as f32
         } else {
             1.0
         }
@@ -896,6 +896,14 @@ unsafe fn native_window_proc_inner(
             let dpi_x = (wparam as u32) & 0xffff;
             let dpi_y = ((wparam as u32) >> 16) & 0xffff;
 
+            // Qt sends the screen/DPI change before applying the suggested rect
+            // (qwindowswindow.cpp:2164-2191), so the handler still sees the old geometry and the
+            // resulting WM_MOVE/WM_SIZE are processed with the new ratio already in place.
+            dispatch_window_system_event(
+                Delivery::Default,
+                hwnd,
+                WindowSystemEvent::DpiChanged { dpi_x, dpi_y },
+            );
             let rect_ptr = lparam as *const RECT;
             if !rect_ptr.is_null() {
                 let r = *rect_ptr;
@@ -911,12 +919,6 @@ unsafe fn native_window_proc_inner(
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
             }
-
-            dispatch_window_system_event(
-                Delivery::Default,
-                hwnd,
-                WindowSystemEvent::DpiChanged { dpi_x, dpi_y },
-            );
             if let Some((handle, receiver)) = get_window_event_binding(hwnd) {
                 handle.post_event(
                     receiver,
@@ -1390,6 +1392,18 @@ unsafe impl Send for NativeWindow {}
 #[cfg(windows)]
 unsafe impl Sync for NativeWindow {}
 
+/// `set_stays_on_top`'s `SetWindowPos` insert-after target: `HWND_TOPMOST` for the topmost band,
+/// `HWND_NOTOPMOST` to leave it.
+#[cfg(windows)]
+fn topmost_insert_after(enabled: bool) -> HWND {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_NOTOPMOST, HWND_TOPMOST};
+    if enabled {
+        HWND_TOPMOST
+    } else {
+        HWND_NOTOPMOST
+    }
+}
+
 #[cfg(windows)]
 impl NativeWindow {
     pub fn new(title: &str, rect: Rect, flags: WindowFlags) -> Result<Self, &'static str> {
@@ -1600,12 +1614,7 @@ impl NativeWindow {
 
     pub fn set_stays_on_top(&mut self, enabled: bool) {
         if !self.hwnd.is_null() {
-            use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_NOTOPMOST, HWND_TOPMOST};
-            let insert_after = if enabled {
-                HWND_TOPMOST
-            } else {
-                HWND_NOTOPMOST
-            };
+            let insert_after = topmost_insert_after(enabled);
             unsafe {
                 SetWindowPos(
                     self.hwnd,
@@ -2377,6 +2386,48 @@ mod tests {
             transparent(&win),
             0,
             "set_click_through(false) must clear WS_EX_TRANSPARENT"
+        );
+    }
+
+    /// G8.6.b / C8.6: `set_stays_on_top` chooses the z-order target for the requested state. The OS
+    /// applies the band, so only the choice is asserted; this runs without a desktop.
+    #[test]
+    fn test_stays_on_top_selects_topmost_insert_after() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_NOTOPMOST, HWND_TOPMOST};
+        assert_eq!(topmost_insert_after(true), HWND_TOPMOST);
+        assert_eq!(topmost_insert_after(false), HWND_NOTOPMOST);
+    }
+
+    /// G8.6.b / C8.6: toggling stays-on-top at run time keeps the window visible and click-through
+    /// intact. It asserts the stays-on-top flag and visibility, not `WS_EX_TOPMOST`, which the CI
+    /// runner does not apply (see `test_set_stays_on_top_toggles_topmost_exstyle`).
+    #[test]
+    fn test_stays_on_top_toggle_keeps_window_visible_and_click_through() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+        let mut win = NativeWindow::new(
+            "Topmost Visible",
+            Rect::new(100, 100, 300, 200),
+            WindowFlags::NORMAL,
+        )
+        .expect("failed to create window");
+        win.show();
+        win.set_click_through(true);
+
+        win.set_stays_on_top(true);
+        assert!(win.flags().contains(WindowFlags::STAYS_ON_TOP));
+        win.set_stays_on_top(false);
+        assert!(!win.flags().contains(WindowFlags::STAYS_ON_TOP));
+
+        assert_ne!(
+            unsafe { IsWindowVisible(win.hwnd()) },
+            0,
+            "stays-on-top toggle must not hide the window"
+        );
+        let transparent =
+            unsafe { GetWindowLongPtrW(win.hwnd(), GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT };
+        assert_ne!(
+            transparent, 0,
+            "stays-on-top toggle must keep WS_EX_TRANSPARENT"
         );
     }
 

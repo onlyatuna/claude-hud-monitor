@@ -111,7 +111,8 @@ impl EventTreeDispatcher {
                     });
                 }
 
-                match hit_test(root, win_pos) {
+                let path = hit_path(root, win_pos);
+                match path.last().map(|s| (s.widget.clone(), s.pos)) {
                     Some((target, local_pos)) => {
                         if buttons.is_empty() {
                             // Enter/Leave are not sent while a button is down (qapplication.cpp:2316).
@@ -120,11 +121,9 @@ impl EventTreeDispatcher {
                         if let Some(global_pos) = tool_tip_global_pos {
                             crate::tooltip::mouse_moved(&target, local_pos, global_pos);
                         }
-                        // QApplication::notify (qapplication.cpp:2746-2750): a buttonless move to a
-                        // widget without mouse tracking is filtered out, not delivered.
-                        if buttons.is_empty() && !target.borrow().widget_base().has_mouse_tracking()
-                        {
-                            return true;
+                        if buttons.is_empty() {
+                            // Buttonless move: QApplication::notify walks the chain (qapplication.cpp:2738-2766).
+                            return deliver_tracking_move(&path);
                         }
                         let mut local_event = Event::new_spontaneous(EventKind::MouseMove {
                             x: local_pos.x,
@@ -376,7 +375,7 @@ impl EventTreeDispatcher {
                 root.borrow_mut().event(event)
             }
             EventKind::DpiChanged { dpi_x, .. } => {
-                let new_dpr = (*dpi_x as f32) / 96.0;
+                let new_dpr = qtrs_gui::round_scale_factor(*dpi_x as f64 / 96.0) as f32;
                 crate::window::propagate_dpi_change_recursive(root, 1.0, new_dpr);
                 true
             }
@@ -548,6 +547,33 @@ fn deliver_with_propagation(path: &[HitStep], make_kind: impl Fn(Point) -> Event
             continue;
         }
         let mut ev = Event::new_spontaneous(make_kind(step.pos));
+        let handled = step.widget.borrow_mut().event(&mut ev);
+        if handled && ev.is_accepted() {
+            return true;
+        }
+    }
+    false
+}
+
+/// The buttonless MouseMove walk of `QApplication::notify` (qapplication.cpp:2738-2766), innermost
+/// first. A widget without mouse tracking is filter-only and ends the walk: `res = true` with the
+/// still-accepted copy (2746-2758). A tracking widget that does not accept the move (the default
+/// `QWidget::mouseMoveEvent` ignores it, qwidget.cpp:9567-9570; widget.rs `EmptyWidget` returns false)
+/// passes it to its parent. The walk stops at the window root, which is `path[0]` (`isWindow`,
+/// 2759). `WA_NoMousePropagation` has no qtrs equivalent. Disabled widgets are skipped after the
+/// tracking check, as in `deliver_with_propagation`.
+fn deliver_tracking_move(path: &[HitStep]) -> bool {
+    for step in path.iter().rev() {
+        if !step.widget.borrow().widget_base().has_mouse_tracking() {
+            return true;
+        }
+        if !step.enabled {
+            continue;
+        }
+        let mut ev = Event::new_spontaneous(EventKind::MouseMove {
+            x: step.pos.x,
+            y: step.pos.y,
+        });
         let handled = step.widget.borrow_mut().event(&mut ev);
         if handled && ev.is_accepted() {
             return true;

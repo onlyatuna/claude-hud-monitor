@@ -103,7 +103,7 @@ pub struct WidgetStyleContext<'a> {
     pub object_name: &'a str,
     pub pseudo_states: &'a [&'a str],
     pub sub_control: Option<&'a str>,
-    pub attributes: &'a [(&'a str, &'a str)],
+    pub attributes: &'a [(String, String)],
 }
 
 /// Qt Style Sheet engine instance.

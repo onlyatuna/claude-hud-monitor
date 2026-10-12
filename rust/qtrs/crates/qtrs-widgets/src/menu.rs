@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use qtrs_core::event::{Event, EventKind};
+use qtrs_core::event_loop::notify_borrowed;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_core::signal::Signal;
 use qtrs_gui::geometry::primitives::{Point, PointF, Rect, RectF, Size};
@@ -272,6 +273,8 @@ impl Menu {
 
     pub fn set_font(&mut self, font: Font) {
         self.font = font;
+        // FontChange (qwidget.cpp:4894-4895) precedes the update work (qwidget.cpp:9502).
+        notify_borrowed(self, &mut Event::new(EventKind::FontChange));
         self.update();
     }
 
@@ -299,12 +302,13 @@ impl Menu {
     /// `QStyleSheetStyle::renderRule`: every matching rule cascades and the more specific one
     /// wins, so `QMenu::item:selected` without a `color` keeps the `QMenu::item` colour.
     fn qss(&self, sub_control: Option<&'static str>, states: &[&'static str]) -> ResolvedStyle {
+        let props = self.base.properties.borrow();
         self.base.resolve_style(&WidgetStyleContext {
             type_name: "QMenu",
             object_name: "",
             pseudo_states: states,
             sub_control,
-            attributes: &[],
+            attributes: props.as_slice(),
         })
     }
 

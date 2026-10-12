@@ -830,7 +830,7 @@ impl QObject for Tracker {
         let (desc, uses_resp) = match &event.kind {
             EventKind::MouseButtonPress { x, y, .. } => (format!("Press({x},{y})"), true),
             EventKind::MouseButtonRelease { x, y, .. } => (format!("Release({x},{y})"), true),
-            EventKind::MouseMove { x, y } => (format!("Move({x},{y})"), false),
+            EventKind::MouseMove { x, y } => (format!("Move({x},{y})"), true),
             EventKind::Enter { x, y } => (format!("Enter({x},{y})"), false),
             EventKind::Leave => ("Leave".to_string(), false),
             _ => return false,
@@ -1064,5 +1064,62 @@ fn mousemove_with_tracking_is_delivered() {
     assert_eq!(
         *log.borrow(),
         vec!["root:Enter(60,40)", "leaf:Enter(30,20)", "leaf:Move(30,20)"],
+    );
+}
+
+#[test]
+fn buttonless_move_walks_up_through_tracking_ancestors() {
+    let log: Log = Default::default();
+    let (root, mid, leaf) =
+        tracker_tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+    mid.borrow().widget_base().set_mouse_tracking(true);
+    leaf.borrow().widget_base().set_mouse_tracking(true);
+    let mut d = EventTreeDispatcher::new();
+
+    d.dispatch_mouse_move(
+        &root,
+        Point::new(60, 40),
+        Point::new(60, 40),
+        MouseButtons(0),
+    );
+
+    assert_eq!(
+        *log.borrow(),
+        vec![
+            "root:Enter(60,40)",
+            "mid:Enter(40,30)",
+            "leaf:Enter(10,10)",
+            "leaf:Move(10,10)",
+            "mid:Move(40,30)",
+        ],
+        "a buttonless move goes innermost-first while each widget has tracking; root has none, so it stops there",
+    );
+}
+
+#[test]
+fn buttonless_move_stops_at_the_first_widget_without_tracking() {
+    let log: Log = Default::default();
+    let (root, _mid, leaf) =
+        tracker_tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+    root.borrow().widget_base().set_mouse_tracking(true);
+    leaf.borrow().widget_base().set_mouse_tracking(true);
+    let mut d = EventTreeDispatcher::new();
+
+    d.dispatch_mouse_move(
+        &root,
+        Point::new(60, 40),
+        Point::new(60, 40),
+        MouseButtons(0),
+    );
+
+    assert_eq!(
+        *log.borrow(),
+        vec![
+            "root:Enter(60,40)",
+            "mid:Enter(40,30)",
+            "leaf:Enter(10,10)",
+            "leaf:Move(10,10)",
+        ],
+        "mid has no tracking: it is filter-only and ends the walk, so root never gets the move",
     );
 }

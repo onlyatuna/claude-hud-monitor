@@ -5,6 +5,8 @@ use std::sync::{Arc, LazyLock, RwLock};
 use crate::style::stylesheet::QStyleSheetStyle;
 
 use qtrs_core::application::CoreApplication;
+use qtrs_core::event::{Event, EventKind};
+use qtrs_core::event_loop::filters_consume;
 use qtrs_core::meta::MetaObject;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_core::signal::Signal;
@@ -33,6 +35,15 @@ static GLOBAL_START_DRAG_TIME_MS: RwLock<u32> = RwLock::new(500);
 static GLOBAL_STYLESHEET: LazyLock<RwLock<Option<Arc<QStyleSheetStyle>>>> =
     LazyLock::new(|| RwLock::new(None));
 
+/// The highest device pixel ratio of any screen (`QGuiApplication::devicePixelRatio`).
+fn max_device_pixel_ratio() -> f32 {
+    qtrs_platform::platform()
+        .screens()
+        .iter()
+        .map(|screen| screen.device_pixel_ratio())
+        .fold(1.0, f32::max)
+}
+
 /// Full widget application singleton equivalent to Qt's `QApplication`.
 ///
 /// Inherits and encapsulates `GuiApplication` and `CoreApplication`, adding:
@@ -52,12 +63,15 @@ impl Application {
 
         // `QGuiApplication::devicePixelRatio()`: the highest ratio of any screen. Qt's Windows font
         // database picks its font engine, and with it the advances text is laid out with, from it.
-        let dpr = qtrs_platform::platform()
-            .screens()
-            .iter()
-            .map(|screen| screen.device_pixel_ratio())
-            .fold(1.0, f32::max);
-        qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
+        // Refreshed on every screen change, as Qt does when screens are added or removed.
+        qtrs_gui::text::font_database::set_application_device_pixel_ratio(max_device_pixel_ratio());
+        qtrs_platform::platform()
+            .screen_changed()
+            .connect(|_: &()| {
+                qtrs_gui::text::font_database::set_application_device_pixel_ratio(
+                    max_device_pixel_ratio(),
+                );
+            });
 
         let focus_changed = Signal::with_owner(gui_app.object_data());
         Self {
@@ -81,6 +95,12 @@ impl Application {
         for root in crate::window::window_roots() {
             if let Ok(widget) = root.try_borrow() {
                 widget.widget_base().style_changed();
+                // The root is only shared-borrowed here, so its own `event()` cannot run; its
+                // filters still see the StyleChange (qwidget.cpp:2724-2725).
+                filters_consume(
+                    widget.object_data(),
+                    &mut Event::new(EventKind::StyleChange),
+                );
                 crate::widget::style_changed_below(widget.children());
             }
         }

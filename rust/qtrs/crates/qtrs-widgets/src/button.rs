@@ -4,6 +4,7 @@ use crate::layout::Layout;
 use crate::style::{ButtonStyleOption, DefaultStyle, Style};
 use crate::widget::{Widget, WidgetBase, WidgetRef, WidgetWeak};
 use qtrs_core::event::{Event, EventKind};
+use qtrs_core::event_loop::notify_borrowed;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_core::signal::Signal;
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
@@ -92,6 +93,8 @@ impl Button {
 
     pub fn set_font(&mut self, font: Font) {
         self.font = font;
+        // FontChange (qwidget.cpp:4894-4895) precedes the update work (qwidget.cpp:9502).
+        notify_borrowed(self, &mut Event::new(EventKind::FontChange));
         self.update_geometry();
         self.update();
     }
@@ -133,6 +136,7 @@ impl Button {
     }
     pub fn resolved_style(&self) -> crate::style::stylesheet::ResolvedStyle {
         let mut buf = [""; 4];
+        let props = self.base.properties.borrow();
         let pseudo = self.base.style_pseudo_states(
             self.state == ButtonState::Hovered,
             self.state == ButtonState::Pressed,
@@ -143,7 +147,7 @@ impl Button {
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),
             pseudo_states: pseudo,
             sub_control: None,
-            attributes: &[],
+            attributes: props.as_slice(),
         };
         self.base.resolve_style(&ctx)
     }

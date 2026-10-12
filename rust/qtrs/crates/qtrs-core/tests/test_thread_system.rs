@@ -155,13 +155,16 @@ fn test_thread_pool_execution_and_cancellation() {
 
 #[test]
 fn test_future_promise_and_watcher() {
+    let el = qtrs_core::event_loop::EventLoop::new();
     let promise: Promise<String> = Promise::new();
     let future = promise.future();
     let watcher = future.watcher();
 
+    // Qt: resultReadyAt is queued to the watcher's event loop, so the slot runs only
+    // after process_events (qfuturewatcher.cpp:521-537).
     let received_result = Arc::new(StdMutex::new(String::new()));
     let rec_res = Arc::clone(&received_result);
-    watcher.finished().connect(move |val| {
+    watcher.result_ready().connect(move |val| {
         *rec_res.lock().unwrap() = val.clone();
     });
 
@@ -175,10 +178,12 @@ fn test_future_promise_and_watcher() {
     promise.set_progress_range(0, 100);
     promise.set_progress_value(45);
     assert_eq!(future.progress_value(), 45);
+    el.process_events(false);
     assert_eq!(progress_val.load(Ordering::SeqCst), 45);
 
     // Fulfill promise
     promise.set_value("computation complete".to_string());
+    el.process_events(false);
 
     assert!(future.is_finished());
     assert_eq!(future.result(), Some("computation complete".to_string()));

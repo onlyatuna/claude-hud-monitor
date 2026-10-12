@@ -1,5 +1,6 @@
 use crate::widget::{hide_children, show_children_first, EmptyWidget, WidgetRef};
 use qtrs_core::event::{ContextMenuReason, Event, EventKind};
+use qtrs_core::event_loop::filters_consume;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
 use qtrs_gui::paint::{BackingStore, Painter};
@@ -216,6 +217,12 @@ struct RenderState {
     /// window is created and updated only by a DPI change (`QWindowPrivate::updateDevicePixelRatio`,
     /// `qwindow.cpp:1436`). It is never re-read from the primary screen.
     device_pixel_ratio: std::cell::Cell<f32>,
+    /// Top-left of the screen the window is on: the identity of `QWindow::screen()`. Qt keeps
+    /// the `QScreen*`; qtrs platform screens are rebuilt per query, so the origin, which is unique
+    /// per desktop layout, stands in for it.
+    screen_origin: std::cell::Cell<Point>,
+    /// `QWindow::screenChanged`: emitted after the window's ratio is updated for its new screen.
+    screen_changed: qtrs_core::signal::Signal<Box<dyn qtrs_platform::screen::PlatformScreen>>,
     stats: std::cell::Cell<RenderStats>,
 }
 
@@ -275,6 +282,7 @@ impl RenderState {
         geometry: std::rc::Rc<std::cell::Cell<Rect>>,
         root: WidgetRef,
         device_pixel_ratio: f32,
+        screen_origin: Point,
     ) -> std::rc::Rc<Self> {
         let state = std::rc::Rc::new(Self {
             window_id,
@@ -290,6 +298,8 @@ impl RenderState {
             render_follows: std::cell::Cell::new(false),
             retry_used: std::cell::Cell::new(false),
             device_pixel_ratio: std::cell::Cell::new(device_pixel_ratio),
+            screen_origin: std::cell::Cell::new(screen_origin),
+            screen_changed: qtrs_core::signal::Signal::new(),
             stats: std::cell::Cell::new(RenderStats::default()),
         });
         RENDER_STATES.with(|m| m.borrow_mut().insert(window_id, std::rc::Rc::clone(&state)));
@@ -298,6 +308,50 @@ impl RenderState {
 
     fn unregister(window_id: ObjectId) {
         let _ = RENDER_STATES.try_with(|m| m.borrow_mut().remove(&window_id));
+    }
+
+    /// `QWindow::screen()`: the platform screen whose origin is `screen_origin`, or the primary
+    /// screen if that screen is gone.
+    fn current_screen(&self) -> Box<dyn qtrs_platform::screen::PlatformScreen> {
+        let origin = self.screen_origin.get();
+        platform()
+            .screens()
+            .into_iter()
+            .find(|s| s.geometry().top_left() == origin)
+            .unwrap_or_else(|| platform().primary_screen())
+    }
+
+    /// After a geometry change to `rect`, moves the window to `screenForGeometry(rect)`
+    /// (`qwindow.cpp:1894-1910`). On a different screen the window takes that screen's ratio
+    /// (`QWindowPrivate::updateDevicePixelRatio`, `qwindow.cpp:1436`) and `screenChanged` is
+    /// emitted. On the same screen nothing changes, so a DPI change already received is kept.
+    fn track_screen(&self, rect: Rect) {
+        let next = screen_for_geometry(rect, self.current_screen());
+        let origin = screen_mapping(&*next).0;
+        if origin == self.screen_origin.get() {
+            return;
+        }
+        self.screen_origin.set(origin);
+        self.apply_device_pixel_ratio(next.device_pixel_ratio());
+        self.screen_changed.emit(&next);
+    }
+
+    /// Applies a new ratio to the backing store, the widget tree and their layouts. Only a
+    /// changed ratio does work, so a repeated screen change to the same ratio is a no-op.
+    fn apply_device_pixel_ratio(&self, new_dpr: f32) {
+        let old_dpr = self.device_pixel_ratio.get();
+        if old_dpr == new_dpr {
+            return;
+        }
+        self.device_pixel_ratio.set(new_dpr);
+        if let Some(bs) = self.backing_store.upgrade() {
+            let geom = self.geometry.get();
+            bs.borrow_mut()
+                .resize(Size::new(geom.width, geom.height), new_dpr);
+        }
+        let root = self.root.borrow().clone();
+        crate::widget::adopt_tree(&root);
+        propagate_dpi_change_recursive(&root, old_dpr, new_dpr);
     }
 
     fn bump(&self, f: impl FnOnce(&mut RenderStats)) {
@@ -591,6 +645,9 @@ pub struct Window {
     resize_cb: ResizeCallback,
     render_state: std::rc::Rc<RenderState>,
     core: WindowCore,
+    /// Per-axis explicit minimum (`QWidget::setMinimumSize`, `qwidget.cpp:3971`). An axis with an
+    /// explicit minimum keeps it; the other axis follows the root layout.
+    explicit_min: (bool, bool),
 }
 
 impl Window {
@@ -660,6 +717,7 @@ impl Window {
             std::rc::Rc::clone(&geom_cell),
             root_widget.clone(),
             dpr,
+            origin,
         );
         let core = WindowCore {
             platform_window: std::rc::Rc::clone(&pw_rc),
@@ -694,6 +752,7 @@ impl Window {
             resize_cb,
             render_state,
             core,
+            explicit_min: (false, false),
         };
         let close_core = win.core.clone();
         crate::application::Application::register_window(
@@ -734,12 +793,21 @@ impl Window {
         self.platform_window.borrow().geometry()
     }
 
+    /// `QWindow::screen()`: the screen the window is on, as last tracked from its geometry.
+    pub fn screen(&self) -> Box<dyn qtrs_platform::screen::PlatformScreen> {
+        self.render_state.current_screen()
+    }
+
+    /// `QWindow::screenChanged`: emitted with the new screen when the window moves to another one.
+    pub fn screen_changed(&self) -> &qtrs_core::signal::Signal<Box<dyn qtrs_platform::screen::PlatformScreen>> {
+        &self.render_state.screen_changed
+    }
+
     /// The screen top-left and ratio a move of this window to `rect` maps with:
     /// `QWindow::setGeometry` uses `screenForGeometry(rect)` from the window's current screen
-    /// (`qwindow.cpp:1867-1870`). qtrs windows do not track their screen (G11.4.b), so the
-    /// current screen is the one `screenForGeometry` picks for the present geometry.
+    /// (`qwindow.cpp:1867-1870`).
     pub fn native_mapping_for(&self, rect: Rect) -> (Point, f32) {
-        let current = screen_for_geometry(self.geometry.get(), platform().primary_screen());
+        let current = self.render_state.current_screen();
         screen_mapping(&*screen_for_geometry(rect, current))
     }
 
@@ -762,6 +830,7 @@ impl Window {
             let _guard = FlagGuard(&self.render_state.within_set_geometry);
             self.platform_window.borrow_mut().set_geometry(native_rect);
         }
+        self.render_state.track_screen(rect);
 
         // 1. Root geometry updated
         self.root_widget
@@ -798,6 +867,7 @@ impl Window {
         let native_rect = self.native_rect_for(rect);
         self.geometry.set(rect);
         self.platform_window.borrow_mut().set_geometry(native_rect);
+        self.render_state.track_screen(rect);
     }
 
     pub fn show(&mut self) {
@@ -859,12 +929,52 @@ impl Window {
         self.platform_window.borrow().opacity()
     }
 
+    /// `QWidget::setMinimumSize` (`qwidget.cpp:4005-4016`): negative values clamp to 0, an unchanged
+    /// minimum is a no-op, and the axes that are set become explicit (`qwidget.cpp:3963-3971`).
     pub fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
-        self.platform_window.borrow_mut().set_minimum_size(min_w, min_h);
+        let (min_w, min_h) = (min_w.max(0), min_h.max(0));
+        if (min_w, min_h) == self.minimum_size() {
+            return;
+        }
+        self.explicit_min = (min_w != 0, min_h != 0);
+        self.platform_window
+            .borrow_mut()
+            .set_minimum_size(min_w, min_h);
     }
 
     pub fn minimum_size(&self) -> (i32, i32) {
         self.platform_window.borrow().minimum_size()
+    }
+
+    /// Top-level minimum from the root layout (`qlayout.cpp:1035-1048`, `:1078-1092`, applied through
+    /// `setMinimumSize` at `:1108-1113`). An axis without an explicit minimum takes the root's
+    /// minimum size hint; an explicit axis keeps its value. Returns the size the window must grow
+    /// to when it is smaller than the minimum (`qwidget.cpp:4013-4016`).
+    fn sync_top_level_minimum(&mut self) -> Option<Size> {
+        let root = std::rc::Rc::clone(&self.root_widget);
+        let hint = {
+            let root_ref = root.borrow();
+            root_ref.layout_ref_mut()?;
+            root_ref.minimum_size_hint()
+        };
+        let (cur_w, cur_h) = self.minimum_size();
+        let (explicit_w, explicit_h) = self.explicit_min;
+        let target_w = if explicit_w { cur_w } else { hint.width };
+        let target_h = if explicit_h { cur_h } else { hint.height };
+        if (target_w, target_h) != (cur_w, cur_h) {
+            // Written straight to the platform: the explicit flags belong to the caller
+            // (`qlayout.cpp:1126-1129` restores them after the layout's own `setMinimumSize`).
+            self.platform_window
+                .borrow_mut()
+                .set_minimum_size(target_w, target_h);
+        }
+        let geom = self.geometry.get();
+        let (grow_w, grow_h) = (geom.width.max(target_w), geom.height.max(target_h));
+        if (grow_w, grow_h) == (geom.width, geom.height) {
+            None
+        } else {
+            Some(Size::new(grow_w, grow_h))
+        }
     }
 
     pub fn start_system_drag(&self) {
@@ -963,6 +1073,14 @@ impl Window {
         if !was_rendering && state.has_pending_invalidation() && !state.render_pending.get() {
             state.request_render();
         }
+        // After the pending-render block: it borrows `self.render_state`, and the grow needs `&mut self`.
+        // Qt activates the root layout on show (`qlayout.cpp:546-548` activates a visible parent only).
+        if !was_rendering && self.is_visible() {
+            if let Some(size) = self.sync_top_level_minimum() {
+                let geom = self.geometry.get();
+                self.set_geometry(Rect::new(geom.x, geom.y, size.width, size.height));
+            }
+        }
     }
 
     pub fn present_custom<F: FnOnce(&mut Painter)>(&mut self, f: F) {
@@ -991,9 +1109,10 @@ impl Window {
     /// Avoids SetWindowPos prior to painting, preventing visual jumping / tearing.
     /// `rect` maps to native pixels as `set_geometry` maps it.
     pub fn present_custom_at<F: FnOnce(&mut Painter)>(&mut self, rect: Rect, f: F) {
-        let dpr = self.render_state.device_pixel_ratio.get();
         let target = self.native_rect_for(rect);
         self.geometry.set(rect);
+        self.render_state.track_screen(rect);
+        let dpr = self.render_state.device_pixel_ratio.get();
         {
             let mut pw = self.platform_window.borrow_mut();
             pw.set_target_pos(Some(Point::new(target.x, target.y)));
@@ -1106,7 +1225,7 @@ impl QObject for Window {
             }
             EventKind::DpiChanged { dpi_x, .. } => {
                 let old_dpr = self.render_state.device_pixel_ratio.get();
-                let new_dpr = (*dpi_x as f32) / 96.0;
+                let new_dpr = qtrs_gui::round_scale_factor(*dpi_x as f64 / 96.0) as f32;
                 self.render_state.device_pixel_ratio.set(new_dpr);
                 let cur_geom = self.geometry.get();
                 let size = Size::new(cur_geom.width, cur_geom.height);
@@ -1148,6 +1267,25 @@ pub fn propagate_dpi_change_recursive(widget_ref: &WidgetRef, old_dpr: f32, new_
     }
 }
 
+/// Delivers a paint request to `widget` (`QWidget::event(Paint)`, qwidget.cpp:9186-9190): the
+/// filters see the `Paint` event first, and a filter that consumes it skips `paint_event`.
+/// `dirty` is the widget-local region being repainted.
+pub fn deliver_paint_event(
+    widget: &mut dyn crate::widget::Widget,
+    painter: &mut Painter,
+    dirty: Rect,
+) {
+    let mut paint = Event::new(EventKind::Paint {
+        x: dirty.x,
+        y: dirty.y,
+        width: dirty.width,
+        height: dirty.height,
+    });
+    if !filters_consume(widget.object_data(), &mut paint) {
+        widget.paint_event(painter);
+    }
+}
+
 fn render_widget_recursive(widget_ref: &WidgetRef, painter: &mut Painter, dirty_in_parent: Rect) {
     let mut widget = widget_ref.borrow_mut();
     if !widget.is_visible() {
@@ -1171,7 +1309,9 @@ fn render_widget_recursive(widget_ref: &WidgetRef, painter: &mut Painter, dirty_
     painter.clip_to_rect(RectF::new(0.0, 0.0, geom.width as f32, geom.height as f32));
 
     let dbg_w = qtrs_platform::resize_debug::start();
-    widget.paint_event(painter);
+    // `QWidget::event(Paint)` delivers the paint request through the filters before
+    // `paintEvent` (qwidget.cpp:9186-9190).
+    deliver_paint_event(&mut **widget, painter, child_dirty);
     if let Some(t0) = dbg_w {
         let us = t0.elapsed().as_micros();
         if us >= 1500 {
@@ -1463,6 +1603,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     cur.x = geometry.x;
                     cur.y = geometry.y;
                     self.geometry.set(cur);
+                    self.render.track_screen(cur);
                     (old_pos, ())
                 };
 
@@ -1489,6 +1630,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     cur.width = size.width;
                     cur.height = size.height;
                     self.geometry.set(cur);
+                    self.render.track_screen(cur);
                     old_size
                 };
 
@@ -1583,7 +1725,7 @@ impl WindowSystemEventHandler for WindowEventHandler {
             }
             WindowSystemEvent::DpiChanged { dpi_x, dpi_y } => {
                 let old_dpr = self.render.device_pixel_ratio.get();
-                let new_dpr = (dpi_x as f32) / 96.0;
+                let new_dpr = qtrs_gui::round_scale_factor(dpi_x as f64 / 96.0) as f32;
                 self.render.device_pixel_ratio.set(new_dpr);
                 let cur_geom = self.geometry.get();
                 let size = Size::new(cur_geom.width, cur_geom.height);

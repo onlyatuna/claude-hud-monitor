@@ -351,6 +351,19 @@ pub enum EventKind {
 
     /// The widget's effective enabled state changed (`QEvent::EnabledChange`).
     EnabledChange,
+
+    /// Paint request for a widget's dirty rectangle, in widget coordinates (`QEvent::Paint`).
+    /// Sent spontaneously by the window's render pass, before `paint_event` (qwidget.cpp:9186).
+    Paint {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+    },
+    /// The widget's font changed (`QEvent::FontChange`, qwidget.cpp:4894-4895).
+    FontChange,
+    /// The widget's style or style sheet changed (`QEvent::StyleChange`, qwidget.cpp:2724-2725).
+    StyleChange,
 }
 
 impl fmt::Debug for EventKind {
@@ -681,6 +694,14 @@ impl fmt::Debug for EventKind {
             }
             EventKind::ThreadChange => write!(f, "ThreadChange"),
             EventKind::EnabledChange => write!(f, "EnabledChange"),
+            EventKind::Paint {
+                x,
+                y,
+                width,
+                height,
+            } => write!(f, "Paint(({}, {}) {}x{})", x, y, width, height),
+            EventKind::FontChange => write!(f, "FontChange"),
+            EventKind::StyleChange => write!(f, "StyleChange"),
         }
     }
 }
@@ -736,6 +757,9 @@ impl EventKind {
             EventKind::ChildRemoved { .. } => EventType::ChildRemoved,
             EventKind::ThreadChange => EventType::ThreadChange,
             EventKind::EnabledChange => EventType::EnabledChange,
+            EventKind::Paint { .. } => EventType::Paint,
+            EventKind::FontChange => EventType::FontChange,
+            EventKind::StyleChange => EventType::StyleChange,
             EventKind::TabletPress { .. } => EventType::TabletPress,
             EventKind::TabletMove { .. } => EventType::TabletMove,
             EventKind::TabletRelease { .. } => EventType::TabletRelease,

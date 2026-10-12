@@ -81,6 +81,32 @@ fn object_filters_consumed(receiver: ObjectId, event: &mut Event) -> bool {
     consumed_by_filter_chain(object_slot, receiver, event)
 }
 
+/// Filter-only delivery for a receiver the caller already holds (`&ObjectData`): application
+/// filters, then the receiver's object filters (`sendThroughApplicationEventFilters` and
+/// `sendThroughObjectEventFilters`, qcoreapplication.cpp:1237-1268). Works for objects that are
+/// not in the QObject registry (widgets), and for callers that cannot take `&mut` on the receiver.
+/// Returns true if a filter consumed the event.
+pub fn filters_consume(receiver: &ObjectData, event: &mut Event) -> bool {
+    let id = receiver.id;
+    if app_filters_consumed(id, event) {
+        return true;
+    }
+    let object_slot = |index: usize| receiver.event_filters.slot_at(index);
+    consumed_by_filter_chain(object_slot, id, event)
+}
+
+/// Delivers `event` to a receiver the caller already holds mutably: filters (see
+/// `filters_consume`) then `receiver.event(event)`, the order of `QCoreApplication::notify`
+/// (qcoreapplication.cpp:1118 scope counter, :1237-1268 filters). Returns true when a filter
+/// consumed the event, otherwise the result of `event()`.
+pub fn notify_borrowed<T: QObject + ?Sized>(receiver: &mut T, event: &mut Event) -> bool {
+    let _scope = ScopeLevelGuard::enter();
+    if filters_consume(receiver.object_data(), event) {
+        return true;
+    }
+    receiver.event(event)
+}
+
 /// Outcome of delivering a timer tick to its receiver.
 pub enum TimerDelivery {
     /// An application or object filter consumed the `Timer` event; `event()` did not run.

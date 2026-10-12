@@ -470,12 +470,13 @@ impl Frame {
     }
     pub fn resolved_style(&self) -> crate::style::stylesheet::ResolvedStyle {
         let mut buf = [""; 4];
+        let props = self.base.properties.borrow();
         let ctx = crate::style::stylesheet::WidgetStyleContext {
             type_name: "QFrame",
             object_name: self.base.object_data.object_name.as_deref().unwrap_or(""),
             pseudo_states: self.base.style_pseudo_states(false, false, &mut buf),
             sub_control: None,
-            attributes: &[],
+            attributes: props.as_slice(),
         };
         self.base.resolve_style(&ctx)
     }
