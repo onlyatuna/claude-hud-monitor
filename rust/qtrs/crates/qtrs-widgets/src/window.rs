@@ -739,6 +739,7 @@ impl Window {
             resize_cb: resize_cb_clone,
             render: std::rc::Rc::clone(&render_state),
             native_double_clicks,
+            minimized: false,
         };
         pw_rc.borrow_mut().set_event_handler(Box::new(handler));
 
@@ -1552,6 +1553,9 @@ struct WindowEventHandler {
     resize_cb: ResizeCallback,
     render: std::rc::Rc<RenderState>,
     native_double_clicks: bool,
+    /// The last minimized state reported by the platform (`QWidget::event` WindowStateChange
+    /// compares `oldState() & WindowMinimized` with `isMinimized()`, qwidget.cpp:9293-9294).
+    minimized: bool,
 }
 
 impl WindowSystemEventHandler for WindowEventHandler {
@@ -1894,6 +1898,24 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     drop_action,
                 });
                 self.dispatcher.dispatch_event(&root, &mut ev);
+            }
+            WindowSystemEvent::Minimize { minimized } => {
+                // Qt acts only when the minimized bit flips (`QWidget::event` WindowStateChange,
+                // qwidget.cpp:9292-9311). Minimize sends a spontaneous Hide first and then hides the
+                // children; restore shows the children first and then sends a spontaneous Show.
+                // `visible` is untouched, so `isVisible()` stays true while minimized.
+                if minimized != self.minimized {
+                    self.minimized = minimized;
+                    if minimized {
+                        self.core
+                            .send_to_window(&mut Event::new_spontaneous(EventKind::Hide));
+                        hide_children(&root);
+                    } else {
+                        show_children_first(&root);
+                        self.core
+                            .send_to_window(&mut Event::new_spontaneous(EventKind::Show));
+                    }
+                }
             }
             _ => {}
         }

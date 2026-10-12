@@ -185,6 +185,15 @@ pub fn notify_helper(receiver: ObjectId, event: &mut Event) -> bool {
         return false;
     }
 
+    // The application object's Quit runs after the filters, then the window veto and exit
+    // (qcoreapplication.cpp:1285-1290, 2052-2058).
+    if matches!(&event.kind, EventKind::Quit { .. })
+        && crate::application::is_application_object(receiver)
+    {
+        crate::application::deliver_application_quit(event);
+        return true;
+    }
+
     if matches!(&event.kind, EventKind::MetaCall(_)) {
         if let EventKind::MetaCall(task) =
             std::mem::replace(&mut event.kind, EventKind::LayoutRequest)
@@ -932,10 +941,14 @@ fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Op
         };
 
         if let EventKind::Quit { exit_code } = event.kind {
-            quit_code = Some(exit_code);
-            // A posted Quit exits the loop through QCoreApplication::exit, which emits aboutToQuit
-            // (qcoreapplication.cpp:2054-2056, 1532-1535).
-            crate::application::emit_about_to_quit_once();
+            // The application object's Quit is an event: it records nothing before delivery and
+            // exits only when accepted (qcoreapplication.cpp:2052-2058).
+            if !crate::application::is_application_object(receiver) {
+                quit_code = Some(exit_code);
+                // A posted Quit exits the loop through QCoreApplication::exit, which emits
+                // aboutToQuit (qcoreapplication.cpp:2054-2056, 1532-1535).
+                crate::application::emit_about_to_quit_once();
+            }
         }
 
         // Python/PySide6 reports a raising handler and keeps delivering later events; the panic

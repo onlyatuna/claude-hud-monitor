@@ -428,7 +428,7 @@ fn test_proc_macro_derive_qobject_and_property_reflection() {
     let signal = mo.method(signal_index).unwrap();
     assert_eq!(signal.method_type(), MethodType::Signal);
     assert_eq!(signal.parameter_types(), &["String"]);
-    assert!(!signal.is_invokable());
+    assert!(signal.is_invokable());
 
     // 2. Generated properties inspection
     assert_eq!(mo.property_count(), 3);

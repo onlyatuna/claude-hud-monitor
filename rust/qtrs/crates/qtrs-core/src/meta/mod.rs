@@ -447,13 +447,66 @@ impl MetaMethod {
         args: &[Variant],
     ) -> Result<Variant, InvokeError> {
         let invoker = self.invoker.ok_or(InvokeError::MethodNotFound)?;
+        self.check_arguments(args)?;
+        invoker(target, args)
+    }
+
+    /// Checks argument count, then each argument against its declared parameter type, before
+    /// invocation (`QMetaMethod::invoke` → `invokeImpl`, qmetaobject.cpp:2770-2809).
+    pub fn check_arguments(&self, args: &[Variant]) -> Result<(), InvokeError> {
         if args.len() != self.parameter_types.len() {
             return Err(InvokeError::ParameterCountMismatch {
                 expected: self.parameter_types.len(),
                 actual: args.len(),
             });
         }
-        invoker(target, args)
+        for (index, (arg, param)) in args.iter().zip(self.parameter_types.iter()).enumerate() {
+            if !variant_accepts_parameter(arg, param) {
+                return Err(InvokeError::TypeMismatch {
+                    index,
+                    expected: *param,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether `arg` is accepted for a parameter declared as `param`.
+///
+/// Mirrors Qt `invokeImpl`'s per-argument compatibility check (qmetaobject.cpp:2774-2809): an
+/// exact metatype match or a Qt-legal numeric widening. Strings are never parsed as numbers.
+/// Parameter type names outside this table are not checked (the metatype table is incomplete).
+fn variant_accepts_parameter(arg: &Variant, param: &str) -> bool {
+    match param {
+        "QVariant" | "Variant" => true,
+        "bool" => matches!(arg, Variant::Bool(_)),
+        "int" | "i32" => match arg {
+            Variant::I64(v) => i32::try_from(*v).is_ok(),
+            Variant::U64(v) => i32::try_from(*v).is_ok(),
+            _ => false,
+        },
+        "uint" | "u32" => match arg {
+            Variant::I64(v) => u32::try_from(*v).is_ok(),
+            Variant::U64(v) => u32::try_from(*v).is_ok(),
+            _ => false,
+        },
+        "qlonglong" | "i64" => match arg {
+            Variant::I64(_) => true,
+            Variant::U64(v) => i64::try_from(*v).is_ok(),
+            _ => false,
+        },
+        "qulonglong" | "u64" => match arg {
+            Variant::U64(_) => true,
+            Variant::I64(v) => *v >= 0,
+            _ => false,
+        },
+        "double" | "float" | "f64" | "f32" => {
+            matches!(arg, Variant::F64(_) | Variant::I64(_) | Variant::U64(_))
+        }
+        "QString" | "String" => matches!(arg, Variant::String(_)),
+        "QByteArray" | "Vec<u8>" => matches!(arg, Variant::ByteArray(_)),
+        _ => true,
     }
 }
 
@@ -779,6 +832,19 @@ impl MetaObject {
         self.super_class?.index_of_method(signature)
     }
 
+    /// Name-only lookup for `invokeMethod(obj, name, args)`. Scans methods in declaration order and
+    /// takes the first invokable overload whose parameter types match (`invokeMethodImpl`,
+    /// qmetaobject.cpp:1693-1708; a parameter mismatch moves on, qmetaobject_p.h:98-102).
+    fn index_of_compatible_method(&self, name: &str, args: &[Variant]) -> Option<usize> {
+        let offset = self.method_offset();
+        for (i, m) in self.methods.iter().enumerate() {
+            if m.name == name && m.is_invokable() && m.check_arguments(args).is_ok() {
+                return Some(offset + i);
+            }
+        }
+        self.super_class?.index_of_compatible_method(name, args)
+    }
+
     pub fn index_of_signal(&self, signal: &str) -> Option<usize> {
         let offset = self.method_offset();
         for (i, m) in self.methods.iter().enumerate() {
@@ -883,21 +949,54 @@ impl MetaObject {
 
     // --- Dynamic Invocation Helper: QMetaObject::invokeMethod ---
 
-    /// Invokes a method by name on the target object (`QMetaObject::invokeMethod`).
+    /// Resolves `member` to a method accepting `args`, without invoking it.
+    ///
+    /// A member containing `(` is a signature and must match exactly; its count and types are then
+    /// checked and reported. A bare name takes the first invokable overload whose parameter types
+    /// match. Queued invokes resolve here before posting, as Qt checks in `invokeImpl` before
+    /// queueing (qmetaobject.cpp:2774-2809).
+    pub fn resolve_method(
+        &self,
+        member: &str,
+        args: &[Variant],
+    ) -> Result<&MetaMethod, InvokeError> {
+        let idx = if member.contains('(') {
+            self.index_of_method(member)
+        } else {
+            self.index_of_compatible_method(member, args)
+        }
+        .ok_or(InvokeError::MethodNotFound)?;
+        let method = self.method(idx).ok_or(InvokeError::MethodNotFound)?;
+        if !method.is_invokable() {
+            return Err(InvokeError::MethodNotFound);
+        }
+        method.check_arguments(args)?;
+        Ok(method)
+    }
+
+    /// Invokes a method by name or signature on the target object (`QMetaObject::invokeMethod`).
     pub fn invoke_method(
         &self,
         target: &mut dyn std::any::Any,
         member: &str,
         args: &[Variant],
     ) -> Result<Variant, InvokeError> {
-        if let Some(idx) = self.index_of_method(member) {
-            if let Some(m) = self.method(idx) {
-                return m.invoke(target, args);
-            }
-        }
-        Err(InvokeError::MethodNotFound)
+        self.resolve_method(member, args)?.invoke(target, args)
     }
 }
 
 /// Static root MetaObject for `QObject` base class.
 pub static QOBJECT_META_OBJECT: MetaObject = MetaObject::new("QObject", None, &[], &[], &[], &[]);
+
+/// Supplies the slot descriptors that a `#[slots]` impl block generates for a type.
+///
+/// The blanket impl contributes none. A `#[slots]` block emits an inherent `__qtrs_slot_methods`,
+/// which shadows this trait method during path resolution.
+#[doc(hidden)]
+pub trait SlotMethodsFallback {
+    fn __qtrs_slot_methods() -> Vec<MetaMethod> {
+        Vec::new()
+    }
+}
+
+impl<T> SlotMethodsFallback for T {}

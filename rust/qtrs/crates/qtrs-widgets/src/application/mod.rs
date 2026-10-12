@@ -59,6 +59,8 @@ impl Application {
     /// Initializes a new `Application` instance.
     pub fn new(args: Vec<String>) -> Self {
         let gui_app = GuiApplication::new(args);
+        // Window veto for the application object's Quit (`QApplication::event(Quit)`).
+        qtrs_core::application::set_quit_gate(Self::quit_gate);
 
         // `QGuiApplication::devicePixelRatio()`: the highest ratio of any screen. Qt's Windows font
         // database picks its font engine, and with it the advances text is laid out with, from it.
@@ -142,23 +144,23 @@ impl Application {
 
     /// Tells the application to quit cleanly (`QCoreApplication::quit`, qcoreapplication.cpp:2138-2147).
     ///
-    /// As `QApplication::event(Quit)` does (qapplication.cpp:1675-1697), the visible top-level windows
-    /// are closed first, and a window that refuses its close vetoes the quit. `exit` is not gated.
-    /// This runs synchronously; Qt posts the Quit event (see residuals in the contract).
+    /// The Quit is an event to the application object, where the window veto (`quit_gate`) runs
+    /// before exit (qapplication.cpp:1675-1697). `exit` is not gated.
     pub fn quit() {
-        if !CoreApplication::in_exec() {
-            return;
-        }
-        // Re-entrant calls (from a window's close handler, or from `maybe_last_window_closed` while
-        // this quit closes windows) return here; the outer call decides.
+        GuiApplication::quit();
+    }
+
+    /// The window veto for the application object's Quit (`QApplication::event(Quit)`,
+    /// qapplication.cpp:1679-1697): closes the visible top-level windows and accepts the quit only
+    /// when none refused and none remains visible. A Quit re-entered from a window's close handler
+    /// is refused, and the outer call decides.
+    fn quit_gate() -> bool {
         if QUITTING.try_with(|q| q.replace(true)).unwrap_or(true) {
-            return;
+            return false;
         }
         let closed = Self::try_close_all_top_level_windows();
         let _ = QUITTING.try_with(|q| q.set(false));
-        if closed && !Self::any_window_visible() {
-            GuiApplication::quit();
-        }
+        closed && !Self::any_window_visible()
     }
 
     /// Closes the visible top-level windows one by one, restarting the scan after each close since

@@ -1,8 +1,13 @@
 #![allow(linker_messages)]
 
 use proc_macro::TokenStream;
-use quote::quote;
+use quote::{format_ident, quote};
 use syn::{parse_macro_input, Attribute, DeriveInput, Fields, Ident, LitStr, Type};
+
+mod invoke;
+mod slots;
+
+use invoke::{argument_bindings, invoker_fn, type_name};
 
 /// Derives `QObject` and generates a static `MetaObject` reflection descriptor (`QMetaObject`).
 ///
@@ -28,7 +33,9 @@ use syn::{parse_macro_input, Attribute, DeriveInput, Fields, Ident, LitStr, Type
 ///     clicked: Signal<()>,
 /// }
 /// ```
-/// Signal fields contribute signature metadata; they are not dynamically invokable.
+/// Signal fields are invokable by name; invoking one emits it, as `emit` does. A derived signal
+/// gets blockSignals suppression and `sender()` only when built with `Signal::with_owner(&data)`;
+/// `Signal::new()` leaves the signal unowned.
 #[proc_macro_derive(QObject, attributes(qobject, property, signal))]
 pub fn derive_qobject(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -105,8 +112,8 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
 
                 for attr in &field.attrs {
                     if attr.path().is_ident("signal") {
-                        if let Some(payload_types) = signal_payload_types(f_type) {
-                            signals.push((f_ident.clone(), payload_types));
+                        if let Some(payload) = signal_payload_type(f_type) {
+                            signals.push((f_ident.clone(), payload));
                         } else {
                             return syn::Error::new_spanned(
                                 f_type,
@@ -146,8 +153,9 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         };
+        let elements = payload_elements(payload_types);
         let payload_matches = matches!(
-            payload_types.as_slice(),
+            elements.as_slice(),
             [only] if quote!(#only).to_string() == quote!(#f_type).to_string()
         );
         if !payload_matches {
@@ -246,55 +254,85 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
         })
         .collect();
 
-    let meta_props_slice = quote! {
-        &[ #(#prop_descriptors),* ]
-    };
+    let props_ident = format_ident!("{}_PROPERTIES", meta_obj_ident);
 
-    let signal_descriptors: Vec<_> = signals
-        .iter()
-        .map(|(field, payload_types)| {
-            let name = field.to_string();
-            let parameter_types: Vec<_> = payload_types
-                .iter()
-                .map(|ty| LitStr::new(&quote!(#ty).to_string().replace(' ', ""), field.span()))
-                .collect();
-            let signature = format!(
-                "{}({})",
-                name,
-                parameter_types
-                    .iter()
-                    .map(|ty| ty.value())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-            let signature = LitStr::new(&signature, field.span());
+    let mut signal_descriptors = Vec::new();
+    let mut signal_invokers = Vec::new();
+    for (field, payload) in &signals {
+        let elems = payload_elements(payload);
+        let parameter_types: Vec<String> = elems.iter().map(type_name).collect();
+        let name_str = field.to_string();
+        let signature = LitStr::new(
+            &format!("{}({})", name_str, parameter_types.join(",")),
+            field.span(),
+        );
+        let parameter_literals: Vec<LitStr> = parameter_types
+            .iter()
+            .map(|ty| LitStr::new(ty, field.span()))
+            .collect();
+        let invoker = format_ident!("__qtrs_invoke_signal_{}_{}", name, field);
+        signal_descriptors.push(quote! {
+            ::qtrs_core::meta::MetaMethod::new(
+                #name_str,
+                #signature,
+                "()",
+                &[#(#parameter_literals),*],
+                &[],
+                ::qtrs_core::meta::MethodType::Signal,
+                ::qtrs_core::meta::Access::Public,
+                Some(#invoker),
+            )
+        });
+
+        let (arg_idents, bindings) = argument_bindings(&elems);
+        let payload_value = if matches!(payload, Type::Tuple(_)) {
+            quote! { (#(#arg_idents,)*) }
+        } else {
+            quote! { #(#arg_idents)* }
+        };
+        signal_invokers.push(invoker_fn(
+            &invoker,
+            &name,
+            &bindings,
             quote! {
-                ::qtrs_core::meta::MetaMethod::new(
-                    #name,
-                    #signature,
-                    "()",
-                    &[#(#parameter_types),*],
-                    &[],
-                    ::qtrs_core::meta::MethodType::Signal,
-                    ::qtrs_core::meta::Access::Public,
-                    None,
-                )
-            }
-        })
-        .collect();
+                let __qtrs_payload: #payload = #payload_value;
+                this.#field.emit(&__qtrs_payload);
+                Ok(::qtrs_core::variant::Variant::Invalid)
+            },
+        ));
+    }
 
+    let methods_ident = format_ident!("{}_METHODS", meta_obj_ident);
     let expanded = quote! {
         #(#meta_properties)*
+        #(#signal_invokers)*
 
         #[allow(non_upper_case_globals)]
-        static #meta_obj_ident: ::qtrs_core::meta::MetaObject = ::qtrs_core::meta::MetaObject::new(
-            #class_name,
-            Some(&::qtrs_core::meta::QOBJECT_META_OBJECT),
-            &[ #(#signal_descriptors),* ],
-            #meta_props_slice,
-            &[],
-            &[],
-        );
+        static #methods_ident: ::std::sync::LazyLock<::std::vec::Vec<::qtrs_core::meta::MetaMethod>> =
+            ::std::sync::LazyLock::new(|| {
+                use ::qtrs_core::meta::SlotMethodsFallback as _;
+                let mut methods: ::std::vec::Vec<::qtrs_core::meta::MetaMethod> =
+                    ::std::vec![ #(#signal_descriptors),* ];
+                methods.extend(#name::__qtrs_slot_methods());
+                methods
+            });
+
+        #[allow(non_upper_case_globals)]
+        static #props_ident: ::std::sync::LazyLock<::std::vec::Vec<::qtrs_core::meta::MetaProperty>> =
+            ::std::sync::LazyLock::new(|| ::std::vec![ #(#prop_descriptors),* ]);
+
+        #[allow(non_upper_case_globals)]
+        static #meta_obj_ident: ::std::sync::LazyLock<::qtrs_core::meta::MetaObject> =
+            ::std::sync::LazyLock::new(|| {
+                ::qtrs_core::meta::MetaObject::new(
+                    #class_name,
+                    Some(&::qtrs_core::meta::QOBJECT_META_OBJECT),
+                    #methods_ident.as_slice(),
+                    #props_ident.as_slice(),
+                    &[],
+                    &[],
+                )
+            });
 
         impl ::qtrs_core::object::QObject for #name {
             fn object_data(&self) -> &::qtrs_core::object::ObjectData {
@@ -314,7 +352,7 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
             }
 
             fn meta_object(&self) -> &'static ::qtrs_core::meta::MetaObject {
-                &#meta_obj_ident
+                &*#meta_obj_ident
             }
         }
     };
@@ -322,7 +360,31 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-fn signal_payload_types(ty: &Type) -> Option<Vec<Type>> {
+/// Registers the `#[slot]` methods of an inherent impl in the type's meta object, so they can be
+/// invoked by name or signature through `MetaObject::invoke_method`.
+///
+/// ```ignore
+/// #[slots]
+/// impl Panel {
+///     #[slot]
+///     fn set_caption(&mut self, text: String) { /* ... */ }
+/// }
+/// ```
+/// Parameters must be owned types; a return value must convert into `Variant`. Put all `#[slot]`
+/// methods of one type in a single `#[slots]` block.
+#[proc_macro_attribute]
+pub fn slots(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    slots::expand(item.into()).into()
+}
+
+/// Marks a method of a `#[slots]` impl block. Outside such a block it is a compile error.
+#[proc_macro_attribute]
+pub fn slot(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    slots::expand_standalone(item.into()).into()
+}
+
+/// Returns the payload `T` of a `Signal<T>` field type; `Signal<(A, B)>` yields the tuple type.
+fn signal_payload_type(ty: &Type) -> Option<Type> {
     let Type::Path(type_path) = ty else {
         return None;
     };
@@ -340,9 +402,14 @@ fn signal_payload_types(ty: &Type) -> Option<Vec<Type>> {
     if generic_args.next().is_some() {
         return None;
     }
+    Some(payload.clone())
+}
+
+/// Parameter types of a signal payload: a tuple's elements, or the payload type itself.
+fn payload_elements(payload: &Type) -> Vec<Type> {
     match payload {
-        Type::Tuple(tuple) => Some(tuple.elems.iter().cloned().collect()),
-        other => Some(vec![other.clone()]),
+        Type::Tuple(tuple) => tuple.elems.iter().cloned().collect(),
+        other => vec![other.clone()],
     }
 }
 

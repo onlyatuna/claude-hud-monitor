@@ -5,7 +5,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
-use crate::event::Event;
+use crate::event::{Event, EventKind};
 use crate::event_loop::{
     install_application_event_filter, remove_application_event_filter, DispatcherKind, EventLoop,
 };
@@ -72,6 +72,9 @@ static IN_EXEC: AtomicBool = AtomicBool::new(false);
 static ABOUT_TO_QUIT_EMITTED: AtomicBool = AtomicBool::new(false);
 /// Thread that owns the application; `aboutToQuit` is only emitted there.
 static APP_THREAD: RwLock<Option<ThreadId>> = RwLock::new(None);
+/// Window veto installed by the widget layer (`QApplication::event(Quit)`, qapplication.cpp:1679-1697).
+/// Returns false when a visible window refuses to close; `None` accepts every Quit.
+static QUIT_GATE: parking_lot::RwLock<Option<fn() -> bool>> = parking_lot::RwLock::new(None);
 
 fn is_app_thread() -> bool {
     APP_THREAD
@@ -84,6 +87,38 @@ fn is_app_thread() -> bool {
 /// The application's thread, if an application object exists.
 fn app_thread() -> Option<ThreadId> {
     APP_THREAD.read().ok().and_then(|t| *t)
+}
+
+/// Installs the window veto that decides whether a `Quit` for the application object is accepted.
+pub fn set_quit_gate(gate: fn() -> bool) {
+    *QUIT_GATE.write() = Some(gate);
+}
+
+/// Whether `receiver` is the application object (`QCoreApplication::self`).
+pub(crate) fn is_application_object(receiver: ObjectId) -> bool {
+    *APP_OBJECT_ID.read().unwrap() == Some(receiver)
+}
+
+/// Delivers `Quit` to the application object: `QCoreApplication::event` (qcoreapplication.cpp:2052-2058)
+/// behind the window veto of `QApplication::event` (qapplication.cpp:1679-1697). Accepted quits
+/// exit with code 0 as in Qt; refused quits are ignored and the loop keeps running.
+pub(crate) fn deliver_application_quit(event: &mut Event) {
+    if !is_app_thread() {
+        // The application object lives on the application thread: repost there.
+        CoreApplication::post_event(
+            CoreApplication::instance_id().expect("application object"),
+            Event::new(EventKind::Quit { exit_code: 0 }),
+        );
+        return;
+    }
+    let gate = *QUIT_GATE.read();
+    match gate {
+        Some(accepts) if !accepts() => event.ignore(),
+        _ => {
+            event.accept();
+            CoreApplication::exit(0);
+        }
+    }
 }
 
 /// The calling thread's application event loop, cloned so no slot borrow is held while it runs.
@@ -245,13 +280,21 @@ impl CoreApplication {
         }
     }
 
-    /// Tells the application to exit with return code 0 (`QCoreApplication::quit`).
+    /// Tells the application to quit (`QCoreApplication::quit`): a sendEvent of Quit on the
+    /// application thread, or a posted one from another thread (qcoreapplication.cpp:2138-2159).
     pub fn quit() {
-        // qcoreapplication.cpp:2143-2144: quit() does nothing outside exec.
+        // qcoreapplication.cpp:2140-2144: no application object, or not in exec, means nothing to do.
+        let Some(app) = Self::instance_id() else {
+            return;
+        };
         if !IN_EXEC.load(Ordering::SeqCst) {
             return;
         }
-        Self::exit(0);
+        if is_app_thread() {
+            Self::send_event(app, &mut Event::new(EventKind::Quit { exit_code: 0 }));
+        } else {
+            Self::post_event(app, Event::new(EventKind::Quit { exit_code: 0 }));
+        }
     }
 
     /// Whether `exec` is running. `QCoreApplication::quit` acts only then (qcoreapplication.cpp:2138-2147).
@@ -261,7 +304,14 @@ impl CoreApplication {
 
     /// Posts an event to a receiver object with priority.
     pub fn post_event_with_priority(receiver: ObjectId, event: Event, priority: i32) {
-        let target_thread = query_object_thread(receiver).unwrap_or_else(ThreadId::current);
+        let app_thread = if is_application_object(receiver) {
+            *APP_THREAD.read().unwrap()
+        } else {
+            None
+        };
+        let target_thread = query_object_thread(receiver)
+            .or(app_thread)
+            .unwrap_or_else(ThreadId::current);
         crate::event_loop::post_event_to_thread_with_priority(
             target_thread,
             receiver,

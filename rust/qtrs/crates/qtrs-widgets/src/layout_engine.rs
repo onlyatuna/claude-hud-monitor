@@ -16,6 +16,9 @@ use qtrs_gui::geometry::primitives::{Rect, Size};
 pub const LAYOUT_SIZE_MAX: i32 = i32::MAX / 256 / 16;
 /// `QWIDGETSIZE_MAX`.
 pub const WIDGET_SIZE_MAX: i32 = (1 << 24) - 1;
+/// `qSmartSpacing` of a widget's layout: the style's layout spacing (`PM_LayoutHorizontalSpacing`,
+/// qcommonstyle.cpp:4746-4748, 6 at 96 dpi).
+pub const WIDGET_LAYOUT_SPACING: i32 = 6;
 
 /// `QLayoutStruct`: one row, column or box of a layout chain.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -443,6 +446,49 @@ pub fn visual_alignment(align: ItemAlignment) -> ItemAlignment {
         bits ^= horizontal;
     }
     ItemAlignment::from_bits(bits)
+}
+
+/// `QLayout::alignmentRect` (qlayout.cpp:1410-1455): the rectangle an aligned layout lays its
+/// content in. Without an alignment flag on an axis, or on an expanding axis, the size is the
+/// rectangle bounded by the maximum; on a fixed vertical axis a height-for-width layout takes the
+/// height it wants at the width it gets. The alignment then places that size inside `rect`.
+pub fn alignment_rect(
+    rect: Rect,
+    align: ItemAlignment,
+    hint: Size,
+    max: Size,
+    expanding: (bool, bool),
+    height_for_width: Option<&dyn Fn(i32) -> i32>,
+) -> Rect {
+    let (expand_h, expand_v) = expanding;
+    let mut s = hint;
+    if expand_h || !align.horizontal() {
+        s.width = rect.width.min(max.width);
+    }
+    if expand_v || !align.vertical() {
+        s.height = rect.height.min(max.height);
+    } else if let Some(height_for_width) = height_for_width {
+        let h = height_for_width(s.width);
+        if h < s.height {
+            s.height = h.min(max.height);
+        }
+    }
+    s.width = s.width.min(rect.width);
+    s.height = s.height.min(rect.height);
+    let mut x = rect.x;
+    let mut y = rect.y;
+    let visual = visual_alignment(align);
+    if visual.contains(ItemAlignment::RIGHT) {
+        x += rect.width - s.width;
+    } else if !visual.contains(ItemAlignment::LEFT) {
+        x += (rect.width - s.width) / 2;
+    }
+    if align.contains(ItemAlignment::BOTTOM) {
+        y += rect.height - s.height;
+    } else if !align.contains(ItemAlignment::TOP) {
+        y += (rect.height - s.height) / 2;
+    }
+    Rect::new(x, y, s.width, s.height)
 }
 
 /// `QWidgetItem::sizeHint`.

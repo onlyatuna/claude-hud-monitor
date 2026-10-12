@@ -2,7 +2,7 @@ use crate::accessibility::{AccessibleAction, AccessibleRole};
 use crate::style::stylesheet::QStyleSheetStyle;
 use crate::focus::FocusPolicy;
 use crate::layout::Layout;
-use crate::layout_engine::WIDGET_SIZE_MAX;
+use crate::layout_engine::{WIDGET_LAYOUT_SPACING, WIDGET_SIZE_MAX};
 pub use crate::size_policy::{Policy, QSizePolicy};
 use qtrs_core::event::{Event, EventKind, FocusReason};
 use qtrs_core::event_loop::{filters_consume, notify_borrowed, post_event_to_thread};
@@ -1171,6 +1171,7 @@ impl Widget for EmptyWidget {
     fn set_layout(&mut self, mut layout: Box<dyn Layout>) {
         let g = self.base.geometry.get();
         layout.set_geometry(Rect::new(0, 0, g.width, g.height));
+        layout.set_smart_spacing(WIDGET_LAYOUT_SPACING);
         if let Some(win_id) = self.base.window_id.get() {
             for w in layout.widgets() {
                 w.borrow().set_window_id(Some(win_id));

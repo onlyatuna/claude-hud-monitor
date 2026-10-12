@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use crate::layout_engine::{
-    distribute_multi_box, find_size, init_empty_multi_box, item_expanding,
+    alignment_rect, distribute_multi_box, find_size, init_empty_multi_box, item_expanding,
     item_has_height_for_width, item_height_for_width, item_is_empty, item_minimum_size,
     item_set_geometry_with, item_size_hint, q_geom_calc, q_max_exp_calc, setup_spacings,
     ItemLimits, LayoutStruct, LAYOUT_SIZE_MAX,
@@ -149,6 +149,21 @@ pub trait Layout: 'static {
 
     fn spacing(&self) -> i32;
 
+    /// `QLayout::alignment()` (the `QLayoutItem` alignment of a layout): NONE unless the layout
+    /// keeps one (`qlayout.cpp:213-227`, `qlayoutitem.cpp:151-153`).
+    fn alignment(&self) -> ItemAlignment {
+        ItemAlignment::NONE
+    }
+
+    /// Stores the layout's own alignment and invalidates it (`QLayout::setAlignment(QLayout*)`,
+    /// qlayout.cpp:213-227). Layouts without an alignment ignore it.
+    fn set_layout_alignment(&mut self, _alignment: ItemAlignment) {}
+
+    /// The value `qSmartSpacing` gives a layout whose own spacing is unset (qlayoutengine.cpp:390-401):
+    /// the style's layout spacing for a widget parent, the parent layout's `spacing()` for a nested
+    /// layout, -1 when parentless. Layouts without spacing ignore it.
+    fn set_smart_spacing(&mut self, _spacing: i32) {}
+
     fn size_hint(&self) -> Size;
 
     /// The smallest size the layout can be squeezed to (`QLayout::minimumSize`).
@@ -165,6 +180,12 @@ pub trait Layout: 'static {
 
     /// Whether the layout's height depends on its width (`QLayout::hasHeightForWidth`).
     fn has_height_for_width(&self) -> bool {
+        false
+    }
+
+    /// `QLayout::isEmpty` (qlayout.cpp:424-435): every item is empty. Only box and grid layouts hold
+    /// items here; other layouts report `false`.
+    fn is_empty(&self) -> bool {
         false
     }
 
@@ -197,7 +218,12 @@ pub struct BoxLayout {
     direction: Direction,
     geometry: Rect,
     margins: Margins,
+    /// `QBoxLayoutPrivate::spacing`: the explicit spacing, -1 when unset (qboxlayout.cpp:580-585).
     spacing: i32,
+    /// The `qSmartSpacing` value used while the explicit spacing is unset (qlayoutengine.cpp:390-401).
+    smart_spacing: i32,
+    /// `QLayoutItem::align` of this layout (`QLayout::setAlignment`, qlayout.cpp:213-227).
+    alignment: ItemAlignment,
     items: Vec<LayoutItem>,
     metric_dirty: Cell<bool>,
     needs_activation: Cell<bool>,
@@ -210,7 +236,9 @@ impl BoxLayout {
             direction,
             geometry: Rect::new(0, 0, 0, 0),
             margins: Margins::new(0, 0, 0, 0),
-            spacing: 6,
+            spacing: -1,
+            smart_spacing: -1,
+            alignment: ItemAlignment::NONE,
             items: Vec::new(),
             metric_dirty: Cell::new(true),
             needs_activation: Cell::new(true),
@@ -277,12 +305,79 @@ impl BoxLayout {
 
     /// `QBoxLayout::addLayout(layout, stretch)`: the child layout is one item of this layout,
     /// sized by the child's own `maximumSize`/`minimumSize`/`sizeHint`. The holder widget only
-    /// carries the child; it has no geometry or size policy of its own.
-    pub fn add_layout(&mut self, layout: Box<dyn Layout>, stretch: u32) {
+    /// carries the child; it has no geometry or size policy of its own. Returns the holder item,
+    /// which `Layout::set_alignment` takes to align the child layout.
+    pub fn add_layout(&mut self, layout: Box<dyn Layout>, stretch: u32) -> WidgetRef {
         let mut holder = EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
         holder.set_layout(layout);
+        // `qSmartSpacing` of a nested layout is its parent layout's `spacing()` (qlayoutengine.cpp:390-401).
+        let spacing = self.spacing_value();
+        if let Some(mut child) = holder.layout_ref_mut() {
+            child.set_smart_spacing(spacing);
+        }
         let widget: WidgetRef = std::rc::Rc::new(std::cell::RefCell::new(Box::new(holder)));
-        self.insert_item(usize::MAX, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: None, nested: true });
+        self.insert_item(
+            usize::MAX,
+            LayoutItem {
+                widget: widget.clone(),
+                stretch,
+                alignment: ItemAlignment::NONE,
+                spacer: None,
+                nested: true,
+            },
+        );
+        widget
+    }
+
+    /// `QBoxLayout::spacing()` (qboxlayout.cpp:562-571): the explicit spacing, or the smart spacing
+    /// while the explicit one is unset (-1).
+    fn spacing_value(&self) -> i32 {
+        if self.spacing >= 0 {
+            self.spacing
+        } else {
+            self.smart_spacing
+        }
+    }
+
+    /// The gap `setupGeom` puts between two non-empty items (qboxlayout.cpp:243-296): the spacing,
+    /// or none where no spacing is known (a parentless layout).
+    fn gap(&self) -> i32 {
+        self.spacing_value().max(0)
+    }
+
+    /// Hands this layout's spacing to every nested child layout (`qSmartSpacing`, qlayoutengine.cpp:390-401).
+    fn propagate_smart_spacing(&self) {
+        let spacing = self.spacing_value();
+        for item in self.items.iter().filter(|item| item.nested) {
+            let holder = item.widget.borrow();
+            let child = holder.layout_ref_mut();
+            if let Some(mut child) = child {
+                child.set_smart_spacing(spacing);
+            }
+        }
+    }
+
+    /// The rectangle the content is laid out in: `QBoxLayout::setGeometry` (qboxlayout.cpp:743)
+    /// places an aligned layout inside `QLayout::alignmentRect` of its geometry.
+    fn placed_rect(&self) -> Rect {
+        if self.alignment == ItemAlignment::NONE {
+            return self.geometry;
+        }
+        let (hint, max, expanding, has_hfw) = {
+            self.ensure_geom();
+            let cache = self.geom_cache.borrow();
+            let geom = cache.as_ref().unwrap();
+            (geom.hint, geom.max, geom.expanding, geom.has_hfw)
+        };
+        let hfw = |width: i32| self.height_for_width(width);
+        alignment_rect(
+            self.geometry,
+            self.alignment,
+            hint,
+            max,
+            expanding,
+            if has_hfw { Some(&hfw) } else { None },
+        )
     }
 
     /// `QBoxLayout::insertSpacerItem`: the spacer goes in with stretch 0 (qboxlayout.cpp:894-902).
@@ -386,7 +481,16 @@ impl Layout for BoxLayout {
         else {
             return false;
         };
-        item.alignment = alignment;
+        if item.nested {
+            // `QLayout::setAlignment(QLayout*)` stores the alignment on the child layout (qlayout.cpp:213-227).
+            let holder = item.widget.borrow();
+            let child = holder.layout_ref_mut();
+            if let Some(mut child) = child {
+                child.set_layout_alignment(alignment);
+            }
+        } else {
+            item.alignment = alignment;
+        }
         self.update_layout();
         true
     }
@@ -406,11 +510,27 @@ impl Layout for BoxLayout {
 
     fn set_spacing(&mut self, spacing: i32) {
         self.spacing = spacing;
+        self.propagate_smart_spacing();
         self.update_layout();
     }
 
     fn spacing(&self) -> i32 {
-        self.spacing
+        self.spacing_value()
+    }
+
+    fn alignment(&self) -> ItemAlignment {
+        self.alignment
+    }
+
+    fn set_layout_alignment(&mut self, alignment: ItemAlignment) {
+        self.alignment = alignment;
+        self.invalidate();
+    }
+
+    fn set_smart_spacing(&mut self, spacing: i32) {
+        self.smart_spacing = spacing;
+        self.propagate_smart_spacing();
+        self.update_layout();
     }
 
     fn size_hint(&self) -> Size {
@@ -423,9 +543,17 @@ impl Layout for BoxLayout {
         self.geom_cache.borrow().as_ref().unwrap().min
     }
 
+    /// `QBoxLayout::maximumSize` (qboxlayout.cpp:612-625): an aligned axis is unbounded.
     fn maximum_size(&self) -> Size {
         self.ensure_geom();
-        self.geom_cache.borrow().as_ref().unwrap().max
+        let mut max = self.geom_cache.borrow().as_ref().unwrap().max;
+        if self.alignment.horizontal() {
+            max.width = LAYOUT_SIZE_MAX;
+        }
+        if self.alignment.vertical() {
+            max.height = LAYOUT_SIZE_MAX;
+        }
+        max
     }
 
     fn expanding_directions(&self) -> (bool, bool) {
@@ -437,6 +565,12 @@ impl Layout for BoxLayout {
     fn has_height_for_width(&self) -> bool {
         self.ensure_geom();
         self.geom_cache.borrow().as_ref().unwrap().has_hfw
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items
+            .iter()
+            .all(|item| item.spacer.is_some() || entry_is_empty(&item.widget, item.nested))
     }
 
     /// `QBoxLayout::heightForWidth` (qboxlayout.cpp:641-652): the width less the margins, then the
@@ -478,11 +612,12 @@ impl Layout for BoxLayout {
         let mut chain = self.geom_cache.borrow().as_ref().unwrap().chain.clone();
         let horz = self.direction == Direction::LeftToRight;
         let rtl = horz && GuiApplication::is_right_to_left();
+        let placed = self.placed_rect();
         let s = Rect::new(
-            self.geometry.x + self.margins.left,
-            self.geometry.y + self.margins.top,
-            self.geometry.width - self.margins.left - self.margins.right,
-            self.geometry.height - self.margins.top - self.margins.bottom,
+            placed.x + self.margins.left,
+            placed.y + self.margins.top,
+            placed.width - self.margins.left - self.margins.right,
+            placed.height - self.margins.top - self.margins.bottom,
         );
         let (pos, space) = if horz { (s.x, s.width) } else { (s.y, s.height) };
         let n = chain.len();
@@ -527,11 +662,17 @@ impl Layout for BoxLayout {
             if item.spacer.is_some() {
                 // A `QSpacerItem` just remembers its rectangle.
                 item.widget.borrow().set_geometry(rect);
+                relayout_child_after_resize(&item.widget, old_size);
+            } else if item.nested {
+                // `QBoxLayout::setGeometry` hands a nested layout its whole slot and clamps nothing;
+                // the child applies its own alignment (qboxlayout.cpp:743).
+                item.widget.borrow().set_geometry(rect);
+                set_nested_layout_geometry(&item.widget);
             } else {
                 let limits = self.geom_cache.borrow().as_ref().unwrap().limits[i];
                 item_set_geometry_with(&**item.widget.borrow(), rect, item.alignment, limits);
+                relayout_child_after_resize(&item.widget, old_size);
             }
-            relayout_child_after_resize(&item.widget, old_size);
         }
     }
 }
@@ -563,6 +704,31 @@ fn box_item_hfw(item: &LayoutItem, width: i32) -> i32 {
                 item_size_hint(&**w).height
             }
         }
+    }
+}
+
+/// Gives a nested layout the rectangle its holder was placed at. The nested items are children of
+/// the holder, so the child layout works in holder coordinates: the holder's size at origin (0,0),
+/// the same rectangle `Widget::update_layout` gives it.
+fn set_nested_layout_geometry(holder: &WidgetRef) {
+    let w = holder.borrow();
+    let rect = w.geometry();
+    let child = w.layout_ref_mut();
+    if let Some(mut child) = child {
+        child.set_geometry(Rect::new(0, 0, rect.width, rect.height));
+    }
+}
+
+/// `QLayoutItem::isEmpty` for a box or grid entry: a nested layout is empty when every item in it
+/// is (qlayout.cpp:424-435); a widget when hidden (qlayoutitem.cpp:691-694).
+fn entry_is_empty(widget: &WidgetRef, nested: bool) -> bool {
+    if nested {
+        widget
+            .borrow()
+            .layout_ref_mut()
+            .map_or(true, |inner| inner.is_empty())
+    } else {
+        item_is_empty(&**widget.borrow())
     }
 }
 
@@ -646,21 +812,29 @@ impl BoxLayout {
                         item_limits.item_max = inner.maximum_size();
                     }
                 }
-                (
-                    swap(item_limits.item_max),
-                    swap(item_minimum_size(&**w)),
-                    swap(item_size_hint(&**w)),
-                    if horz { exp } else { (exp.1, exp.0) },
-                    item_is_empty(&**w),
-                    true,
-                    (if horz { policy.horizontal_stretch } else { policy.vertical_stretch }) as i32,
-                    item_limits,
-                )
-            };
+                    (
+                        swap(item_limits.item_max),
+                        swap(item_minimum_size(&**w)),
+                        swap(item_size_hint(&**w)),
+                        if horz { exp } else { (exp.1, exp.0) },
+                        entry_is_empty(&item.widget, item.nested),
+                        true,
+                        (if horz {
+                            policy.horizontal_stretch
+                        } else {
+                            policy.vertical_stretch
+                        }) as i32,
+                        item_limits,
+                    )
+                };
 
             let mut spacing = 0;
             if !empty {
-                spacing = if previous_non_empty.is_some() { self.spacing } else { 0 };
+                spacing = if previous_non_empty.is_some() {
+                    self.gap()
+                } else {
+                    0
+                };
                 if let Some(previous) = previous_non_empty {
                     chain[previous].spacing = spacing;
                 }
@@ -735,6 +909,8 @@ pub struct GridItem {
     pub col_span: usize,
     /// `QLayoutItem::alignment`.
     pub alignment: ItemAlignment,
+    /// The item is a nested layout (`QGridLayout::addLayout`): `widget` holds the child layout.
+    pub nested: bool,
 }
 
 #[derive(Clone)]
@@ -745,6 +921,9 @@ struct GridGeom {
     hint: Size,
     min: Size,
     expanding: (bool, bool),
+    max: Size,
+    /// Some item has height-for-width (`QGridLayoutPrivate::has_hfw`).
+    has_hfw: bool,
 }
 
 /// Grid layout laying out widgets in a 2D grid of rows and columns (`QGridLayout`).
@@ -760,8 +939,14 @@ struct GridGeom {
 pub struct GridLayout {
     geometry: Rect,
     margins: Margins,
+    /// `QGridLayoutPrivate::horizontal_spacing`: the explicit spacing, -1 while unset.
     h_spacing: i32,
+    /// `QGridLayoutPrivate::vertical_spacing`: the explicit spacing, -1 while unset.
     v_spacing: i32,
+    /// Smart spacing from the parent layout or widget (`qSmartSpacing`, qlayoutengine.cpp:390-401).
+    smart_spacing: i32,
+    /// `QLayout::alignment`: set on this layout by its parent (`QLayoutItem::alignment`).
+    alignment: ItemAlignment,
     items: Vec<GridItem>,
     row_stretches: Vec<u32>,
     col_stretches: Vec<u32>,
@@ -776,8 +961,10 @@ impl GridLayout {
         Self {
             geometry: Rect::new(0, 0, 0, 0),
             margins: Margins::new(0, 0, 0, 0),
-            h_spacing: 6,
-            v_spacing: 6,
+            h_spacing: -1,
+            v_spacing: -1,
+            smart_spacing: -1,
+            alignment: ItemAlignment::NONE,
             items: Vec::new(),
             row_stretches: Vec::new(),
             col_stretches: Vec::new(),
@@ -824,15 +1011,23 @@ impl GridLayout {
         self.col_min_widths.get(col).copied().unwrap_or(0)
     }
 
-    /// `QGridLayout::horizontalSpacing` (qgridlayout.cpp:1093-1101). Qt falls back to the style
-    /// when unset; this port always stores an explicit value (default 6).
+    /// `QGridLayout::horizontalSpacing` (qgridlayout.cpp:1093-1101): the explicit spacing, or the
+    /// smart spacing while none is set.
     pub fn horizontal_spacing(&self) -> i32 {
-        self.h_spacing
+        if self.h_spacing >= 0 {
+            self.h_spacing
+        } else {
+            self.smart_spacing
+        }
     }
 
     /// `QGridLayout::verticalSpacing` (qgridlayout.cpp:1121-1129).
     pub fn vertical_spacing(&self) -> i32 {
-        self.v_spacing
+        if self.v_spacing >= 0 {
+            self.v_spacing
+        } else {
+            self.smart_spacing
+        }
     }
 
     /// `QGridLayout::addWidget(widget, row, column, rowSpan, columnSpan, alignment)`.
@@ -852,8 +1047,56 @@ impl GridLayout {
             row_span: row_span.max(1),
             col_span: col_span.max(1),
             alignment,
+            nested: false,
         });
         self.update_layout();
+    }
+
+    /// `QGridLayout::addLayout(layout, row, column, rowSpan, columnSpan, alignment)`: the child
+    /// layout takes the cell span as one item. `alignment` is set on the child layout, as
+    /// `QGridLayout::addLayout` does (`QLayout::setAlignment`, qlayout.cpp:213-227). Returns the
+    /// holder widget, which identifies the item for `set_alignment` and `remove_widget`.
+    pub fn add_layout(
+        &mut self,
+        layout: Box<dyn Layout>,
+        row: usize,
+        column: usize,
+        row_span: usize,
+        col_span: usize,
+        alignment: ItemAlignment,
+    ) -> WidgetRef {
+        let mut holder = EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
+        holder.set_layout(layout);
+        let spacing = self.spacing();
+        if let Some(mut child) = holder.layout_ref_mut() {
+            child.set_smart_spacing(spacing);
+            child.set_layout_alignment(alignment);
+        }
+        let widget: WidgetRef = std::rc::Rc::new(std::cell::RefCell::new(Box::new(holder)));
+        self.items.push(GridItem {
+            widget: widget.clone(),
+            row,
+            column,
+            row_span: row_span.max(1),
+            col_span: col_span.max(1),
+            alignment: ItemAlignment::NONE,
+            nested: true,
+        });
+        self.update_layout();
+        widget
+    }
+
+    /// `QLayout::removeWidget` (qlayout.cpp:1468-1485): every item holding `widget` leaves the
+    /// layout. The widget itself is not destroyed. Returns whether an item was removed.
+    pub fn remove_widget(&mut self, widget: &WidgetRef) -> bool {
+        let before = self.items.len();
+        self.items
+            .retain(|item| !std::rc::Rc::ptr_eq(&item.widget, widget));
+        let removed = self.items.len() != before;
+        if removed {
+            self.update_layout();
+        }
+        removed
     }
 
     pub fn set_row_stretch(&mut self, row: usize, stretch: u32) {
@@ -894,11 +1137,13 @@ impl GridLayout {
 
     pub fn set_horizontal_spacing(&mut self, spacing: i32) {
         self.h_spacing = spacing;
+        self.propagate_smart_spacing();
         self.update_layout();
     }
 
     pub fn set_vertical_spacing(&mut self, spacing: i32) {
         self.v_spacing = spacing;
+        self.propagate_smart_spacing();
         self.update_layout();
     }
 
@@ -921,6 +1166,105 @@ impl GridLayout {
             .max()
             .unwrap_or(0)
     }
+    /// Gap between columns: a layout with no spacing puts none in (`setupSpacings` takes the
+    /// spacing, and a parentless grid has none, probed).
+    fn gap_h(&self) -> i32 {
+        self.horizontal_spacing().max(0)
+    }
+
+    fn gap_v(&self) -> i32 {
+        self.vertical_spacing().max(0)
+    }
+
+    /// Hands the spacing to every nested child layout (`qSmartSpacing`, qlayoutengine.cpp:390-401).
+    fn propagate_smart_spacing(&self) {
+        let spacing = self.spacing();
+        for item in self.items.iter().filter(|item| item.nested) {
+            let holder = item.widget.borrow();
+            let child = holder.layout_ref_mut();
+            if let Some(mut child) = child {
+                child.set_smart_spacing(spacing);
+            }
+        }
+    }
+
+    /// The rectangle the content is laid out in: `QGridLayout::setGeometry` places an aligned grid
+    /// inside `QLayout::alignmentRect` of its geometry (qgridlayout.cpp:1324).
+    fn placed_rect(&self) -> Rect {
+        if self.alignment == ItemAlignment::NONE {
+            return self.geometry;
+        }
+        self.ensure_geom();
+        let (hint, max, expanding, has_hfw) = {
+            let cache = self.geom_cache.borrow();
+            let geom = cache.as_ref().unwrap();
+            (geom.hint, geom.max, geom.expanding, geom.has_hfw)
+        };
+        let hfw = |width: i32| self.height_for_width(width);
+        alignment_rect(
+            self.geometry,
+            self.alignment,
+            hint,
+            max,
+            expanding,
+            if has_hfw { Some(&hfw) } else { None },
+        )
+    }
+
+    /// Width of the columns an item spans, once `cols` holds their positions.
+    fn cell_width(cols: &[LayoutStruct], item: &GridItem) -> i32 {
+        let last = &cols[item.column + item.col_span - 1];
+        last.pos + last.size - cols[item.column].pos
+    }
+
+    /// `QGridLayoutPrivate::setupHfwLayoutData` and `recalcHFW` (qgridlayout.cpp:334-356, 816-877):
+    /// the row chain once `cols` holds the column widths. Rows start at their minimum; each item
+    /// raises the rows it covers to its height at its cell width.
+    fn hfw_rows(&self, base_rows: &[LayoutStruct], cols: &[LayoutStruct]) -> Vec<LayoutStruct> {
+        let mut rows = base_rows.to_vec();
+        for (i, row) in rows.iter_mut().enumerate() {
+            let min = self.row_min_heights.get(i).copied().unwrap_or(0);
+            row.size_hint = min;
+            row.minimum_size = min;
+        }
+        for item in &self.items {
+            let (r1, r2) = (item.row, item.row + item.row_span - 1);
+            if r1 != r2 {
+                init_empty_multi_box(&mut rows, r1, r2);
+                continue;
+            }
+            let w = item.widget.borrow();
+            if entry_is_empty(&item.widget, item.nested) {
+                continue;
+            }
+            let row = &mut rows[r1];
+            if item_has_height_for_width(&**w) {
+                let h = item_height_for_width(&**w, Self::cell_width(cols, item));
+                row.size_hint = row.size_hint.max(h);
+                row.minimum_size = row.minimum_size.max(h);
+            } else {
+                row.size_hint = row.size_hint.max(item_size_hint(&**w).height);
+                row.minimum_size = row.minimum_size.max(item_minimum_size(&**w).height);
+            }
+        }
+        for item in &self.items {
+            let (r1, r2) = (item.row, item.row + item.row_span - 1);
+            let w = item.widget.borrow();
+            if r1 == r2 || entry_is_empty(&item.widget, item.nested) {
+                continue;
+            }
+            let (mut hint, mut min) = (item_size_hint(&**w).height, item_minimum_size(&**w).height);
+            if item_has_height_for_width(&**w) {
+                let h = item_height_for_width(&**w, Self::cell_width(cols, item));
+                hint = hint.max(h);
+                min = min.max(h);
+            }
+            let stretch = w.size_policy().vertical_stretch as i32;
+            distribute_multi_box(&mut rows, r1, r2, min, hint, &self.row_stretches, stretch);
+        }
+        rows
+    }
+
     fn ensure_geom(&self) {
         if !self.metric_dirty.get() && self.geom_cache.borrow().is_some() {
             return;
@@ -928,22 +1272,33 @@ impl GridLayout {
         let (rows, cols, limits) = self.setup_layout_data();
         let hint_raw = find_size(&rows, &cols, |d| d.size_hint);
         let min_raw = find_size(&rows, &cols, |d| d.minimum_size);
-        let hint = Size::new(
-            hint_raw.width + self.margins.left + self.margins.right,
-            hint_raw.height + self.margins.top + self.margins.bottom,
+        let max_raw = find_size(&rows, &cols, |d| d.maximum_size);
+        let h_margin = self.margins.left + self.margins.right;
+        let v_margin = self.margins.top + self.margins.bottom;
+        let hint = Size::new(hint_raw.width + h_margin, hint_raw.height + v_margin);
+        let min = Size::new(min_raw.width + h_margin, min_raw.height + v_margin);
+        // `QGridLayout::maximumSize` (qgridlayout.cpp:1207-1221): bounded to QLAYOUTSIZE_MAX.
+        let max = Size::new(
+            (max_raw.width + h_margin).min(LAYOUT_SIZE_MAX),
+            (max_raw.height + v_margin).min(LAYOUT_SIZE_MAX),
         );
-        let min = Size::new(
-            min_raw.width + self.margins.left + self.margins.right,
-            min_raw.height + self.margins.top + self.margins.bottom,
+        let expanding = (
+            cols.iter().any(|c| c.expansive),
+            rows.iter().any(|r| r.expansive),
         );
-        let expanding = (cols.iter().any(|c| c.expansive), rows.iter().any(|r| r.expansive));
+        let has_hfw = self
+            .items
+            .iter()
+            .any(|item| item_has_height_for_width(&**item.widget.borrow()));
         let geom = GridGeom {
             rows,
             cols,
             limits,
             hint,
             min,
+            max,
             expanding,
+            has_hfw,
         };
         *self.geom_cache.borrow_mut() = Some(geom);
         self.metric_dirty.set(false);
@@ -983,7 +1338,16 @@ impl Layout for GridLayout {
         else {
             return false;
         };
-        item.alignment = alignment;
+        if item.nested {
+            // `QLayout::setAlignment(QLayout*)` stores the alignment on the child layout (qlayout.cpp:213-227).
+            let holder = item.widget.borrow();
+            let child = holder.layout_ref_mut();
+            if let Some(mut child) = child {
+                child.set_layout_alignment(alignment);
+            }
+        } else {
+            item.alignment = alignment;
+        }
         self.update_layout();
         true
     }
@@ -1003,17 +1367,75 @@ impl Layout for GridLayout {
     fn set_spacing(&mut self, spacing: i32) {
         self.h_spacing = spacing;
         self.v_spacing = spacing;
+        self.propagate_smart_spacing();
         self.update_layout();
     }
 
     fn spacing(&self) -> i32 {
         // `QGridLayout::spacing` (qgridlayout.cpp:1150-1158): the common value, or -1 when the
         // horizontal and vertical spacings differ.
-        if self.h_spacing == self.v_spacing {
-            self.h_spacing
+        let (h, v) = (self.horizontal_spacing(), self.vertical_spacing());
+        if h == v {
+            h
         } else {
             -1
         }
+    }
+
+    fn alignment(&self) -> ItemAlignment {
+        self.alignment
+    }
+
+    fn set_layout_alignment(&mut self, alignment: ItemAlignment) {
+        self.alignment = alignment;
+        self.invalidate();
+    }
+
+    fn set_smart_spacing(&mut self, spacing: i32) {
+        self.smart_spacing = spacing;
+        self.propagate_smart_spacing();
+        self.update_layout();
+    }
+
+    fn maximum_size(&self) -> Size {
+        // `QGridLayout::maximumSize` (qgridlayout.cpp:1207-1221): an aligned axis is unbounded.
+        self.ensure_geom();
+        let mut max = self.geom_cache.borrow().as_ref().unwrap().max;
+        if self.alignment.horizontal() {
+            max.width = LAYOUT_SIZE_MAX;
+        }
+        if self.alignment.vertical() {
+            max.height = LAYOUT_SIZE_MAX;
+        }
+        max
+    }
+
+    fn has_height_for_width(&self) -> bool {
+        self.ensure_geom();
+        self.geom_cache.borrow().as_ref().unwrap().has_hfw
+    }
+
+    fn is_empty(&self) -> bool {
+        self.items
+            .iter()
+            .all(|item| entry_is_empty(&item.widget, item.nested))
+    }
+
+    fn height_for_width(&self, width: i32) -> i32 {
+        // `QGridLayoutPrivate::heightForWidth` (qgridlayout.cpp:358-372).
+        self.ensure_geom();
+        let cache = self.geom_cache.borrow();
+        let geom = cache.as_ref().unwrap();
+        if !geom.has_hfw {
+            return -1;
+        }
+        let m = self.margins;
+        let inner = width - m.left - m.right;
+        let mut cols = geom.cols.clone();
+        let cc = cols.len();
+        q_geom_calc(&mut cols, 0, cc, 0, inner, -1);
+        let rows = self.hfw_rows(&geom.rows, &cols);
+        find_size(&rows, &cols, |d| d.size_hint).height + m.top + m.bottom
     }
 
     fn size_hint(&self) -> Size {
@@ -1048,22 +1470,30 @@ impl Layout for GridLayout {
         }
         self.needs_activation.set(false);
         self.ensure_geom();
+        let placed = self.placed_rect();
         // `qGeomCalc` writes positions into the chains, so the activation works on copies.
-        let (mut rows, mut cols) = {
+        let (base_rows, mut cols, has_hfw) = {
             let borrow = self.geom_cache.borrow();
             let g = borrow.as_ref().unwrap();
-            (g.rows.clone(), g.cols.clone())
+            (g.rows.clone(), g.cols.clone(), g.has_hfw)
         };
-        let (rr, cc) = (rows.len(), cols.len());
+        let (rr, cc) = (base_rows.len(), cols.len());
         if rr == 0 || cc == 0 {
             return;
         }
 
-        let x = self.geometry.x + self.margins.left;
-        let y = self.geometry.y + self.margins.top;
-        let width = self.geometry.width - self.margins.left - self.margins.right;
-        let height = self.geometry.height - self.margins.top - self.margins.bottom;
+        let x = placed.x + self.margins.left;
+        let y = placed.y + self.margins.top;
+        let width = placed.width - self.margins.left - self.margins.right;
+        let height = placed.height - self.margins.top - self.margins.bottom;
         q_geom_calc(&mut cols, 0, cc, x, width, -1);
+        // `QGridLayoutPrivate::distribute` lays the rows out from the height-for-width rows when
+        // some item has height-for-width (qgridlayout.cpp:879-928).
+        let mut rows = if has_hfw {
+            self.hfw_rows(&base_rows, &cols)
+        } else {
+            base_rows
+        };
         q_geom_calc(&mut rows, 0, rr, y, height, -1);
         let rtl = GuiApplication::is_right_to_left();
 
@@ -1081,10 +1511,17 @@ impl Layout for GridLayout {
                 let g = widget.geometry();
                 Size::new(g.width, g.height)
             };
-            let limits = self.geom_cache.borrow().as_ref().unwrap().limits[i];
             let rect = Rect::new(left, top, w, h);
-            item_set_geometry_with(&**item.widget.borrow(), rect, item.alignment, limits);
-            relayout_child_after_resize(&item.widget, old_size);
+            if item.nested {
+                // `QGridBox::setGeometry` hands a nested layout its whole cell (qgridlayout.cpp:48);
+                // the child applies its own alignment in its `setGeometry`.
+                item.widget.borrow().set_geometry(rect);
+                set_nested_layout_geometry(&item.widget);
+            } else {
+                let limits = self.geom_cache.borrow().as_ref().unwrap().limits[i];
+                item_set_geometry_with(&**item.widget.borrow(), rect, item.alignment, limits);
+                relayout_child_after_resize(&item.widget, old_size);
+            }
         }
     }
 }
@@ -1145,13 +1582,19 @@ impl GridLayout {
             .map(|item| {
                 let w = item.widget.borrow();
                 let policy = w.size_policy();
-                let limits = ItemLimits::of(&**w, item.alignment);
+                let mut limits = ItemLimits::of(&**w, item.alignment);
+                if item.nested {
+                    // `QLayoutItem::maximumSize` of a `QLayout` is that layout's own maximumSize.
+                    if let Some(inner) = w.layout_ref_mut() {
+                        limits.item_max = inner.maximum_size();
+                    }
+                }
                 Boxed {
                     min: item_minimum_size(&**w),
                     hint: item_size_hint(&**w),
                     max: limits.item_max,
                     expanding: item_expanding(&**w, item.alignment),
-                    empty: item_is_empty(&**w),
+                    empty: entry_is_empty(&item.widget, item.nested),
                     h_stretch: policy.horizontal_stretch as i32,
                     v_stretch: policy.vertical_stretch as i32,
                     limits,
@@ -1204,8 +1647,8 @@ impl GridLayout {
         }
 
         let empty_of = |i: usize| boxes[i].empty;
-        setup_spacings(&mut cols, &grid, cc, self.h_spacing, true, &empty_of);
-        setup_spacings(&mut rows, &grid, cc, self.v_spacing, false, &empty_of);
+        setup_spacings(&mut cols, &grid, cc, self.gap_h(), true, &empty_of);
+        setup_spacings(&mut rows, &grid, cc, self.gap_v(), false, &empty_of);
 
         // Multi-cell items go in after the single-cell ones for a better distribution.
         if has_multi {

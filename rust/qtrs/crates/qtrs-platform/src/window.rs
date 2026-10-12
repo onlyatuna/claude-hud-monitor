@@ -40,7 +40,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 #[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetMessageTime, GetWindowRect, IsZoomed,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetMessageTime, GetWindowRect, IsIconic, IsZoomed,
     RegisterClassExW, SetWindowPos, ShowWindow,
     HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
     HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, NCCALCSIZE_PARAMS, SWP_FRAMECHANGED,
@@ -54,6 +54,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
     WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME, GetForegroundWindow, IsChild,
+    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
 };
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -779,6 +780,17 @@ unsafe fn native_window_proc_inner(
             0
         }
         WM_SIZE => {
+            // Qt: `SIZE_MINIMIZED` only changes the window state and leaves the geometry alone
+            // (`QWindowsWindow::handleResized`, qwindowswindow.cpp:2370-2377). The 0x0 client size
+            // Windows reports while iconic must not reach the geometry or the widget tree.
+            if wparam as u32 == SIZE_MINIMIZED {
+                dispatch_window_system_event(
+                    Delivery::Default,
+                    hwnd,
+                    WindowSystemEvent::Minimize { minimized: true },
+                );
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
             let dpr = get_window_dpr(hwnd);
             let phys_w = (lparam as usize & 0xffff) as i32;
             let phys_h = ((lparam as usize >> 16) & 0xffff) as i32;
@@ -813,10 +825,25 @@ unsafe fn native_window_proc_inner(
             // Resize, callback, layout, render). No second `EventKind::Resize` is posted to the
             // bound QObject; it used to re-run the callback and a synchronous render.
             handle_geometry_change(Delivery::Default, hwnd, logical_rect);
+            // Qt restores the state after the geometry (`QWindowsWindow::handleResized`,
+            // qwindowswindow.cpp:2385-2395). The widget layer dedupes repeated restores.
+            if wparam as u32 == SIZE_RESTORED || wparam as u32 == SIZE_MAXIMIZED {
+                dispatch_window_system_event(
+                    Delivery::Default,
+                    hwnd,
+                    WindowSystemEvent::Minimize { minimized: false },
+                );
+            }
             crate::resize_debug::wm_size_end(hwnd as isize);
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_MOVE => {
+            // Qt ignores a move while iconic: `QWindowsWindow::handleMoved` only runs the geometry
+            // change when `!IsIconic` (qwindowswindow.cpp:2328-2333). Windows reports the iconic
+            // position as (-32000, -32000), which must not reach the geometry or the event receiver.
+            if unsafe { IsIconic(hwnd) } != 0 {
+                return DefWindowProcW(hwnd, msg, wparam, lparam);
+            }
             crate::resize_debug::wm_move_begin(hwnd as isize);
             let dpr = get_window_dpr(hwnd);
             let phys_x = get_x_lparam(lparam);

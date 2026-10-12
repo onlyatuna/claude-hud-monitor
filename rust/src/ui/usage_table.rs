@@ -21,7 +21,7 @@ use qtrs_gui::text::font::{Font, FontWeight};
 use qtrs_gui::text::font_metrics::FontMetrics;
 use qtrs_gui::tiny_skia::{Color, LineCap, LineJoin, PathBuilder};
 use qtrs_widgets::{
-    BoxLayout, EmptyWidget, GridLayout, Label, Layout, Widget, WidgetBase, WidgetRef,
+    BoxLayout, EmptyWidget, GridLayout, ItemAlignment, Label, Layout, Widget, WidgetBase, WidgetRef,
 };
 
 use super::styles::{duo_colors, scale_colors, Theme};
@@ -1283,7 +1283,14 @@ impl UsageTable {
         lv.add_stretch(1);
 
         legend.borrow_mut().set_layout(Box::new(lv));
-        grid.add_widget(legend, 5, 0);
+        grid.add_widget_aligned(
+            legend,
+            5,
+            0,
+            1,
+            1,
+            ItemAlignment::V_CENTER | ItemAlignment::LEFT,
+        );
 
         // Row 6: Separator under dials spanning all 4 columns
         let sep2 = make_widget(SeparatorWidget::new(theme.separator));
@@ -1307,7 +1314,7 @@ impl UsageTable {
                 grid.add_widget(c.m1_reset.clone(), 3, col);
                 grid.add_widget(c.m1_countdown.clone(), 4, col);
                 grid.add_widget(c.dial.clone(), 5, col);
-                grid.add_widget(c.m2_val.clone(), 7, col);
+                grid.add_widget_aligned(c.m2_val.clone(), 7, col, 1, 1, ItemAlignment::H_CENTER);
                 grid.add_widget(c.m2_reset.clone(), 8, col);
                 grid.add_widget(c.m2_countdown.clone(), 9, col);
                 grid.set_column_stretch(col, 1);

@@ -1,0 +1,487 @@
+"""QTRS_SPEC.md chapter 02 (QObject model) PySide6 probes.
+
+Purpose: observe Qt QObject behaviour cited by the [PYSIDE-RUN] evidence of
+chapter 02 rows (R-00003 .. R-00036). Each probe prints `R-000xx: <result>`.
+
+How to run (from any directory):
+    QT_QPA_PLATFORM=offscreen python spec02_qobject.py
+
+The PySide6 and Qt versions are printed first. Risky parent-reassignment cases
+(self parent, descendant parent, cross-thread parent) run in child processes
+so a crash or hang cannot stop the remaining probes.
+"""
+
+import os
+import subprocess
+import sys
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
+
+import PySide6  # noqa: E402
+import shiboken6  # noqa: E402
+from PySide6.QtCore import (  # noqa: E402
+    Property,
+    QCoreApplication,
+    QEvent,
+    QObject,
+    QThread,
+    Signal,
+    qVersion,
+)
+from PySide6.QtWidgets import QApplication, QFrame, QPushButton, QWidget  # noqa: E402
+
+app = QApplication.instance() or QApplication(sys.argv)
+
+DEFERRED = QEvent.Type.DeferredDelete.value
+
+
+class EventTap(QObject):
+    """Event filter recording selected event types (ChildAdded/Removed carry the child name)."""
+
+    def __init__(self, target, log, types):
+        super().__init__()
+        self.log = log
+        self.types = types
+        target.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        t = ev.type()
+        if t in self.types:
+            entry = t.name
+            if t in (QEvent.Type.ChildAdded, QEvent.Type.ChildRemoved):
+                try:
+                    entry = (t.name, ev.child().objectName())
+                except Exception:
+                    entry = (t.name, "?")
+            self.log.append(entry)
+        return False
+
+
+def delete_now(obj):
+    obj.deleteLater()
+    QCoreApplication.sendPostedEvents(None, DEFERRED)
+
+
+def probe_R00003():
+    log = []
+    p = QObject()
+    tap = EventTap(p, log, (QEvent.Type.ChildAdded, QEvent.Type.ChildRemoved))
+    c = QObject(p)
+    after_ctor = list(log)
+    c.setParent(None)
+    print(f"R-00003: after ctor(parent) {after_ctor}; after setParent(None) {log}")
+
+
+def probe_R00005():
+    log = []
+    root = QObject()
+    root.destroyed.connect(lambda *a: log.append("root"))
+    for n in ("c1", "c2", "c3"):
+        ch = QObject(root)
+        ch.destroyed.connect(lambda *a, n=n: log.append(n))
+    delete_now(root)
+    print(f"R-00005: destruction order {log}")
+
+
+def probe_R00012():
+    cnt = []
+    o = QObject()
+    o.destroyed.connect(lambda *a: cnt.append(1))
+    o.deleteLater()
+    o.deleteLater()
+    QCoreApplication.processEvents()
+    QCoreApplication.sendPostedEvents(None, DEFERRED)
+    print(f"R-00012: destroyed count after two deleteLater: {len(cnt)}")
+
+
+def probe_R00014():
+    calls = []
+
+    def zero_arg():
+        calls.append("0-arg")
+
+    def one_arg(obj=None):
+        calls.append(type(obj).__name__ if obj is not None else "None")
+
+    o = QObject()
+    o.destroyed.connect(zero_arg)
+    o.destroyed.connect(one_arg)
+    del o
+    print(f"R-00014: destroyed slots received: {calls}")
+
+
+def probe_R00015():
+    o = QObject()
+    print(f"R-00015: objectName() unset -> {o.objectName()!r}")
+
+
+def probe_R00016():
+    o = QObject()
+    seen = []
+    o.objectNameChanged.connect(lambda n: seen.append(n))
+    for v in ("a", "a", "", ""):
+        o.setObjectName(v)
+    print(f"R-00016: objectNameChanged emissions for sets a,a,'','': {seen}")
+
+
+def probe_R00017():
+    class MyBtn(QPushButton):
+        pass
+
+    root = QWidget()
+    QPushButton(root)
+    QPushButton(root)
+    MyBtn(root)
+    print(
+        "R-00017: findChild(QAbstractButton) type "
+        f"{type(root.findChild(QPushButton)).__name__}; "
+        f"findChildren(QAbstractButton) count {len(root.findChildren(__import__('PySide6.QtWidgets', fromlist=['QAbstractButton']).QAbstractButton))}; "
+        f"findChildren(MyBtn) count {len(root.findChildren(MyBtn))}"
+    )
+
+
+def probe_R00018():
+    root = QObject()
+    a = QObject(root); a.setObjectName("A")
+    a1 = QObject(a)
+    deep = QObject(a1); deep.setObjectName("t")
+    b = QObject(root); b.setObjectName("B")
+    shallow = QObject(b); shallow.setObjectName("t")
+    found = root.findChild(QObject, "t")
+    where = "deep (under A)" if found is deep else ("shallow (under B)" if found is shallow else repr(found))
+    print(f"R-00018: findChild('t') returns {where}; "
+          f"FindDirectChildrenOnly -> {root.findChild(QObject, 't', __import__('PySide6.QtCore', fromlist=['Qt']).Qt.FindChildOption.FindDirectChildrenOnly) is not None}")
+
+
+def probe_R00019():
+    root = QObject()
+    QObject(root).setObjectName("x")  # Python wrapper dropped; C++ child owned by root
+    print(f"R-00019: findChild('x') on unowned-wrapper child -> {root.findChild(QObject, 'x') is not None}")
+
+
+def probe_R00020():
+    root = QObject()
+    u = QObject(root)
+    n = QObject(root); n.setObjectName("n")
+    omitted = root.findChild(QObject)
+    empty = root.findChild(QObject, "")
+    none = root.findChild(QObject, None)
+    print(
+        f"R-00020: findChild(QObject) -> {'unnamed' if omitted is u else 'named' if omitted is n else omitted}; "
+        f"findChild(QObject,'') -> {'unnamed' if empty is u else 'named' if empty is n else empty}; "
+        f"findChild(QObject,None) -> {'unnamed' if none is u else 'named' if none is n else none}; "
+        f"findChildren(QObject) count {len(root.findChildren(QObject))}; "
+        f"findChildren(QObject,'') count {len(root.findChildren(QObject, ''))}"
+    )
+
+
+def probe_R00021():
+    p = QObject()
+    c = QObject(p)
+    print(f"R-00021: c.parent() is p {c.parent() is p}; p.children() len {len(p.children())}; "
+          f"c.thread() is main {c.thread() == app.thread()}")
+
+
+def probe_R00022():
+    btn = QPushButton()
+    got = []
+    btn.clicked.connect(lambda *a: got.append(1))
+    btn.blockSignals(True)
+    btn.clicked.emit()
+    while_blocked = len(got)
+    btn.blockSignals(False)
+    btn.clicked.emit()
+    print(f"R-00022: inherited clicked while blocked -> {while_blocked} emissions; after unblock -> {len(got) - while_blocked}")
+
+
+def probe_R00023():
+    o = QObject()
+    seq = [o.blockSignals(True), o.blockSignals(True), o.blockSignals(False), o.blockSignals(False)]
+    print(f"R-00023: blockSignals returns (prev state) for True,True,False,False: {seq}")
+
+
+def probe_R00024():
+    from PySide6.QtCore import QSignalBlocker
+
+    o = QObject()
+    with QSignalBlocker(o):
+        outer = o.signalsBlocked()
+        with QSignalBlocker(o):
+            inner = o.signalsBlocked()
+        after_inner = o.signalsBlocked()
+    after_outer = o.signalsBlocked()
+    p = QObject()
+    p.blockSignals(True)
+    with QSignalBlocker(p):
+        pass
+    print(f"R-00024: outer={outer} inner={inner} after_inner={after_inner} after_outer={after_outer}; "
+          f"pre-blocked after blocker={p.signalsBlocked()}")
+
+
+def probe_R00025_26():
+    import PySide6.QtCore as qc
+
+    print(f"R-00025: QPointer in PySide6.QtCore={hasattr(qc, 'QPointer')}, "
+          f"QWeakPointer={hasattr(qc, 'QWeakPointer')} -> not PySide-observable; Qt-source evidence only")
+    print("R-00026: same as R-00025 -> not PySide-observable; Qt-source evidence only")
+
+
+def probe_R00027():
+    class Decl(QObject):
+        _rw = 0
+
+        def get_rw(self):
+            return self._rw
+
+        def set_rw(self, v):
+            self._rw = v
+
+        rw = Property(int, get_rw, set_rw)
+        ro = Property(int, get_rw)
+
+    o = Decl()
+    o.setProperty("rw", 5)
+    r_rw = o.setProperty("ro", 9)
+    print(f"R-00027: writable setProperty -> value {o.property('rw')}; read-only setProperty -> "
+          f"{r_rw}, value {o.property('ro')}")
+
+
+def probe_R00028():
+    o = QObject()
+    r1 = o.setProperty("dyn", 3)
+    r2 = o.setProperty("dyn", 4)
+    names = [bytes(x).decode() for x in o.dynamicPropertyNames()]
+    print(f"R-00028: undeclared setProperty returns {r1}, {r2}; value {o.property('dyn')}; dynamicPropertyNames {names}")
+
+
+def probe_R00029():
+    o = QObject()
+    ev = []
+    tap = EventTap(o, ev, (QEvent.Type.DynamicPropertyChange,))
+    o.setProperty("k", 1)
+    n_new = len(ev)
+    o.setProperty("k", 1)
+    n_same = len(ev)
+    o.setProperty("k", 2)
+    n_change = len(ev)
+    print(f"R-00029: DynamicPropertyChange counts after new/same/changed: {n_new}/{n_same}/{n_change}")
+
+
+def probe_R00030():
+    o = QObject()
+    ev = []
+    tap = EventTap(o, ev, (QEvent.Type.DynamicPropertyChange,))
+    o.setProperty("k", 1)
+    before = len(ev)
+    r1 = o.setProperty("k", None)
+    names_after = [bytes(x).decode() for x in o.dynamicPropertyNames()]
+    after_existing = len(ev)
+    r2 = o.setProperty("absent", None)
+    print(f"R-00030: set None on existing -> {r1}, property {o.property('k')}, names {names_after}, "
+          f"events +{after_existing - before}; set None on absent -> {r2}, events +{len(ev) - after_existing}")
+
+
+def probe_R00032():
+    class Sub(QPushButton):
+        pass
+
+    class Base(QObject):
+        pass
+
+    class Sub2(Base):
+        pass
+
+    print(f"R-00032: QPushButton superClass {QPushButton.staticMetaObject.superClass().className()}; "
+          f"Sub(QPushButton) metaObject superClass {Sub.staticMetaObject.superClass().className()}; "
+          f"Sub2(Base(QObject)) chain Sub2 -> Base -> "
+          f"{'Base' if False else ''}"
+          f"{Sub2.staticMetaObject.superClass().className()} -> "
+          f"{Sub2.staticMetaObject.superClass().superClass().className()}")
+
+
+def probe_R00034():
+    class Named(QObject):
+        sig = Signal(str)
+        sig2 = Signal(int, list)
+
+    mo = Named.staticMetaObject
+    sigs = [mo.method(i).methodSignature().data().decode() for i in range(mo.methodOffset(), mo.methodCount())]
+    print(f"R-00034: signals in meta data {sigs}")
+
+
+def probe_R00035():
+    class Notif(QObject):
+        sig = Signal(str)
+        _v = ""
+
+        def get_v(self):
+            return self._v
+
+        def set_v(self, v):
+            self._v = v
+
+        v = Property(str, get_v, set_v, notify=sig)
+
+    mo = Notif.staticMetaObject
+    idx = mo.indexOfProperty("v")
+    prop = mo.property(idx)
+    notify_idx = prop.notifySignalIndex()
+    print(f"R-00035: notifySignalIndex {notify_idx} -> {mo.method(notify_idx).name().data().decode()}; "
+          f"indexOfSignal('sig(QString)') {mo.indexOfSignal('sig(QString)')}")
+
+
+def probe_R00036():
+    class SubFrame(QFrame):
+        pass
+
+    print(f"R-00036: QFrame enumeratorCount {QFrame.staticMetaObject.enumeratorCount()}; "
+          f"SubFrame(QFrame) enumeratorCount {SubFrame.staticMetaObject.enumeratorCount()} (expect sum over superdata); "
+          f"QObject classInfoCount {QObject.staticMetaObject.classInfoCount()}")
+
+
+def probe_a_b_c_d_e_f():
+    # (a) see R-00020 (omitted vs '' vs None)
+    # (b) deleteLater inside a slot of the same object
+    class Emitter(QObject):
+        sig = Signal()
+
+    e = Emitter()
+    seen = []
+
+    def slot():
+        e.deleteLater()
+        seen.append(("in slot", shiboken6.isValid(e)))
+
+    e.sig.connect(slot)
+    e.sig.emit()
+    seen.append(("after emit", shiboken6.isValid(e)))
+    QCoreApplication.processEvents()
+    seen.append(("after processEvents", shiboken6.isValid(e)))
+    print(f"(b) deleteLater in own slot: {seen}")
+
+    # (c) sendPostedEvents(None, DeferredDelete) at same level
+    o = QObject()
+    o.deleteLater()
+    before = shiboken6.isValid(o)
+    QCoreApplication.sendPostedEvents(None, DEFERRED)
+    print(f"(c) sendPostedEvents(None, DeferredDelete): valid before {before}, after {shiboken6.isValid(o)}")
+
+    # (d) setParent(current parent) sends no ChildAdded/ChildRemoved
+    p = QObject()
+    c = QObject(p)
+    log = []
+    tap = EventTap(p, log, (QEvent.Type.ChildAdded, QEvent.Type.ChildRemoved))
+    c.setParent(p)
+    print(f"(d) setParent(current parent) events: {log}")
+
+    # (e) property() round-trip, declared and dynamic
+    class Props(QObject):
+        def __init__(self):
+            super().__init__()
+            self._v = 1
+
+        def getv(self):
+            return self._v
+
+        def setv(self, v):
+            self._v = v
+
+        v = Property(int, getv, setv)
+
+    q = Props()
+    q.setProperty("v", 7)
+    q.setProperty("dyn", "hi")
+    print(f"(e) declared v round-trip {q.property('v')}; dynamic dyn round-trip {q.property('dyn')!r}; "
+          f"missing {q.property('nope')!r}")
+
+    # (f) ~QObject order: destroyed(parent), children deleted, then ChildRemoved at grandparent
+    gp = QObject()
+    p2 = QObject(gp)
+    p2.setObjectName("p")
+    c2 = QObject(p2)
+    c2.setObjectName("c")
+    flog = []
+    p2.destroyed.connect(lambda *a: flog.append("p.destroyed"))
+    c2.destroyed.connect(lambda *a: flog.append("c.destroyed"))
+    gtap = EventTap(gp, flog, (QEvent.Type.ChildRemoved,))
+    delete_now(p2)
+    print(f"(f) ~QObject order at grandparent: {flog}")
+
+
+PROBES = [
+    probe_R00003, probe_R00005, probe_R00012, probe_R00014, probe_R00015, probe_R00016,
+    probe_R00017, probe_R00018, probe_R00019, probe_R00020, probe_R00021, probe_R00022,
+    probe_R00023, probe_R00024, probe_R00025_26, probe_R00027, probe_R00028, probe_R00029,
+    probe_R00030, probe_R00032, probe_R00034, probe_R00035, probe_R00036, probe_a_b_c_d_e_f,
+]
+
+
+# ---- R-00007: reparenting to self / descendant / other thread (child-process cases)
+
+def case_self():
+    o = QObject()
+    p = QObject()
+    o.setParent(p)
+    o.setParent(o)
+    print(f"R-00007 self: o.parent() is o {o.parent() is o}; o in o.children() {o in o.children()}", flush=True)
+
+
+def case_desc():
+    a = QObject()
+    b = QObject(a)
+    a.setParent(b)
+    print(f"R-00007 descendant: a.parent() is b {a.parent() is b}; b.parent() is a {b.parent() is a}", flush=True)
+
+
+def case_thread():
+    t = QThread()
+    t.start()
+    w = QObject()
+    w.moveToThread(t)
+    p = QObject()
+    c = QObject(p)
+    c.setParent(w)
+    print(f"R-00007 other-thread: c.parent() is None {c.parent() is None}; p.children() len {len(p.children())}", flush=True)
+    t.quit()
+    t.wait()
+
+
+CASES = {"self": case_self, "desc": case_desc, "thread": case_thread}
+
+
+def run_r00007_cases():
+    for name in CASES:
+        try:
+            r = subprocess.run(
+                [sys.executable, os.path.abspath(__file__), f"--case={name}"],
+                capture_output=True, text=True, timeout=60,
+            )
+            for line in r.stdout.splitlines():
+                if line.startswith("R-00007"):
+                    print(line)
+            warns = [ln for ln in r.stderr.splitlines() if "QObject::setParent" in ln]
+            for w in warns:
+                print(f"R-00007 {name} stderr: {w}")
+            if r.returncode != 0:
+                print(f"R-00007 {name}: exit code {r.returncode}")
+        except subprocess.TimeoutExpired:
+            print(f"R-00007 {name}: timeout (hang)")
+
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1].startswith("--case="):
+        CASES[sys.argv[1].split("=", 1)[1]]()
+        os._exit(0)
+    print(f"PySide6 {PySide6.__version__}; Qt {qVersion()}")
+    for fn in PROBES:
+        try:
+            fn()
+        except Exception as e:  # keep running remaining probes
+            print(f"{fn.__name__}: ERROR {type(e).__name__}: {e}")
+    run_r00007_cases()
+
+
+if __name__ == "__main__":
+    main()
+    os._exit(0)

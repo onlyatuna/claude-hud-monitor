@@ -168,6 +168,14 @@ pub enum WindowSystemEvent {
     InteractiveResizeStart,
     /// Native interactive sizing loop left (Windows `WM_EXITSIZEMOVE`).
     InteractiveResizeEnd,
+    /// Window minimized or restored (Windows `WM_SIZE` `SIZE_MINIMIZED` / `SIZE_RESTORED`).
+    /// Qt delivers this as `WindowStateChange` and the minimize transition as a spontaneous
+    /// `Hide`/`Show` (`QWidgetWindow::handleWindowStateChangedEvent`, qwidgetwindow.cpp:1125-1151;
+    /// `QWidget::event` `WindowStateChange`, qwidget.cpp:9292-9311). Qt's minimize does not
+    /// change the window geometry (qwindowswindow.cpp:2370-2377).
+    Minimize {
+        minimized: bool,
+    },
     GeometryChange {
         geometry: Rect,
     },

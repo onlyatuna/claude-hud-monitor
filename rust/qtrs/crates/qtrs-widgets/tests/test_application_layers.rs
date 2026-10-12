@@ -496,4 +496,65 @@ mod close_quit {
             "quit closes the open window before exiting"
         );
     }
+
+    /// Qt: a posted Quit is `QApplication::event(Quit)`, which closes the windows and is vetoed
+    /// by a refusing one (qapplication.cpp:1675-1697).
+    #[test]
+    fn posted_quit_is_vetoed_by_refusing_window() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        Application::reset_for_test();
+        let mut app = Application::new(vec!["quit_test".to_string()]);
+        GuiApplication::set_quit_on_last_window_closed(false);
+        let mut win =
+            Window::new("w", Rect::new(0, 0, 100, 100), WindowFlags::NORMAL).expect("window");
+        win.set_window_event_handler(|ev: &mut Event| {
+            if matches!(ev.kind, EventKind::Close) {
+                ev.ignore();
+            }
+        });
+        win.show();
+        qtrs_core::timer::Timer::single_shot(10, || {
+            let app_id = CoreApplication::instance_id().expect("application object");
+            CoreApplication::post_event(app_id, Event::new(EventKind::Quit { exit_code: 0 }));
+        });
+        qtrs_core::timer::Timer::single_shot(500, || Application::exit(7)); // watchdog
+        let code = app.exec();
+        GuiApplication::set_quit_on_last_window_closed(true);
+        assert_eq!(
+            code, 7,
+            "a posted Quit that a window refuses to close must not end exec"
+        );
+        assert!(win.is_visible(), "the refusing window stays visible");
+    }
+
+    /// Qt: `QCoreApplication::quit` from a worker thread posts Quit to the application
+    /// (qcoreapplication.cpp:2156-2157), which runs the window veto on the application thread.
+    #[test]
+    fn quit_from_worker_thread_is_vetoed_by_refusing_window() {
+        let _guard = TEST_MUTEX.lock().unwrap();
+        Application::reset_for_test();
+        let mut app = Application::new(vec!["quit_test".to_string()]);
+        GuiApplication::set_quit_on_last_window_closed(false);
+        let mut win =
+            Window::new("w", Rect::new(0, 0, 100, 100), WindowFlags::NORMAL).expect("window");
+        win.set_window_event_handler(|ev: &mut Event| {
+            if matches!(ev.kind, EventKind::Close) {
+                ev.ignore();
+            }
+        });
+        win.show();
+        qtrs_core::timer::Timer::single_shot(10, || {
+            std::thread::spawn(|| Application::quit())
+                .join()
+                .expect("worker thread");
+        });
+        qtrs_core::timer::Timer::single_shot(500, || Application::exit(7)); // watchdog
+        let code = app.exec();
+        GuiApplication::set_quit_on_last_window_closed(true);
+        assert_eq!(
+            code, 7,
+            "a quit from a worker thread must still be vetoed by the app-thread window"
+        );
+        assert!(win.is_visible(), "the refusing window stays visible");
+    }
 }

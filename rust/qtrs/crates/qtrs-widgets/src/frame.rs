@@ -10,6 +10,7 @@ use qtrs_gui::tiny_skia::Color;
 
 use crate::focus::FocusPolicy;
 use crate::layout::Layout;
+use crate::layout_engine::WIDGET_LAYOUT_SPACING;
 use crate::size_policy::{Policy, QSizePolicy};
 use crate::widget::{Widget, WidgetBase, WidgetRef, WidgetWeak};
 
@@ -618,6 +619,7 @@ impl Widget for Frame {
 
     fn set_layout(&mut self, mut layout: Box<dyn Layout>) {
         layout.set_geometry(self.contents_rect());
+        layout.set_smart_spacing(WIDGET_LAYOUT_SPACING);
         *self.base.layout.get_mut() = Some(layout);
         self.update();
     }

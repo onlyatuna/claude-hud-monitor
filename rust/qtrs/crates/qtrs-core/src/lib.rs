@@ -37,4 +37,4 @@ pub mod application;
 pub use application::*;
 
 #[cfg(feature = "derive")]
-pub use qtrs_derive::QObject;
+pub use qtrs_derive::{slot, slots, QObject};

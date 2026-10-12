@@ -175,8 +175,9 @@ pub(crate) fn registration_thread_of(id: ObjectId) -> Option<ThreadId> {
 /// (`QMetaObject::invokeMethod` with `Qt::QueuedConnection` or `Qt::BlockingQueuedConnection`).
 ///
 /// Needs no `&mut` borrow of the object, so any thread may call it with the receiver's id and its
-/// static `MetaObject`. The member is resolved and its argument count checked before anything is
-/// posted, as Qt does (qmetaobject.cpp `invokeMethodImpl`). `Queued` returns `Ok(Variant::Invalid)`
+/// static `MetaObject`. The member is resolved and its arguments type-checked before anything is
+/// posted, as Qt does (`invokeMethodImpl`, qmetaobject.cpp:1693-1708; `invokeImpl` type checks,
+/// qmetaobject.cpp:2774-2809). `Queued` returns `Ok(Variant::Invalid)`
 /// once posted; the return value is not delivered. `BlockingQueued` waits for the result on the
 /// receiver's thread. `Auto` queues when the caller is on another thread. `Direct`, and `Auto` on the
 /// receiver's own thread, need a `&mut` borrow and return `Err(TargetBorrowFailed)`; use
@@ -189,21 +190,7 @@ pub fn invoke_method_on_thread(
     conn_type: crate::signal::ConnectionType,
 ) -> Result<Variant, crate::meta::InvokeError> {
     use crate::signal::ConnectionType;
-    let idx = meta
-        .index_of_method(member)
-        .ok_or(crate::meta::InvokeError::MethodNotFound)?;
-    let method = meta
-        .method(idx)
-        .ok_or(crate::meta::InvokeError::MethodNotFound)?;
-    if !method.is_invokable() {
-        return Err(crate::meta::InvokeError::MethodNotFound);
-    }
-    if args.len() != method.parameter_count() {
-        return Err(crate::meta::InvokeError::ParameterCountMismatch {
-            expected: method.parameter_count(),
-            actual: args.len(),
-        });
-    }
+    let method = meta.resolve_method(member, args)?;
 
     let thread =
         registration_thread_of(receiver).ok_or(crate::meta::InvokeError::TargetBorrowFailed)?;
@@ -216,13 +203,12 @@ pub fn invoke_method_on_thread(
         }
     };
 
-    let member_owned = member.to_string();
     let args_owned = args.to_vec();
     if !blocking {
         let event = Event::new(EventKind::MetaCall(Box::new(
             move |target: &mut dyn std::any::Any| {
                 // Qt drops the return value of a queued invoke along with any failure.
-                let _ = meta.invoke_method(target, &member_owned, &args_owned);
+                let _ = method.invoke(target, &args_owned);
             },
         )));
         crate::event_loop::post_event_to_thread(thread, receiver, event);
@@ -239,7 +225,7 @@ pub fn invoke_method_on_thread(
     let (tx, rx) = std::sync::mpsc::channel::<Result<Variant, crate::meta::InvokeError>>();
     let event = Event::new(EventKind::MetaCall(Box::new(
         move |target: &mut dyn std::any::Any| {
-            let result = meta.invoke_method(target, &member_owned, &args_owned);
+            let result = method.invoke(target, &args_owned);
             let _ = tx.send(result);
         },
     )));

@@ -799,6 +799,92 @@ mod window_level {
         assert_eq!(*seen.borrow(), vec!["Move(150,160) from (100,100)"]);
         assert_eq!(*log.borrow(), vec!["root:Move(150,160)"], "only the window widget is moved");
     }
+
+    #[test]
+    fn minimize_and_restore_send_hide_and_show_like_qt() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SendMessageW, SC_MINIMIZE, SC_RESTORE, WM_SYSCOMMAND,
+        };
+        let log: Log = Default::default();
+        let (root, _m, _l) = tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+        let mut win = window_with_root(root);
+        let seen: Rc<RefCell<Vec<&'static str>>> = Default::default();
+        let sink = Rc::clone(&seen);
+        win.set_window_event_handler(move |ev: &mut Event| match &ev.kind {
+            EventKind::Hide => sink.borrow_mut().push("Hide"),
+            EventKind::Show => sink.borrow_mut().push("Show"),
+            _ => {}
+        });
+        win.show();
+        seen.borrow_mut().clear();
+
+        unsafe { SendMessageW(hwnd(&win), WM_SYSCOMMAND, SC_MINIMIZE as usize, 0) };
+        assert!(
+            win.is_visible(),
+            "minimize keeps isVisible() true (PySide6 probe)"
+        );
+        assert_eq!(
+            *seen.borrow(),
+            vec!["Hide"],
+            "minimize sends a spontaneous QHideEvent"
+        );
+
+        seen.borrow_mut().clear();
+        unsafe { SendMessageW(hwnd(&win), WM_SYSCOMMAND, SC_RESTORE as usize, 0) };
+        assert!(win.is_visible());
+        assert_eq!(
+            *seen.borrow(),
+            vec!["Show"],
+            "restore sends a spontaneous QShowEvent"
+        );
+    }
+
+    #[test]
+    fn minimize_keeps_the_window_geometry() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SendMessageW, SC_MINIMIZE, WM_SYSCOMMAND,
+        };
+        let log: Log = Default::default();
+        let (root, _m, _l) = tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+        let mut win = window_with_root(root);
+        win.show();
+        let before = win.geometry();
+        unsafe { SendMessageW(hwnd(&win), WM_SYSCOMMAND, SC_MINIMIZE as usize, 0) };
+        let after = win.geometry();
+        assert_eq!(
+            (after.width, after.height),
+            (before.width, before.height),
+            "minimize must not resize the window (qwindowswindow.cpp:2374-2377 returns before any geometry change)"
+        );
+    }
+
+    #[test]
+    fn minimize_does_not_report_a_move_to_offscreen_coordinates() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SendMessageW, SC_MINIMIZE, WM_SYSCOMMAND,
+        };
+        let log: Log = Default::default();
+        let (root, _m, _l) = tree(Resp::NotHandled, Resp::NotHandled, Resp::NotHandled, &log);
+        let mut win = window_with_root(root);
+        let moves: Rc<RefCell<Vec<(i32, i32)>>> = Default::default();
+        let sink = Rc::clone(&moves);
+        win.set_window_event_handler(move |ev: &mut Event| {
+            if let EventKind::Move { x, y, .. } = &ev.kind {
+                sink.borrow_mut().push((*x, *y));
+            }
+        });
+        win.show();
+        moves.borrow_mut().clear();
+        unsafe { SendMessageW(hwnd(&win), WM_SYSCOMMAND, SC_MINIMIZE as usize, 0) };
+        assert!(
+            moves
+                .borrow()
+                .iter()
+                .all(|&(x, y)| x > -10_000 && y > -10_000),
+            "a minimized window's position must not reach the HUD as a Move: {:?}",
+            moves.borrow()
+        );
+    }
 }
 
 struct Tracker {
