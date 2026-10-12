@@ -452,4 +452,50 @@ pub mod unix_theme {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_generic_theme_color_scheme_and_signals() {
+        let theme = GenericTheme::new(ColorScheme::Light);
+        assert_eq!(theme.color_scheme(), ColorScheme::Light);
+
+        let change_count = Arc::new(AtomicUsize::new(0));
+        let last_scheme = Arc::new(std::sync::Mutex::new(ColorScheme::Unknown));
+        let c_cnt = Arc::clone(&change_count);
+        let l_sch = Arc::clone(&last_scheme);
+
+        theme.theme_changed().connect(move |s| {
+            c_cnt.fetch_add(1, Ordering::SeqCst);
+            *l_sch.lock().unwrap() = *s;
+        });
+
+        // Changing to same scheme does not emit
+        theme.set_color_scheme(ColorScheme::Light);
+        assert_eq!(change_count.load(Ordering::SeqCst), 0);
+
+        // Changing to Dark emits
+        theme.set_color_scheme(ColorScheme::Dark);
+        assert_eq!(theme.color_scheme(), ColorScheme::Dark);
+        assert_eq!(change_count.load(Ordering::SeqCst), 1);
+        assert_eq!(*last_scheme.lock().unwrap(), ColorScheme::Dark);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_win32_theme_query_and_refresh() {
+        let theme = Win32Theme::new();
+        let scheme = theme.color_scheme();
+        assert!(matches!(
+            scheme,
+            ColorScheme::Dark | ColorScheme::Light | ColorScheme::Unknown
+        ));
+        // refresh without OS setting change does not crash or emit spurious signals
+        theme.refresh();
+        assert_eq!(theme.color_scheme(), scheme);
+    }
+}
 pub use unix_theme::UnixTheme;

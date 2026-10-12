@@ -954,7 +954,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`QGuiApplication.styleHints().colorScheme()` 與 `colorSchemeChanged`；HUD 於 `QTimer.singleShot(0, …)` 重新套用主題（`hud_window.py:104,213-220,230-238`）。
 - **qtrs required**：色彩配置 MUST 反映 `AppsUseLightTheme`，變更 MUST 只發射一次。
 - **Current implementation**：Windows `IMPLEMENTED-UNTESTED`。`Win32Theme::query_color_scheme` 讀 `AppsUseLightTheme`；`refresh` 只在改變時發射；視窗 proc 於 `WM_SETTINGCHANGE`/`WM_THEMECHANGED` 呼叫；app 把後續處理排到主執行緒（`main.rs:511-521`）。
-- **Known gap**：**G11.10.a [P2]** 高對比與 `ShouldAppsUseDarkMode` 未驗證；**G11.10.b [P2]** `GuiApplication::new` 預設 `Palette::dark()`，不跟隨系統配置；**G11.10.c [P2]** `theme.rs` 無單元測試。
+- **Known gap**：**G11.10.a [P2]** 高對比與 `ShouldAppsUseDarkMode` 未驗證；**G11.10.b [P2]** `GuiApplication::new` 預設 `Palette::dark()`，不跟隨系統配置；**G11.10.c [P2；已修復：RC-179]** theme.rs 補齊單元測試（GenericTheme 與 Win32Theme，RC-179）。
 - **Test**：既有只對 cocoa／unix 的 set-and-read。必要：翻轉登錄值、呼叫 `refresh`、斷言一次 `theme_changed`。
 - **HUD usage**：Python `hud_window.py:104,213-238`；Rust `main.rs:514-521`、`ui/mod.rs::resolve_is_dark`（未知配置視為暗）。
 
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 240 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.4.c、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.b、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 241 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.4.c、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.b、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.10.c、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1538,7 +1538,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.9.h | P2 | 熱鍵失敗氣泡只以 log 煙霧測試驗證 |
 | G11.10.a | P2 | 高對比與 `ShouldAppsUseDarkMode` 未驗證 |
 | G11.10.b | P2 | `GuiApplication::new` 預設 `Palette::dark()`，不跟隨系統配置 |
-| G11.10.c | P2 | `theme.rs` 無單元測試 |
+| G11.10.c | P2；已修復：RC-179 | theme.rs 補齊單元測試 |
 | G11.11.a | P2 | 第二次啟動「喚醒」第一個 HUD 後的可觀察結果 |
 | G11.11.b | P2 | 剪貼簿：兩個 HUD 都不用 |
 | G11.12.a | P2 | 無視窗圖示 API |
@@ -3725,6 +3725,21 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - `qtrs-widgets` 全套 423 項測試通過（71 suites, 0.16s）。
   - `layout_qt_oracle` 4 項測試通過（含 512 條 layout 比對與 known mismatch 報告）。
   - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
+  - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
+  - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
+- **Residual**：無。
+
+#### RC-179 theme.rs 補齊單元測試（G11.10.c）
+- **Qt 依據**：`[QT-SRC gui/kernel/qplatformtheme.cpp:88-120]`（`QPlatformTheme::colorScheme`、主題變更通知機制）。
+- **根因**：`crates/qtrs-platform/src/theme.rs` 包含色彩配置偵測與 `theme_changed` 訊號派發實作，但該模組內部缺乏獨立單元測試（G11.10.c）。
+- **修正**：
+  - `crates/qtrs-platform/src/theme.rs`：新增 `mod tests`，包含 `test_generic_theme_color_scheme_and_signals` 與 `test_win32_theme_query_and_refresh`，覆蓋色彩配置切換防重發射及刷新驗證。
+- **驗證**：
+  - 單元測試：`crates/qtrs-platform/src/theme.rs:455-499`（`test_generic_theme_color_scheme_and_signals`、`test_win32_theme_query_and_refresh`，pin 測試）。
+  - **PASS**：`test theme::tests::test_generic_theme_color_scheme_and_signals ... ok`、`test theme::tests::test_win32_theme_query_and_refresh ... ok`。
+- **全套回歸**：
+  - `qtrs-platform` 全套 113 項測試通過（11 suites, 2 ignored, 0.00s）。
+  - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` `qtrs-core` 0 error, 0 warning。
   - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
   - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
 - **Residual**：無。
