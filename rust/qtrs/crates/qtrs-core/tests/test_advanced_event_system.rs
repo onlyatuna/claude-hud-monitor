@@ -152,6 +152,16 @@ fn test_event_type_mapping() {
         timestamp: 0,
     });
     assert_eq!(ev3.event_type(), EventType::Pointer);
+    assert_eq!(
+        EventType::Pointer as u32,
+        218,
+        "EventType::Pointer must match Qt QEvent::Pointer value (qcoreevent.h:285 / G3.1.a)"
+    );
+    assert_eq!(
+        EventType::DpiChanged as u32,
+        222,
+        "EventType::DpiChanged must match Qt QEvent::DevicePixelRatioChange value (qcoreevent.h:292 / G3.1.a)"
+    );
 
     let ev4 = Event::new(EventKind::HoverEnter {
         pos: EventPointPos::new(5.0, 5.0),

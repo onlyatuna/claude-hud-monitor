@@ -90,8 +90,8 @@ pub enum EventType {
     Gesture = 198,
     TouchCancel = 209,
     Expose = 206,
-    DpiChanged = 250,
-    Pointer = 251,
+    Pointer = 218,
+    DpiChanged = 222,
     User = 1000,
     MaxUser = 65535,
 }

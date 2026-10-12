@@ -171,7 +171,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qcoreevent.h]`：事件建構時為 accepted；`type()` 為 `QEvent::Type` 數值；OS 來源事件 `spontaneous()` 為 true。
 - **qtrs required**：MUST 新事件 accepted 且非 spontaneous；OS 來源 MUST 以 `new_spontaneous` 建；每個與 Qt 同名的 `EventType` 數值 MUST 等於 Qt 數值；HUD 會收到的事件 MUST 有對應 type。
 - **Current implementation**：`IMPLEMENTED`：`Event::new/new_spontaneous/accept/ignore`；88 個 `EventType` 中 86 個與 `qcoreevent.h` 數值一致（稽核者逐一比對，`READ`；RC-38 加入 `EnabledChange`=98）。`PARTIAL`：僅 61/88 可由 `EventKind` 到達（`Paint`(12)、`Create`、`Destroy`、`ParentChange`、`UpdateLater`、`ChildPolished`、`WindowTitleChange`、`PaletteChange`、`Clipboard`、`SockAct` 到不了）。`ABSENT`：另外 92 種 Qt 事件（`Polish`、`LanguageChange`、`StyleChange`、`FontChange`、`ActivationChange`、`WindowStateChange`、`ApplicationActivate/Deactivate`、`LocaleChange`…）；`registerEventType`、`sendSpontaneousEvent`、`isPosted`。
-- **Known gap**：**G3.1.a [P2, READ]** `Pointer`=251、`DpiChanged`=250 不是 Qt 數值（Qt：`Pointer`=218、`DevicePixelRatioChange`=222）；**G3.1.b [D]** `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)`（恆為 type 1000）。理由：Rust 型別安全；HUD 不用；**G3.1.c [P1, RAN；已修復：RC-129]** （修復前；Paint／FontChange／StyleChange／EnabledChange／Show／Hide 已經 filter，Polish／PaletteChange／LanguageChange／ActivationChange 仍缺） 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等。
+- **Known gap**：**G3.1.a [P2, READ；已修復：RC-175]** Pointer=218、DpiChanged=222 與 Qt QEvent::Pointer、QEvent::DevicePixelRatioChange 數值一致（qcoreevent.h:285, 292, RC-175）；**G3.1.b [D]** `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)`（恆為 type 1000）。理由：Rust 型別安全；HUD 不用；**G3.1.c [P1, RAN；已修復：RC-129]** （修復前；Paint／FontChange／StyleChange／EnabledChange／Show／Hide 已經 filter，Polish／PaletteChange／LanguageChange／ActivationChange 仍缺） 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等。
 - **Test**：既有 `event/mod.rs::tests::*`、`test_advanced_event_system.rs::test_event_type_mapping`。必要：以表格逐一比對每個 `EventType as u32` 與 Qt 數值；每個 `EventKind` 變體有唯一 `event_type()`。
 - **HUD usage**：Python 覆寫 widget handler（`hud_window.py:560-622`、`usage_table.py:160`）；`QEvent`/`postEvent`/`sendEvent`/`installEventFilter` 未用。Rust 只用 `EventKind::MetaCall`（`main.rs:44-55`）與 widgets 的 `UpdateRequest`。
 
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 236 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 237 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1260,7 +1260,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.7.a | P1, RAN；已修復：RC-123 | 對已被借用的物件送事件會**無聲丟失** |
 | G2.7.b | DV-07（已核准 B 類差異；原標 D） | 跨執行緒直接派送不支援 |
 | G2.7.c | test gap | `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tes |
-| G3.1.a | P2, READ | `Pointer`=251、`DpiChanged`=250 不是 Qt 數值 |
+| G3.1.a | P2, READ；已修復：RC-175 | Pointer=218、DpiChanged=222 符合 Qt QEvent 數值 |
 | G3.1.b | D | `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)` |
 | G3.1.c | P1, RAN；已修復：RC-129 | 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等 |
 | G3.2.a | P1, RAN；已修復：RC-68 | 跨輪／下一輪的優先序錯誤 |
@@ -3659,6 +3659,22 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **修改後 PASS**：`test test_qobject_hierarchy_accessors ... ok`；驗證初始狀態無 parent、無 children、thread 為當前執行緒；建立關係後 `parent()`、`children_ids()` 與 `thread()` 回傳正確 ID。
 - **全套回歸**：
   - `qtrs-core` 全套 327 項測試通過（40 suites, 0.10s）。
+  - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
+  - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
+  - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
+- **Residual**：無。
+
+#### RC-175 EventType::Pointer 與 EventType::DpiChanged 數值符合 Qt 規範（G3.1.a）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreevent.h:285, 292]`：`QEvent::Pointer = 218`、`QEvent::DevicePixelRatioChange = 222`。
+- **根因**：`qtrs-core` 的 `EventType` enum 將 `DpiChanged` 賦值為 250、`Pointer` 賦值為 251，非 Qt 規範之枚舉數值（G3.1.a）。
+- **修正**：
+  - `crates/qtrs-core/src/event/types.rs`：將 `EventType::Pointer` 修正為 218，`EventType::DpiChanged` 修正為 222。
+- **驗證**：
+  - 單元測試：`crates/qtrs-core/tests/test_advanced_event_system.rs:155-164`（`test_event_type_mapping`）。
+  - **修改前 FAIL**：`assertion left == right failed: EventType::Pointer must match Qt QEvent::Pointer value (qcoreevent.h:285 / G3.1.a); left: 251, right: 218`。
+  - **修改後 PASS**：`test test_event_type_mapping ... ok`；驗證 `Pointer as u32 == 218` 與 `DpiChanged as u32 == 222`。
+- **全套回歸**：
+  - `qtrs-core` 全套 327 項測試通過（40 suites, 0.11s）。
   - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
   - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
   - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
