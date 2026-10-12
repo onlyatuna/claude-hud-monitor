@@ -219,12 +219,18 @@ impl SingleInstance {
 
         if !lock_acquired {
             // Another instance holds the lock. Send command via UnixStream.
+            // Retry up to 5 times with a brief backoff in case the primary's listener
+            // socket is still completing bind/listen under heavy test runner load.
             let mut sent = false;
-            if let Ok(mut stream) = UnixStream::connect(&socket_path) {
-                let buf = [command as u8];
-                if stream.write_all(&buf).is_ok() {
-                    sent = true;
+            for _ in 0..5 {
+                if let Ok(mut stream) = UnixStream::connect(&socket_path) {
+                    let buf = [command as u8];
+                    if stream.write_all(&buf).is_ok() {
+                        sent = true;
+                        break;
+                    }
                 }
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
             return SingleInstanceResult::Secondary { command_sent: sent };
         }
