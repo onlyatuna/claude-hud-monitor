@@ -16,7 +16,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use qtrs_core::event::{Event, EventKind};
-use qtrs_core::event_loop::{get_thread_event_sender, post_event_to_thread, EventLoop};
+use qtrs_core::event_loop::{
+    get_thread_event_sender, post_event_to_thread, post_event_to_thread_with_priority, EventLoop,
+};
 use qtrs_core::object::{
     add_owned_child, move_to_thread, query_object_thread, register_qobject, send_event,
     unregister_qobject, ObjectData, ObjectId, QObject, ThreadId,
@@ -359,6 +361,35 @@ fn queued_events_of_moved_subtree_wait_for_target_loop_in_order() {
     assert_eq!(
         *ran.lock().unwrap(),
         vec![("before-move", owner_tid), ("after-move", owner_tid)]
+    );
+}
+#[test]
+fn transferred_events_preserve_priority_ordering() {
+    let source = ThreadId::current();
+    let ran: Ran = Arc::new(Mutex::new(Vec::new()));
+
+    let mut root = Plain::new();
+    let root_id = root.data.id;
+    // SAFETY: root stays on this thread and alive until owner unregisters it.
+    unsafe { register_qobject(&mut root) };
+
+    // Post low priority then high priority while on source thread
+    post_event_to_thread_with_priority(source, root_id, record(&ran, "low-priority"), 0);
+    post_event_to_thread_with_priority(source, root_id, record(&ran, "high-priority"), 10);
+
+    let watched = Arc::clone(&ran);
+    let owner = Owner::spawn(vec![root_id], 5, move || watched.lock().unwrap().len() >= 2);
+    let owner_tid = owner.tid;
+    assert_eq!(move_to_thread(&mut root.data, owner_tid, source), Ok(()));
+
+    assert!(
+        owner.finish(),
+        "transferred events must be delivered on target"
+    );
+    assert_eq!(
+        *ran.lock().unwrap(),
+        vec![("high-priority", owner_tid), ("low-priority", owner_tid)],
+        "Transferred events must respect priority ordering (qobject.cpp:1805-1815 / G7.5.c)"
     );
 }
 
