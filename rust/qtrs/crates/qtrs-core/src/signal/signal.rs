@@ -3,6 +3,7 @@
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -472,32 +473,30 @@ impl<T> Signal<T> {
 
             let is_same_thread = target_thread.map_or(true, |thread| thread == current_thread);
 
-            match sub.conn_type {
-                ConnectionType::Direct => match sub.dispatcher {
-                    SlotDispatcher::Direct(ref slot) => slot(value),
-                    SlotDispatcher::Queued {
-                        ref direct_slot, ..
-                    } => {
+            // Python/PySide6 isolates a raising slot (sys.excepthook) and continues with the
+            // remaining slots; Qt's doActivate has no such containment. The panic hook logs it.
+            let _ = catch_unwind(AssertUnwindSafe(|| match sub.conn_type {
+                ConnectionType::Direct => match &sub.dispatcher {
+                    SlotDispatcher::Direct(slot) => slot(value),
+                    SlotDispatcher::Queued { direct_slot, .. } => {
                         direct_slot(value);
                     }
                 },
-                ConnectionType::Auto if is_same_thread => match sub.dispatcher {
-                    SlotDispatcher::Direct(ref slot) => slot(value),
-                    SlotDispatcher::Queued {
-                        ref direct_slot, ..
-                    } => {
+                ConnectionType::Auto if is_same_thread => match &sub.dispatcher {
+                    SlotDispatcher::Direct(slot) => slot(value),
+                    SlotDispatcher::Queued { direct_slot, .. } => {
                         direct_slot(value);
                     }
                 },
-                _ => match sub.dispatcher {
-                    SlotDispatcher::Direct(ref slot) => {
+                _ => match &sub.dispatcher {
+                    SlotDispatcher::Direct(slot) => {
                         slot(value);
                     }
-                    SlotDispatcher::Queued { ref queued_fn, .. } => {
+                    SlotDispatcher::Queued { queued_fn, .. } => {
                         queued_fn(value, sub.receiver_id, target_thread, self.emitter_id());
                     }
                 },
-            }
+            }));
         }
     }
 }

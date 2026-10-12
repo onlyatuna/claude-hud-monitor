@@ -145,28 +145,28 @@ impl RefreshController {
             .name(format!("quota-{}", id))
             .spawn(move || {
                 let started = Instant::now();
-                let metrics_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    provider.fetch_usage()
-                }));
+                // The provider's panic is logged once below (Python `except Exception` path), so the
+                // panic hook stays silent for this call only.
+                let metrics_res = crate::logger::with_panic_log_suppressed(|| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        provider.fetch_usage()
+                    }))
+                });
                 let metrics = match metrics_res {
                     Ok(m) => m,
-                    Err(panic_info) => {
-                        let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    Err(panic_payload) => {
+                        let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
                             s.to_string()
-                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        } else if let Some(s) = panic_payload.downcast_ref::<String>() {
                             s.clone()
                         } else {
-                            "執行緒內部異常 (Worker thread panicked)".to_string()
+                            "非字串 panic payload".to_string()
                         };
-                        log::error!(
-                            "[RefreshController] Provider {} panicked: {}",
-                            id_owned,
-                            msg
-                        );
+                        warn!("provider={} failure=panic: {}", id_owned, msg);
                         UsageMetrics {
                             provider_id: id_owned.clone(),
-                            error: Some(format!("執行異常: {}", msg)),
-                            error_code: "PANIC".to_string(),
+                            error: Some("查詢失敗，請查看診斷紀錄".to_string()),
+                            error_code: "unexpected".to_string(),
                             ..Default::default()
                         }
                     }
@@ -333,11 +333,8 @@ mod tests {
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert_eq!(r.provider_id, "mock_panic");
-        assert_eq!(r.error_code, "PANIC");
-        assert!(
-            r.error.as_ref().unwrap().contains("Worker thread panicked")
-                || r.error.as_ref().unwrap().contains("Intentional mock")
-        );
+        assert_eq!(r.error_code, "unexpected");
+        assert_eq!(r.error.as_deref(), Some("查詢失敗，請查看診斷紀錄"));
 
         let state = ctrl.states.get("mock_panic").unwrap();
         assert!(

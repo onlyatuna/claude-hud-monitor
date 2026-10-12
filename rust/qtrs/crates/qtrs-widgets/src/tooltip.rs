@@ -21,6 +21,7 @@
 //!
 //! The 700 ms / 2 s / 300 ms / 10 s timers are the Qt tool tip protocol, not application debounce.
 //! Application state is per thread, like `QApplicationPrivate`.
+use qtrs_gui::text::might_be_rich_text;
 
 use crate::label::Label;
 use crate::widget::{Widget, WidgetRef, WidgetWeak};
@@ -349,7 +350,9 @@ fn new_tip_label(text: &str) -> Label {
     label.set_background_color(Some(palette.color(ColorGroup::Inactive, ColorRole::ToolTipBase)));
     label.set_color(palette.color(ColorGroup::Inactive, ColorRole::ToolTipText));
     label.set_font(qtrs_gui::text::Font::new(crate::label::APP_DEFAULT_FAMILY, 12.0));
-    label.base.set_style_sheet("QLabel { padding: 2px 4px; }");
+    label.set_type_name("QToolTip");
+    // `QTipLabel` margin: `1 + PM_ToolTipLabelFrameWidth` (qtooltip.cpp:107). Windows gives 2.
+    label.set_margin(2);
     label
 }
 
@@ -443,18 +446,29 @@ impl ToolTip {
             let tip = slot.as_mut().expect("created above");
             tip.text = text.to_string();
             tip.widget = widget;
+            let screen = tip_screen(pos);
             let size = {
                 let mut label = tip.label.borrow_mut();
                 let label = label
                     .as_any_mut()
                     .downcast_mut::<Label>()
                     .expect("the tip's root widget is a Label");
+                // `QTipLabel::updateSize` (qtooltip.cpp:152): rich text word-wraps.
+                let rich = might_be_rich_text(text);
+                label.set_rich(rich);
+                label.set_word_wrap(rich);
                 label.set_text(text);
-                label.size_hint()
+                let mut size = label.size_hint();
+                // qtooltip.cpp:155-157: a plain tip wider than the screen wraps to it.
+                if !label.word_wrap() && size.width > screen.width {
+                    label.set_word_wrap(true);
+                    size = label.size_hint();
+                }
+                size
             };
-            // `QTipLabel::updateSize`: the size hint plus one pixel of width.
+            // `QTipLabel::updateSize` adds one pixel of width (qtooltip.cpp:159).
             let size = Size::new(size.width + 1, size.height);
-            let origin = place_tip(pos, size, CURSOR_SIZE, tip_screen(pos));
+            let origin = place_tip(pos, size, CURSOR_SIZE, screen);
             tip.window.set_geometry(Rect::new(origin.x, origin.y, size.width, size.height));
             // `restartExpireTimer`: a new expiry cancels a pending hide.
             start_timer(&c.expire, expire_time_ms(text, msec_display_time));

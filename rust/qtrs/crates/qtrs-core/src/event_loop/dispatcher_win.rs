@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Once};
@@ -60,12 +61,23 @@ const CLASS_NAME: &[u16] = &[
     'w' as u16, 'C' as u16, 'l' as u16, 'a' as u16, 's' as u16, 's' as u16, 0,
 ];
 
+/// Window procedure entry point. Unwinding out of an `extern "system"` callback aborts the
+/// process, so a raising handler is contained here and the message falls back to the default.
 unsafe extern "system" fn internal_wnd_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    match catch_unwind(AssertUnwindSafe(|| {
+        internal_wnd_proc_inner(hwnd, msg, wparam, lparam)
+    })) {
+        Ok(result) => result,
+        Err(_) => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
+}
+
+unsafe fn internal_wnd_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if msg == WM_TIMER {
         let timer_id = wparam as u32;
         if crate::timer::has_thread_timer_context() {
@@ -89,6 +101,32 @@ unsafe extern "system" fn internal_wnd_proc(
     }
 
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// Restores `in_timer_event` (and the single-shot/KillTimer bookkeeping) on every exit path,
+/// including unwinding out of a raising timer slot.
+struct InTimerGuard {
+    id: TimerId,
+    raw_id: u32,
+    internal_hwnd: HWND,
+    single_shot: bool,
+}
+
+impl Drop for InTimerGuard {
+    fn drop(&mut self) {
+        if !self.single_shot {
+            crate::timer::with_thread_timer_context(|ctx| {
+                let mut reg = ctx.registry.lock().unwrap();
+                if let Some(entry) = reg.get_mut(self.id) {
+                    entry.in_timer_event = false;
+                } else {
+                    unsafe {
+                        KillTimer(self.internal_hwnd, self.raw_id as usize);
+                    }
+                }
+            });
+        }
+    }
 }
 
 fn dispatch_thread_timer(raw_id: u32, internal_hwnd: HWND) {
@@ -120,6 +158,12 @@ fn dispatch_thread_timer(raw_id: u32, internal_hwnd: HWND) {
     let Some(receiver) = receiver_opt else {
         return;
     };
+    let _in_timer = InTimerGuard {
+        id,
+        raw_id,
+        internal_hwnd,
+        single_shot,
+    };
 
     if single_shot {
         unsafe {
@@ -128,25 +172,15 @@ fn dispatch_thread_timer(raw_id: u32, internal_hwnd: HWND) {
         remove_posted_timer_event(internal_hwnd, raw_id);
     }
 
-    if matches!(
-        crate::event_loop::deliver_timer_event(receiver, raw_id as u64),
-        crate::event_loop::TimerDelivery::NotDeliverable
-    ) {
-        crate::timer::dispatch_single_shot_callback(receiver);
-    }
-
-    if !single_shot {
-        crate::timer::with_thread_timer_context(|ctx| {
-            let mut reg = ctx.registry.lock().unwrap();
-            if let Some(entry) = reg.get_mut(id) {
-                entry.in_timer_event = false;
-            } else {
-                unsafe {
-                    KillTimer(internal_hwnd, raw_id as usize);
-                }
-            }
-        });
-    }
+    // Python/PySide6 contains a raising timer slot and keeps the loop and other timers running.
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if matches!(
+            crate::event_loop::deliver_timer_event(receiver, raw_id as u64),
+            crate::event_loop::TimerDelivery::NotDeliverable
+        ) {
+            crate::timer::dispatch_single_shot_callback(receiver);
+        }
+    }));
 }
 
 static REGISTER_CLASS_ONCE: Once = Once::new();

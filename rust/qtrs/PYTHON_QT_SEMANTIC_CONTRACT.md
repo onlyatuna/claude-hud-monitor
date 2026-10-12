@@ -564,7 +564,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G7.6.a [P1, RAN；已修復：RC-121]** （修復前）`ThreadHandle::is_finished()` 在 `join(self)` 之前**恆為 false**（旗標由 builder 建立卻從未與執行緒共享，只有消耗 handle 的 `join` 會設）。
   - **G7.6.b [P1, RAN；已修復：RC-121]** （修復前）`ThreadBuilder::priority` 存了但從不套用。
   - **G7.6.c [P1, RAN；已修復：RC-121]** （修復前）無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning`。
-  - **G7.6.d [P2]** 閉包 panic 會跳過 `clear_current`（無 guard）。
+  - **G7.6.d [P2, RAN；已修復：RC-128]** （修復前）閉包 panic 會跳過 `clear_current`（無 guard）。
   - **G7.6.e [P2]** `EventLoopThreadHandle` 無 Drop／join，丟棄即分離。
   - **G7.6.f [P1, RAN（macOS CI）；已修復：RC-44]** macOS 上每個執行緒的事件迴圈都用 `CocoaEventDispatcher`，它要求主執行緒，所以 `spawn_with_event_loop` 與任何非主執行緒的 `EventLoop::process_events`／`exec` 一定 panic。
   - **G7.6.g [P1, RAN（macOS CI）；已修復：RC-45]** dispatcher 依「是否主執行緒」選擇（RC-44），不是依事件迴圈的建立路徑：macOS 上只有 core 應用程式的主執行緒用 Cocoa（Qt 用 UNIX），而未呼叫 `init_current` 的 `std::thread` 若先搶到主執行緒判定也會拿到 Cocoa。
@@ -599,7 +599,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：provider worker（`thread::Builder`，`refresh_controller.rs:132-197`）→ `mpsc` → UI 執行緒 100 ms `poll_timer`（`main.rs:554-573`）**加上** worker 呼叫 `notify_callback` 立刻 post MetaCall（`main.rs:525-537`）。熱鍵：Win32 訊息迴圈執行緒設 `AtomicBool` 並 notify（`hotkey.rs:263-279`）→ post MetaCall（`main.rs:471-483`）。單一實例 IPC 執行緒只設 `WAKE_REQUESTED`（`main.rs:279-284`），由 1 s 計時器消費（`:546`）。
 - **Known gap**
   - **G7.9.a [P2, READ；P0 主張已被讀碼推翻，待驗證]** 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於 provider worker（`hud_window.rs:408`）與熱鍵執行緒（`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`，早於註冊）只寫 atomic。**這不證明所有 interleaving 皆安全**（未執行）；它只是 G3.2.b 的假設性表現，G3.2.b 修復後自然消除。**不是 `D`。**
-  - **G7.9.b [P1]** 發佈設定 `panic = "abort"`（`rust/Cargo.toml`）：任何 worker panic 會終止整個行程；Python 有 `threading.excepthook`／`sys.excepthook`（`core/logger.py:64,73`），行為不同。
+  - **G7.9.b [P1, RAN；已修復：RC-128]** （修復前）發佈設定 `panic = "abort"`（`rust/Cargo.toml`）：任何 worker panic 會終止整個行程；Python 有 `threading.excepthook`／`sys.excepthook`（`core/logger.py:64,73`），行為不同。
 - **Test**：必要：`worker_post_before_main_loop_registered_is_not_lost`（App 層，模擬啟動順序）。
 - **HUD usage**：見上。
 
@@ -703,7 +703,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`setToolTip` 在 hover 一段時間後顯示。
 - **qtrs required**：MUST widget 層級 tooltip（Python HUD 以 tooltip 顯示錯誤與過期資料）。
 - **Current implementation**：`IMPLEMENTED`（RC-11c；Win32 真實視窗驗證）。`Widget::tool_tip/set_tool_tip/tool_tip_duration/always_show_tool_tips`、`EventKind::ToolTip{x,y,global_x,global_y}`（`QHelpEvent` 形狀，無 `text`）、`qtrs-widgets/src/tooltip.rs`（`ToolTip::show_text/hide_text/is_visible/text/geometry`、純函式 `place_tip`／`expire_time_ms`）、`EventTreeDispatcher::dispatch_mouse_move`。
-- **Known gap**：**G8.8.a [P0, READ；已修復：RC-11c + HUD 接線]** Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` 設定 tooltip；Rust HUD 已在 `provider_card.rs`（卡片 `container`）、`usage_table.rs`（5 個 value cell + header + dial + m2_val 的 run-out 備註）、`hud_window.rs`（`ghost_label`、`layout_toggle_btn`）設定相同文字（測試 `ui/tool_tip_tests.rs` 7 項，修前全部失敗；真實 `ClaudeHUD.exe` Windows smoke：停留約 1.3 s 後出現 `WS_EX_NOACTIVATE|TOPMOST` 的 tip 視窗、未搶前景、移開與點擊後消失、子 widget 退回父層 tooltip；tip 外觀未取得像素，仍須 MANUAL WINDOWS VERIFICATION）；**G8.8.b [P2, READ]** 無 `QToolTip::showText` 的 `rect` 參數（`setTipRect`，游標離開該矩形即隱藏）與 `QToolTip::font/palette/setFont/setPalette`；**G8.8.c [P2, READ]** 游標大小固定為 `QPlatformCursor` 預設的 16×16 邏輯像素（偏移 `(2,16)`）。Qt 的 `placeTip` 取 `cursor->size()`（Windows 為 `QWindowsCursor::size()`，由登錄檔 `CursorBaseSize` 與 DPI 算出，`qwindowscursor.cpp:675-692`），再經 `QHighDpi::fromNativePixels` 除以 DPR（`qtooltip.cpp:325-328`）；qtrs 兩步都沒做。因此 tip 相對游標的偏移只有在「預設 100% DPI 且登錄值剛好得 16」時才可能與 Qt 一致 `[INFERENCE]`；DPR≠1 或自訂游標大小時偏移必然不同，須手動驗證。**位置幾何與 Qt 的一致性只由 `place_tip` 純函式測試（手算自 `qtooltip.cpp:349-361`）支持，不涵蓋游標大小；真實視窗測試只證明接線，不是 Qt 幾何 parity 證明**；**G8.8.d [P1, READ]** tip 內容是單行 `Label`：沒有自動換行（Qt 在比螢幕寬時換行，`qtooltip.cpp:152-157`）、沒有 rich text（`Qt::mightBeRichText`）、字串中的換行未驗證。Python 的 tooltip 是否含換行／HTML 待 Phase 4 核對；**G8.8.e [P2, READ]** `set_tool_tip` 不送 `ToolTipChange`（無 `EventKind`、無 `changeEvent`）；`StatusTip`、`WhatsThis` 未實作；`Action::tool_tip` 未接到 menu／toolbar；**G8.8.f [P2, READ]** tip 視窗只重用一個實例（Qt 每次新建並 `deleteLater`）；無淡入淡出；`WindowActivate/Deactivate/ActivationChange` 不存在（G11.1.d），tip 因 `FocusIn/FocusOut` 而隱藏，不因啟用狀態改變；**G8.8.g [P2, `[INFERENCE]`]** 混合 DPI：tip 視窗以主螢幕 DPR 建立，再移到游標所在螢幕；未在異質 DPI 實機驗證。
+- **Known gap**：**G8.8.a [P0, READ；已修復：RC-11c + HUD 接線]** Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,160` 設定 tooltip；Rust HUD 已在 `provider_card.rs`（卡片 `container`）、`usage_table.rs`（5 個 value cell + header + dial + m2_val 的 run-out 備註）、`hud_window.rs`（`ghost_label`、`layout_toggle_btn`）設定相同文字（測試 `ui/tool_tip_tests.rs` 7 項，修前全部失敗；真實 `ClaudeHUD.exe` Windows smoke：停留約 1.3 s 後出現 `WS_EX_NOACTIVATE|TOPMOST` 的 tip 視窗、未搶前景、移開與點擊後消失、子 widget 退回父層 tooltip；tip 外觀未取得像素，仍須 MANUAL WINDOWS VERIFICATION）；**G8.8.b [P2, READ]** 無 `QToolTip::showText` 的 `rect` 參數（`setTipRect`，游標離開該矩形即隱藏）與 `QToolTip::font/palette/setFont/setPalette`；**G8.8.c [P2, READ]** 游標大小固定為 `QPlatformCursor` 預設的 16×16 邏輯像素（偏移 `(2,16)`）。Qt 的 `placeTip` 取 `cursor->size()`（Windows 為 `QWindowsCursor::size()`，由登錄檔 `CursorBaseSize` 與 DPI 算出，`qwindowscursor.cpp:675-692`），再經 `QHighDpi::fromNativePixels` 除以 DPR（`qtooltip.cpp:325-328`）；qtrs 兩步都沒做。因此 tip 相對游標的偏移只有在「預設 100% DPI 且登錄值剛好得 16」時才可能與 Qt 一致 `[INFERENCE]`；DPR≠1 或自訂游標大小時偏移必然不同，須手動驗證。**位置幾何與 Qt 的一致性只由 `place_tip` 純函式測試（手算自 `qtooltip.cpp:349-361`）支持，不涵蓋游標大小；真實視窗測試只證明接線，不是 Qt 幾何 parity 證明**；**G8.8.d [P1, RAN；已修復：RC-126]** （修復前） tip 內容是單行 `Label`：沒有自動換行（Qt 在比螢幕寬時換行，`qtooltip.cpp:152-157`）、沒有 rich text（`Qt::mightBeRichText`）、字串中的換行未驗證。Python 的 tooltip 是否含換行／HTML 待 Phase 4 核對；**G8.8.e [P2, READ]** `set_tool_tip` 不送 `ToolTipChange`（無 `EventKind`、無 `changeEvent`）；`StatusTip`、`WhatsThis` 未實作；`Action::tool_tip` 未接到 menu／toolbar；**G8.8.f [P2, READ]** tip 視窗只重用一個實例（Qt 每次新建並 `deleteLater`）；無淡入淡出；`WindowActivate/Deactivate/ActivationChange` 不存在（G11.1.d），tip 因 `FocusIn/FocusOut` 而隱藏，不因啟用狀態改變；**G8.8.g [P2, `[INFERENCE]`]** 混合 DPI：tip 視窗以主螢幕 DPR 建立，再移到游標所在螢幕；未在異質 DPI 實機驗證。
 - **Test**：`qtrs-widgets/tests/test_tooltip.rs`（26 項：純函式 `place_tip`／`expire_time_ms`；喚醒延遲、取消、fall-asleep、冒泡與座標、`showText` 更換／位置／存活；真實視窗：按鈕狀態、非活動視窗與 `WA_AlwaysShowToolTips`、不搶前景）。tip 外觀（顏色、字型、圓角）不自動斷言，須手動驗證。
 - **HUD usage**：見上；HUD 已設定與 Python 相同的 tooltip（見 G8.8.a，`rust/src/ui/tool_tip_tests.rs`）。
 
@@ -1146,7 +1146,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **G12.3.a [P1, RAN；已修復：RC-117]** （修復前）QMenu 規則被解析但不消費（G8.5.f）；Rust 卡片樣式表**丟掉了** QMenu 規則，Python 卡片樣式表有（`rust/src/ui/styles.rs:128-327`）；表格模式的 QMenu 數值是從 `get_hud_stylesheet` 複製的數字（`rust/src/ui/tray_icon.rs:258-278`）。
 - **G12.3.b [P0, READ；已修復：RC-15]** Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px`（`styles.rs:192,291`），Python 沒有此屬性（`styles.py:116-124`）。
 - **G12.3.c [P1, RAN；已修復：RC-74（面板色依 `vibrant` 選擇；樣式表本身不畫面板）]** （修復前）表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_solid`；Rust 不接受 `vibrant`，一律以 `panel_bg_vibrant` 自繪（`styles.rs:371`、`hud_window.rs:88-92`）。
-- **G12.3.d [P1]** 型別比對無繼承；Label 的 `pseudo_states` 為空（`:hover/:disabled` 對 label 不成立）。
+- **G12.3.d [P1, RAN；已修復：RC-127]** （修復前；QLabel→QFrame、QPushButton→QAbstractButton 的繼承 RC-32 已涵蓋，殘餘的 QObject／QToolTip 由 RC-127 修正；Label `:hover` 仍未處理）型別比對無繼承；Label 的 `pseudo_states` 為空（`:hover/:disabled` 對 label 不成立）。
 - **G12.3.e [P2]** `font-family` 清單以一個原始字串存、查找時才拆；generic（`sans-serif`/`monospace`）被跳過而非映射到系統字型，`'Consolas', monospace` 在沒有 Consolas 時沒有等寬退路。**Qt 依據**：Linux 的 `QFontconfigDatabase::resolveFontFamilyAlias` 把家族字串交給 `FcConfigSubstitute`（`qfontconfigdatabase.cpp:970-995`），`fallbacksForFamily` 另把 style hint 轉成 fontconfig 的 `sans-serif`／`monospace` 等（`getFcFamilyForStyleHint`，`:347-367`）；macOS 無此家族時依 style hint 取 Menlo 等（`qcoretextfontdatabase.mm:625-640`）；Windows 取 Courier New 等（`qwindowsfontdatabasebase.cpp:939-961`）。與 G12.6.d 同一根因（字型來源與缺字型規則），一起處理，不單獨修。CSS 的 generic 名稱在 Qt 內經哪一條路徑變成 style hint，尚未追到 `qcssparser.cpp`／`qstylesheetstyle.cpp`，`[INFERENCE]`。
 - **G12.3.f [P2, INFERENCE]** `font-weight: 800` 映射到 `FontWeight::Black`；列舉無 ExtraBold，字型選擇只分 regular／bold（`font_database.rs`）；Qt 的數值映射未驗證。
 - **G12.3.g [P2]** `font-size` px 取整（`test_label_box_model.rs::qss_pixel_sizes_are_rounded_like_qt`）；`letter-spacing` 於 `label.rs`。
@@ -1199,7 +1199,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.5.s [P0, READ；= G8.5.d；已修復：RC-10] | `Window::set_style_sheet` 為 app 全域 | G8.5.d | 修復 |
 | G12.5.t [P0, READ；= G11.5.a；已修復：RC-09 implementation complete / DirectComposition hardware verification pending] | DComp 路徑 opacity 無效（待實測） | G11.5.a | 實測後修復 |
 | G12.5.u [P2] | 色彩／字型解析細節 | G12.3.e–h | 驗證 |
-| G12.5.v [P1] | 發佈 profile `panic = "abort"` vs Python excepthook | G7.9.b | 決定 |
+| G12.5.v [P1, RAN；已修復：RC-128] | 發佈 profile `panic = "abort"` vs Python excepthook | G7.9.b | 已依 Python 修正（RC-128） |
 | G12.5.w [P2] | `rust/README.md` 仍描述 egui/eframe/reqwest | `rust/README.md:3,27,95` | 文件修正 |
 
 ### C12.6 既有的對照 harness 與未涵蓋範圍
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 180 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.k、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 185 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.5.a、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.k、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.d、G10.7.e、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.4.a、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1413,7 +1413,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.6.a | P1, RAN；已修復：RC-121 | `ThreadHandle::is_finished()` 在 `join(self)` 之前**恆為 false** |
 | G7.6.b | P1, RAN；已修復：RC-121 | `ThreadBuilder::priority` 存了但從不套用 |
 | G7.6.c | P1, RAN；已修復：RC-121 | 無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning` |
-| G7.6.d | P2 | 閉包 panic 會跳過 `clear_current` |
+| G7.6.d | P2, RAN；已修復：RC-128 | 閉包 panic 會跳過 `clear_current` |
 | G7.6.e | P2 | `EventLoopThreadHandle` 無 Drop／join，丟棄即分離 |
 | G7.6.f | P1, RAN（macOS CI）；已修復：RC-44 | macOS 非主執行緒的事件迴圈用 Cocoa dispatcher 而 panic |
 | G7.6.g | P1, RAN（macOS CI）；已修復：RC-45 | dispatcher 依主執行緒身分而非建立路徑選擇 |
@@ -1426,7 +1426,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.7.a | P2, READ | 靜默 no-op 取代警告 |
 | G7.7.b | P2, READ | 無擁有者檢查 |
 | G7.9.a | P2, READ；P0 主張已被讀碼推翻，待驗證 | 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new` |
-| G7.9.b | P1 | 發佈設定 `panic = "abort"` |
+| G7.9.b | P1, RAN；已修復：RC-128 | 發佈設定 `panic = "abort"` |
 | G8.1.a | P1, READ；已修復：RC-26 | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ | 隱藏 item 的 geometry 被設為 (0,0,0,0) |
 | G8.1.c | P1, RAN；已修復：RC-112 | 無 Show/Hide 事件 |
@@ -1469,7 +1469,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.8.a | P0, READ；已修復：RC-11c + HUD 接線 | Python 在 `provider_card.py:125`、`usage_table.py:318,328,339,373-375`、`hud_window.py:155,16 |
 | G8.8.b | P2, READ | 無 `showText` 的 `rect` 參數、`QToolTip::font/palette` |
 | G8.8.c | P2, READ | 游標大小固定 16×16 邏輯像素；`QWindowsCursor::size()` 與 `fromNativePixels`（DPR）未建模 |
-| G8.8.d | P1, READ | tip 無自動換行、無 rich text |
+| G8.8.d | P1, RAN；已修復：RC-126 | tip 無自動換行、無 rich text |
 | G8.8.e | P2, READ | 不送 `ToolTipChange`；`StatusTip`／`WhatsThis`／`Action::tool_tip` 未接 |
 | G8.8.f | P2, READ | tip 視窗重用、無淡入淡出、不因啟用狀態改變而隱藏（G11.1.d） |
 | G8.8.g | P2, `[INFERENCE]` | 混合 DPI 的 tip 視窗未實測 |
@@ -1602,7 +1602,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.3.a | P1, RAN；已修復：RC-117 | QMenu 規則被解析但不消費 |
 | G12.3.b | P0, READ；已修復：RC-15 | Rust 卡片 `QLabel#Badge` 加了 `max-height: 15px` |
 | G12.3.c | P1, RAN；已修復：RC-74 | 表格模式面板：Python 的 `get_hud_stylesheet(theme, vibrant)` 依 `vibrant` 選半透明 `panel` 或 `panel_sol |
-| G12.3.d | P1 | 型別比對無繼承 |
+| G12.3.d | P1, RAN；已修復：RC-127 | 型別比對無繼承 |
 | G12.3.e | P2 | `font-family` 清單以一個原始字串存、查找時才拆 |
 | G12.3.f | P2, INFERENCE | `font-weight: 800` 映射到 `FontWeight::Black` |
 | G12.3.g | P2 | `font-size` px 取整 |
@@ -1633,7 +1633,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.6.c | P2 | 測試序列化靠環境變數；全域 DPR 仍是行程全域 |
 | G12.6.d | P1, RAN | 字型來源與缺字型替換規則與 Qt（fontconfig／CoreText／GDI）不同 |
 | G12.5.u | P2 | 色彩／字型解析細節 |
-| G12.5.v | P1 | 發佈 profile `panic = "abort"` vs Python excepthook |
+| G12.5.v | P1, RAN；已修復：RC-128 | 發佈 profile `panic = "abort"` vs Python excepthook |
 | G12.5.w | P2 | `rust/README.md` 仍描述 egui/eframe/reqwest |
 | G12.8.a | P1, RAN；已修復：RC-14 | 指標值字級：Python widget-local `font-size: 14px`；Rust 只有 `set_font(14)`，被 app sheet `QLabel#MetricValue { font-size: 16px }` 蓋過（符合 Qt：樣式表字級勝過 `setFont`），有效字級 16，`sizeHint` 高度 19 vs 17。RC-14 的第一個分歧 |
 | G12.8.b | P1, RAN；已修復：RC-14 | 橫向 body spacing：Python 8（`hud_window.py:337`），Rust 預設 6；卡片寬 213 vs 211 |
@@ -3213,3 +3213,25 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **驗證**：`a_grid_cell_on_an_aligned_vertical_axis_takes_height_for_width` 修正前 FAIL `left: (0, 40, 40, 20) right: (0, 10, 40, 80)`；`a_vertical_box_gives_a_height_for_width_item_the_height_for_its_width` 停用核心時 FAIL `left: (0, 0, 40, 24) right: (0, 0, 40, 44)`（PySide6 兩項探針）。
 - **Residual**：GridLayout 的 HFW、QLabel 換行（qtrs-widgets 沒有 word_wrap）、HFW 快取、`minimumHeightForWidth`、qBoxLayout tryWidth 未移植；G9.2.d (2)(3) 未處理。Python HUD 沒有 `setWordWrap`／`heightForWidth`，HUD 無可見影響。
 - **共同驗證（RC-123..125）**：qtrs workspace（略過 `real_windows`）119 個 test binary 全 ok；HUD 132 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 與改動前逐像素比對：只有時鐘與由時間推得的重設時間文字不同，選單完全相同。
+
+#### RC-126 多行／換行 label 的尺寸與繪製一致；tooltip 依 Qt 換行、邊距與型別（G8.8.d）
+- **Qt 依據**：`[QT-SRC widgets/widgets/qtooltip.cpp:100-160]` `QTipLabel`：margin（1 + `PM_ToolTipLabelFrameWidth`）、`setWordWrap(Qt::mightBeRichText(text))`、超過螢幕寬才對純文字換行（155）、寬度 +1；`[QT-SRC widgets/widgets/qlabel.cpp:574-625]` `sizeForWidth`／tryWidth；`[QT-SRC gui/text/qtextdocument.cpp:72-130]` `mightBeRichText`、`837-857` `adjustSize`；`gui/text/qtexthtmlparser.cpp:355-444` 元素表。
+- **根因**：`Label::size_hint` 把多行文字當一行量（畫成多行）；tip label 沒有換行／rich 狀態、沒有 Qt 的寬度與 margin 規則；`TextDocument::draw` 忽略原點；沒有 rich text 偵測。
+- **修正**：`qtrs-gui` `might_be_rich_text`、`TextDocument::adjust_size`、`draw` 原點修正；`Label` 加 word_wrap／rich／margin，尺寸與繪製共用同一文字量測；tooltip 型別為 `QToolTip`、margin 2、rich 偵測、依螢幕寬換行、寬 +1，移除舊的 QLabel padding 樣式表。
+- **驗證**：`test_tooltip.rs` `a_long_plain_tip_word_wraps`（修正前 FAIL「plain tip did not wrap: height 19, one line 19」）、`a_long_rich_tip_word_wraps`（同）、`a_multi_line_tip_is_as_tall_as_its_lines`（`left: 19 right: 49`）；`qtrs-gui/tests/test_rich_text_detection.rs` 3 個（新 API）。PySide6 offscreen 對照：「line one\nline two」Qt 50×33、qtrs 50×34；HUD 兩行 run-out tip Qt 248×29、qtrs 235×34（差異來自 tip 字型：qtrs 12、Qt 預設 9pt，G8.8.b）；200 字錯誤 tip 因兩邊螢幕寬不同（800 vs 1536）不可比，兩邊都依 `qtooltip.cpp:155` 規則。
+- **Residual**：tip 字型（G8.8.b）；Windows 原生 style 的 tip margin（offscreen Fusion 量到 3，qtrs 用 2）未驗證；`average_char_width` 為 size×0.6，tryWidth 起點與 Qt 不同；純文字換行非 Qt 的斷行演算法。
+
+#### RC-127 QSS 的 `QObject` 選擇器套用到所有 widget；tooltip 只符合 `QToolTip`（G12.3.d 殘餘）
+- **Qt 依據**：`[QT-SRC widgets/styles/qstylesheetstyle.cpp:1579-1601]` 型別比對沿 `metaObject()->superClass()`，每個 widget 都是 QObject；`1585-1586` `QTipLabel` 以 `QToolTip` 比對。
+- **修正**：`style/stylesheet.rs` `node_name_equals`：`QObject` 符合所有 widget；`QToolTip` 為獨立型別，tip 不再吃 QLabel／QFrame／QWidget 規則。
+- **驗證**：新 test binary `test_stylesheet_type_inheritance.rs`：`qobject_selector_styles_every_widget` 修正前 FAIL `:69:5 left: None right: Some(red)`；`a_tool_tip_is_a_qtooltip_and_not_a_qlabel` `:77:5 left: Some(red) right: None`。
+- **Residual**：Label 的 `:hover` pseudo-state 未處理。
+
+#### RC-128 release 改為 unwind；Python 格式的未處理例外記錄；slot／posted event／timer／WndProc／COM／worker 邊界攔截 panic（G12.5.v、G7.9.b、G7.6.d）
+- **Python 依據**：`python/core/logger.py:63-70` `sys.excepthook` 記錄「Unhandled exception in main thread:」後繼續；`72-82` `threading.excepthook` 記錄「Unhandled exception in background thread '{name}':」（無名稱用 'unknown'）；`python/core/refresh_controller.py:80-88` worker 例外記 warning `provider=%s failure=%s`，錯誤訊息「查詢失敗，請查看診斷紀錄」、error_code `unexpected`。PyQt 安裝自訂 hook 時不 `qFatal`（`qpycore_public_api.cpp:103-110, 224-226`）。
+- **根因**：`rust/Cargo.toml` release `panic = "abort"`，`catch_unwind` 全部失效；沒有 panic hook；`Signal::emit`、`pump_posted_events`、timer 派送、`extern "system"` callback 沒有攔截點（Rust ≥ 1.81 從 `extern "system"` unwind 直接 abort）；`in_timer_event`、loop level、`ThreadContext` 在 unwind 時不還原。
+- **修正**：release `panic = "unwind"`；`logger.rs` 在 `setup_logging` 安裝 Python 格式 panic hook（主執行緒／背景執行緒名稱）；`Signal::emit` 每個 subscriber、`pump_posted_events`、Windows timer 派送以 `catch_unwind` 攔截；`internal_wnd_proc`、`native_window_proc`、`tray_window_proc`、4 個 `IDropTarget` callback 攔截後回預設結果；`LoopLevelGuard`、`InTimerGuard`、`ClearContextOnDrop` RAII；HUD 供應者 panic 依 Python 錯誤路徑回報。
+- **驗證**：新 test binary `test_panic_containment.rs`：`signal_slot_panic_does_not_stop_later_slots`、`posted_event_panic_does_not_stop_later_events` 修正前 FAIL（`:21:13`、`:47:13` panic 未被攔截）；移除 pump 攔截時再次 FAIL。HUD `logger::tests` 兩個（記錄格式）、`refresh_controller::tests::test_worker_panic_catch`（斷言改為 Python 錯誤路徑）。WndProc／tray／COM／timer／執行緒攔截沒有無頭測試，只經編譯與既有測試。
+- **代價**：release exe 3,945,472 → 5,328,384 bytes（unwind 約 +1.27 MB，程式碼 +0.11 MB）。
+- **Residual**：refresh worker 的 `tx.send`／callback 不在攔截內（panic 結束 worker，hook 會記錄；`running` 可能停在 true，Python `_complete` 先設 false）；非 Windows dispatcher 的 timer 未攔截；`THREAD_EVENT_HANDLES`／`TRAY_INSTANCES` 的 std Mutex 在攔截後可能 poison；攔截時正在送的 posted event 被丟棄。
+- **共同驗證（RC-126..128）**：qtrs workspace（略過 `real_windows`）121 個 test binary 全 ok；HUD 134 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG。

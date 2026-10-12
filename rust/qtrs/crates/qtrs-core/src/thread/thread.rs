@@ -320,6 +320,16 @@ impl Default for ThreadBuilder {
     }
 }
 
+/// Clears the thread's `ThreadContext` on every exit path, including unwinding out of the body.
+/// Declared before `FinishGuard`, so `finished` is still emitted while the context is installed.
+struct ClearContextOnDrop;
+
+impl Drop for ClearContextOnDrop {
+    fn drop(&mut self) {
+        ThreadContext::clear_current();
+    }
+}
+
 impl ThreadBuilder {
     /// Creates a default thread builder.
     pub fn new() -> Self {
@@ -384,6 +394,7 @@ impl ThreadBuilder {
             CURRENT_INTERRUPTION_FLAG.with(|flag| {
                 *flag.borrow_mut() = Some(flag_clone);
             });
+            let _clear_context = ClearContextOnDrop;
 
             thread_started.emit(&());
             let guard = FinishGuard {
@@ -393,7 +404,6 @@ impl ThreadBuilder {
             let res = f();
             // `finished` is emitted while this thread's context is still installed.
             drop(guard);
-            ThreadContext::clear_current();
             res
         })?;
 

@@ -195,7 +195,7 @@ fn selector_matches(selector: &QCssBasicSelector, ctx: &WidgetStyleContext) -> b
 
     // 3. Type name match (e.g. `QLabel`, `QProgressBar`): the class or any class it inherits.
     if let Some(elem) = &selector.element_name {
-        if elem != "*" && elem != "QWidget" && !inherits(ctx.type_name, elem) {
+        if elem != "*" && !node_name_equals(ctx.type_name, elem) {
             return false;
         }
     }
@@ -224,12 +224,17 @@ fn selector_matches(selector: &QCssBasicSelector, ctx: &WidgetStyleContext) -> b
     true
 }
 
-/// Whether the Qt class `type_name` is `class` or inherits it, as walked by
-/// `QStyleSheetStyleSelector::nodeNameEquals` (`metaObject()->superClass()`,
-/// qstylesheetstyle.cpp:1579-1601). Every class inherits `QWidget`, checked by the caller. A class
-/// qtrs does not know matches its own name only.
-fn inherits(type_name: &str, class: &str) -> bool {
-    type_name == class
+/// Whether a widget of Qt class `type_name` matches the type selector `class`, as
+/// `QStyleSheetStyleSelector::nodeNameEquals` decides it (qstylesheetstyle.cpp:1579-1601). A
+/// tip (`QTipLabel`) matches `QToolTip` only (1585-1586). Any other widget matches its own class,
+/// every class it inherits from, `QWidget` and `QObject`. The base-class pairs are the ones qtrs
+/// models (RC-32); a class qtrs does not know matches its own name and the base classes above.
+fn node_name_equals(type_name: &str, class: &str) -> bool {
+    if type_name == "QToolTip" {
+        return class == "QToolTip";
+    }
+    matches!(class, "QObject" | "QWidget")
+        || type_name == class
         || matches!(
             (type_name, class),
             ("QLabel", "QFrame") | ("QPushButton", "QAbstractButton")

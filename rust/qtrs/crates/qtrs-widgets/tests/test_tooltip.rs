@@ -567,6 +567,48 @@ fn an_empty_text_hides_the_tip_after_the_hide_delay() {
     assert!(ToolTip::is_visible(), "QTipLabel::hideTip waits 300 ms");
     assert!(pump_until(&mut el, Duration::from_millis(1500), || !ToolTip::is_visible()));
 }
+// Tip text geometry: QToolTip::updateSize (qtooltip.cpp:143-160) and QLabel::sizeForWidth.
+
+fn tip_height(text: &str) -> i32 {
+    ToolTip::show_text(Point::new(300, 300), text, None, -1);
+    ToolTip::geometry().expect("visible").height
+}
+
+#[test]
+fn a_long_plain_tip_word_wraps() {
+    let _el = EventLoop::new();
+    let one = tip_height("word");
+    let line = one - 4;
+    let h = tip_height(&"word ".repeat(100));
+    assert!(
+        h >= 3 * line + 4,
+        "plain tip did not wrap: height {h}, one line {one}"
+    );
+}
+
+#[test]
+fn a_long_rich_tip_word_wraps() {
+    let _el = EventLoop::new();
+    let one = tip_height("word");
+    let line = one - 4;
+    let h = tip_height(&"<b>word </b>".repeat(200));
+    assert!(
+        h >= 3 * line + 4,
+        "rich tip did not wrap: height {h}, one line {one}"
+    );
+}
+
+#[test]
+fn a_multi_line_tip_is_as_tall_as_its_lines() {
+    let _el = EventLoop::new();
+    let one = tip_height("a");
+    let line = one - 4;
+    assert_eq!(
+        tip_height("a\nb\nc"),
+        3 * line + 4,
+        "one line of height per \\n-separated line"
+    );
+}
 
 // ---- real windows: activation gate, button state, no focus stealing -------------------------
 

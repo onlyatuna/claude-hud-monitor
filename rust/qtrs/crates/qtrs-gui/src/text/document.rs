@@ -8,10 +8,13 @@ use crate::paint::painter::Painter;
 use crate::text::block::TextBlock;
 use crate::text::document_fragment::TextDocumentFragment;
 use crate::text::font::Font;
+use crate::text::font_metrics::FontMetrics;
 use crate::text::format::TextCharFormat;
 use crate::text::fragment::TextFragment;
+use crate::text::layout::TextLayout;
 use crate::text::markup;
 use crate::text::position::{byte_to_grapheme, grapheme_count, grapheme_to_byte};
+use tiny_skia::Color;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Rich text document model (`QTextDocument`).
@@ -118,13 +121,8 @@ impl TextDocument {
     /// Computes the document layout and returns all laid out lines across blocks.
     pub fn layout_lines(&self) -> Vec<crate::text::line::TextLine> {
         let mut lines = Vec::new();
-        let wrap = self.page_size.map(|s| s.width);
         for block in &self.blocks {
-            let mut layout = block.create_layout(&self.default_font);
-            if let Some(w) = wrap {
-                layout.set_wrap_width(Some(w));
-                layout.do_layout();
-            }
+            let layout = self.block_layout(block);
             for i in 0..layout.line_count() {
                 if let Some(l) = layout.line_at(i) {
                     lines.push(l.clone());
@@ -146,6 +144,42 @@ impl TextDocument {
             total_h += l.height();
         }
         SizeF::new(max_w, total_h)
+    }
+
+    /// Sizes the text to its ideal width (`QTextDocument::adjustSize`, qtextdocument.cpp:837-857).
+    ///
+    /// Starts from a width of 80 `x` characters, then narrows the width towards a 5:3 aspect ratio
+    /// so a long paragraph is neither one line nor a tall column. Finally the width is set to the
+    /// ideal (widest unwrapped line) width.
+    pub fn adjust_size(&mut self) {
+        let font = self.default_font.clone();
+        let x_advance = FontMetrics::from_font(&font)
+            .horizontal_advance_exact("x", &font)
+            .round();
+        let mw = x_advance * 80.0;
+        self.set_text_width(mw);
+        let mut size = self.size();
+        if size.width != 0.0 {
+            let mut w = int_sqrt(5.0 * size.height * size.width / 3.0);
+            self.set_text_width(w.min(mw));
+            size = self.size();
+            if w * 3.0 < 5.0 * size.height {
+                w = int_sqrt(2.0 * size.height * size.width);
+                self.set_text_width(w.min(mw));
+            }
+        }
+        let ideal = self.size().width;
+        self.set_text_width(ideal);
+    }
+
+    /// Lays out one block at the document's text width (`setTextWidth` wrap).
+    fn block_layout(&self, block: &TextBlock) -> TextLayout {
+        let mut layout = block.create_layout(&self.default_font);
+        if let Some(w) = self.page_size.map(|s| s.width) {
+            layout.set_wrap_width(Some(w));
+            layout.do_layout();
+        }
+        layout
     }
 
     /// Returns total number of paragraph blocks.
@@ -492,15 +526,23 @@ impl TextDocument {
         self.is_modified = true;
     }
 
-    /// Renders all blocks to a `Painter`.
+    /// Renders all blocks to a `Painter` in black where no format sets a colour.
     pub fn draw(&self, painter: &mut Painter, pos: PointF) {
+        self.draw_with_color(painter, pos, Color::BLACK);
+    }
+
+    /// Renders all blocks at `pos`, wrapped to the text width, with `default_color` where no format
+    /// sets a foreground colour. Blocks stack by their laid-out line heights, as `size()` measures.
+    pub fn draw_with_color(&self, painter: &mut Painter, pos: PointF, default_color: Color) {
         let mut curr_y = pos.y;
         for block in &self.blocks {
-            let mut layout = block.create_layout(&self.default_font);
-            layout.set_position(PointF::new(pos.x, curr_y));
-            layout.draw(painter, PointF::new(0.0, 0.0), &[]);
-            let b_rect = layout.bounding_rect();
-            curr_y += b_rect.height.max(self.default_font.size() * 1.2);
+            let layout = self.block_layout(block);
+            layout.draw_with_color(painter, PointF::new(pos.x, curr_y), &[], default_color);
+            let block_h: f32 = (0..layout.line_count())
+                .filter_map(|i| layout.line_at(i))
+                .map(|l| l.height())
+                .sum();
+            curr_y += block_h;
         }
     }
 
@@ -512,6 +554,11 @@ impl TextDocument {
             pos += b.text().graphemes(true).count() + 1;
         }
     }
+}
+
+/// `qt_int_sqrt`: the integer square root, floored.
+fn int_sqrt(v: f32) -> f32 {
+    (v.max(0.0) as u32 as f32).sqrt().floor()
 }
 
 /// Canonical Qt alias.

@@ -16,6 +16,84 @@ use crate::text::format::{
 use crate::text::fragment::TextFragment;
 use std::borrow::Cow;
 use tiny_skia::Color;
+/// The HTML element names `QTextHtmlParser::lookupElement` knows (qtexthtmlparser.cpp:355-416),
+/// sorted for binary search.
+#[rustfmt::skip]
+const RICH_TEXT_ELEMENTS: &[&str] = &[
+    "a", "address", "b", "big", "blockquote", "body", "br", "caption", "center", "cite", "code",
+    "dd", "del", "dfn", "div", "dl", "dt", "em", "font", "h1", "h2", "h3", "h4", "h5", "h6", "head",
+    "hr", "html", "i", "img", "kbd", "li", "link", "meta", "nobr", "ol", "p", "pre", "qt", "s",
+    "samp", "script", "small", "span", "strong", "style", "sub", "sup", "table", "tbody", "td",
+    "tfoot", "th", "thead", "title", "tr", "tt", "u", "ul", "var",
+];
+
+/// `Qt::mightBeRichText` (qtextdocument.cpp:72-130): whether `text` likely holds rich text.
+///
+/// Looks for a tag, or a `&lt;` entity, before the first line break. The first tag must be a known
+/// element name, so `value <5 and >3` is plain text and `<b>x</b>` is rich.
+pub fn might_be_rich_text(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    if n == 0 {
+        return false;
+    }
+    let mut start = 0;
+    while start < n && chars[start].is_whitespace() {
+        start += 1;
+    }
+    // A leading `<?xml ... ?>` declaration is skipped, as for XHTML.
+    if chars[start..(start + 5).min(n)]
+        .iter()
+        .copied()
+        .eq("<?xml".chars())
+    {
+        while start < n {
+            if chars[start] == '?' && start + 2 < n && chars[start + 1] == '>' {
+                start += 2;
+                break;
+            }
+            start += 1;
+        }
+        while start < n && chars[start].is_whitespace() {
+            start += 1;
+        }
+    }
+    let doctype: String = chars[start..(start + 5).min(n)].iter().collect();
+    if doctype.eq_ignore_ascii_case("<!doc") {
+        return true;
+    }
+    let mut open = start;
+    while open < n && chars[open] != '<' && chars[open] != '\n' {
+        if chars[open] == '&'
+            && chars[open + 1..(open + 4).min(n)]
+                .iter()
+                .copied()
+                .eq("lt;".chars())
+        {
+            return true;
+        }
+        open += 1;
+    }
+    if open < n && chars[open] == '<' {
+        if let Some(close) = (open..n).find(|&i| chars[i] == '>') {
+            let mut tag = String::new();
+            for i in open + 1..close {
+                let c = chars[i];
+                if c.is_numeric() || c.is_alphabetic() {
+                    tag.extend(c.to_lowercase());
+                } else if !tag.is_empty() && c.is_whitespace() {
+                    break;
+                } else if !tag.is_empty() && c == '/' && i + 1 == close {
+                    break;
+                } else if !c.is_whitespace() && (!tag.is_empty() || c != '!') {
+                    return false;
+                }
+            }
+            return RICH_TEXT_ELEMENTS.binary_search(&tag.as_str()).is_ok();
+        }
+    }
+    false
+}
 
 /// Default hyperlink color applied to imported anchors (`QPalette::Link`).
 pub fn link_color() -> Color {

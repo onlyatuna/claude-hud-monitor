@@ -244,12 +244,7 @@ const TRAY_WINDOW_CLASS_NAME: &[u16] = &[
 ];
 
 #[cfg(windows)]
-unsafe extern "system" fn tray_window_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe fn tray_window_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let tray_ptr = {
         let guard = TRAY_INSTANCES.lock().unwrap();
         guard
@@ -314,6 +309,23 @@ unsafe extern "system" fn tray_window_proc(
     }
 
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// Tray window procedure. Unwinding out of an `extern "system"` callback aborts the process, so a
+/// raising handler is contained and the message falls back to the default.
+#[cfg(windows)]
+unsafe extern "system" fn tray_window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tray_window_proc_inner(hwnd, msg, wparam, lparam)
+    })) {
+        Ok(result) => result,
+        Err(_) => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }
 
 #[cfg(windows)]

@@ -54,7 +54,9 @@ lto = false
 codegen-units = 16
 incremental = false
 strip = true
-panic = "abort"
+# Unwind (not abort) so the panic containment boundaries (signal slots, posted events, timers,
+# WndProc/COM callbacks, provider workers) can catch a panic and keep running, as Python does.
+panic = "unwind"
 
 # The size-optimised default (`opt-level = "z"`) makes the software rasteriser 5-13x slower
 # (1100x470 rounded rect: 3.8 ms at 3, 19 ms at z), which shows up as lag while resizing.

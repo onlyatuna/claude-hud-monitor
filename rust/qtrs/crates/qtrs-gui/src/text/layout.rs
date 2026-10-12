@@ -332,8 +332,20 @@ impl TextLayout {
         RectF::new(self.position.x, self.position.y, max_w, total_h)
     }
 
-    /// Draws the laid-out text to the given `Painter`.
+    /// Draws the laid-out text to the given `Painter`, in black where no format sets a colour.
     pub fn draw(&self, painter: &mut Painter, pos: PointF, selections: &[FormatRange]) {
+        self.draw_with_color(painter, pos, selections, Color::BLACK);
+    }
+
+    /// Draws the laid-out text; `default_color` is used where no format sets a foreground colour
+    /// (`QAbstractTextDocumentLayout` takes the palette text colour as its default).
+    pub fn draw_with_color(
+        &self,
+        painter: &mut Painter,
+        pos: PointF,
+        selections: &[FormatRange],
+        default_color: Color,
+    ) {
         let full_text = self.composite_text();
         let graphemes: Vec<&str> = full_text.graphemes(true).collect();
 
@@ -372,7 +384,7 @@ impl TextLayout {
                 let g_x = pos.x + line.cursor_to_x(g_idx, Edge::Leading);
 
                 // Format override
-                let mut char_color = Color::BLACK;
+                let mut char_color = default_color;
                 for fmt in &self.formats {
                     if g_idx >= fmt.start && g_idx < fmt.start + fmt.length {
                         if let Some(fg) = fmt.format.foreground {

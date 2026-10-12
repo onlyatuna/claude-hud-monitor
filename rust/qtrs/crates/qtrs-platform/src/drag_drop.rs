@@ -120,11 +120,14 @@ pub mod win32_ole {
         if !pdw_effect.is_null() {
             *pdw_effect = DROPEFFECT_COPY;
         }
-        (target.callback)(DropEvent::Enter {
-            pos: Point::new(pt.x, pt.y),
-            formats: vec!["text/plain".to_string()],
-            effect: DROPEFFECT_COPY,
-        });
+        // Python/PySide6 contains a raising handler; unwinding out of an extern "system" fn aborts.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (target.callback)(DropEvent::Enter {
+                pos: Point::new(pt.x, pt.y),
+                formats: vec!["text/plain".to_string()],
+                effect: DROPEFFECT_COPY,
+            })
+        }));
         S_OK
     }
 
@@ -138,16 +141,20 @@ pub mod win32_ole {
         if !pdw_effect.is_null() {
             *pdw_effect = DROPEFFECT_COPY;
         }
-        (target.callback)(DropEvent::Over {
-            pos: Point::new(pt.x, pt.y),
-            effect: DROPEFFECT_COPY,
-        });
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (target.callback)(DropEvent::Over {
+                pos: Point::new(pt.x, pt.y),
+                effect: DROPEFFECT_COPY,
+            })
+        }));
         S_OK
     }
 
     unsafe extern "system" fn drag_leave(this: *mut c_void) -> HRESULT {
         let target = &*(this as *mut OleDropTarget);
-        (target.callback)(DropEvent::Leave);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (target.callback)(DropEvent::Leave)
+        }));
         S_OK
     }
 
@@ -162,12 +169,14 @@ pub mod win32_ole {
         if !pdw_effect.is_null() {
             *pdw_effect = DROPEFFECT_COPY;
         }
-        (target.callback)(DropEvent::Drop {
-            pos: Point::new(pt.x, pt.y),
-            formats: vec!["text/plain".to_string()],
-            data: vec![("text/plain".to_string(), b"dropped".to_vec())],
-            effect: DROPEFFECT_COPY,
-        });
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            (target.callback)(DropEvent::Drop {
+                pos: Point::new(pt.x, pt.y),
+                formats: vec!["text/plain".to_string()],
+                data: vec![("text/plain".to_string(), b"dropped".to_vec())],
+                effect: DROPEFFECT_COPY,
+            })
+        }));
         S_OK
     }
 

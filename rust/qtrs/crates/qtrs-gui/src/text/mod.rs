@@ -17,6 +17,7 @@ pub mod highlighter;
 pub mod layout;
 mod line;
 mod markup;
+pub use markup::might_be_rich_text;
 pub mod outline_face;
 pub mod position;
 pub mod qcssparser;

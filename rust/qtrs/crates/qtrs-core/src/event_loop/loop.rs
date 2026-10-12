@@ -1,6 +1,7 @@
 use crate::event::EventFilterChain;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
@@ -641,12 +642,11 @@ impl EventLoop {
         }
         self.state.running.lock().push(self.exit.clone());
         let _running = RunningLoop(Arc::clone(&self.state.running));
-        ThreadContext::set_current_loop_level(ThreadContext::current_loop_level() + 1);
+        let _level = LoopLevelGuard::enter();
         while !self.exit.exit_requested.load(Ordering::SeqCst) {
             self.process_events(true);
         }
         // qeventloop.cpp:161, 187: the loop itself moves `loopLevel`; `scopeLevel` is per handler.
-        ThreadContext::set_current_loop_level(ThreadContext::current_loop_level() - 1);
         self.exit.return_code.load(Ordering::SeqCst)
     }
 
@@ -860,6 +860,22 @@ fn forward_to_owner(posted: PostedEvent) -> Option<PostedEvent> {
     }
 }
 
+/// Restores the thread's loop level on every exit path, including unwinding.
+struct LoopLevelGuard;
+
+impl LoopLevelGuard {
+    fn enter() -> Self {
+        ThreadContext::set_current_loop_level(ThreadContext::current_loop_level() + 1);
+        Self
+    }
+}
+
+impl Drop for LoopLevelGuard {
+    fn drop(&mut self) {
+        ThreadContext::set_current_loop_level(ThreadContext::current_loop_level() - 1);
+    }
+}
+
 fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Option<i32>) {
     {
         let mut q = queue.lock().unwrap();
@@ -896,7 +912,9 @@ fn pump_posted_events(queue: &Arc<Mutex<EventQueue>>, modal: bool) -> (usize, Op
             crate::application::emit_about_to_quit_once();
         }
 
-        send_event(receiver, &mut event);
+        // Python/PySide6 reports a raising handler and keeps delivering later events; the panic
+        // hook logs it. The in-flight event is dropped, as Python drops it.
+        let _ = catch_unwind(AssertUnwindSafe(|| send_event(receiver, &mut event)));
 
         if let EventKind::DeferredDelete { .. } = event.kind {
             finish_deferred_delete(receiver);

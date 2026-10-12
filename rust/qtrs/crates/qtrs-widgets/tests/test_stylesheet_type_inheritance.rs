@@ -64,3 +64,19 @@ fn a_base_class_selector_weighs_the_same_as_the_class_itself() {
         green()
     );
 }
+
+#[test]
+fn qobject_selector_styles_every_widget() {
+    assert_eq!(color("QObject { color: #ff0000; }", "QLabel", ""), red());
+    assert_eq!(
+        color("QObject { color: #ff0000; }", "QProgressBar", ""),
+        red()
+    );
+}
+
+#[test]
+fn a_tool_tip_is_a_qtooltip_and_not_a_qlabel() {
+    assert_eq!(color("QLabel { color: #ff0000; }", "QToolTip", ""), None);
+    assert_eq!(color("QToolTip { color: #ff0000; }", "QToolTip", ""), red());
+    assert_eq!(color("QWidget { color: #ff0000; }", "QToolTip", ""), None);
+}

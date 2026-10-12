@@ -645,7 +645,13 @@ unsafe extern "system" fn native_window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     let _t = qtrs_gui::startup_trace::span_min(3.0, || format!("wndproc msg=0x{msg:04X}"));
-    native_window_proc_inner(hwnd, msg, wparam, lparam)
+    // Python/PySide6 contains a raising handler; unwinding out of an extern "system" fn aborts.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        native_window_proc_inner(hwnd, msg, wparam, lparam)
+    })) {
+        Ok(result) => result,
+        Err(_) => DefWindowProcW(hwnd, msg, wparam, lparam),
+    }
 }
 
 #[cfg(windows)]
