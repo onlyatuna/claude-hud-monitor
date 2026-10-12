@@ -353,23 +353,21 @@ fn test_event_filter_cross_thread_and_cycle_prevention() {
     // SAFETY: object remains boxed and unmoved until unregistered.
     unsafe { register_qobject(&mut *obj_b) };
 
-    // 1. Cannot install self as event filter
+    // 1. Qt allows installing self as event filter (qobject.cpp:2407-2423)
     let a_id = obj_a.data.id;
     let self_filter = qtrs_core::object::install_event_filter(&mut obj_a.data, a_id);
     assert!(
-        !self_filter,
-        "Cannot install object as its own event filter"
+        self_filter,
+        "Qt allows installing object as its own event filter"
     );
-
     // 2. Normal installation succeeds
     let ok = qtrs_core::object::install_event_filter(&mut obj_a.data, obj_b.data.id);
     assert!(ok);
     assert!(obj_a.data.event_filters.contains(obj_b.data.id));
 
-    // 3. Direct cycle prevention: obj_b cannot install obj_a while obj_a watches obj_b
+    // 3. Qt allows mutual event filters (qobject.cpp:2407-2423)
     let cycle = qtrs_core::object::install_event_filter(&mut obj_b.data, obj_a.data.id);
-    assert!(!cycle, "Direct filter cycle must be rejected");
-
+    assert!(cycle, "Mutual filter installation succeeds in Qt");
     // SAFETY: neither registered object has an active callback.
     unsafe {
         unregister_qobject(obj_a.data.id);

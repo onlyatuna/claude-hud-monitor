@@ -206,7 +206,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G3.4.b [P2, READ]** filter 物件正被借用（例如 parent 在 `event()` 中對它過濾的 child 送事件）時，filter 被靜默跳過，事件無過濾遞送。
   - **G3.4.c [P1, RAN；已修復：RC-87]** （修復前）Windows 計時器遞送不經 `notify_helper`／`event()`（見 C5.2）。
   - **G3.4.d [D]** 跨執行緒 `send_event` 回 false 且不做事（Qt 會在呼叫端執行緒遞送並警告）。理由：同 G2.7.b。
-  - **G3.4.e [P2, READ]** `install_event_filter` 拒絕自己與直接環（Qt 允許）。
+  - **G3.4.e [P2, READ；已修復：RC-169]** （修復前）`install_event_filter` 拒絕自己與直接環。RC-169 依 Qt `QObject::installEventFilter`（`[QT-SRC corelib/kernel/qobject.cpp:2407-2423]`）實作：移除人工檢查，允許安裝自身為 filter 及互設 filter 環，僅保留跨執行緒拒絕。
   - **G3.4.f [P2, READ；已修復：RC-168]** （修復前）filter 吃掉事件時 `send_event`／`notify_helper` 回 false。RC-168 依 Qt `notify_helper`（`qcoreapplication.cpp:1285-1295`）實作：application filter 或 object filter 攔截消費事件時回傳 true。
 - **Test**：`loop.rs::tests::{filter_removed_by_earlier_filter_is_not_called, app_filter_removed_by_earlier_filter_is_not_called, filter_installed_during_dispatch_follows_qt_index_walk, app_filter_installed_during_dispatch_follows_qt_index_walk}`（RC-78）。必要：`timer_event_passes_event_filter`。
 - **HUD usage**：Python 無 `installEventFilter`；Rust 只裝 native filter（`WakeFilter`，`main.rs:57-83,322`）。
@@ -494,7 +494,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G7.5.a [P1, RAN；已修復：RC-107]** （修復前）**計時器被停止、不遷移**（`stop_timers_for_object` 作用於呼叫執行緒的 registry，沒有人在目標重新註冊）；`ObjectData.timers` 仍列出死掉的 id。
   - **G7.5.b [P1, RAN；已修復：RC-107]** （修復前）**事件可能遺失**：從來源佇列移除後，只有 `query_thread_sender(target)` 有值才重送；目標沒有條目就丟。且主執行緒沒有 sender，所以 **main→worker 的移動不會轉移主佇列的任何東西**。
   - **G7.5.c [P2, READ]** 轉移的事件繞過壓縮／優先序。
-  - **G7.5.d [P2, READ]** 只更新一層 children 的 `ObjectData.thread_id`，更深後代只更新 registry，`connect_to` 之後讀到 stale 欄位。
+  - **G7.5.d [P2, READ；已修復：RC-107]** （RC-107 已修復，RC-169 補齊 pin 測試）`move_to_thread` 透過 `flip_owned` 與 `with_object_mut` 遞迴更新所有層級後代之 `ObjectData.thread_id`；補齊 `test_move_to_thread_three_levels.rs` 驗證。
   - **G7.5.e [P2, RAN；已修復：RC-107]** （修復前）`ThreadChange` 在親和性更新**之後**送（Qt 之前，`[INFERENCE]`），且在持有同一已註冊物件 `&mut ObjectData` 時 `send_event`（aliasing 疑慮）。
   - **G7.5.f [P2]** `caller` 是參數而非從 OS 讀取。
   - **G7.5.g [P2]** target 沒有 loop 時仍回 `Ok`。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 227 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 229 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1278,7 +1278,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.4.b | P2, READ | filter 物件正被借用 |
 | G3.4.c | P1, RAN；已修復：RC-87 | Windows 計時器遞送不經 `notify_helper`／`event()` |
 | G3.4.d | D | 跨執行緒 `send_event` 回 false 且不做事 |
-| G3.4.e | P2, READ | `install_event_filter` 拒絕自己與直接環 |
+| G3.4.e | P2, READ；已修復：RC-169 | install_event_filter 允許自己與直接環（qobject.cpp:2407-2423） |
 | G3.4.f | P2, READ；已修復：RC-168 | filter 吃掉事件時 send_event 回 true（qcoreapplication.cpp:1285-1295） |
 | G3.5.a | P1, RAN；已修復：RC-93 | 無 scope level：同 handler 內 `process_events` 會刪 |
 | G3.5.b | P1, RAN；已修復：RC-94 | `EventLoop::exec` 結束沒有 cleanup flush |
@@ -1361,7 +1361,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.5.a | P1, RAN；已修復：RC-107 | **計時器被停止、不遷移** |
 | G7.5.b | P1, RAN；已修復：RC-107 | **事件可能遺失**：從來源佇列移除後，只有 `query_thread_sender(target)` 有值才重送 |
 | G7.5.c | P2, READ | 轉移的事件繞過壓縮／優先序 |
-| G7.5.d | P2, READ | 只更新一層 children 的 `ObjectData.thread_id`，更深後代只更新 registry，`connect_to` 之後讀到 stale 欄位 |
+| G7.5.d | P2, READ；已修復：RC-107 | 遞迴更新所有層級 children 的 ObjectData.thread_id（RC-107 修復，RC-169 補測試） |
 | G7.5.e | P2, RAN；已修復：RC-107 | `ThreadChange` 在親和性更新**之後**送 |
 | G7.5.f | P2 | `caller` 是參數而非從 OS 讀取 |
 | G7.5.g | P2 | target 沒有 loop 時仍回 `Ok` |
@@ -3541,4 +3541,27 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   2. 更新 `loop.rs::test_notify_helper_pipeline_and_safe_removal` 與 `layered_tests.rs::test_level1_event_filter_lifo_intercept_and_tombstone` 的斷言為 `assert!(handled)`。
 - **驗證**：新增測試 `crates/qtrs-core/tests/test_filter_consumed_returns_true.rs`（2 個測試項目，分別驗證 application filter 與 object filter 攔截消費時 `send_event` 回傳 `true` 且 target 未被呼叫）。修改前 FAIL：`send_event must return true when consumed by application filter`、`send_event must return true when consumed by object filter`。修改後 PASS。qtrs-core 319 項測試全過；qtrs workspace 1009 項測試全過；HUD 135 項全過；clippy 0 warning；`cargo fmt --check` 通過；`--snapshot` 比對版面 0 px 差異。
 - **HUD 影響**：無負面影響。HUD 僅使用 native filter，不依賴 QObject filter 回傳值。
+- **Residual**：無。
+
+#### RC-169 install_event_filter 允許自身與直接環符合 Qt 規範（G3.4.e，並補齊 G7.5.d 測試）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:2407-2423]` `QObject::installEventFilter`：
+  ```cpp
+  void QObject::installEventFilter(QObject *obj) {
+      if (!obj) return;
+      if (d->threadData.loadRelaxed() != obj->d_func()->threadData.loadRelaxed()) {
+          qWarning("QObject::installEventFilter(): Cannot filter events for objects in a different thread.");
+          return;
+      }
+      d->ensureExtraData();
+      auto isNullOrEquals = [](auto obj) { return [obj](const auto &p) { return !p || p == obj; }; };
+      d->extraData->eventFilters.removeIf(isNullOrEquals(obj));
+      d->extraData->eventFilters.prepend(obj);
+  }
+  ```
+  Qt 原始碼無任何自身過濾（`obj == this`）或互設過濾器直接環之檢查，僅校驗跨執行緒親和性。
+  PySide6 實測：`o.installEventFilter(o)` 及相互安裝皆成功執行。
+- **根因**：qtrs `qobject.rs:688-705` 人工加上了 `if target.id == filter { return false; }` 與 `if is_watched { return false; }`，人為限制了 Qt 允許之行為。舊有測試 `test_qobject_safety_and_qt6_features.rs` 誤將此拒絕釘住。
+- **修正**：在 `rust/qtrs/crates/qtrs-core/src/object/qobject.rs` 移除自身與直接環拒絕邏輯，僅保留跨執行緒檢查。更新 `test_qobject_safety_and_qt6_features.rs` 斷言。
+- **驗證**：新增測試 `crates/qtrs-core/tests/test_install_event_filter_self_and_mutual.rs`（3 個測試項目，包含 self filter 允許、mutual cycle 允許、self filter 事件遞送與攔截測試）。修改前 3 項全 FAIL，修改後全 PASS。並新增 `crates/qtrs-core/tests/test_move_to_thread_three_levels.rs` 補齊 C7.5 / G7.5.d 所要求的 3 層後代 thread_id 更新 pin 測試。qtrs-core 324 項全過；qtrs workspace 1014 項全過；HUD 135 項全過；clippy 0 warning；`cargo fmt --check` 通過；`--snapshot` 比對版面 0 px 差異。
+- **HUD 影響**：無負面影響。HUD 不使用自身或直接環過濾器。
 - **Residual**：無。

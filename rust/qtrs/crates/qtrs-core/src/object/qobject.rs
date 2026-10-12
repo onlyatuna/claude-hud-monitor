@@ -683,25 +683,13 @@ pub fn delete_later(obj: &ObjectData) {
     );
 }
 
-/// Event filter callback (`QObject::eventFilter`).
+/// Event filter callback (`QObject::eventFilter`, `qobject.cpp:2407-2423`).
 pub fn install_event_filter(target: &mut ObjectData, filter: ObjectId) -> bool {
-    // 1. Cannot filter self
-    if target.id == filter {
-        return false;
-    }
-    // 2. Cross-thread check: filter and target must be in the same thread (Qt invariant)
+    // Cross-thread check: filter and target must be in the same thread (qobject.cpp:2412-2415)
     if let Some(filter_thread) = query_object_thread(filter) {
         if filter_thread != target.thread_id {
             return false;
         }
-    }
-    // 3. Direct cycle prevention: if filter is already watched by target, reject cycle
-    let is_watched = with_object(filter, |f| {
-        f.object_data().event_filters.contains(target.id)
-    })
-    .unwrap_or(false);
-    if is_watched {
-        return false;
     }
 
     target.event_filters.install(filter);
