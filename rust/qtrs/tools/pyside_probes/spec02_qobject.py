@@ -73,6 +73,44 @@ def probe_R00003():
     print(f"R-00003: after ctor(parent) {after_ctor}; after setParent(None) {log}")
 
 
+def probe_R00001_49_50():
+    """Tree state observed from inside ChildRemoved / ChildAdded handlers during setParent."""
+    old = QObject(); old.setObjectName("old")
+    new = QObject(); new.setObjectName("new")
+    c = QObject(old); c.setObjectName("c")
+    seen = []
+
+    class Snap(QObject):
+        def eventFilter(self, obj, ev):
+            t = ev.type()
+            if t in (QEvent.Type.ChildAdded, QEvent.Type.ChildRemoved):
+                p = c.parent()
+                seen.append((t.name, obj.objectName(),
+                             "c.parent=" + (p.objectName() if p else "None"),
+                             "c in old.children=" + str(c in old.children()),
+                             "c in new.children=" + str(c in new.children())))
+            return False
+
+    snap = Snap()
+    old.installEventFilter(snap)
+    new.installEventFilter(snap)
+    c.setParent(new)
+    p = c.parent()
+    print(f"R-00049/R-00050: during handlers {seen}")
+    print(f"R-00001: after setParent returns c.parent={p.objectName() if p else None}, "
+          f"c in old={c in old.children()}, c in new={c in new.children()}")
+
+
+def probe_R00057():
+    """A blocked object still emits destroyed() (~QObject clears blockSig first)."""
+    o = QObject()
+    got = []
+    o.destroyed.connect(lambda *a: got.append("destroyed"))
+    o.blockSignals(True)
+    delete_now(o)
+    print(f"R-00057: destroyed while blocked -> {got}")
+
+
 def probe_R00005():
     log = []
     root = QObject()
@@ -410,7 +448,7 @@ def probe_a_b_c_d_e_f():
 
 
 PROBES = [
-    probe_R00003, probe_R00005, probe_R00012, probe_R00014, probe_R00015, probe_R00016,
+    probe_R00001_49_50, probe_R00057, probe_R00003, probe_R00005, probe_R00012, probe_R00014, probe_R00015, probe_R00016,
     probe_R00017, probe_R00018, probe_R00019, probe_R00020, probe_R00021, probe_R00022,
     probe_R00023, probe_R00024, probe_R00025_26, probe_R00027, probe_R00028, probe_R00029,
     probe_R00030, probe_R00032, probe_R00034, probe_R00035, probe_R00036, probe_a_b_c_d_e_f,

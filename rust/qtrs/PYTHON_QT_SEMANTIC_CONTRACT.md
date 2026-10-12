@@ -121,7 +121,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G2.1.d [P1, RAN；已修復：RC-123]** （修復前）parent 正被借用（dispatch 中）時 `with_object_mut` 回 `None`：`ObjectData::drop` 的解除連結與 `set_parent` 的 child-list 更新被**靜默略過**，留下 stale children id，事件遺失。
   - **G2.1.e [P2, READ]** 無自我 parent／環／跨執行緒檢查。
   - **G2.1.f [P2, READ]** `set_parent` 跨 registry 鎖與物件借用，非原子；`QT_CPP_MAPPING.md` 寫「atomically」不實。
-  - **G2.1.g [D]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。理由：Rust 所有權；須在文件註明「parent 只銷毀它擁有的 Box」。
+  - **G2.1.g [P2, READ；DV-08 候選]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。原分類 D 與 Core 範圍衝突（spec v0.2.3）：改為 `QTRS_SPEC.md` 01.6 的 B 類候選差異 DV-08，核准前視同缺陷（R-00008）。
+  - **G2.1.h [P2, READ]** 改變 parent 時，`ChildRemoved` 回呼看到的樹狀態與 Qt 不同：Qt 在送 `ChildRemoved` 時 child 的 parent 仍是舊 parent、新 parent 的 children 尚不含它（`qobject.cpp:2322-2337`，PySide 6.11.2 實測）；`reparent_owned` 在全部更新完才送事件（`qobject.rs:894-899`），`set_parent` 先更新 registry 的 parent（`qobject.rs:756-758`）。見 R-00049。
 - **HUD usage**：Python `QTimer(self)`（`refresh_controller.py:35,39`）、`UsageTable(parent=self)` + `old_table.deleteLater()`（`hud_window.py:262-266`）、`widget.setParent(None)` + `deleteLater()`（`:187-189`）。Rust：`rust/src` 不用 core `set_parent`/`add_owned_child`（grep 為空）；走 `qtrs-widgets` 自己的 `set_parent_widget`。
 
 ### C2.2 deleteLater / 延遲銷毀
@@ -1222,7 +1223,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 376 項：D 12、P0 35、P1 170、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 210 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.2.a、G9.2.b、G9.2.c、G9.2.e、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 377 項：D 11、P0 35、P1 170、P2 156、test gap 5（計數含已修復項；標籤含「已修復」者共 210 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.2.a、G9.2.b、G9.2.c、G9.2.e、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1232,7 +1233,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.1.d | P1, RAN；已修復：RC-123 | parent 正被借用 |
 | G2.1.e | P2, READ | 無自我 parent／環／跨執行緒檢查 |
 | G2.1.f | P2, READ | `set_parent` 跨 registry 鎖與物件借用，非原子 |
-| G2.1.g | D | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
+| G2.1.g | P2, READ；DV-08 候選 | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
+| G2.1.h | P2, READ | `ChildRemoved` 回呼期間的樹狀態與 Qt 不同（R-00049） |
 | G2.2.a | P1, RAN；已修復：RC-92 | `delete_later` 不會自我 post、不會 drop |
 | G2.2.b | P1, RAN；已修復：RC-88 | 不清除 posted events |
 | G2.2.c | P2, READ | 無 `destroyed` 信號 |
