@@ -282,7 +282,7 @@ pub trait Widget: QObject + 'static {
 
     fn set_geometry(&self, rect: Rect);
     fn size_hint(&self) -> Size {
-        Size::new(100, 30)
+        Size::new(-1, -1)
     }
 
     fn minimum_size(&self) -> Size {
@@ -290,9 +290,8 @@ pub trait Widget: QObject + 'static {
     }
 
     fn minimum_size_hint(&self) -> Size {
-        self.minimum_size()
+        Size::new(-1, -1)
     }
-
     fn maximum_size(&self) -> Size {
         self.widget_base().max_size.get()
     }
@@ -1244,8 +1243,7 @@ impl Widget for EmptyWidget {
         if let Some(layout) = self.base.layout.borrow().as_ref() {
             layout.size_hint()
         } else {
-            let g = self.base.geometry.get();
-            Size::new(g.width, g.height)
+            Size::new(-1, -1)
         }
     }
 
@@ -1258,7 +1256,7 @@ impl Widget for EmptyWidget {
         if let Some(layout) = self.base.layout.borrow().as_ref() {
             layout.minimum_size()
         } else {
-            Size::new(0, 0)
+            Size::new(-1, -1)
         }
     }
 
