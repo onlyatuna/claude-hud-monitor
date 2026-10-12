@@ -136,7 +136,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### C2.3 objectName 與階層查詢
 - **已遷移**：要求見 `QTRS_SPEC.md` §02（R-00015～R-00021）。本節只保留缺陷（G）與 HUD 使用位置；Qt behavior、qtrs required、Current implementation、Test 以新規格為準。
-- **Known gap**：**G2.3.a [P2, READ]** 型別為 exact `TypeId`（無子類別語意）；**G2.3.b [P2, READ]** 深度優先逐 child，而非先掃完直接子物件；**G2.3.c [P2, READ]** 只搜 `owned_children`；**G2.3.d [P2, READ]** 無 `objectNameChanged`；**G2.3.e [P2, READ]** `parent()/children()/thread()` 取用器不存在（欄位為 `pub`）。
+- **Known gap**：**G2.3.a [P2, READ]** 型別為 exact `TypeId`（無子類別語意）；**G2.3.b [P2, READ；已修復：RC-171]** 深度優先逐 child，而非先掃完直接子物件。RC-171 依 Qt `qt_qFindChild_helper`（`[QT-SRC corelib/kernel/qobject.cpp:2242-2256]`）改為兩階段搜尋：第一階段先遍歷所有直接 children 比對名稱與型別，第二階段若無直接 child 符合才依序對各 child 遞迴深入；**G2.3.c [P2, READ]** 只搜 `owned_children`；**G2.3.d [P2, READ]** 無 `objectNameChanged`；**G2.3.e [P2, READ]** `parent()/children()/thread()` 取用器不存在（欄位為 `pub`）。
 - **HUD usage**：Python 到處 `setObjectName` 供 QSS `#id` 選擇器（`hud_window.py:139…`、`provider_card.py:45-104`、`usage_table.py:121…`）；`findChild` 未用。Rust 走 widget 層的 `set_object_name`。
 
 ### C2.4 blockSignals / QSignalBlocker
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 230 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 231 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1244,7 +1244,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.2.c | P2, READ | 無 `destroyed` 信號 |
 | G2.2.d | P1, RAN；已修復：RC-92 | widgets 的 `delete_later` 在「當前 dispatch 回傳時」就刪，比 Qt 的「回到事件迴圈」早 |
 | G2.3.a | P2, READ | 型別為 exact `TypeId` |
-| G2.3.b | P2, READ | 深度優先逐 child，而非先掃完直接子物件 |
+| G2.3.b | P2, READ；已修復：RC-171 | 依 qt_qFindChild_helper 採兩階段搜尋：先掃完同層直接 child 再遞迴深入子樹（qobject.cpp:2242-2256） |
 | G2.3.c | P2, READ | 只搜 `owned_children` |
 | G2.3.d | P2, READ | 無 `objectNameChanged` |
 | G2.3.e | P2, READ | `parent()/children()/thread()` 取用器不存在 |
@@ -3576,4 +3576,30 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/widget.rs` 與 `rust/qtrs/crates/qtrs-widgets/src/menu.rs`，目標執行緒改由 `query_object_thread(target).unwrap_or(self.object_data.thread_id)` 解析，並在 `qtrs-derive/src/lib.rs` 修正 2 處 clippy 警告確保零警告。
 - **驗證**：新增測試 `crates/qtrs-widgets/tests/test_widget_update_cross_thread.rs`（2 項測試，包含已註冊 widget 及未註冊於 global registry 之 widget，驗證由 worker thread 呼叫 `update()` 時，事件確實送達所屬 GUI 執行緒之 event loop）。未修正前 FAIL：`Unregistered widget update() from worker thread must post to widget's thread affinity`。修正後 PASS。qtrs-widgets 418 項全過；HUD 135 項全過；`cargo clippy -j 1 -- -D warnings` 0 warning；`rustfmt` 格式檢查通過；`--snapshot` 版面 0 px 差異。
 - **HUD 影響**：無負面影響。HUD 若由背景任務觸發 widget 更新能更安全送達主執行緒。
+- **Residual**：無。
+
+#### RC-171 find_child 採兩階段搜尋：先比對直接 children 再遞迴子樹（G2.3.b，R-00018）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:2242-2256]` `qt_qFindChild_helper`：
+  ```cpp
+  QObject *qt_qFindChild_helper(const QObject *parent, QAnyStringView name, const QMetaObject &mo, Qt::FindChildOptions options)
+  {
+      Q_ASSERT(parent);
+      for (QObject *obj : parent->children()) {
+          if (mo.cast(obj) && (name.isNull() || matches_objectName_non_null(obj, name)))
+             return obj;
+      }
+      if (options & Qt::FindChildrenRecursively) {
+          for (QObject *child : parent->children()) {
+              if (QObject *obj = qt_qFindChild_helper(child, name, mo, options))
+                  return obj;
+          }
+      }
+      return nullptr;
+  }
+  ```
+  Qt 的 `findChild` 在遞迴搜尋時，每個節點都會**優先掃過同層全部直接 children**；只有在沒有任何直接 child 符合時，才依序遞迴深入各 child。
+- **根因**：qtrs `qobject.rs` 的 `find_child_any`、`find_child_id`、`find_child_any_mut` 實作為單一迴圈：每檢查一個 child 若不符合即立刻呼叫 `child.find_child_any(...)` 進入子樹深處。若第一個 child 的孫代有符合名稱者，就會搶先被回傳，導致同層第二個直接符合的 child 被略過。
+- **修正**：在 `rust/qtrs/crates/qtrs-core/src/object/qobject.rs` 中，將 `find_child_any`、`find_child_id` 與 `find_child_any_mut` 全數改為符合 Qt `qt_qFindChild_helper` 之兩階段搜尋。
+- **驗證**：在 `rust/qtrs/crates/qtrs-core/tests/test_qobject_lifecycle_and_hierarchy.rs` 新增 `test_find_child_searches_direct_children_before_descendants`（包含 `find_child`、`find_child_id` 與 `find_child_mut`）。修復前 FAIL（`crates/qtrs-core/tests/test_qobject_lifecycle_and_hierarchy.rs:289:5 left: "from_grandchild" right: "from_direct_child"`）。修復後 PASS。qtrs-core 325 項測試全過；跨平台 target（linux/mac）0 警告；HUD 135 項全過；clippy 0 警告；rustfmt 格式一致；--snapshot 0 像素差異。
+- **HUD 影響**：無負面影響。階層物件搜尋行為更加精確符合 Qt。
 - **Residual**：無。

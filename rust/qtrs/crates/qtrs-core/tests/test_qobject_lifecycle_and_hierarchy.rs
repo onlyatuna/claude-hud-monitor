@@ -265,6 +265,49 @@ fn test_object_hierarchy_search_find_child() {
     assert_eq!(updated_ok.text, "Confirmed");
 }
 
+#[test]
+fn test_find_child_searches_direct_children_before_descendants() {
+    // G2.3.b: [QT-SRC corelib/kernel/qobject.cpp:2242-2256] qt_qFindChild_helper
+    // Qt scans direct children first, and only searches deeper descendants if no direct child matches.
+    let mut root = MockContainer::new("root");
+    unsafe { register_qobject(&mut root) };
+
+    let panel = Box::new(MockContainer::new("panel"));
+    let panel_id = panel.data.id;
+    let grandchild_btn = Box::new(MockButton::new("action_btn", "from_grandchild"));
+    let direct_btn = Box::new(MockButton::new("action_btn", "from_direct_child"));
+    let direct_btn_id = direct_btn.data.id;
+
+    unsafe {
+        add_owned_child(root.data.id, panel).ok().unwrap();
+        add_owned_child(panel_id, grandchild_btn).ok().unwrap();
+        add_owned_child(root.data.id, direct_btn).ok().unwrap();
+    }
+
+    let found = root.find_child::<MockButton>("action_btn");
+    assert!(found.is_some());
+    assert_eq!(
+        found.unwrap().text,
+        "from_direct_child",
+        "find_child must return shallowest matching child (qt_qFindChild_helper / G2.3.b)"
+    );
+
+    let found_id = root.find_child_id("action_btn", std::any::TypeId::of::<MockButton>());
+    assert_eq!(
+        found_id,
+        Some(direct_btn_id),
+        "find_child_id must return shallowest matching child ID (G2.3.b)"
+    );
+
+    let found_mut = root.find_child_mut::<MockButton>("action_btn");
+    assert!(found_mut.is_some());
+    assert_eq!(
+        found_mut.unwrap().text,
+        "from_direct_child",
+        "find_child_mut must return shallowest matching child (G2.3.b)"
+    );
+}
+
 // --- 3. Thread Migration Cascading Tests ---
 
 #[test]

@@ -1000,7 +1000,7 @@ pub trait QObject: std::any::Any {
 
     /// Queries a child object by type ID and optional name (`QObject::findChild`).
     fn find_child_any(&self, name: &str, type_id: std::any::TypeId) -> Option<&dyn std::any::Any> {
-        // 1. Search owned children first
+        // 1. Direct children first (qt_qFindChild_helper: qobject.cpp:2242-2256)
         for child in &self.object_data().owned_children {
             let name_matches = name.is_empty() || child.object_name() == Some(name);
             if name_matches {
@@ -1010,17 +1010,19 @@ pub trait QObject: std::any::Any {
                     }
                 }
             }
+        }
+        // 2. Descendants if no direct child matched
+        for child in &self.object_data().owned_children {
             if let Some(found) = child.find_child_any(name, type_id) {
                 return Some(found);
             }
         }
-
         None
     }
 
     /// Queries the ObjectId of a child object matching type ID and optional name.
     fn find_child_id(&self, name: &str, type_id: std::any::TypeId) -> Option<ObjectId> {
-        // 1. Search owned children first
+        // 1. Direct children first (qt_qFindChild_helper: qobject.cpp:2242-2256)
         for child in &self.object_data().owned_children {
             let name_matches = name.is_empty() || child.object_name() == Some(name);
             if name_matches {
@@ -1030,11 +1032,13 @@ pub trait QObject: std::any::Any {
                     }
                 }
             }
+        }
+        // 2. Descendants if no direct child matched
+        for child in &self.object_data().owned_children {
             if let Some(found_id) = child.find_child_id(name, type_id) {
                 return Some(found_id);
             }
         }
-
         None
     }
 
@@ -1043,15 +1047,24 @@ pub trait QObject: std::any::Any {
         name: &str,
         type_id: std::any::TypeId,
     ) -> Option<&mut dyn std::any::Any> {
-        for child in &mut self.object_data_mut().owned_children {
+        // 1. Direct children first (qt_qFindChild_helper: qobject.cpp:2242-2256)
+        let mut match_idx = None;
+        for (i, child) in self.object_data().owned_children.iter().enumerate() {
             let name_matches = name.is_empty() || child.object_name() == Some(name);
             if name_matches
                 && child
                     .as_qobject_any()
                     .is_some_and(|a| a.type_id() == type_id)
             {
-                return child.as_qobject_any_mut();
+                match_idx = Some(i);
+                break;
             }
+        }
+        if let Some(i) = match_idx {
+            return self.object_data_mut().owned_children[i].as_qobject_any_mut();
+        }
+        // 2. Descendants if no direct child matched
+        for child in &mut self.object_data_mut().owned_children {
             if let Some(found) = child.find_child_any_mut(name, type_id) {
                 return Some(found);
             }
