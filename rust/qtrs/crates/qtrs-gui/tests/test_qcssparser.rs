@@ -284,3 +284,12 @@ fn test_parse_full_python_cards_stylesheet() {
     let sheet = QCssStyleSheet::parse(qss);
     assert_eq!(sheet.rules.len(), 18, "All 18 rules in get_cards_stylesheet must be parsed successfully");
 }
+#[test]
+fn test_qcss_8_digit_hex_color_is_argb() {
+    // Qt QColor::fromString("#11223344") interprets 8-digit hex as #AARRGGBB:
+    // alpha=0x11 (17), red=0x22 (34), green=0x33 (51), blue=0x44 (68).
+    use qtrs_gui::text::qcssparser::parse_color;
+    let color = parse_color("#11223344").expect("valid 8-digit hex color");
+    let u = color.to_color_u8();
+    assert_eq!((u.alpha(), u.red(), u.green(), u.blue()), (17, 34, 51, 68));
+}

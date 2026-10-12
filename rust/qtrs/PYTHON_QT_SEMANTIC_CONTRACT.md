@@ -1103,7 +1103,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **G12.3.e [P2]** `font-family` 清單以一個原始字串存、查找時才拆；generic（`sans-serif`/`monospace`）被跳過而非映射到系統字型，`'Consolas', monospace` 在沒有 Consolas 時沒有等寬退路。**Qt 依據**：Linux 的 `QFontconfigDatabase::resolveFontFamilyAlias` 把家族字串交給 `FcConfigSubstitute`（`qfontconfigdatabase.cpp:970-995`），`fallbacksForFamily` 另把 style hint 轉成 fontconfig 的 `sans-serif`／`monospace` 等（`getFcFamilyForStyleHint`，`:347-367`）；macOS 無此家族時依 style hint 取 Menlo 等（`qcoretextfontdatabase.mm:625-640`）；Windows 取 Courier New 等（`qwindowsfontdatabasebase.cpp:939-961`）。與 G12.6.d 同一根因（字型來源與缺字型規則），一起處理，不單獨修。CSS 的 generic 名稱在 Qt 內經哪一條路徑變成 style hint，尚未追到 `qcssparser.cpp`／`qstylesheetstyle.cpp`，`[INFERENCE]`。
 - **G12.3.f [P2, INFERENCE]** `font-weight: 800` 映射到 `FontWeight::Black`；列舉無 ExtraBold，字型選擇只分 regular／bold（`font_database.rs`）；Qt 的數值映射未驗證。
 - **G12.3.g [P2]** `font-size` px 取整（`test_label_box_model.rs::qss_pixel_sizes_are_rounded_like_qt`）；`letter-spacing` 於 `label.rs`。
-- **G12.3.h [P2, INFERENCE]** 色彩：8 位數十六進位被當 `#RRGGBBAA`（`qcssparser.rs`），Qt 的 `QColor` 形式是 `#AARRGGBB`，HUD 不用；具名顏色只有 black/white/red/green/blue；`rgba` 的 alpha ≤ 1 當分數、否則 0–255。
+- **G12.3.h [P2, INFERENCE；已修復：RC-160]** （修復前）色彩：8 位數十六進位被當 `#RRGGBBAA`（`qcssparser.rs`），Qt 的 `QColor` 形式是 `#AARRGGBB`。RC-160 依 `QCss::Parser::parseHexColor` 改為 `#AARRGGBB`。
 - Rust 以 `set_label_color`（`ui/mod.rs:86-109`）與 `set_status_dot_color`（`hud_window.rs:69-83`）模擬 Python `setStyleSheet(color: …)` 的 widget 內聯覆蓋。
 
 **必要測試（唯一能抓到 G12.3.a–b 的方式）**：用 PySide6 腳本把 `ui/styles.py` 兩個主題的所有樣式表傾印為 `(selector, property, value)` 集合；Rust 測試解析 `rust/src/ui/styles.rs` 的樣式表並斷言集合相同。目前 `styles.rs` 沒有任何測試，`qtrs-gui/tests/test_qcssparser.rs::test_parse_full_python_cards_stylesheet` 只斷言「18 條規則」（`:285`），不比對屬性值。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 218 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 219 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1567,7 +1567,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.3.e | P2 | `font-family` 清單以一個原始字串存、查找時才拆 |
 | G12.3.f | P2, INFERENCE | `font-weight: 800` 映射到 `FontWeight::Black` |
 | G12.3.g | P2 | `font-size` px 取整 |
-| G12.3.h | P2, INFERENCE | 色彩：8 位數十六進位被當 `#RRGGBBAA` |
+| G12.3.h | P2, INFERENCE；已修復：RC-160 | 色彩：8 位數十六進位被當 `#RRGGBBAA` |
 | G12.5.a | P0, READ；= G12.3.b；已修復：RC-15 | Badge `max-height: 15px` 只在 Rust |
 | G12.5.b | P0, READ；= G9.4.b；已修復：RC-14 | 卡片根 layout spacing 2（Rust）vs 5（Python），無註解說明 |
 | G12.5.c | P1, RAN；已修復：RC-74 | 面板底色不依 Acrylic 是否成功而改變 |
@@ -3419,4 +3419,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：`WidgetBase::set_geometry` 與 `EmptyWidget::set_geometry` 依 Qt 的 `qMin(max).max(min)` 邏輯夾取 rect 之寬高後再存入並發送失效與重繪。
 - **驗證**：新增測試 `test_set_geometry_clamps_to_explicit_minimum_and_maximum_size`。修改前 FAIL：`crates\qtrs-widgets\tests\test_explicit_size_and_hfw.rs:201:5 assertion left == right failed`（left: `(10, 10, 20, 20)`，right: `(10, 10, 50, 50)`）。修改後通過。`qtrs-widgets` 408 項測試全過；HUD 135 passed；clippy 0 warning；`cargo fmt --check` 通過。`--snapshot` 比對無版面位移。
 - **HUD 影響**：無負面影響。手動 `set_geometry` 之 widget 尺寸不會再突破顯式設定之 min/max 邊界。
+- **Residual**：無。
+
+#### RC-160 QSS 8 位十六進位顏色解析為 #AARRGGBB（G12.3.h）
+- **Qt 依據**：`[QT-SRC gui/text/qcssparser.cpp:3024-3029]` `QCss::Parser::parseHexColor` 呼叫 `QColor::fromString(lexem())`；Qt `QColor::fromString`（`qcolor.cpp:3225-3233`）對 8 位數十六進位字串（`#AARRGGBB`）將前兩位視為 Alpha、後續依次為 Red、Green、Blue。
+- **根因**：`qcssparser.rs` 的 `parse_color` 過去將 8 位數十六進位解析為 `#RRGGBBAA`（最後兩位為 Alpha），與 Qt 語意相反。
+- **修正**：`parse_color` 於長度為 8 的十六進位分支改為依序取 `a`（0..2）、`r`（2..4）、`g`（4..6）、`b`（6..8）。
+- **驗證**：新增測試 `test_qcss_8_digit_hex_color_is_argb`。修改前 FAIL：`crates\qtrs-gui\tests\test_qcssparser.rs:294:5 assertion left == right failed`（left: `(68, 17, 34, 51)`，right: `(17, 34, 51, 68)`）。修改後通過。`qtrs-gui` 163 項測試全過；`qtrs-widgets` 408 passed；HUD 135 passed；clippy 0 warning；`cargo fmt --check` 通過。`--snapshot` 比對無版面位移。
+- **HUD 影響**：無負面影響。QSS 中若使用 8 位十六進位色碼將精確遵循 Qt 之 ARGB 順序。
 - **Residual**：無。

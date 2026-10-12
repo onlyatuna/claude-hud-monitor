@@ -526,10 +526,12 @@ pub fn parse_color(input: &str) -> Option<Color> {
                 Some(Color::from_rgba8(r, g, b, 255))
             }
             8 => {
-                let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-                let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-                let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-                let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+                // Qt QCss::Parser::parseHexColor -> QColor::fromString (qcssparser.cpp:3026):
+                // 8-digit hex colors are in #AARRGGBB format.
+                let a = u8::from_str_radix(&hex[0..2], 16).ok()?;
+                let r = u8::from_str_radix(&hex[2..4], 16).ok()?;
+                let g = u8::from_str_radix(&hex[4..6], 16).ok()?;
+                let b = u8::from_str_radix(&hex[6..8], 16).ok()?;
                 Some(Color::from_rgba8(r, g, b, a))
             }
             _ => None,
