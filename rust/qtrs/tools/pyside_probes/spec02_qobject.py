@@ -12,6 +12,7 @@ so a crash or hang cannot stop the remaining probes.
 """
 
 import os
+import platform
 import subprocess
 import sys
 
@@ -21,14 +22,21 @@ os.environ.setdefault("QT_QPA_FONTDIR", "C:/Windows/Fonts")
 import PySide6  # noqa: E402
 import shiboken6  # noqa: E402
 from PySide6.QtCore import (  # noqa: E402
+    ClassInfo,
     Property,
     QCoreApplication,
     QEvent,
+    QEventLoop,
     QObject,
     QThread,
+    QTimer,
+    Qt,
     Signal,
+    Slot,
+    qInstallMessageHandler,
     qVersion,
 )
+from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtWidgets import QApplication, QFrame, QPushButton, QWidget  # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv)
@@ -447,11 +455,293 @@ def probe_a_b_c_d_e_f():
     print(f"(f) ~QObject order at grandparent: {flog}")
 
 
+def valid(o):
+    return shiboken6.isValid(o)
+
+
+def run_loop_ms(ms):
+    loop = QEventLoop()
+    QTimer.singleShot(ms, loop.quit)
+    loop.exec()
+
+
+class Emitter(QObject):
+    sig = Signal()
+
+
+class SelfDel(QObject):
+    sig = Signal()
+
+
+class Receiver(QObject):
+    def __init__(self, sink):
+        super().__init__()
+        self.sink = sink
+
+    @Slot()
+    def on_sig(self):
+        self.sink.append("called")
+
+
+class LabelTap(QObject):
+    """Event filter logging ChildAdded/ChildRemoved as (label, event, child name) into a shared log."""
+
+    def __init__(self, target, log, label):
+        super().__init__()
+        self.log = log
+        self.label = label
+        target.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if ev.type() in (QEvent.Type.ChildAdded, QEvent.Type.ChildRemoved):
+            self.log.append((self.label, ev.type().name, ev.child().objectName()))
+        return False
+
+
+class TypeTap(QObject):
+    def __init__(self, target, sink, etype):
+        super().__init__()
+        self.sink = sink
+        self.etype = etype
+        target.installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        if ev.type() == self.etype:
+            self.sink.append(1)
+        return False
+
+
+class Ticker(QObject):
+    def __init__(self, sink):
+        super().__init__()
+        self.sink = sink
+        self.startTimer(10)
+
+    def timerEvent(self, ev):
+        self.sink.append(1)
+
+
+def probe_R00002():
+    log = []
+    old, new = QObject(), QObject()
+    old.setObjectName("old")
+    new.setObjectName("new")
+    c = QObject(old)
+    c.setObjectName("c")
+    taps = [LabelTap(old, log, "old"), LabelTap(new, log, "new")]
+    c.setParent(new)
+    print(f"R-00002: setParent(old->new) event order {log}")
+
+
+def probe_R00004():
+    p = QObject()
+    c = QObject(p)
+    c.setParent(None)
+    print(f"R-00004: after setParent(None) valid {valid(c)}; parent() is None {c.parent() is None}")
+
+
+def probe_R00009():
+    o = QObject()
+    o.deleteLater()
+    before = valid(o)
+    QCoreApplication.sendPostedEvents(None, DEFERRED)
+    after = valid(o)
+    o2 = QObject()
+    o2.deleteLater()
+    loop_before = valid(o2)
+    run_loop_ms(20)
+    loop_after = valid(o2)
+    print(f"R-00009: deleteLater valid before processing {before}; after sendPostedEvents(None, DeferredDelete) {after}; "
+          f"event-loop path valid before loop {loop_before}, after loop return {loop_after}")
+
+
+def probe_R00010():
+    log = []
+    holder = []
+
+    def handler():
+        o = QObject()
+        holder.append(o)
+        o.destroyed.connect(lambda *a: log.append("destroyed"))
+        o.deleteLater()
+        QCoreApplication.processEvents()
+        log.append(("inside handler after processEvents, valid", valid(o)))
+
+    def finish():
+        log.append(("after handler returned to loop, valid", valid(holder[0])))
+        loop.quit()
+
+    loop = QEventLoop()
+    QTimer.singleShot(0, handler)
+    QTimer.singleShot(20, finish)
+    loop.exec()
+    log.append(("after loop exec, valid", valid(holder[0])))
+    print(f"R-00010: {log}")
+
+
+def probe_R00011():
+    o = QObject()
+
+    def last_handler():
+        o.deleteLater()
+        QCoreApplication.exit(0)
+
+    QTimer.singleShot(0, last_handler)
+    rc = app.exec()
+    print(f"R-00011: after app.exec() returned rc={rc}, valid {valid(o)}")
+
+
+def probe_R00013():
+    etype = QEvent.Type(QEvent.Type.User.value + 1)
+    obj = QObject()
+    obj_hits, app_hits = [], []
+    taps = [TypeTap(obj, obj_hits, etype), TypeTap(app, app_hits, etype)]
+    QCoreApplication.postEvent(obj, QEvent(etype))
+    shiboken6.delete(obj)
+    QCoreApplication.sendPostedEvents(None, 0)
+    app.removeEventFilter(taps[1])
+    print(f"R-00013: custom event posted then obj deleted; obj-filter hits {len(obj_hits)}; app-filter hits {len(app_hits)}")
+
+
+def probe_R00040():
+    e, sink = Emitter(), []
+    r = Receiver(sink)
+    e.sig.connect(r.on_sig)
+    e.sig.emit()
+    before = len(sink)
+    shiboken6.delete(e)
+    QCoreApplication.processEvents()
+    print(f"R-00040: slot calls before sender deleted {before}; after sender deleted {len(sink)}; "
+          f"sender valid {valid(e)}; receiver valid {valid(r)}")
+
+
+def probe_R00041():
+    class Sg(QObject):
+        sig = Signal()
+
+    s = Sg()
+    got = []
+    s.sig.connect(lambda: got.append(1))
+    s.blockSignals(True)
+    s.sig.emit()
+    blocked = len(got)
+    s.blockSignals(False)
+    s.sig.emit()
+    print(f"R-00041: user Signal emissions while blockSignals(True) {blocked}; after unblock {len(got) - blocked}")
+
+
+def probe_R00043():
+    e, log = SelfDel(), []
+    e.destroyed.connect(lambda *a: log.append("destroyed"))
+
+    def slot():
+        e.deleteLater()
+        log.append(("in slot", valid(e)))
+
+    def after_slot():
+        log.append(("after slot returned (same emit)", valid(e)))
+
+    e.sig.connect(slot)
+    e.sig.connect(after_slot)
+    e.sig.emit()
+    log.append(("after emit returned", valid(e)))
+    QCoreApplication.sendPostedEvents(None, DEFERRED)
+    log.append(("after sendPostedEvents(DeferredDelete)", valid(e)))
+    print(f"R-00043: {log}")
+
+
+def probe_R00051():
+    e, sink = Emitter(), []
+    r = Receiver(sink)
+    e.sig.connect(r.on_sig, Qt.ConnectionType.QueuedConnection)
+    e.sig.emit()
+    shiboken6.delete(r)
+    QCoreApplication.processEvents()
+    print(f"R-00051: queued slot after receiver deleted before processing -> sink {sink}")
+
+
+def probe_R00053():
+    ticks = []
+    t = Ticker(ticks)
+    run_loop_ms(50)
+    before = len(ticks)
+    shiboken6.delete(t)
+    run_loop_ms(100)
+    print(f"R-00053: timer events before delete {before}; after delete + 100 ms loop {len(ticks)} "
+          f"(unchanged {len(ticks) == before}); valid {valid(t)}")
+
+
+def probe_R00059():
+    root = QObject()
+    unnamed = [QObject(root), QObject(root)]
+    named = QObject(root)
+    named.setObjectName("n")
+    n_empty = len(root.findChildren(QObject, ""))
+    n_all = len(root.findChildren(QObject))
+    print(f"R-00059: findChildren(QObject, '') count {n_empty} (2 unnamed children, 1 named); "
+          f"findChildren(QObject) count {n_all}; findChild(QObject, '') is None {root.findChild(QObject, '') is None}")
+
+
+def probe_R00060():
+    class RO(QObject):
+        def getv(self):
+            return 3
+
+        ro = Property(int, getv)
+
+    o = RO()
+    ok = o.setProperty("ro", 5)
+    names = [bytes(n) for n in o.dynamicPropertyNames()]
+    print(f"R-00060: setProperty on read-only declared 'ro' returned {ok}; value {o.property('ro')}; "
+          f"dynamicPropertyNames contains 'ro' {b'ro' in names}")
+
+
+def probe_R00066():
+    parent = QWidget()
+    parent.setObjectName("parent")
+    child = QWidget(parent)
+    child.setObjectName("child")
+    log = []
+    parent.destroyed.connect(lambda *a: log.append("parent"))
+    child.destroyed.connect(lambda *a: log.append("child"))
+    shiboken6.delete(parent)
+    print(f"R-00066: QWidget destroyed order (expect parent first) {log}")
+
+
+def probe_R00067():
+    @ClassInfo(author="base")
+    class CiBase(QObject):
+        pass
+
+    @ClassInfo(version="2")
+    class CiSub(CiBase):
+        pass
+
+    print(f"R-00067: classInfoCount base {CiBase.staticMetaObject.classInfoCount()}; "
+          f"sub (adds one) {CiSub.staticMetaObject.classInfoCount()} (expect base+1 = 2); "
+          f"QObject {QObject.staticMetaObject.classInfoCount()}")
+
+
+def probe_R00071():
+    e, sink = Emitter(), []
+    r = Receiver(sink)
+    e.sig.connect(r.on_sig)
+    e.sig.emit()
+    before = len(sink)
+    shiboken6.delete(r)
+    e.sig.emit()
+    print(f"R-00071: slot calls before receiver deleted {before}; after receiver deleted + sender emit {len(sink)}; "
+          f"receiver valid {valid(r)}; sender valid {valid(e)}")
+
+
 PROBES = [
     probe_R00001_49_50, probe_R00057, probe_R00003, probe_R00005, probe_R00012, probe_R00014, probe_R00015, probe_R00016,
     probe_R00017, probe_R00018, probe_R00019, probe_R00020, probe_R00021, probe_R00022,
     probe_R00023, probe_R00024, probe_R00025_26, probe_R00027, probe_R00028, probe_R00029,
     probe_R00030, probe_R00032, probe_R00034, probe_R00035, probe_R00036, probe_a_b_c_d_e_f,
+    probe_R00002, probe_R00004, probe_R00009, probe_R00010, probe_R00013, probe_R00040, probe_R00041,
+    probe_R00043, probe_R00051, probe_R00053, probe_R00059, probe_R00060, probe_R00066, probe_R00067,
+    probe_R00071, probe_R00011,
 ]
 
 
@@ -462,14 +752,14 @@ def case_self():
     p = QObject()
     o.setParent(p)
     o.setParent(o)
-    print(f"R-00007 self: o.parent() is o {o.parent() is o}; o in o.children() {o in o.children()}", flush=True)
+    print(f"R-00048 self: o.parent() is o {o.parent() is o}; o in o.children() {o in o.children()}", flush=True)
 
 
 def case_desc():
     a = QObject()
     b = QObject(a)
     a.setParent(b)
-    print(f"R-00007 descendant: a.parent() is b {a.parent() is b}; b.parent() is a {b.parent() is a}", flush=True)
+    print(f"R-00048 descendant: a.parent() is b {a.parent() is b}; b.parent() is a {b.parent() is a}", flush=True)
 
 
 def case_thread():
@@ -496,7 +786,7 @@ def run_r00007_cases():
                 capture_output=True, text=True, timeout=60,
             )
             for line in r.stdout.splitlines():
-                if line.startswith("R-00007"):
+                if line.startswith(("R-00007", "R-00048", "R-00064")):
                     print(line)
             warns = [ln for ln in r.stderr.splitlines() if "QObject::setParent" in ln]
             for w in warns:
@@ -509,9 +799,20 @@ def run_r00007_cases():
 
 def main():
     if len(sys.argv) > 1 and sys.argv[1].startswith("--case="):
-        CASES[sys.argv[1].split("=", 1)[1]]()
+        name = sys.argv[1].split("=", 1)[1]
+        msgs = []
+
+        def handler(mode, context, message):
+            msgs.append(message)
+            sys.stderr.write(message + "\n")
+
+        qInstallMessageHandler(handler)
+        CASES[name]()
+        hits = [m for m in msgs if "setParent" in m]
+        print(f"R-00064: warning captured={bool(hits)} text={hits[0] if hits else ''!r} case={name}", flush=True)
         os._exit(0)
     print(f"PySide6 {PySide6.__version__}; Qt {qVersion()}")
+    print(f"platform={QGuiApplication.platformName()} dpr={app.primaryScreen().devicePixelRatio()} os={platform.platform()}")
     for fn in PROBES:
         try:
             fn()
