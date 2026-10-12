@@ -564,7 +564,7 @@ fn main() -> std::process::ExitCode {
         tray.borrow_mut().update_menu_state();
         let _ = tray.borrow_mut().tray.show_message(
             "⚠️ 穿透模式已暫停",
-            "全域快捷鍵未註冊成功，已自動停用啟動時穿透模式以防視窗鎖死。\n您仍可由系統匣右鍵選單手動開啟。",
+            hotkey::LOCKOUT_WARNING_MESSAGE,
             TrayMessageIcon::Warning,
             5000,
         );

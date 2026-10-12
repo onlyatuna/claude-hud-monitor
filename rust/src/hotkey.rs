@@ -82,6 +82,10 @@ impl HotkeyRegistration {
 pub fn click_through_startup_allowed(registration: Option<&HotkeyRegistration>) -> bool {
     registration.is_some_and(HotkeyRegistration::clickthrough_registered)
 }
+/// The warning body shown when click-through mode is disabled on startup to prevent lockout
+/// (mirrors Python `hud_window.py:432`).
+pub const LOCKOUT_WARNING_MESSAGE: &str =
+    "全域快捷鍵註冊失敗，已自動停用啟動時穿透模式以防視窗鎖死。\n您仍可由系統匣右鍵選單手動開啟。";
 
 pub struct HotkeyManager {
     registration: HotkeyRegistration,
@@ -665,5 +669,14 @@ mod tests {
             "Ctrl+Alt+Shift+F12"
         );
         assert_eq!(format_hotkey(0, 0x20), "Space");
+    }
+    #[test]
+    fn test_lockout_warning_message_matches_python() {
+        // Python hud_window.py:432:
+        // "全域快捷鍵註冊失敗，已自動停用啟動時穿透模式以防視窗鎖死。\n您仍可由系統匣右鍵選單手動開啟。"
+        assert_eq!(
+            LOCKOUT_WARNING_MESSAGE,
+            "全域快捷鍵註冊失敗，已自動停用啟動時穿透模式以防視窗鎖死。\n您仍可由系統匣右鍵選單手動開啟。"
+        );
     }
 }

@@ -943,7 +943,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.9.b [P1]** macOS 熱鍵明確未實作（`hotkey.rs:7-8,146-151`）；Python 用 pynput。
   - **G11.9.c [D, RAN；已修復：RC-157]** （修復前）`GenericHotkeyManager`／`CocoaHotkeyManager`／`UnixHotkeyManager` 為 stub，回報成功卻未註冊。理由：未驗證平台；**但 stub 回 `Ok` 違反規則 3（誤用須可見失敗）**——RC-157 改回回傳錯誤。
   - **G11.9.d [P2]** app 以原子旗標 + `run_on_main_thread`（`main.rs:466-483`）取代 queued 信號。
-  - **G11.9.e [P2, READ]** 穿透鎖定訊息文字不同：Rust「全域快捷鍵未註冊成功，…」（`main.rs`），Python「全域快捷鍵註冊失敗，…」（`hud_window.py:432`）。
+  - **G11.9.e [P2, READ；已修復：RC-158]** （修復前）穿透鎖定訊息文字不同：Rust「全域快捷鍵未註冊成功，…」（`main.rs`），Python「全域快捷鍵註冊失敗，…」（`hud_window.py:432`）。RC-158 改為與 Python 完全一致。
   - **G11.9.f [P2, READ]** Rust 的主熱鍵取自設定 `hotkey`，穿透熱鍵由 `compute_ct_mods` 推導；Python 固定 `Alt+C`／`Alt+Shift+C`（`main.py:89`、`hotkey.py:70,79`）。預設設定下相同；訊息文字使用實際註冊的組合，而非固定的 `Alt+`。
   - **G11.9.g [P2, INFERENCE]** `HotkeyManager::start` 等工作執行緒回報，沒有逾時（Python 最多等 1.5 s）；`RegisterHotKey` 本身不會長時間阻塞，但此處未驗證執行緒卡住的情況。
   - **G11.9.h [P2]** 熱鍵失敗時的托盤氣泡（`main.rs`）只以 log 煙霧測試驗證，沒有自動測試，也沒有目視確認氣泡內容與連續兩則訊息的顯示。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 216 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 217 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1532,7 +1532,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.9.b | P1 | macOS 熱鍵明確未實作 |
 | G11.9.c | D, RAN；已修復：RC-157 | `GenericHotkeyManager`／`CocoaHotkeyManager`／`UnixHotkeyManager` 為 stub，回報成功卻未註冊 |
 | G11.9.d | P2 | app 以原子旗標 + `run_on_main_thread` |
-| G11.9.e | P2, READ | 穿透鎖定訊息文字與 Python 不同 |
+| G11.9.e | P2, READ；已修復：RC-158 | 穿透鎖定訊息文字與 Python 不同 |
 | G11.9.f | P2, READ | 主熱鍵取自設定、穿透熱鍵推導；Python 固定 |
 | G11.9.g | P2, INFERENCE | `start` 等回報無逾時 |
 | G11.9.h | P2 | 熱鍵失敗氣泡只以 log 煙霧測試驗證 |
@@ -3404,3 +3404,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **驗證**：測試 `test_cocoa_hotkey_manager`、`test_unix_hotkey_manager`、`test_cross_platform_hotkeys`、`test_generic_platform_integration_full_lifecycle`。修改前 FAIL：`crates/qtrs-platform/src/hotkey.rs:284:9 assertion failed: mgr.register_hotkey(9527, HotkeyModifiers::ALT, 8).is_err()`（修改前回傳 `Ok(())`）。修改後所有測試通過。`qtrs-platform` 111 passed（0 failed）；HUD 134 passed、5 ignored；clippy 0 warning；`cargo fmt --check` 通過。`--snapshot` 比對無版面位移。
 - **HUD 影響**：無可見影響（Windows HUD 使用專用之 `win32_hotkey_loop`；非 Windows HUD 在 `rust/src/hotkey.rs` 已回報 `HotkeyStatus::Unsupported`）。
 - **Residual**：macOS (G11.9.b) 與 Linux 之真正 OS 全域熱鍵後端仍待實作。
+
+#### RC-158 穿透鎖定警告文字與 Python 一致（G11.9.e）
+- **Python 依據**：`[PYTHON-SRC python/ui/hud_window.py:426-435]` `_safe_init_click_through` 在穿透熱鍵未註冊時顯示系統匣訊息，標題為「⚠️ 穿透模式已暫停」，內文為「全域快捷鍵註冊失敗，已自動停用啟動時穿透模式以防視窗鎖死。\n您仍可由系統匣右鍵選單手動開啟。」。
+- **根因**：Rust `main.rs:567` 寫為「全域快捷鍵未註冊成功，…」，措辭與 Python 不一致。
+- **修正**：`hotkey.rs` 宣告常數 `LOCKOUT_WARNING_MESSAGE` 為 Python 確切文字；`main.rs:567` 呼叫 `tray.show_message` 時改用該常數。
+- **驗證**：新增測試 `test_lockout_warning_message_matches_python`。修改前 FAIL：`src\hotkey.rs:677:9 assertion left == right failed`（left: `"全域快捷鍵未註冊成功..."`，right: `"全域快捷鍵註冊失敗..."`）。修改後通過。HUD 135 passed、5 ignored；clippy 0 warning；`cargo fmt --check` 通過。`--snapshot` 比對無版面位移。
+- **HUD 影響**：穿透模式於熱鍵未註冊啟動時送出的系統匣警告內文與 Python 完全一致。
+- **Residual**：無。
