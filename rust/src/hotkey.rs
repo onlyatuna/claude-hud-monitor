@@ -209,6 +209,9 @@ impl HotkeyManager {
         &self.registration
     }
 
+    /// Timeout matching Python's `self._ready_event.wait(timeout=1.5)` (hotkey.py:116).
+    pub const START_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
     pub fn start(hotkey_str: &str) -> Result<Self, String> {
         let toggle_flag = Arc::new(AtomicBool::new(false));
         let ct_flag = Arc::new(AtomicBool::new(false));
@@ -243,8 +246,8 @@ impl HotkeyManager {
             // The worker reports once both `RegisterHotKey` calls are done (Python waits on
             // `_ready_event`). The channel closes if the thread ends before reporting.
             let registration = registered_rx
-                .recv()
-                .map_err(|_| "hotkey thread ended before registering".to_owned())?;
+                .recv_timeout(Self::START_TIMEOUT)
+                .map_err(|e| format!("hotkey thread registration failed or timed out: {e}"))?;
             Ok(Self {
                 registration,
                 toggle_flag,
@@ -678,5 +681,11 @@ mod tests {
             LOCKOUT_WARNING_MESSAGE,
             "全域快捷鍵註冊失敗，已自動停用啟動時穿透模式以防視窗鎖死。\n您仍可由系統匣右鍵選單手動開啟。"
         );
+    }
+
+    #[test]
+    fn test_hotkey_start_timeout_constant() {
+        // Verifies timeout configuration matching Python's 1.5s (_ready_event.wait(timeout=1.5), hotkey.py:116)
+        assert_eq!(HotkeyManager::START_TIMEOUT.as_millis(), 1500);
     }
 }
