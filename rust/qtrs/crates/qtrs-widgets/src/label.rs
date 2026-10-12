@@ -4,7 +4,7 @@ use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::notify_borrowed;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{PointF, Rect, RectF, Size};
-use qtrs_gui::paint::{Painter, Pen};
+use qtrs_gui::paint::{Painter, Pen, RenderHint};
 use qtrs_gui::text::{Font, FontMetrics, TextDocument};
 use qtrs_gui::tiny_skia::Color;
 
@@ -474,6 +474,8 @@ impl Widget for Label {
                 geom.width as f32,
                 geom.height as f32,
             );
+            // QSS rule background/border (`qstylesheetstyle.cpp:1282-1285, 1360-1363`) is anti-aliased.
+            painter.set_render_hint(RenderHint::Antialiasing, true);
             if border_r > 0.0 {
                 painter.draw_rounded_rect(rect_f, border_r, border_r);
             } else {

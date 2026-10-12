@@ -27,7 +27,6 @@ thread_local! {
     static QUITTING: Cell<bool> = const { Cell::new(false) };
 }
 
-static GLOBAL_DOUBLE_CLICK_INTERVAL_MS: RwLock<u32> = RwLock::new(400);
 static GLOBAL_CURSOR_FLASH_TIME_MS: RwLock<u32> = RwLock::new(1000);
 static GLOBAL_WHEEL_SCROLL_LINES: RwLock<i32> = RwLock::new(3);
 static GLOBAL_START_DRAG_DISTANCE: RwLock<i32> = RwLock::new(10);
@@ -326,11 +325,14 @@ impl Application {
     // --- Interactive Settings ---
 
     pub fn double_click_interval() -> u32 {
-        *GLOBAL_DOUBLE_CLICK_INTERVAL_MS.read().unwrap()
+        qtrs_gui::application::GuiApplication::style_hints().mouse_double_click_interval_ms
     }
 
+    /// `QApplication::setDoubleClickInterval` writes the style hint (`qapplication.cpp:3486-3488`).
     pub fn set_double_click_interval(ms: u32) {
-        *GLOBAL_DOUBLE_CLICK_INTERVAL_MS.write().unwrap() = ms;
+        let mut hints = qtrs_gui::application::GuiApplication::style_hints();
+        hints.mouse_double_click_interval_ms = ms;
+        qtrs_gui::application::GuiApplication::set_style_hints(hints);
     }
 
     pub fn cursor_flash_time() -> u32 {
@@ -375,7 +377,9 @@ impl Application {
         VISIBLE_WINDOWS.with(|vis| vis.borrow_mut().clear());
         ACTIVE_WINDOW_ID.with(|act| *act.borrow_mut() = None);
         FOCUS_WIDGET.with(|fw| *fw.borrow_mut() = None);
-        *GLOBAL_DOUBLE_CLICK_INTERVAL_MS.write().unwrap() = 400;
+        let mut hints = qtrs_gui::application::GuiApplication::style_hints();
+        hints.mouse_double_click_interval_ms = 400;
+        qtrs_gui::application::GuiApplication::set_style_hints(hints);
         *GLOBAL_CURSOR_FLASH_TIME_MS.write().unwrap() = 1000;
         *GLOBAL_WHEEL_SCROLL_LINES.write().unwrap() = 3;
         *GLOBAL_START_DRAG_DISTANCE.write().unwrap() = 10;

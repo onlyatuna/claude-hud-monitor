@@ -1088,6 +1088,16 @@ impl Widget for EmptyWidget {
         }
         if size_changed {
             self.resize_event(new_size, old_size);
+            // A layout-owning child re-lays out its children when its size changes, as Qt's
+            // QLayout::widgetEvent does on Resize: `if (d->activated) doResize()` (qlayout.cpp:528-530).
+            // A parentless widget is a window root, which Window lays out itself (window.rs:859-860);
+            // fitting it here as well ran that pass twice (test_layout_metric_caching aligned container).
+            let has_parent = self.base.parent.borrow().is_some();
+            if let Some(mut layout) = self.layout_ref_mut() {
+                if has_parent && !layout.is_dirty() {
+                    layout.set_geometry(Rect::new(0, 0, rect.width, rect.height));
+                }
+            }
         }
 
         self.update();

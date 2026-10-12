@@ -384,6 +384,8 @@ impl X11NativeWindow {
                     global_pos,
                     button: btn,
                     modifiers: mods,
+                    // `X11Event::ButtonPress` carries no time; the press is stamped on arrival.
+                    timestamp: crate::window_system_interface::event_time_ms(),
                 });
             }
             X11Event::ButtonRelease {

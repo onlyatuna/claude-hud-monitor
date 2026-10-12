@@ -13,6 +13,14 @@ pub enum Delivery {
     Asynchronous,
 }
 
+/// Milliseconds since the first call in this process, wrapping at 2^32. Backends whose
+/// decoded events carry no native time stamp `MousePress` with this clock instead.
+pub fn event_time_ms() -> u32 {
+    static ORIGIN: std::sync::LazyLock<std::time::Instant> =
+        std::sync::LazyLock::new(std::time::Instant::now);
+    ORIGIN.elapsed().as_millis() as u32
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MouseButton {
     None,
@@ -117,6 +125,9 @@ pub enum WindowSystemEvent {
         global_pos: Point,
         button: MouseButton,
         modifiers: KeyboardModifiers,
+        /// Event time in milliseconds (`QMouseEvent::timestamp`), used to synthesize a double
+        /// click on backends that do not report one. Wraps at 2^32, as Qt's does.
+        timestamp: u32,
     },
     MouseRelease {
         pos: Point,

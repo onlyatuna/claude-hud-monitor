@@ -40,7 +40,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 #[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowRect, IsZoomed,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetMessageTime, GetWindowRect, IsZoomed,
     RegisterClassExW, SetWindowPos, ShowWindow,
     HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
     HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, NCCALCSIZE_PARAMS, SWP_FRAMECHANGED,
@@ -973,6 +973,8 @@ unsafe fn native_window_proc_inner(
                     global_pos,
                     button,
                     modifiers,
+                    // `QWindowsContext` stamps mouse messages with `GetMessageTime()` (qwindowscontext.cpp:836).
+                    timestamp: unsafe { GetMessageTime() } as u32,
                 },
             );
 
@@ -1978,6 +1980,11 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
     }
     fn set_event_handler(&mut self, handler: Box<dyn WindowSystemEventHandler>) {
         self.set_event_handler(handler);
+    }
+
+    fn reports_native_double_clicks(&self) -> bool {
+        // `WM_*BUTTONDBLCLK` arrives from the OS (`CS_DBLCLKS` on the window class).
+        true
     }
 
     fn native_handle(&self) -> isize {

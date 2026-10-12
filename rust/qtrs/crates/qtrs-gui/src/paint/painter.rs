@@ -90,6 +90,48 @@ impl Default for Pen {
     }
 }
 
+/// Render hint (`QPainter::RenderHint`, `qpainter.h`); bit values match Qt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RenderHint {
+    /// Anti-aliased shape edges (`QPainter::Antialiasing`).
+    Antialiasing = 0x01,
+    /// Anti-aliased text (`QPainter::TextAntialiasing`). Stored only; text drawing is always
+    /// anti-aliased.
+    TextAntialiasing = 0x02,
+    /// Bilinear sampling of pixmaps and textures (`QPainter::SmoothPixmapTransform`).
+    SmoothPixmapTransform = 0x04,
+}
+
+/// Set of render hints (`QPainter::RenderHints`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderHints(u8);
+
+impl RenderHints {
+    /// `QPainter::begin` default: `TextAntialiasing` only (`qpainter.cpp:1847`).
+    pub const DEFAULT: Self = Self(RenderHint::TextAntialiasing as u8);
+
+    /// `QPainter::testRenderHint`.
+    pub fn contains(self, hint: RenderHint) -> bool {
+        self.0 & hint as u8 != 0
+    }
+
+    /// `QPainter::setRenderHint(hint, on)`.
+    fn set(&mut self, hint: RenderHint, on: bool) {
+        if on {
+            self.0 |= hint as u8;
+        } else {
+            self.0 &= !(hint as u8);
+        }
+    }
+}
+
+impl Default for RenderHints {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// Painter state snapshot (modeled after Qt `QPainter` state stack).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PainterState {
@@ -97,7 +139,7 @@ pub struct PainterState {
     pub brush: Brush,
     pub transform: Transform,
     pub opacity: f32,
-    pub antialiasing: bool,
+    pub render_hints: RenderHints,
     pub composition_mode: CompositionMode,
     pub clip_rect: Option<tiny_skia::Rect>,
 }
@@ -109,7 +151,7 @@ impl Default for PainterState {
             brush: Brush::NoBrush,
             transform: Transform::identity(),
             opacity: 1.0,
-            antialiasing: true,
+            render_hints: RenderHints::default(),
             composition_mode: CompositionMode::SourceOver,
             clip_rect: None,
         }
@@ -157,6 +199,21 @@ impl<'a> Painter<'a> {
     // Returns a reference to the active state.
     pub fn state(&self) -> &PainterState {
         &self.state
+    }
+
+    /// Sets or clears one render hint (`QPainter::setRenderHint`). Saved by `save()`.
+    pub fn set_render_hint(&mut self, hint: RenderHint, on: bool) {
+        self.state.render_hints.set(hint, on);
+    }
+
+    /// Active render hints (`QPainter::renderHints`).
+    pub fn render_hints(&self) -> RenderHints {
+        self.state.render_hints
+    }
+
+    /// Tests one render hint (`QPainter::testRenderHint`).
+    pub fn test_render_hint(&self, hint: RenderHint) -> bool {
+        self.state.render_hints.contains(hint)
     }
 
     // Returns a mutable reference to the active state.
@@ -355,6 +412,18 @@ impl<'a> Painter<'a> {
     pub fn fill_path_with_rule(&mut self, path: &Path, fill_rule: tiny_skia::FillRule) {
         let opacity = self.state.opacity;
         let transform = self.state.transform;
+        let anti_alias = self.state.render_hints.contains(RenderHint::Antialiasing);
+        // Qt samples a pixmap or texture brush with the nearest pixel unless
+        // `SmoothPixmapTransform` is set (`QPainter::renderHints`, Qt default: off).
+        let filter = if self
+            .state
+            .render_hints
+            .contains(RenderHint::SmoothPixmapTransform)
+        {
+            FilterQuality::Bilinear
+        } else {
+            FilterQuality::Nearest
+        };
         self.update_clip_mask_if_needed();
         let mask_ref = self.cached_mask.as_ref();
         let blend_mode = self.state.composition_mode.into();
@@ -369,7 +438,7 @@ impl<'a> Painter<'a> {
                         &mut self.device.as_pixmap_mut(),
                         path,
                         fill_rule,
-                        self.state.antialiasing,
+                        anti_alias,
                         transform,
                         c.premultiply().to_color_u8(),
                         mask_ref,
@@ -379,7 +448,7 @@ impl<'a> Painter<'a> {
                 let paint = Paint {
                     shader: Shader::SolidColor(c),
                     blend_mode,
-                    anti_alias: self.state.antialiasing,
+                    anti_alias,
                     ..Default::default()
                 };
                 self.device
@@ -417,12 +486,12 @@ impl<'a> Painter<'a> {
                         shader: Pattern::new(
                             tile.as_ref(),
                             SpreadMode::Repeat,
-                            FilterQuality::Nearest,
+                            filter,
                             opacity,
                             Transform::identity(),
                         ),
                         blend_mode,
-                        anti_alias: self.state.antialiasing,
+                        anti_alias,
                         ..Default::default()
                     };
                     self.device
@@ -435,7 +504,7 @@ impl<'a> Painter<'a> {
                     let paint = Paint {
                         shader,
                         blend_mode,
-                        anti_alias: self.state.antialiasing,
+                        anti_alias,
                         ..Default::default()
                     };
                     self.device
@@ -448,7 +517,7 @@ impl<'a> Painter<'a> {
                     let paint = Paint {
                         shader,
                         blend_mode,
-                        anti_alias: self.state.antialiasing,
+                        anti_alias,
                         ..Default::default()
                     };
                     self.device
@@ -461,12 +530,12 @@ impl<'a> Painter<'a> {
                     shader: Pattern::new(
                         pattern.pixmap.as_tiny_skia().as_ref(),
                         SpreadMode::Repeat,
-                        FilterQuality::Bilinear,
+                        filter,
                         opacity,
                         pattern.transform,
                     ),
                     blend_mode,
-                    anti_alias: self.state.antialiasing,
+                    anti_alias,
                     ..Default::default()
                 };
                 self.device
@@ -487,7 +556,7 @@ impl<'a> Painter<'a> {
         let paint = Paint {
             shader: Shader::SolidColor(c),
             blend_mode,
-            anti_alias: self.state.antialiasing,
+            anti_alias: self.state.render_hints.contains(RenderHint::Antialiasing),
             ..Default::default()
         };
         let stroke = pen.to_stroke();
@@ -532,6 +601,87 @@ impl<'a> Painter<'a> {
         pb.line_to(p2.x, p2.y);
         if let Some(path) = pb.finish() {
             self.stroke_path(&path);
+            self.fill_aliased_line_end_pixels(&path, p1, p2);
+        }
+    }
+
+    /// Qt's aliased thin-line endpoint rule: with pen width <= 1 and a non-flat cap, the pixel
+    /// containing each endpoint is drawn too. Qt builds these caps in
+    /// `QCosmeticStroker::drawLine` (qcosmeticstroker.cpp:263 `drawCaps`, :342-356 CapBegin|CapEnd)
+    /// and the raster engine takes that path for width <= 1 (qpaintengine_raster.cpp:655-658).
+    /// tiny-skia's Round cap and the Square cap on a diagonal miss the endpoint pixel centre, so
+    /// the pixel is filled explicitly in device space. A pixel the stroke already covers is not
+    /// filled again, since Qt blends each pixel once and a translucent pen would otherwise double
+    /// up. Stroke coverage comes from rasterising the same outline into a small local mask.
+    fn fill_aliased_line_end_pixels(&mut self, path: &Path, p1: PointF, p2: PointF) {
+        let pen = match &self.state.pen {
+            Some(pen) => pen.clone(),
+            None => return,
+        };
+        if self.state.render_hints.contains(RenderHint::Antialiasing)
+            || pen.width > 1.0
+            || pen.cap == LineCap::Butt
+        {
+            return;
+        }
+        let transform = self.state.transform;
+        let res_scale = tiny_skia::PathStroker::compute_resolution_scale(&transform);
+        let Some(outline) = path.stroke(&pen.to_stroke(), res_scale) else {
+            return;
+        };
+        let mut d1 = tiny_skia::Point::from_xy(p1.x, p1.y);
+        let mut d2 = tiny_skia::Point::from_xy(p2.x, p2.y);
+        transform.map_point(&mut d1);
+        transform.map_point(&mut d2);
+        // Local coverage spans both endpoint pixels plus the cap extent (half the pen width in
+        // device space) and a 2 px margin.
+        let scale = transform
+            .sx
+            .abs()
+            .max(transform.sy.abs())
+            .max(transform.kx.abs())
+            .max(transform.ky.abs());
+        let margin = 2 + (pen.width * scale).ceil() as i32;
+        let x0 = d1.x.min(d2.x).floor() as i32 - margin;
+        let y0 = d1.y.min(d2.y).floor() as i32 - margin;
+        let x1 = d1.x.max(d2.x).ceil() as i32 + margin;
+        let y1 = d1.y.max(d2.y).ceil() as i32 + margin;
+        let width = (x1 - x0) as u32;
+        let Some(mut coverage) = Mask::new(width, (y1 - y0) as u32) else {
+            return;
+        };
+        coverage.fill_path(
+            &outline,
+            tiny_skia::FillRule::Winding,
+            false,
+            transform.post_translate(-x0 as f32, -y0 as f32),
+        );
+        let mut c = pen.color;
+        c.apply_opacity(self.state.opacity);
+        let paint = Paint {
+            shader: Shader::SolidColor(c),
+            blend_mode: self.state.composition_mode.into(),
+            anti_alias: false,
+            ..Default::default()
+        };
+        self.update_clip_mask_if_needed();
+        let mask_ref = self.cached_mask.as_ref();
+        for d in [d1, d2] {
+            let (px, py) = (d.x.floor() as i32, d.y.floor() as i32);
+            let local = (py - y0) as u32 * width + (px - x0) as u32;
+            if coverage.data()[local as usize] != 0 {
+                continue;
+            }
+            if let Some(rect) = tiny_skia::Rect::from_xywh(px as f32, py as f32, 1.0, 1.0) {
+                let path = PathBuilder::from_rect(rect);
+                self.device.as_pixmap_mut().fill_path(
+                    &path,
+                    &paint,
+                    tiny_skia::FillRule::Winding,
+                    Transform::identity(),
+                    mask_ref,
+                );
+            }
         }
     }
 
@@ -674,15 +824,25 @@ impl<'a> Painter<'a> {
             .pre_scale(scale_x, scale_y)
             .pre_translate(-src_rect.x, -src_rect.y);
 
+        // Qt `drawPixmap` samples nearest unless `SmoothPixmapTransform` is set.
+        let filter = if self
+            .state
+            .render_hints
+            .contains(RenderHint::SmoothPixmapTransform)
+        {
+            FilterQuality::Bilinear
+        } else {
+            FilterQuality::Nearest
+        };
         let paint = Paint {
             shader: Pattern::new(
                 pixmap.as_tiny_skia().as_ref(),
                 SpreadMode::Pad,
-                FilterQuality::Bilinear,
+                filter,
                 self.state.opacity,
                 patt_transform,
             ),
-            anti_alias: self.state.antialiasing,
+            anti_alias: self.state.render_hints.contains(RenderHint::Antialiasing),
             ..Default::default()
         };
 
@@ -1162,7 +1322,9 @@ mod tests {
         assert!(state.pen.is_some());
         assert_eq!(state.brush, Brush::NoBrush);
         assert_eq!(state.opacity, 1.0);
-        assert!(state.antialiasing);
+        // Qt `QPainter::begin` leaves only TextAntialiasing set (`qpainter.cpp:1847`).
+        assert_eq!(state.render_hints, RenderHints::DEFAULT);
+        assert!(!state.render_hints.contains(RenderHint::Antialiasing));
         assert!(state.clip_rect.is_none());
         assert_eq!(state.transform, tiny_skia::Transform::identity());
 
@@ -1369,5 +1531,190 @@ mod tests {
             .iter()
             .any(|p| p[1] > 50 && p[3] > 0);
         assert!(has_green, "Canvas must contain rendered green text pixels");
+    }
+
+    // G10.4.d: Qt's fresh QPainter has renderHints()==TextAntialiasing only, so shapes are aliased.
+    // QPainter probe (PySide6 6.11.2): 30.3px ellipse with no hint has 0 partial-alpha pixels;
+    // with Antialiasing it has 114.
+    #[test]
+    fn g10_4d_default_shapes_are_aliased_like_qt() {
+        let mut pm = Pixmap::new(40, 40).unwrap();
+        pm.fill(tiny_skia::Color::TRANSPARENT);
+        {
+            let mut p = Painter::begin(&mut pm);
+            p.set_pen(None);
+            p.set_brush(Brush::from_rgba8(255, 0, 0, 255));
+            p.draw_ellipse(RectF::new(2.5, 2.5, 30.3, 30.3));
+        }
+        let partial = pm
+            .data()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|px| px[3] > 0 && px[3] < 255)
+            .count();
+        assert_eq!(
+            partial, 0,
+            "fresh QPainter has no Antialiasing hint (Qt renderHints()==TextAntialiasing only): \
+             ellipse edge must be aliased, found {partial} partial-alpha pixels"
+        );
+    }
+
+    // G10.4.d: draw_pixmap samples nearest-neighbour unless SmoothPixmapTransform is set (Qt
+    // default). Source: left half red, right half blue, 4x4 px. Target: 10x10 px, scale 2.5.
+    // Nearest yields only pure red or pure blue opaque pixels; bilinear mixes at the seam.
+    #[test]
+    fn g10_4d_draw_pixmap_is_nearest_without_smooth_pixmap_transform() {
+        let mut src = Pixmap::new(4, 4).unwrap();
+        {
+            let mut sp = Painter::begin(&mut src);
+            sp.set_pen(None);
+            sp.set_brush(Brush::from_rgba8(255, 0, 0, 255));
+            sp.draw_rect(RectF::new(0.0, 0.0, 2.0, 4.0));
+            sp.set_brush(Brush::from_rgba8(0, 0, 255, 255));
+            sp.draw_rect(RectF::new(2.0, 0.0, 2.0, 4.0));
+        }
+        let mut dest = Pixmap::new(10, 10).unwrap();
+        {
+            let mut p = Painter::begin(&mut dest);
+            p.draw_pixmap(RectF::new(0.0, 0.0, 10.0, 10.0), &src, None);
+        }
+        let stride = 10 * 4;
+        for y in 0..10usize {
+            for x in 0..10usize {
+                let i = y * stride + x * 4;
+                let px = &dest.data()[i..i + 4];
+                let (r, b) = (px[0], px[2]);
+                assert_eq!(px[3], 255, "pixel ({x},{y}) must be opaque");
+                let pure_red = r == 255 && b == 0;
+                let pure_blue = r == 0 && b == 255;
+                assert!(
+                    pure_red || pure_blue,
+                    "pixel ({x},{y}) is a mixed colour rgba=({},{},{},{}); Qt nearest sampling gives pure colours",
+                    px[0], px[1], px[2], px[3]
+                );
+            }
+        }
+    }
+
+    // G10.4.d: an aliased cosmetic line with a non-flat cap covers both end pixels. Qt's default
+    // pen is SquareCap (qpen.cpp:203); QCosmeticStroker::drawLine adds caps unless FlatCap
+    // (qcosmeticstroker.cpp:263, CapBegin|CapEnd at :356). PySide6 6.11.2 probe, 1px black on
+    // white, Antialiasing off, same result for Square and Round: H (8,36)-(258,36) is black at
+    // x=8 and x=258 and white at x=7 and x=259; V (36,8)-(36,258) and D (8,8)-(258,158) likewise.
+    // FlatCap: the far end pixel (258) stays white.
+    #[test]
+    fn g10_4d_aliased_line_includes_endpoint_pixels_like_qt() {
+        const W: u32 = 300;
+        let red = |pm: &Pixmap, x: usize, y: usize| pm.data()[(y * W as usize + x) * 4];
+        let draw = |p1: (f32, f32), p2: (f32, f32), cap: LineCap| {
+            let mut pm = Pixmap::new(W, W).unwrap();
+            pm.fill(tiny_skia::Color::WHITE);
+            {
+                let mut p = Painter::begin(&mut pm);
+                p.set_pen(Pen::new(tiny_skia::Color::BLACK, 1.0).with_cap(cap));
+                p.draw_line(PointF::new(p1.0, p1.1), PointF::new(p2.0, p2.1));
+            }
+            pm
+        };
+        // (start, end, pixel before start along the line, pixel after end along the line)
+        let lines = [
+            (
+                (8.0, 36.0),
+                (258.0, 36.0),
+                (8, 36),
+                (258, 36),
+                (7, 36),
+                (259, 36),
+            ),
+            (
+                (36.0, 8.0),
+                (36.0, 258.0),
+                (36, 8),
+                (36, 258),
+                (36, 7),
+                (36, 259),
+            ),
+            (
+                (8.0, 8.0),
+                (258.0, 158.0),
+                (8, 8),
+                (258, 158),
+                (7, 7),
+                (259, 159),
+            ),
+        ];
+        for cap in [LineCap::Square, LineCap::Round] {
+            for (p1, p2, start, end, before, after) in lines {
+                let pm = draw(p1, p2, cap);
+                let msg = format!("{cap:?} {p1:?}->{p2:?}");
+                assert_eq!(
+                    red(&pm, start.0, start.1),
+                    0,
+                    "{msg}: start pixel must be drawn"
+                );
+                assert_eq!(red(&pm, end.0, end.1), 0, "{msg}: end pixel must be drawn");
+                assert_eq!(
+                    red(&pm, before.0, before.1),
+                    255,
+                    "{msg}: pixel before start must stay white"
+                );
+                assert_eq!(
+                    red(&pm, after.0, after.1),
+                    255,
+                    "{msg}: pixel after end must stay white"
+                );
+            }
+        }
+        for (p1, p2, start, end, _, _) in lines {
+            let pm = draw(p1, p2, LineCap::Butt);
+            let msg = format!("FlatCap {p1:?}->{p2:?}");
+            assert_eq!(
+                red(&pm, start.0, start.1),
+                0,
+                "{msg}: start pixel must be drawn"
+            );
+            assert_eq!(
+                red(&pm, end.0, end.1),
+                255,
+                "{msg}: FlatCap must not draw the end pixel"
+            );
+        }
+    }
+
+    // G10.4.d: the endpoint pixel is blended once. Qt draws each pixel of an aliased cosmetic
+    // line once (QCosmeticStroker::drawLine, qcosmeticstroker.cpp:263/:356). HUD menu separator
+    // (menu.rs paint_item): white alpha 31 over (22,25,32) from x=9.0 to x=258.0 at y=36.5.
+    // PySide6 6.11.2 probe, Antialiasing off: x=8 and x=259 stay (22,25,32); x=9..=258 are all
+    // (50,53,59), with x=9 and x=258 identical to the interior.
+    #[test]
+    fn g10_4d_aliased_line_endpoint_is_blended_once() {
+        const W: u32 = 300;
+        let bg = [22u8, 25, 32];
+        let mut pm = Pixmap::new(W, W).unwrap();
+        pm.fill(tiny_skia::Color::from_rgba8(bg[0], bg[1], bg[2], 255));
+        {
+            let mut p = Painter::begin(&mut pm);
+            p.set_render_hint(RenderHint::Antialiasing, false);
+            p.set_pen(Pen::new(
+                tiny_skia::Color::from_rgba8(255, 255, 255, 31),
+                1.0,
+            ));
+            p.draw_line(PointF::new(9.0, 36.5), PointF::new(258.0, 36.5));
+        }
+        let px = |x: usize, y: usize| {
+            let i = (y * W as usize + x) * 4;
+            [pm.data()[i], pm.data()[i + 1], pm.data()[i + 2]]
+        };
+        assert_eq!(px(8, 36), bg, "pixel before the start must stay background");
+        assert_eq!(px(259, 36), bg, "pixel after the end must stay background");
+        let interior = px(100, 36);
+        for x in 9..=258usize {
+            assert_eq!(
+                px(x, 36),
+                interior,
+                "x={x}: each pixel of the line must be blended exactly once"
+            );
+        }
     }
 }

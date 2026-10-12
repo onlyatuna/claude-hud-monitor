@@ -344,7 +344,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G5.1.a [P1, RAN；已修復：RC-85]** （修復前）`set_interval` 對啟動中的計時器無效。重現：`set_interval(5000)`、`start()`、`set_interval(20)`，pump 400 ms → **0 次** `timeout`（Qt：約 20 次）。
   - **G5.1.b [P1, RAN；已修復：RC-85]** （修復前）`set_single_shot` 啟動中無效。
-  - **G5.1.c [P1, READ]** `Timer::start` 是 `unsafe` 並以原始位址註冊（pinning 契約）；`Timer::new` 沒有 parent 參數，沒有 `QTimer(self)` 那種「隨 parent 銷毀」的生命週期。
+  - **G5.1.c [P1, RAN；已修復：RC-135]** （修復前；僅 unsafe start；parent 生命週期仍缺） `Timer::start` 是 `unsafe` 並以原始位址註冊（pinning 契約）；`Timer::new` 沒有 parent 參數，沒有 `QTimer(self)` 那種「隨 parent 銷毀」的生命週期。
   - **G5.1.d [P2, READ]** 執行緒沒有 timer context 時 `start` 靜默回 `TimerId::INVALID`（Qt 會警告）。
   - **G5.1.e [P2, READ]** `timeout` 是公開 `Signal<()>` 欄位，不在 meta-object 上。
   - **G5.1.f [P1, RAN；已修復：RC-11a]** 對已啟動（或 `stop` 後再 `start`）的計時器重啟，`timeout` **永遠不再觸發**。根因不在 `Timer`：`register_object_metadata` 重新註冊同一物件時，把被取代的舊 record 的 `liveness` 設為 false，但新舊 record 共用同一個 `Arc<AtomicBool>`，等於把活著的物件標為死亡（所有 `QPointer` 變 null，`with_object_mut` 拒絕遞送 `timer_event`）。修復：只有舊 record 與新物件不共用 liveness（id 被別的物件重用）時才標死。測試 `qtrs-core/tests/test_timer_restart.rs`（5 項，修復前 5/5 FAIL）。同一缺陷也影響任何重複 `register_qobject` 的物件。
@@ -653,7 +653,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.4.e [P2]** 無 `WA_TransparentForMouseEvents`／`WA_NoMousePropagation`；視窗離開時 Leave 只送最後一個葉。
   - **G8.4.f [P1, RAN；已修復：RC-116]** （修復前）右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關。
   - **G8.4.g [P1；已修復：RC-06]** `Window` 沒有 release／double-click／move handler（見 C11.2、G12.5.f）。
-  - **G8.4.h [P1, RAN；已修復：RC-132]** （修復前；僅 (1) MouseMove 傳遞；(2) 非 Win32 雙擊仍缺） RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTracking`（`qapplication.cpp:2735-2740`），qtrs 兩者都沒有（G8.4.b、G8.4.c）；(2) 雙擊只有 Win32 平台層會產生（視窗類別 `CS_DBLCLKS`，`qwindowswindowclassdescription.cpp:67`）；X11／Wayland／Cocoa 的第二次點擊仍是一般 `MousePress`——Qt 是在通用層用 `mouseDoubleClickInterval`／`mouseDoubleClickDistance` 判斷（`qguiapplication.cpp:2401-2425`），qtrs 沒有這一層；(3) 沒有 `WA_NoMousePropagation`（G8.4.e）。
+  - **G8.4.h [P1, RAN；已修復：RC-132、RC-136]** （修復前；(1) MouseMove 傳遞由 RC-132、(2) 非 Win32 雙擊由 RC-136 修正） RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTracking`（`qapplication.cpp:2735-2740`），qtrs 兩者都沒有（G8.4.b、G8.4.c）；(2) 雙擊只有 Win32 平台層會產生（視窗類別 `CS_DBLCLKS`，`qwindowswindowclassdescription.cpp:67`）；X11／Wayland／Cocoa 的第二次點擊仍是一般 `MousePress`——Qt 是在通用層用 `mouseDoubleClickInterval`／`mouseDoubleClickDistance` 判斷（`qguiapplication.cpp:2401-2425`），qtrs 沒有這一層；(3) 沒有 `WA_NoMousePropagation`（G8.4.e）。
   - **G8.4.i [P2]** `Window::set_mouse_press_handler`／`set_mouse_move_handler`／`set_context_menu_handler` 與新的 `set_window_event_handler` 是兩套並存的視窗層 handler API；press 與 move 的語意（未被 widget 處理才呼叫）與 `set_window_event_handler` 一致，但沒有合併。
 - **Test**：既有 `test_widget_hit_test_and_event_dispatch`、`test_hover_enter_leave_events_transition`、`test_builtin_button_click_and_state_transition`。必要：`unaccepted_press_reaches_parent_widget`；`accepted_press_stops_at_child`（RC-06 已有，原文名稱誤植）；`press_grab_routes_move_and_release_outside_widget`；`enter_leave_ancestor_chain_minus_common_ancestor`；`mousemove_without_tracking_is_swallowed`。
 - **HUD usage**：Python `mousePressEvent/MoveEvent/ReleaseEvent/resizeEvent/moveEvent`（`hud_window.py:560-606`）；`enterEvent/leaveEvent/eventFilter` 無。Rust：`set_mouse_move_handler/set_mouse_press_handler/set_resize_handler`（`hud_window.rs:325,352,368`）。
@@ -671,7 +671,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G8.5.f [P1, RAN；已修復：RC-117]** （修復前）**QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在；選單外觀來自寫死的 `MenuStyle`（`rust/src/ui/tray_icon.rs`），手動複製了 Python QSS 的數值；`QMenu::item:selected/:disabled` 不驅動 hover／停用色。
   - **G8.5.g [P2, READ]** `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄；`margin` 只有選單消費。
   - **G8.5.h [P2, READ]** 父 widget 的 `font` 繼承未實作（`[INFERENCE]`，未對照 `qstylesheetstyle.cpp`）。
-  - **G8.5.i [P1, READ]** RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排（`LayoutScheduler::invalidate(parent)`）；parent 自己的 size hint 因此改變時，不會再往祖先傳（Qt 的 `QLayout::invalidate` 會一路到最上層 layout 並對它 post `LayoutRequest`）；(2) widget 自己的 layout 在 `style_changed` 時只標 dirty，要靠 parent 的 `BoxLayout::activate` 順手重排（`child_layout.is_dirty()`）；沒有 parent 的 root，或 parent 沒有 layout 時，不會被排程（**G8.5.i(2) 的 root 部分 = RC-05 residual prerequisite，由 RC-10 一併消化**：沒有 parent 的 root 在 render 前由 `LayoutScheduler::activate_if_dirty` 排程，沒有新增 layout 子系統；「parent 沒有 layout」的情形未驗證，仍開放）。(3) `Application::set_style_sheet` 不通知既有 widget（RC-10 已修復）；`Application::set_font` 見 G8.5.j。
+  - **G8.5.i [P1, RAN；已修復：RC-138]** （修復前；(1) 經查已由 `layout_scheduler.rs` rebuild 後 `update_geometry` 往上傳（G9.5.a 測試釘住）；(2)「parent 沒有 layout」由 RC-138 修正；(3) RC-10） RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排（`LayoutScheduler::invalidate(parent)`）；parent 自己的 size hint 因此改變時，不會再往祖先傳（Qt 的 `QLayout::invalidate` 會一路到最上層 layout 並對它 post `LayoutRequest`）；(2) widget 自己的 layout 在 `style_changed` 時只標 dirty，要靠 parent 的 `BoxLayout::activate` 順手重排（`child_layout.is_dirty()`）；沒有 parent 的 root，或 parent 沒有 layout 時，不會被排程（**G8.5.i(2) 的 root 部分 = RC-05 residual prerequisite，由 RC-10 一併消化**：沒有 parent 的 root 在 render 前由 `LayoutScheduler::activate_if_dirty` 排程，沒有新增 layout 子系統；「parent 沒有 layout」的情形未驗證，仍開放）。(3) `Application::set_style_sheet` 不通知既有 widget（RC-10 已修復）；`Application::set_font` 見 G8.5.j。
   - **G8.5.j [P2, READ；實測]** `Application::set_font` 只寫 `GLOBAL_FONT`：沒有任何 widget 讀 `Application::font()`，也沒有 `FontChange`／`ApplicationFontChange`；各 widget 在建構時寫死字型（Label／Button 13、ProgressBar 12、Menu 12），也沒有「明確設定 vs. 沿用」的 resolve mask，所以新建的 widget 也不會用 app font。實測：既有 Label 的 size hint 在 `Application::set_font(40pt)` 後仍是 35→35；新建 Label 的字型為 13.0 而非 40.0。Qt：`QApplication::setFont` 對所有非 window 的 widget 送 `ApplicationFontChange`，`resolveFont()` 重新解析（`qapplication.cpp:1352-1386`、`qwidget.cpp:4763-4829, 9265`）。**HUD 不受影響**：Python 從未呼叫 `QApplication.setFont`（`grep` 全 `python/`），只用 widget 區域的 `setFont` 與 QSS。依使用者決定，**不在 RC-10 處理**。
   - **G8.5.k [P2, RAN；已修復：RC-117]** （修復前）HUD 的選單沒有 parent：Rust `Menu::new("")`（`tray_icon.rs:308`）；Python `QMenu(self.hud_window)`（`tray_icon.py:55`）、`QMenu(self)`（`hud_window.py:678`）。Qt 的 QMenu 沿 parent 鏈取得 sheet（`qstylesheetstyle.cpp:1654`）。qtrs 的 parent 鏈解析已可用（RC-10 的 `a_menu_takes_the_sheet_of_the_window_it_hangs_under_and_not_another`），但 `Menu` 不消費解析結果（G8.5.f），所以即使掛 parent 也沒有可見差異；兩者要一起處理。
   - **G8.5.l [P2, READ]** `StyleChange` 通知以 `try_borrow` 走訪：`style_changed_below` 跳過目前被 mutably borrow 的 widget（正在被驅動的那個），`Application::set_style_sheet` 在某個 root 被借用時，整棵樹不會被通知。與 `resolve_style` 遇到被借用祖先就停止走訪同類（`widget.rs:463`）。未實測。
@@ -720,7 +720,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G9.1.b [P1；已修復：RC-31]** （修復前：） 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor`（grep 為空）。 RC-31：`BoxLayout` 新增 `add_spacing`／`insert_spacing`／`add_spacer_item`／`insert_spacer_item`／`insert_stretch`／`set_stretch_factor`／`set_stretch`／`stretch`，以及公開的 `SpacerItem`（`QSpacerItem` 的 min／max／hint／expanding）；`LayoutItem::spacer` 由 `bool` 改為 `Option<SpacerItem>`。`set_stretch_factor(QLayout*)` 不適用（qtrs 子 layout 掛在 widget 上，以 widget 版本處理）。
   - **G9.1.c [P1；= G9.2.a；已修復：RC-07]** 無 item 對齊（見 C9.3）。
   - **G9.1.d [P1, RAN；已修復：RC-125]** （修復前）無 `heightForWidth`（grep `height_for_width|has_height` 為空）——換行 label 無法如 Qt 排版。
-  - **G9.1.e [P1]** 無 `retainSizeWhenHidden`、無 RTL（`Direction` 只有 TopToBottom／LeftToRight）、無 `SizeConstraint`。
+  - **G9.1.e [P1, RAN；已修復：RC-139]** （修復前；SizeConstraint 仍缺；方向為全域而非逐 widget） 無 `retainSizeWhenHidden`、無 RTL（`Direction` 只有 TopToBottom／LeftToRight）、無 `SizeConstraint`。
 - **Test**：既有 `test_vbox_and_hbox_layout_calculation`、`test_box_layout_add_stretch`、`test_layout_stretch_minimum.rs`（6 項，用 `spacer=0`，而 layout 實際用 `-1`）、`qt_layout_compare.py`（手動，見 C9.7）。`add_stretch_zero_matches_qt` 已由 RC-30 的 `test_box_layout_add_stretch_zero.rs` 補上。 G9.1.b API 由 RC-31 的 `test_box_layout_spacing.rs`（8 項）以 PySide6 參考值比對。
 - **HUD usage**：Python `QVBoxLayout/QHBoxLayout`（`hud_window.py:135,143,168,280,336`；`provider_card.py:25-90`；`usage_table.py:114,273-276,411`）、`addStretch`（`hud_window.py:286`、`provider_card.py:42,63,90`、`usage_table.py:123,278,285`）。Rust：對應檔案的 `BoxLayout::` 與 `add_stretch(1)`。
 
@@ -829,7 +829,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G10.4.a [P1, RAN；已修復：RC-103]** （修復前）`set_clip_rect` **不經 transform**（遮罩只用 DPR 縮放，文字 clip 用 `clip * dpr`）；`ScrollArea::paint_event` 在 widget translate 之後呼叫 `set_clip_rect(viewport)`，其 clip 落在視窗座標。
   - **G10.4.b [P2, READ]** `set_clip_rect` 取代而非相交：`ScrollArea` 內失去 widget 層的髒區 clip。
   - **G10.4.c [P1, RAN；已修復：RC-102]** （修復前）`draw_text` 忽略旋轉與縮放，只轉換原點；`ProgressBar` 垂直文字先 `rotate` 再 `draw_text`，**畫出來沒有旋轉**。
-  - **G10.4.d [P1, READ]** 無 render hints；`draw_pixmap` 恆為 `FilterQuality::Bilinear`，只有 hatched brush 用 Nearest。
+  - **G10.4.d [P1, RAN；已修復：RC-134]** （修復前；TextAntialiasing 尚未影響 draw_text） 無 render hints；`draw_pixmap` 恆為 `FilterQuality::Bilinear`，只有 hatched brush 用 Nearest。
   - **G10.4.e [P2, INFERENCE]** `Painter::begin` 只要 ClearType 開就啟用 LCD 文字，與目的地 alpha 無關；Python HUD 設 `WA_TranslucentBackground`；Qt 在 ARGB 目的地是否改用灰階，**待對照 golden**。
 - **Test**：既有 `painter.rs` 內聯測試（`test_painter_transforms_and_state_stack`、`test_painter_draw_pixmap_and_clip`、`test_painter_begin_dpr_transform`）、`qtrs-gui/tests/test_painter_advanced_features.rs`、`test_lcd_text_parity.rs`（`DIFF`：固定 Qt 輸出 fixture）。必要：translate (100,0) + clip (0,0,10,10) + fill → 像素在 x=100..110；旋轉的 `draw_text` 有垂直字形範圍；縮放的 `draw_pixmap` 與 Qt golden（nearest vs bilinear）一致。
 - **HUD usage**：Python `QPainter`（`usage_table.py:35,55,83,161`、`tray_icon.py:32`，Antialiasing hint）；Rust `draw_pixmap`（`usage_table.rs:566`、`menu.rs:1370`）。兩個 HUD 都沒有 `ScrollArea`；只有水平 `ProgressBar`。
@@ -935,7 +935,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.4.a [P0, READ；已修復：RC-13]** Rust HUD 啟動時用 `primary_screen().geometry()` 與 `ensure_within_screen`（`hud_window.rs:178-193,640-662`），且與 `:823-824` 的 `available_geometry()` 不一致；**從不使用 `clamp_window_rect_to_screens`**；沒有以中心選螢幕、沒有「脫離所有螢幕就停靠右上」、沒有 50×30 門檻。修復：三個放置點（啟動還原、`apply_ui_mode_internal`、`reset_geometry`）改用 `placement.rs`。額外發現並一併修正（同一組規則）：(1) 啟動時 Rust 把位置夾進螢幕，Python 只在「至少 50×30 可見」時原樣 `move(x,y)`，不夾；(2) 只有一個座標存在時 Python 視為沒有儲存位置；(3) 模式切換時 Rust 以**舊尺寸**的視窗中心選螢幕，Python 在 `resize` 之後（新尺寸）；(4) `reset_geometry` Python 不夾，Rust 夾；(5) Rust 用 `geometry()`（含工作列），Python 用 `availableGeometry()`。證據：`rust/tools/gen_hud_placement_oracle.py` 以**未修改的 Python** `_ensure_within_screen`／`_restore_or_default_position`／`_reset_geometry` 對假螢幕（只假造螢幕清單）產生 3751 筆 oracle（`rust/src/ui/placement_oracle.txt`；6 種螢幕配置含負座標與上下堆疊、含「視窗中心在螢幕邊緣 ±1 px」），Rust 三個函式逐筆相同。舊算法（重新實作的算術，不是出貨程式碼）對同一 oracle 的結果：E 案例 1623／2714 筆不同、R 案例 959／992 筆不同（略過無主螢幕的案例；舊邏輯以主螢幕工作區近似，舊程式碼實際用含工作列的 `geometry()`），因此 oracle 能區分新舊；**沒有 before-FAIL**（舊邏輯內嵌在需要真實視窗的方法裡，無法呼叫）。變異檢查（不是 before-FAIL）：`right()` 改成 `x+width`、`center()` 改成 `x+width/2`、50×30 門檻改成 32×32，各使 oracle 測試 FAIL。Win32 煙霧測試（單螢幕 1536×864 邏輯，工作區 816 高）：儲存位置 (-3000,300) 與只露出 36 px 的 (1500,100) 都落到預設位置 (1216,50)；(1400,100)（露出 136 px）原樣保留，舊程式碼會夾到 x=846。多螢幕只以假螢幕 oracle 驗證，本機只有一個螢幕。  - **G11.4.b [P1, RAN；已修復：RC-130]** （修復前） `Window` 無 `screen()`；`screen_changed` 只在 `WM_DISPLAYCHANGE` 發射，無訂閱者。RC-13 的 `Screens::window_screen` 以「完整幾何與視窗交集面積最大的螢幕」近似 `QWidget.screen()`；無交集時 Qt 用 `MonitorFromWindow(…NEAREST)`，近似版回到主螢幕。此 gap 仍開著。
   - **G11.4.c [P1, RAN；已修復：RC-71]** `Win32Screen::geometry` 以 dpr 除原點（`high_dpi::from_native_rect`），在 DPI 不同的副螢幕上不是 Qt 的虛擬桌面映射。
   - **G11.4.d [P2]** `Win32Screen::primary()` 寫死 `MonitorFromPoint(0,0)`；DPR 夾到最小 1.0。
-  - **G11.4.e [P1, READ]** `qtrs_gui::Rect::right()`／`bottom()` 回傳 `x + width`／`y + height`，`QRect::right()`／`bottom()` 是 `x + width - 1`（`qrect.h:199-203`）；`center()` 是 `x + width / 2`，`QRect::center()` 是 `(x1 + x2) / 2`（`qrect.h:253-257`）。`contains`／`intersects` 的半開語意與 `QRect` 一致，只有這幾個存取器不同，名稱相同而數值差 1，移植 Python 程式碼時會靜默偏 1 px。qtrs 非測試程式碼約 83 處使用 `.right()`／`.bottom()`，**未修**（改語意影響全部呼叫者，是獨立 RC）；RC-13 的 `placement.rs` 不使用它們。
+  - **G11.4.e [P1, READ；已決策：RC-138 保留半開語意，於存取器文件標明與 QRect 的差異]** `qtrs_gui::Rect::right()`／`bottom()` 回傳 `x + width`／`y + height`，`QRect::right()`／`bottom()` 是 `x + width - 1`（`qrect.h:199-203`）；`center()` 是 `x + width / 2`，`QRect::center()` 是 `(x1 + x2) / 2`（`qrect.h:253-257`）。`contains`／`intersects` 的半開語意與 `QRect` 一致，只有這幾個存取器不同，名稱相同而數值差 1，移植 Python 程式碼時會靜默偏 1 px。qtrs 非測試程式碼約 83 處使用 `.right()`／`.bottom()`，**未修**（改語意影響全部呼叫者，是獨立 RC）；RC-13 的 `placement.rs` 不使用它們。
   - **G11.4.f [P2, INFERENCE]** 設定載入（`config.rs` sanitize）把 `window_x/y` 超出 −5000..10000 的值改為 `None`；Python 的 `hud_window.py` 沒有這個範圍檢查（未檢查 Python 設定模組）。
   - **G11.4.g [P2, INFERENCE]** 混合 DPI 多螢幕的工作區座標經 `high_dpi::from_native_rect`（G11.4.c）；RC-13 的 oracle 使用合成的單一座標系，本機只有一個螢幕，真實多螢幕、混合 DPI 未驗證。（RC-71 之後工作區以螢幕原點換算，換算本身有單元測試；實機仍未驗證。）
   - **G11.4.h [P2, READ]** `Win32Screen::screen_at`（`screen.rs`）把邏輯座標直接交給 `MonitorFromPoint`，而 `MonitorFromPoint` 吃的是原生座標。Qt 的 `QGuiApplication::screenAt` 以各螢幕的邏輯 `geometry()` 判斷（`qguiapplication.cpp:1147-1164`）。縮放大於 100% 時，邏輯範圍之外、原生範圍之內的點也會得到螢幕。目前沒有非測試呼叫者（`grep '.screen_at('`），未修。
@@ -977,7 +977,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-DOC]`：`QSystemTrayIcon(icon)`、`setToolTip`、`setContextMenu`、`show`、`showMessage(title, msg, icon, msecs)`、`activated(reason)`；HUD 在 `Trigger` 時切換顯示；Windows 上 Qt 在右鍵時自己顯示 context menu。
 - **qtrs required**：同樣的信號與訊息 API，選單 MUST 在游標處彈出。
 - **Current implementation**：`IMPLEMENTED-UNTESTED`（Windows 執行期）。`TrayIcon::new/show/hide/set_tooltip/show_message` 與 `on_activated/on_context_menu_requested/on_message_clicked`（`qtrs-platform/src/tray_icon.rs`）；`tray_window_proc` 把 `NIN_SELECT | WM_LBUTTONUP` 映射為 Trigger、`WM_LBUTTONDBLCLK` 為 DoubleClick，右鍵為 Context 加選單 exec，`TaskbarCreated` 時重新加入圖示。HUD 用 `on_activated` Trigger（`main.rs:355-357`）與 `on_menu_action`（`:431-449`）。
-- **Known gap**：**G11.8.a [P1]** 選單位置換算用主螢幕 DPR（`tray_icon.rs:281`）；**G11.8.b [P2]** `show_message` 只收 title／text／4 值圖示 enum／時間，不收自訂 `QIcon`（Python 傳 `tray.icon()`，`main.py:75-82`）；**G11.8.c [P0, READ；= G11.9.a 的重複登錄；已修復：RC-12]** Python 的 `hotkey_failed` 訊息 Rust 沒有（→ G11.9.a）；**G11.8.d [P2]** 圖示：Python 依平台選 `.ico/.icns/.png`（`tray_icon.py:17-28`），Rust 內嵌 PNG；**G11.8.e [P2, INFERENCE]** 雙擊在 Windows 先 Trigger 兩次再 DoubleClick（如 Qt）；**G11.8.f [P2]** DBus／macOS 後端存在但未驗證（macOS：真實 AppKit 已在主執行緒入口實測，見 C11.13）。
+- **Known gap**：**G11.8.a [P1, RAN；已修復：RC-137]** （修復前） 選單位置換算用主螢幕 DPR（`tray_icon.rs:281`）；**G11.8.b [P2]** `show_message` 只收 title／text／4 值圖示 enum／時間，不收自訂 `QIcon`（Python 傳 `tray.icon()`，`main.py:75-82`）；**G11.8.c [P0, READ；= G11.9.a 的重複登錄；已修復：RC-12]** Python 的 `hotkey_failed` 訊息 Rust 沒有（→ G11.9.a）；**G11.8.d [P2]** 圖示：Python 依平台選 `.ico/.icns/.png`（`tray_icon.py:17-28`），Rust 內嵌 PNG；**G11.8.e [P2, INFERENCE]** 雙擊在 Windows 先 Trigger 兩次再 DoubleClick（如 Qt）；**G11.8.f [P2]** DBus／macOS 後端存在但未驗證（macOS：真實 AppKit 已在主執行緒入口實測，見 C11.13）。
 - **Test**：既有 `tray_icon.rs` 內聯測試（`test_menu_item_constructors`、`test_menu_builder_and_hmenu_lifecycle`、`test_create_hicon_from_pixmap`、`test_tray_icon_lifecycle`、`test_tray_signals_and_window_proc_dispatch`）；應用層 `test_context_menu_parity_cards_and_table_modes`、`test_tray_and_hud_menu_unified_parity`（只比選單內容）。必要：對 tray 視窗 post `WM_LBUTTONUP` 與 `WM_LBUTTONDBLCLK`，斷言發射序列。
 - **HUD usage**：Python `tray_icon.py:43-151`、`main.py:63-65,75-82`；Rust `rust/src/ui/tray_icon.rs:547-560`、`main.rs:343-357,431-449`。
 
@@ -1272,7 +1272,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 197 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 375 項：D 12、P0 35、P1 169、P2 154、test gap 5（計數含已修復項；標籤含「已修復」者共 202 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.2.a、G9.2.b、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1346,7 +1346,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G4.3.b | P2, READ | modal pump 一律保留 DeferredDelete，不依 loop level 判斷 |
 | G5.1.a | P1, RAN；已修復：RC-85 | `set_interval` 對啟動中的計時器無效 |
 | G5.1.b | P1, RAN；已修復：RC-85 | `set_single_shot` 啟動中無效 |
-| G5.1.c | P1, READ | `Timer::start` 是 `unsafe` 並以原始位址註冊 |
+| G5.1.c | P1, RAN；已修復：RC-135 | `Timer::start` 是 `unsafe` 並以原始位址註冊 |
 | G5.1.d | P2, READ | 執行緒沒有 timer context 時 `start` 靜默回 `TimerId::INVALID` |
 | G5.1.e | P2, READ | `timeout` 是公開 `Signal<()>` 欄位，不在 meta-object 上 |
 | G5.1.f | P1, RAN；已修復：RC-11a | 重啟已啟動的 `Timer` 後 `timeout` 不再觸發（重新註冊物件時 liveness 被自己殺死） |
@@ -1445,7 +1445,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.4.e | P2 | 無 `WA_TransparentForMouseEvents`／`WA_NoMousePropagation` |
 | G8.4.f | P1, RAN；已修復：RC-116 | 右鍵 `context_menu_cb` 在 release 時觸發，與 widget 是否 accept 無關 |
 | G8.4.g | P1；已修復：RC-06 | `Window` 沒有 release／double-click／move handler |
-| G8.4.h | P1, RAN；已修復：RC-132 | RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTr |
+| G8.4.h | P1, RAN；已修復：RC-132、RC-136 | RC-06 之後仍存在的滑鼠傳遞限制：(1) `MouseMove` 不沿 parent 傳遞——Qt 的傳遞迴圈對 move 依賴 buttons 狀態與 `hasMouseTr |
 | G8.4.i | P2 | `Window::set_mouse_press_handler`／`set_mouse_move_handler`／`set_context_menu_handler` 與新的  |
 | G8.5.a | P1, READ；繼承比對已修復：RC-32 | 無繼承比對 |
 | G8.5.b | P1, RAN；已修復：RC-129 | `attributes` 只有 Label |
@@ -1455,7 +1455,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.5.f | P1, RAN；已修復：RC-117 | **QMenu 規則被解析但從不被消費**：`type_name: "QMenu"` 在原始碼中不存在 |
 | G8.5.g | P2, READ | `margin-*` 長手寫被解析後在 `apply_declaration` 丟棄 |
 | G8.5.h | P2, READ | 父 widget 的 `font` 繼承未實作 |
-| G8.5.i | P1, READ | RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排 |
+| G8.5.i | P1, RAN；已修復：RC-138 | RC-05 之後仍存在的失效傳播限制：(1) `updateGeometry` 只要求**直接 parent** 的 layout 重排 |
 | G8.5.j | P2, READ；實測 | `Application::set_font` 只寫 `GLOBAL_FONT`：沒有任何 widget 讀 `Application::font()`，也沒有 `FontChan |
 | G8.5.k | P2, RAN；已修復：RC-117 | HUD 的選單沒有 parent：Rust `Menu::new("")` |
 | G8.5.l | P2, READ | `StyleChange` 通知以 `try_borrow` 走訪：`style_changed_below` 跳過目前被 mutably borrow 的 widget |
@@ -1477,7 +1477,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.1.b | P1；已修復：RC-31 | 無 `add_spacing`／`add_spacer_item`／`insert_stretch`／`set_stretch_factor` |
 | G9.1.c | P1；= G9.2.a；已修復：RC-07 | 無 item 對齊 |
 | G9.1.d | P1, RAN；已修復：RC-125 | 無 `heightForWidth` |
-| G9.1.e | P1 | 無 `retainSizeWhenHidden`、無 RTL |
+| G9.1.e | P1, RAN；已修復：RC-139 | 無 `retainSizeWhenHidden`、無 RTL |
 | G9.2.a | P0, READ；已修復：RC-07 | **無 per-item 對齊** |
 | G9.2.b | P1, RAN；已修復：RC-110 | `Layout::add_widget_with_stretch` 對 grid **靜默忽略 stretch** 並新增一列 |
 | G9.2.c | P1, RAN；部分修復：RC-110 | 無 `setRowStretch`／`setColumnStretch`／`setColumnMinimumWidth` 讀回 |
@@ -1507,7 +1507,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G10.4.a | P1, RAN；已修復：RC-103 | `set_clip_rect` **不經 transform** |
 | G10.4.b | P2, READ | `set_clip_rect` 取代而非相交：`ScrollArea` 內失去 widget 層的髒區 clip |
 | G10.4.c | P1, RAN；已修復：RC-102 | `draw_text` 忽略旋轉與縮放，只轉換原點 |
-| G10.4.d | P1, READ | 無 render hints |
+| G10.4.d | P1, RAN；已修復：RC-134 | 無 render hints |
 | G10.4.e | P2, INFERENCE | `Painter::begin` 只要 ClearType 開就啟用 LCD 文字，與目的地 alpha 無關 |
 | G10.5.a | P1, 注意 | 既有測試 `rust/src/ui/tray_icon.rs::test_menu_text_does_not_depend_on_window_offset` **只涵蓋 `tr |
 | G10.5.b | P2, INFERENCE | 子選單原點是 `parent_native + round(sg.x*dpr)`，Qt 是 `round((root+sg)*dpr)`，可差 1 裝置像素 |
@@ -1545,7 +1545,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.4.b | P1, RAN；已修復：RC-130 | `Window` 無 `screen()` |
 | G11.4.c | P1, RAN；已修復：RC-71 | `Win32Screen::geometry` 以 dpr 除原點 |
 | G11.4.d | P2 | `Win32Screen::primary()` 寫死 `MonitorFromPoint(0,0)` |
-| G11.4.e | P1, READ | qtrs `Rect::right/bottom/center` 與 `QRect` 差 1（`x+w` vs `x+w-1`） |
+| G11.4.e | P1, READ；已決策：RC-138 保留並文件化 | qtrs `Rect::right/bottom/center` 與 `QRect` 差 1（`x+w` vs `x+w-1`） |
 | G11.4.f | P2, INFERENCE | 設定載入把 window_x/y 超出 ±範圍者改為 None，Python 沒有 |
 | G11.4.g | P2, INFERENCE | 混合 DPI 多螢幕未驗證 |
 | G11.4.h | P2, READ | `Win32Screen::screen_at` 把邏輯座標交給 `MonitorFromPoint` |
@@ -1561,7 +1561,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G11.7.a | P1, RAN；已修復：RC-74 | HUD 在視窗可見之前呼叫 `set_backdrop` |
 | G11.7.b | P2 | `None` 比 Python 的 `clear` 多做 DWM 呼叫 |
 | G11.7.c | P2 | macOS 路徑只對 `MockObjcRuntime` 測過 |
-| G11.8.a | P1 | 選單位置換算用主螢幕 DPR |
+| G11.8.a | P1, RAN；已修復：RC-137 | 選單位置換算用主螢幕 DPR |
 | G11.8.b | P2 | `show_message` 只收 title／text／4 值圖示 enum／時間，不收自訂 `QIcon` |
 | G11.8.c | P0, READ；= G11.9.a 的重複登錄；已修復：RC-12 | Python 的 `hotkey_failed` 訊息 Rust 沒有 |
 | G11.8.d | P2 | 圖示：Python 依平台選 `.ico/.icns/.png` |
@@ -3270,3 +3270,47 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：`Window.explicit_min`；`sync_top_level_minimum` 在可見時的 `render_and_present` 結尾依根 `minimum_size_hint` 導出非 explicit 軸並放大視窗；平台 `topmost_insert_after(enabled)` 分離 z-order 選擇。
 - **驗證**：新 test binary `test_top_level_minimum.rs`（4 項）：停用導出 FAIL `:40:5 left: (0, 0) right: (120, 40)`、`:90:5 left: (150, 0) right: (150, 40)`；可見性閘門改為 true 時 FAIL `:63:5 left: (120, 40) right: (0, 0)`（未加閘門時 HUD 3 個 parity 測試失敗，即隱藏視窗在 show 前被放大）。平台 `test_stays_on_top_selects_topmost_insert_after`（反轉時 FAIL `left: 0x…fffe right: 0x…ffff`）、`test_stays_on_top_toggle_keeps_window_visible_and_click_through`（CI 執行，不 ignore）。
 - **Residual**：明確 `set_minimum_size` 不在設定當下放大可見視窗（下一次 render 才放大）；導出只在 render 時進行；`set_geometry_silent` 不導出；平台最小值以邏輯單位存、`WM_GETMINMAXINFO` 套在實體像素（既有）；無逐軸 setter。HUD 每個模式都明確設定兩軸最小值，不受影響。
+- **共同驗證（RC-129..133）**：qtrs workspace（略過 `real_windows`）全部 test binary ok；HUD 134 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` 對 linux／macOS target 無錯誤；`--snapshot` 四張 PNG。commit `96a95f0`，CI 38188886719 三平台成功、0 warning。
+
+#### RC-134 Painter render hints：預設只有 TextAntialiasing；SmoothPixmapTransform 控制取樣；非 AA 線段端點與 Qt 相同（G10.4.d）
+- **Qt 依據**：`[QT-SRC gui/painting/qpainter.cpp:1847]` 預設 render hints 只有 TextAntialiasing；`[QT-SRC gui/painting/qcosmeticstroker.cpp:177-178, 263, 342-356, 709-907]` 非 AA cosmetic 線、非 FlatCap 畫端點像素；`[QT-SRC gui/painting/qpen.cpp:203-204]` 預設 SquareCap；`[QT-SRC widgets/styles/qstylesheetstyle.cpp:1266-1285, 1360-1363, 4175-4190]`、`[QT-SRC widgets/styles/qfusionstyle.cpp:538-552, 679-754, 1118-1142, 1352-1356, 2108-2111]` style 程式碼自行開 AA 的位置；`[QT-SRC widgets/widgets/qlabel.cpp:1089-1097]` 縮放 pixmap 用 smooth。PySide6 offscreen 探測：預設 ellipse／line 邊緣部分透明像素 0，開 AA 114／100；drawPixmap 預設 nearest。
+- **根因**：`PainterState.antialiasing` 預設 true 且無 API；`draw_pixmap`／Texture brush 恆為 Bilinear；tiny-skia 非 AA stroke 漏掉 Round／斜線 Square 的終點像素。
+- **修正**：`RenderHint`／`RenderHints`，`set_render_hint`／`render_hints`／`test_render_hint`（隨 save／restore）；shape 與 pixmap 依 hint；`draw_line` 非 AA 補端點像素且每像素只混一次；qtrs-widgets（menu、label、progress_bar、scroll、style、key_sequence_edit）在 Qt style 開 AA 的位置開 AA；HUD `usage_table.rs` 依 `usage_table.py:56,84,162` 開 AA，provider icon 縮放開 SmoothPixmapTransform。
+- **驗證**：qtrs-gui `g10_4d_default_shapes_are_aliased_like_qt` 修正前 FAIL `painter.rs:1394:9 found 95 partial-alpha pixels`；`g10_4d_draw_pixmap_is_nearest_without_smooth_pixmap_transform` FAIL `:1429:17 mixed colour rgba=(178,0,77,255)`；`g10_4d_aliased_line_includes_endpoint_pixels_like_qt` FAIL `:1550:17 left: 255, right: 0`；`g10_4d_aliased_line_endpoint_is_blended_once` FAIL `x=9 left: [76, 78, 83] right: [51, 53, 59]`。改寫 `test_painter_state_default_and_clone`（原本釘住 AA 預設開）。HUD 快照與改前逐像素比對：卡片／表格只差時鐘與重設時間文字；右鍵選單 6 px（分隔線兩端點，x=8 改為背景、x=258 改為線色，與 Qt 探測一致，±1 色階）。
+- **Residual**：`draw_text` 不受 TextAntialiasing 影響；qtrs `Pen::new` 預設 RoundCap（Qt 為 SquareCap）；polyline／path 端點未補；hatched brush 保持 Nearest；HUD 面板圓角邊框開 AA（Qt QSS 圓角繪製亦開 AA，`qstylesheetstyle.cpp:1266-1285`）。
+
+#### RC-135 `Timer::start` 不再是 `unsafe`：`Timer::new` 回傳 `Pin<Box<Timer>>`（G5.1.c）
+- **依據**：Rust 記憶體安全問題，無對應 Qt 原始碼；Qt 的 QTimer 為堆上 QObject，位址於生命週期內固定，本修正以 pinning 取得同樣保證。
+- **根因**：`Timer::start` 以 `self` 位址註冊到 object registry，start 之後移動 Timer 即留下懸空位址，契約由呼叫者以 `unsafe` 承擔。
+- **修正**：`Timer` 為 `!Unpin`；`Timer::new()` 回傳 `Pin<Box<Timer>>`；`start`／`start_with_interval`／`start_with_registry`／`start_with` 取 `self: Pin<&mut Self>`；設定值與 id 改 `Cell`，setter／`stop` 取 `&self`；`Drop` 在釋放前取消註冊。呼叫端全部遷移：`rust/src/main.rs`、`tooltip.rs`、`timer.rs` 單元測試、`test_timer_restart.rs`、`layered_tests.rs`。
+- **驗證**：新 test binary `test_timer_pinned_start.rs`：停用 `register_pinned_qobject` 時 FAIL `:32:5 started timer never delivered timeout left: 0 right: 1`、`:42:5 a started timer must be registered`；doctest 確認 `Pin::into_inner(Timer::new())` 無法編譯。
+- **Residual**：無 parent 生命週期（`QTimer(self)`）；在其他執行緒已註冊的 timer 再 start 會靜默改綁；`Timer` 變為 `!Sync`。
+
+#### RC-136 通用層雙擊判定（非 Win32 平台）；`set_double_click_interval` 寫入 style hint（G8.4.h(2)）
+- **Qt 依據**：`[QT-SRC gui/kernel/qguiapplication.cpp:2401-2426]` 同視窗、同按鍵、間隔小於 `mouseDoubleClickInterval` 即為雙擊；`:2407-2414` 移動超過 `mouseDoubleClickDistance`（逐軸、嚴格大於）取消；`[QT-SRC widgets/kernel/qwidgetwindow.cpp:570]` 被標為雙擊的第二次按下不再當成 press 送出；`[QT-SRC widgets/kernel/qapplication.cpp:3486-3488]` `setDoubleClickInterval` 寫入 style hints；`[QT-SRC plugins/platforms/windows/qwindowscontext.cpp:836]` 事件時間取 `GetMessageTime()`。
+- **根因**：`MousePress` 無時間戳；通用層沒有按下配對狀態；間隔存在獨立 static。
+- **修正**：`WindowSystemEvent::MousePress.timestamp`（Win32 `GetMessageTime`，X11／Wayland／Cocoa 以到達時間）；`PlatformWindow::reports_native_double_clicks()`（Win32 為 true，不重複判定）；qtrs-widgets `window.rs` 以視窗為鍵的 pending press 判定並與原生雙擊共用 `deliver_double_click`；`Application::double_click_interval`／`set_double_click_interval` 改讀寫 `GuiApplication` style hints。
+- **驗證**：新 test binary `test_generic_double_click.rs`（9 項）；判定前 FAIL：`:244:5 left: [(60, 40), (60, 40)] right: [(60, 40)]`、`:257:5`、`:299:5`、`:360:5`。
+- **Residual**：X11／Wayland／Cocoa 時間戳為到達時間而非原生事件時間；間隔取 style hint 預設 400 ms，非 OS 值；pending 狀態以視窗為鍵（Qt 為全域 static，跨視窗本來就不配對）；HUD 直接使用平台視窗，其雙擊分支不經此路徑（Win32 原生）。
+
+#### RC-137 tray／右鍵選單座標以游標所在螢幕換算（G11.8.a）
+- **Qt 依據**：`[QT-SRC plugins/platforms/windows/qwindowssystemtrayicon.cpp:398-404]` `screenAtDp(globalPos)`，找不到用 `screens().value(0)`；`[QT-SRC widgets/util/qsystemtrayicon.cpp:181-184]` `QHighDpi::fromNativePixels(globalNativePos, screen)`；`[QT-SRC gui/kernel/qhighdpiscaling.cpp:713-721]` 原點為該螢幕原生左上角。
+- **根因**：`tray_icon.rs` 以主螢幕 DPR 與視窗相對換算（無螢幕原點）；`show_context_menu` 傳入未換算的實體座標。
+- **修正**：`qtrs-platform/src/screen.rs` `native_cursor_to_logical`（找含該原生點的螢幕，否則主螢幕）；`tray_icon.rs` 兩處改用之。
+- **驗證**：`test_window_screen_mapping.rs` 新增 4 項；以舊公式 FAIL：`:453 left: Point{x:3000,y:400} right: Point{x:2640,y:267}`、`:463 left: Point{x:-1440,y:300} right: Point{x:-1920,y:200}`、`:473 left: Point{x:2000,y:267} right: Point{x:3000,y:400}`；螢幕外點為對照。
+- **Residual**：鍵盤觸發（lParam -1）仍用 `GetCursorPos`；無多螢幕實機驗證；fallback 用主螢幕而非 `screens()[0]`。
+
+#### RC-138 擁有 layout 的 widget 被無 layout 的 parent 改尺寸時重排（G8.5.i）；`Rect` 邊界語意決策（G11.4.e）；submenu 方向判斷用含端點邊界
+- **Qt 依據**：`[QT-SRC widgets/kernel/qlayout.cpp:528-533]` Resize 時 layout `doResize`／`activate`；`[QT-SRC widgets/widgets/qmenu.cpp:2523-2535]` submenu 側邊判斷用 `QRect::right()`（含端點）；`[QT-SRC gui/painting/qpolygon.cpp:126-129]` `QPolygon(QRect)` 用 `x+w`，與 qtrs `Polygon::from_rect` 一致（無需修改）。PySide6 探測：無 layout 的 parent `setGeometry` 子 widget 後其 layout 同步重排（label 31→300）。
+- **根因**：`EmptyWidget::set_geometry` 尺寸改變時不重排自己的 layout；只有 layout 擁有者的 parent 或 window root 會做。
+- **修正**：`widget.rs` `EmptyWidget::set_geometry`：有 parent 且 layout 不 dirty 時以新尺寸 `layout.set_geometry`（root 由 `Window` 處理）；`menu.rs` 側邊判斷改為含端點；`primitives.rs` `right()`／`bottom()`／`center()` 文件註明與 QRect 差 1。G11.4.e 決策：保留半開語意（HUD 的 `placement.rs`、`calc_frameless_edge` 已依 QRect 規則；約 83 處呼叫者改語意風險高於收益）。
+- **驗證**：`test_widget_invalidation.rs` `a_layout_owning_widget_resized_by_a_layout_less_parent_relayouts_its_children` 修正前 FAIL `:545:9 the child layout was not re-run left: 100, right: 300`。submenu 1 px 邊界無測試（私有函式、門檻為 qtrs 特有）。
+- **Residual**：window root 的 layout 在 resize callback 之後執行（Qt 在 receiver 前，`qapplication.cpp:3261-3262`；`test_hud_extensions` 釘住目前順序）；無 parent 的非 root EmptyWidget 不重排；巢狀 EmptyWidget 可能多一次 layout pass（未量測）。
+
+#### RC-139 `retainSizeWhenHidden` 與 RightToLeft 版面（G9.1.e）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qlayoutitem.cpp:691-693]` 隱藏且 retain 者不算 empty；`:408-411, 429-474` `setGeometry` 用 `visualAlignment`；`[QT-SRC gui/kernel/qguiapplication_p.h:176-186]` 無水平旗標補 AlignLeft、RTL 下左右互換（AlignAbsolute 除外）；`[QT-SRC widgets/kernel/qboxlayout.cpp:788-790]`、`[QT-SRC widgets/kernel/qgridlayout.cpp:921-922]` RTL 鏡像；`[QT-SRC widgets/kernel/qsizepolicy.h:98-99, 145-154]`。PySide6 offscreen 探測值見測試。
+- **根因**：`SizePolicy` 無 retain 欄位，`item_is_empty` 把所有隱藏 widget 視為 empty；box／grid 只由左至右排；對齊直接用原始旗標。
+- **修正**：`size_policy.rs` `retain_size_when_hidden`；`layout_engine.rs` `item_is_empty` 檢查 retain、`visual_alignment`；`layout.rs` box／grid 在 RTL 時鏡像 x。
+- **驗證**：新 test binary `test_layout_direction.rs`（7 項）；停用 retain FAIL `:188 left (0,0,0,0) right (64,35,50,30)` 等 4 項；停用鏡像 FAIL `:196 left (0,40,60,20) right (240,40,60,20)`；停用 visual alignment FAIL `:229 left 0 right 240`、`:253`。
+- **行為變更**：LTR 下未設對齊、尺寸小於格子的 item 改靠左（Qt `visualAlignment` 補 AlignLeft）；先前 qtrs 置中。
+- **Residual**：方向為全域 `GuiApplication`，無逐 widget `layoutDirection`；`SizeConstraint` 未實作；empty item 幾何被歸零（Qt 不動）。

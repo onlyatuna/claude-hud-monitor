@@ -707,6 +707,7 @@ impl Window {
         let geom_cell = std::rc::Rc::new(std::cell::Cell::new(geometry));
         let geom_clone = std::rc::Rc::clone(&geom_cell);
 
+        let native_double_clicks = platform_win.reports_native_double_clicks();
         let pw_rc = std::rc::Rc::new(std::cell::RefCell::new(platform_win));
         let pw_clone = std::rc::Rc::clone(&pw_rc);
 
@@ -737,6 +738,7 @@ impl Window {
             mouse_move_cb: move_cb_clone,
             resize_cb: resize_cb_clone,
             render: std::rc::Rc::clone(&render_state),
+            native_double_clicks,
         };
         pw_rc.borrow_mut().set_event_handler(Box::new(handler));
 
@@ -1439,6 +1441,105 @@ fn do_render_and_present(
     Some(dirty)
 }
 
+/// The press a double click is measured against (`qguiapplication.cpp:2401-2426`: the statics
+/// `lastPressTimestamp`, `lastPressWindow`, `mousePressButton`, `globalPressPosition`).
+struct PressRecord {
+    window: ObjectId,
+    button: qtrs_platform::MouseButton,
+    global_pos: Point,
+    timestamp: u32,
+}
+
+/// Qt keeps this in process-wide statics. Keyed by window, so presses in one window never pair
+/// with presses in another.
+static PENDING_PRESS: std::sync::Mutex<Option<PressRecord>> = std::sync::Mutex::new(None);
+
+/// Qt's press rule (`qguiapplication.cpp:2419-2426`): every press updates the record, and a press
+/// is a double click when it lands within the interval of the last press, with the same button, in
+/// the same window. Qt has no distance check on presses; the move rule cancels instead.
+fn press_is_double(
+    window: ObjectId,
+    button: qtrs_platform::MouseButton,
+    global_pos: Point,
+    timestamp: u32,
+) -> bool {
+    let interval =
+        qtrs_gui::application::GuiApplication::style_hints().mouse_double_click_interval_ms;
+    let mut pending = PENDING_PRESS.lock().unwrap_or_else(|e| e.into_inner());
+    let double = pending.as_ref().is_some_and(|prev| {
+        let delta = timestamp.wrapping_sub(prev.timestamp);
+        delta > 0 && delta < interval && prev.button == button && prev.window == window
+    });
+    *pending = Some(PressRecord {
+        window,
+        button,
+        global_pos,
+        timestamp,
+    });
+    double
+}
+
+/// Qt's move rule (`qguiapplication.cpp:2407-2414`): a pointer that moved more than the double
+/// click distance from the last press on either axis cancels the pending press. The test is
+/// strict, so a move of exactly the distance keeps it.
+fn move_cancels_press(global_pos: Point) {
+    let distance = qtrs_gui::application::GuiApplication::style_hints().mouse_double_click_distance;
+    let mut pending = PENDING_PRESS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(prev) = pending.as_ref() {
+        let dx = (global_pos.x - prev.global_pos.x).abs();
+        let dy = (global_pos.y - prev.global_pos.y).abs();
+        if dx > distance || dy > distance {
+            *pending = None;
+        }
+    }
+}
+
+/// A native double click ends the press pair, so the next press starts a new one.
+fn clear_pending_press() {
+    *PENDING_PRESS.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+impl WindowEventHandler {
+    /// `QWidgetWindow` delivers a double click as a MouseButtonDblClick event, and falls back to
+    /// the press handler when nothing accepts it (`QWidget::mouseDoubleClickEvent`). A press the
+    /// detector promotes goes through here too, so it is never delivered as a press
+    /// (`qwidgetwindow.cpp:570`).
+    fn deliver_double_click(&mut self, pos: Point, button: qtrs_platform::MouseButton) {
+        let root = self.core.root();
+        let btn = match button {
+            qtrs_platform::MouseButton::Left => 1,
+            qtrs_platform::MouseButton::Right => 2,
+            qtrs_platform::MouseButton::Middle => 3,
+            _ => 0,
+        };
+        let mut ev = Event::new_spontaneous(EventKind::MouseButtonDblClick {
+            x: pos.x,
+            y: pos.y,
+            button: btn,
+        });
+        if !self.dispatcher.dispatch_event(&root, &mut ev) {
+            let mut unhandled = Event::new_spontaneous(EventKind::MouseButtonDblClick {
+                x: pos.x,
+                y: pos.y,
+                button: btn,
+            });
+            let handled = match self.core.event_cb.borrow().as_ref() {
+                Some(cb) => {
+                    cb(&mut unhandled);
+                    unhandled.is_accepted()
+                }
+                None => false,
+            };
+            if !handled {
+                // QWidget::mouseDoubleClickEvent default: mousePressEvent.
+                if let Some(cb) = self.mouse_press_cb.borrow().as_ref() {
+                    cb(pos, button);
+                }
+            }
+        }
+    }
+}
+
 struct WindowEventHandler {
     platform_window: std::rc::Rc<std::cell::RefCell<Box<dyn PlatformWindow>>>,
     backing_store: std::rc::Rc<std::cell::RefCell<BackingStore>>,
@@ -1450,6 +1551,7 @@ struct WindowEventHandler {
     mouse_move_cb: MouseMoveCallback,
     resize_cb: ResizeCallback,
     render: std::rc::Rc<RenderState>,
+    native_double_clicks: bool,
 }
 
 impl WindowSystemEventHandler for WindowEventHandler {
@@ -1465,6 +1567,9 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 global_pos,
                 buttons,
             } => {
+                if !self.native_double_clicks {
+                    move_cancels_press(global_pos);
+                }
                 self.dispatcher
                     .dispatch_mouse_move(&root, pos, global_pos, buttons);
                 if let Some(cb) = self.mouse_move_cb.borrow().as_ref() {
@@ -1480,7 +1585,20 @@ impl WindowSystemEventHandler for WindowEventHandler {
                     self.render.request_render();
                 }
             }
-            WindowSystemEvent::MousePress { pos, button, .. } => {
+            WindowSystemEvent::MousePress {
+                pos,
+                global_pos,
+                button,
+                timestamp,
+                ..
+            } => {
+                // Platforms that report their own double clicks never synthesize one here.
+                if !self.native_double_clicks
+                    && press_is_double(self.core.id, button, global_pos, timestamp)
+                {
+                    self.deliver_double_click(pos, button);
+                    return;
+                }
                 let btn = match button {
                     qtrs_platform::MouseButton::Left => 1,
                     qtrs_platform::MouseButton::Right => 2,
@@ -1541,37 +1659,9 @@ impl WindowSystemEventHandler for WindowEventHandler {
                 }
             }
             WindowSystemEvent::MouseDoubleClick { pos, button, .. } => {
-                let btn = match button {
-                    qtrs_platform::MouseButton::Left => 1,
-                    qtrs_platform::MouseButton::Right => 2,
-                    qtrs_platform::MouseButton::Middle => 3,
-                    _ => 0,
-                };
-                let mut ev = Event::new_spontaneous(EventKind::MouseButtonDblClick {
-                    x: pos.x,
-                    y: pos.y,
-                    button: btn,
-                });
-                if !self.dispatcher.dispatch_event(&root, &mut ev) {
-                    let mut unhandled = Event::new_spontaneous(EventKind::MouseButtonDblClick {
-                        x: pos.x,
-                        y: pos.y,
-                        button: btn,
-                    });
-                    let handled = match self.core.event_cb.borrow().as_ref() {
-                        Some(cb) => {
-                            cb(&mut unhandled);
-                            unhandled.is_accepted()
-                        }
-                        None => false,
-                    };
-                    if !handled {
-                        // QWidget::mouseDoubleClickEvent default: mousePressEvent.
-                        if let Some(cb) = self.mouse_press_cb.borrow().as_ref() {
-                            cb(pos, button);
-                        }
-                    }
-                }
+                // A native double click ends the press pair, so the next press starts a new one.
+                clear_pending_press();
+                self.deliver_double_click(pos, button);
             }
             WindowSystemEvent::Wheel {
                 pos,

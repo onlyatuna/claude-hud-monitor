@@ -273,12 +273,7 @@ unsafe fn tray_window_proc_inner(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: L
                 WM_RBUTTONUP | WM_CONTEXTMENU => {
                     let mut pt = POINT { x: 0, y: 0 };
                     GetCursorPos(&mut pt);
-                    let dpr = crate::integration::platform().primary_screen().device_pixel_ratio();
-                    let pos = if dpr > 1.0 {
-                        crate::high_dpi::from_native_point(Point::new(pt.x, pt.y), dpr)
-                    } else {
-                        Point::new(pt.x, pt.y)
-                    };
+                    let pos = crate::screen::native_cursor_to_logical(Point::new(pt.x, pt.y));
                     tray.on_context_menu_requested.emit(&pos);
                     tray.on_activated.emit(&TrayActivation::Context);
                     if tray.menu.is_some() {
@@ -597,7 +592,7 @@ impl TrayIcon {
         unsafe {
             GetCursorPos(&mut pt);
         }
-        self.show_context_menu_at(Point::new(pt.x, pt.y));
+        self.show_context_menu_at(crate::screen::native_cursor_to_logical(Point::new(pt.x, pt.y)));
     }
 
     pub fn show_context_menu_at(&self, screen_pos: Point) {

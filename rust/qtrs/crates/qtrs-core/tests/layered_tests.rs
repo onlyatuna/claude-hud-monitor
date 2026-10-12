@@ -276,8 +276,7 @@ fn test_level3_timer_and_event_loop_exit() {
         loop_handle.post_quit(ObjectId(0), 0); // Quit event loop
     });
 
-    // SAFETY: timer remains alive at this address through event-loop completion.
-    unsafe { timer.start() };
+    timer.as_mut().start();
 
     // Start event loop
     let exit_code = event_loop.exec();

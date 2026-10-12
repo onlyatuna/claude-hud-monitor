@@ -57,6 +57,8 @@ pub struct QSizePolicy {
     pub vertical_stretch: u32,
     /// `QSizePolicy::heightForWidth` (`hfw` bit): the widget's height depends on its width.
     pub height_for_width: bool,
+    /// `QSizePolicy::retainSizeWhenHidden`: a hidden widget keeps its layout slot.
+    pub retain_size_when_hidden: bool,
 }
 
 impl Default for QSizePolicy {
@@ -67,6 +69,7 @@ impl Default for QSizePolicy {
             horizontal_stretch: 0,
             vertical_stretch: 0,
             height_for_width: false,
+            retain_size_when_hidden: false,
         }
     }
 }
@@ -80,6 +83,7 @@ impl QSizePolicy {
             horizontal_stretch: 0,
             vertical_stretch: 0,
             height_for_width: false,
+            retain_size_when_hidden: false,
         }
     }
 
@@ -105,6 +109,13 @@ impl QSizePolicy {
         self
     }
 
+    /// Sets `retainSizeWhenHidden` (`QSizePolicy::setRetainSizeWhenHidden`): a hidden widget keeps
+    /// its layout slot (`QWidgetItem::isEmpty`, qlayoutitem.cpp:691-693).
+    pub fn with_retain_size_when_hidden(mut self, retain: bool) -> Self {
+        self.retain_size_when_hidden = retain;
+        self
+    }
+
     /// Transposes the horizontal and vertical policies and stretch factors.
     pub fn transposed(&self) -> Self {
         Self {
@@ -113,6 +124,7 @@ impl QSizePolicy {
             horizontal_stretch: self.vertical_stretch,
             vertical_stretch: self.horizontal_stretch,
             height_for_width: self.height_for_width,
+            retain_size_when_hidden: self.retain_size_when_hidden,
         }
     }
 }

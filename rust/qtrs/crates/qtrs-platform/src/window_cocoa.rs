@@ -309,6 +309,8 @@ impl CocoaNativeWindow {
                     global_pos,
                     button: btn,
                     modifiers: KeyboardModifiers::from_bits(modifiers),
+                    // `CocoaNativeEvent::MouseDown` carries no time; the press is stamped on arrival.
+                    timestamp: crate::window_system_interface::event_time_ms(),
                 });
             }
             CocoaNativeEvent::MouseUp {

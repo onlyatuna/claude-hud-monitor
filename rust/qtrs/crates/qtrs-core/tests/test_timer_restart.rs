@@ -10,14 +10,15 @@ use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoop;
 use qtrs_core::object::{register_qobject, unregister_qobject, ObjectData, ObjectId, QObject};
 use qtrs_core::timer::{Timer, TimerType};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-fn counting_timer(interval_ms: u64, single_shot: bool) -> (Timer, Arc<AtomicU32>) {
+fn counting_timer(interval_ms: u64, single_shot: bool) -> (Pin<Box<Timer>>, Arc<AtomicU32>) {
     let count = Arc::new(AtomicU32::new(0));
     let c = Arc::clone(&count);
-    let mut timer = Timer::new();
+    let timer = Timer::new();
     timer.set_interval(interval_ms);
     timer.set_single_shot(single_shot);
     timer.timeout.connect(move |_| {
@@ -44,8 +45,8 @@ fn restarted_single_shot_timer_still_fires() {
     let mut el = EventLoop::new();
     let (mut timer, count) = counting_timer(40, true);
 
-    unsafe { timer.start() };
-    unsafe { timer.start() };
+    timer.as_mut().start();
+    timer.as_mut().start();
 
     assert!(
         pump_until(&mut el, Duration::from_millis(500), || count
@@ -62,9 +63,9 @@ fn stop_then_start_fires() {
     let mut el = EventLoop::new();
     let (mut timer, count) = counting_timer(40, true);
 
-    unsafe { timer.start() };
+    timer.as_mut().start();
     timer.stop();
-    unsafe { timer.start() };
+    timer.as_mut().start();
 
     assert!(
         pump_until(&mut el, Duration::from_millis(500), || count
@@ -81,14 +82,14 @@ fn restart_postpones_the_deadline() {
     let mut el = EventLoop::new();
     let (mut timer, count) = counting_timer(120, true);
 
-    unsafe { timer.start() };
+    timer.as_mut().start();
     let first = Instant::now();
     assert!(
         !pump_until(&mut el, Duration::from_millis(70), || count
             .load(Ordering::SeqCst)
             >= 1)
     );
-    unsafe { timer.start() };
+    timer.as_mut().start();
     let restarted = Instant::now();
 
     // Past the first deadline (120 ms after `first`) but before the restarted one.
@@ -117,8 +118,8 @@ fn restarted_repeating_timer_keeps_firing() {
     let mut el = EventLoop::new();
     let (mut timer, count) = counting_timer(25, false);
 
-    unsafe { timer.start() };
-    unsafe { timer.start() };
+    timer.as_mut().start();
+    timer.as_mut().start();
 
     assert!(
         pump_until(&mut el, Duration::from_millis(600), || count
@@ -135,9 +136,9 @@ fn restarting_a_timer_keeps_the_object_alive() {
     let _el = EventLoop::new();
     let (mut timer, _count) = counting_timer(1000, true);
 
-    unsafe { timer.start() };
+    timer.as_mut().start();
     assert!(timer.object_data().is_alive());
-    unsafe { timer.start() };
+    timer.as_mut().start();
     assert!(
         timer.object_data().is_alive(),
         "re-registering an object must not kill its own liveness token"

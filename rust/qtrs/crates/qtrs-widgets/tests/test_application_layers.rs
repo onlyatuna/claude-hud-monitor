@@ -352,6 +352,10 @@ fn test_widget_application_window_registry_and_focus() {
     // Interactive settings
     Application::set_double_click_interval(500);
     assert_eq!(Application::double_click_interval(), 500);
+    assert_eq!(
+        GuiApplication::style_hints().mouse_double_click_interval_ms,
+        500
+    );
 
     Application::set_wheel_scroll_lines(5);
     assert_eq!(Application::wheel_scroll_lines(), 5);

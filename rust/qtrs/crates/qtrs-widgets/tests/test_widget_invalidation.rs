@@ -520,4 +520,34 @@ mod pumped {
         assert_eq!(fx.first.borrow().geometry().width, hint);
         assert_eq!(left_of_second(&fx), hint + fx.spacing);
     }
+
+    /// Qt `QLayout::widgetEvent` (qlayout.cpp:520-535): a Resize re-lays out the widget's own
+    /// layout. `inner` owns a layout and is resized by a layout-less parent (`first`, a plain
+    /// `EmptyWidget` with no layout), so nothing else queues `inner`'s layout pass.
+    #[test]
+    fn a_layout_owning_widget_resized_by_a_layout_less_parent_relayouts_its_children() {
+        let mut fx = fixture(Box::new(EmptyWidget::new()), Box::new(Label::new("Beta")));
+
+        let alpha: WidgetRef = Rc::new(RefCell::new(Box::new(Label::new("Alpha"))));
+        alpha
+            .borrow()
+            .set_size_policy(QSizePolicy::new(Policy::Expanding, Policy::Preferred));
+        let mut inner_layout = BoxLayout::horizontal();
+        inner_layout.add_widget(Rc::clone(&alpha));
+        let mut inner_widget = EmptyWidget::new();
+        inner_widget.set_layout(Box::new(inner_layout));
+        let inner: WidgetRef = Rc::new(RefCell::new(Box::new(inner_widget)));
+
+        fx.first.borrow_mut().add_child(Rc::clone(&inner));
+        pump_idle(&mut fx);
+
+        inner.borrow().set_geometry(Rect::new(0, 0, 300, 40));
+        pump_idle(&mut fx);
+
+        assert_eq!(
+            alpha.borrow().geometry().width,
+            300,
+            "the child layout was not re-run"
+        );
+    }
 }

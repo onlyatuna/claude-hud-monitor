@@ -574,11 +574,19 @@ impl Rect {
         self.y
     }
 
+    /// Exclusive right edge: `x + width`.
+    ///
+    /// This is NOT `QRect::right()`, which is the inclusive last column `x + width - 1`
+    /// (G11.4.e). The Qt-equivalent last column is `right() - 1`.
     #[inline]
     pub const fn right(&self) -> i32 {
         self.x + self.width
     }
 
+    /// Exclusive bottom edge: `y + height`.
+    ///
+    /// This is NOT `QRect::bottom()`, which is the inclusive last row `y + height - 1`
+    /// (G11.4.e). The Qt-equivalent last row is `bottom() - 1`.
     #[inline]
     pub const fn bottom(&self) -> i32 {
         self.y + self.height
@@ -607,6 +615,11 @@ impl Rect {
     }
 
     // Center
+    /// Centre from exclusive corners: `(x + width / 2, y + height / 2)`.
+    ///
+    /// Differs from `QRect::center()`, which uses inclusive corners
+    /// `((x1 + x2) / 2, (y1 + y2) / 2)` with `x2 = x + width - 1`; it can be one pixel off.
+    /// `Rect` is a half-open (exclusive-edge) type by design (G11.4.e).
     #[inline]
     pub const fn center(&self) -> Point {
         Point::new(self.x + self.width / 2, self.y + self.height / 2)

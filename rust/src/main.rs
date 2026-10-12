@@ -602,7 +602,7 @@ fn main() -> std::process::ExitCode {
             }
         });
     });
-    unsafe { clock_timer.start() };
+    clock_timer.as_mut().start();
 
     let mut poll_timer = Timer::new();
     poll_timer.set_interval(100);
@@ -613,7 +613,7 @@ fn main() -> std::process::ExitCode {
             }
         });
     });
-    unsafe { poll_timer.start() };
+    poll_timer.as_mut().start();
 
     // Initial memory trim after 2.5s (mirrors Python QTimer.singleShot(2500, trim_memory))
     Timer::single_shot(2500, || {

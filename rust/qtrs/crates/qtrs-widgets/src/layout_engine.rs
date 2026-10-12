@@ -9,6 +9,7 @@
 use crate::layout::ItemAlignment;
 use crate::size_policy::Policy;
 use crate::widget::Widget;
+use qtrs_gui::application::GuiApplication;
 use qtrs_gui::geometry::primitives::{Rect, Size};
 
 /// `QLAYOUTSIZE_MAX`.
@@ -420,9 +421,28 @@ pub fn smart_max_size(widget: &dyn Widget, align: ItemAlignment) -> Size {
     s
 }
 
-/// `QWidgetItem::isEmpty`: a hidden widget takes no part in the layout.
+/// `QWidgetItem::isEmpty` (qlayoutitem.cpp:691-693): a hidden widget takes no part in the layout,
+/// unless its size policy retains its size when hidden.
 pub fn item_is_empty(widget: &dyn Widget) -> bool {
-    !widget.is_visible()
+    !widget.is_visible() && !widget.size_policy().retain_size_when_hidden
+}
+
+/// `QStyle::visualAlignment` (qguiapplication_p.h:176-186): without a horizontal flag `AlignLeft` is
+/// assumed; under right-to-left the horizontal flag is mirrored unless `AlignAbsolute` is set.
+/// `AlignAbsolute` is not returned: nothing that reads the visual alignment checks it.
+pub fn visual_alignment(align: ItemAlignment) -> ItemAlignment {
+    let mut bits = align.bits();
+    if !align.horizontal() {
+        bits |= ItemAlignment::LEFT.bits();
+    }
+    let horizontal = ItemAlignment::LEFT.bits() | ItemAlignment::RIGHT.bits();
+    if bits & ItemAlignment::ABSOLUTE.bits() == 0
+        && bits & horizontal != 0
+        && GuiApplication::is_right_to_left()
+    {
+        bits ^= horizontal;
+    }
+    ItemAlignment::from_bits(bits)
 }
 
 /// `QWidgetItem::sizeHint`.
@@ -593,8 +613,10 @@ pub fn item_set_geometry_with(
     }
     let mut x = rect.x;
     let mut y = rect.y;
-    let left = !align.horizontal() || align.contains(ItemAlignment::LEFT);
-    if align.contains(ItemAlignment::RIGHT) {
+    // `QWidgetItem::setGeometry` (qlayoutitem.cpp:451-455) decides on the visual alignment.
+    let visual = visual_alignment(align);
+    let left = !visual.contains(ItemAlignment::RIGHT) && visual.contains(ItemAlignment::LEFT);
+    if visual.contains(ItemAlignment::RIGHT) {
         x += rect.width - width;
     } else if !left {
         x += (rect.width - width) / 2;

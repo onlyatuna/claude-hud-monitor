@@ -12,7 +12,7 @@ use qtrs_core::object::QObject;
 use qtrs_core::signal::Signal;
 use qtrs_gui::geometry::primitives::{PointF, Rect, RectF, Size};
 use qtrs_gui::paint::brush::Brush;
-use qtrs_gui::paint::painter::{Painter, Pen};
+use qtrs_gui::paint::painter::{Painter, Pen, RenderHint};
 use qtrs_gui::text::{Font, FontMetrics};
 use qtrs_gui::tiny_skia::Color;
 
@@ -495,6 +495,8 @@ impl Widget for ProgressBar {
         };
 
         // 1. Track
+        // Groove and chunks are anti-aliased (`qstylesheetstyle.cpp:4175-4190`, `qfusionstyle.cpp:1118-1142`).
+        painter.set_render_hint(RenderHint::Antialiasing, true);
         painter.set_brush(Brush::Color(track_bg));
         painter.set_pen(border_pen);
         painter.draw_rounded_rect(frame, groove_radius, groove_radius);

@@ -7,6 +7,7 @@ use crate::layout_engine::{
 };
 use crate::size_policy::Policy;
 use crate::widget::{EmptyWidget, Widget, WidgetRef};
+use qtrs_gui::application::GuiApplication;
 use qtrs_gui::geometry::primitives::{Margins, Rect, Size};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -476,6 +477,7 @@ impl Layout for BoxLayout {
         // cached chain stays the metric input for the next geometry pass.
         let mut chain = self.geom_cache.borrow().as_ref().unwrap().chain.clone();
         let horz = self.direction == Direction::LeftToRight;
+        let rtl = horz && GuiApplication::is_right_to_left();
         let s = Rect::new(
             self.geometry.x + self.margins.left,
             self.geometry.y + self.margins.top,
@@ -507,7 +509,13 @@ impl Layout for BoxLayout {
 
         for (i, (item, data)) in self.items.iter().zip(&chain).enumerate() {
             let rect = if horz {
-                Rect::new(data.pos, s.y, data.size, s.height)
+                // `QBoxLayout::setGeometry` mirrors a horizontal box under RTL (qboxlayout.cpp:788-790).
+                let pos = if rtl {
+                    2 * s.x + s.width - data.pos - data.size
+                } else {
+                    data.pos
+                };
+                Rect::new(pos, s.y, data.size, s.height)
             } else {
                 Rect::new(s.x, data.pos, s.width, data.size)
             };
@@ -1057,6 +1065,7 @@ impl Layout for GridLayout {
         let height = self.geometry.height - self.margins.top - self.margins.bottom;
         q_geom_calc(&mut cols, 0, cc, x, width, -1);
         q_geom_calc(&mut rows, 0, rr, y, height, -1);
+        let rtl = GuiApplication::is_right_to_left();
 
         for (i, item) in self.items.iter().enumerate() {
             let (r2, c2) = (item.row + item.row_span - 1, item.column + item.col_span - 1);
@@ -1064,6 +1073,8 @@ impl Layout for GridLayout {
             let top = rows[item.row].pos;
             let w = cols[c2].pos + cols[c2].size - left;
             let h = rows[r2].pos + rows[r2].size - top;
+            // `QGridLayoutPrivate::distribute` mirrors a cell under RTL (qgridlayout.cpp:921-922).
+            let left = if rtl { 2 * x + width - left - w } else { left };
 
             let old_size = {
                 let widget = item.widget.borrow();

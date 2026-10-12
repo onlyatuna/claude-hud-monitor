@@ -33,6 +33,7 @@ use qtrs_gui::geometry::primitives::{Point, Rect, Size};
 use qtrs_gui::paint::palette::{ColorGroup, ColorRole};
 use qtrs_platform::window::WindowFlags;
 use std::cell::{Cell, RefCell};
+use std::pin::Pin;
 
 /// `SH_ToolTip_WakeUpDelay` (qcommonstyle.cpp:5348-5350).
 pub const WAKE_UP_DELAY_MS: u64 = 700;
@@ -118,34 +119,32 @@ struct Controller {
     tool_tip_widget: RefCell<Option<WidgetWeak>>,
     tool_tip_pos: Cell<Point>,
     tool_tip_global_pos: Cell<Point>,
-    wake_up: RefCell<Box<Timer>>,
-    fall_asleep: RefCell<Box<Timer>>,
+    wake_up: RefCell<Pin<Box<Timer>>>,
+    fall_asleep: RefCell<Pin<Box<Timer>>>,
     tip: RefCell<Option<Tip>>,
-    expire: RefCell<Box<Timer>>,
-    hide: RefCell<Box<Timer>>,
+    expire: RefCell<Pin<Box<Timer>>>,
+    hide: RefCell<Pin<Box<Timer>>>,
 }
 
-fn single_shot_timer(on_timeout: fn()) -> RefCell<Box<Timer>> {
-    let mut timer = Box::new(Timer::new());
+fn single_shot_timer(on_timeout: fn()) -> RefCell<Pin<Box<Timer>>> {
+    let timer = Timer::new();
     timer.set_single_shot(true);
     timer.timeout.connect(move |()| on_timeout());
     RefCell::new(timer)
 }
 
-fn start_timer(timer: &RefCell<Box<Timer>>, ms: u64) {
+fn start_timer(timer: &RefCell<Pin<Box<Timer>>>, ms: u64) {
     let mut timer = timer.borrow_mut();
-    // SAFETY: the timer is boxed inside the thread-local controller, so its address is stable
-    // until the thread ends, when `Timer::drop` unregisters it.
-    unsafe { timer.start_with_interval(ms) };
+    timer.as_mut().start_with_interval(ms);
 }
 
-fn stop_timer(timer: &RefCell<Box<Timer>>) {
-    if let Ok(mut timer) = timer.try_borrow_mut() {
+fn stop_timer(timer: &RefCell<Pin<Box<Timer>>>) {
+    if let Ok(timer) = timer.try_borrow_mut() {
         timer.stop();
     }
 }
 
-fn timer_active(timer: &RefCell<Box<Timer>>) -> bool {
+fn timer_active(timer: &RefCell<Pin<Box<Timer>>>) -> bool {
     timer.try_borrow().map(|t| t.is_active()).unwrap_or(false)
 }
 

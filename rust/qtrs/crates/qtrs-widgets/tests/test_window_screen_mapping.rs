@@ -14,6 +14,7 @@ use qtrs_gui::geometry::primitives::{Point, Rect};
 use qtrs_gui::paint::Pixmap;
 use qtrs_gui::{round_scale_factor, GuiApplication, HighDpiScaleFactorRoundingPolicy};
 use qtrs_platform::platform_window::PlatformWindow;
+use qtrs_platform::screen::native_cursor_to_logical;
 use qtrs_platform::screen::PlatformScreen;
 use qtrs_platform::window_system_interface::WindowSystemEventHandler;
 use qtrs_platform::{
@@ -435,4 +436,52 @@ fn present_custom_at_onto_another_screen_takes_that_screens_ratio() {
     w.present_custom_at(Rect::new(2000, 100, 400, 300), |_| {});
     assert_eq!(w.device_pixel_ratio(), 1.5);
     assert_eq!(w.screen().geometry(), RIGHT_150.logical());
+}
+
+// --- tray context-menu point: the screen under the native cursor, not the primary's ratio --------
+
+/// Left of the primary: native top-left (-2880, 0), logical (-2880, 0, 1920, 1080).
+const LEFT_150: ScreenSpec = spec(-2880, 0, 2880, 1620, 1.5);
+/// A 150% primary with a 100% secondary on its right.
+const PRIMARY_150: ScreenSpec = spec(0, 0, 2880, 1620, 1.5);
+const RIGHT_100: ScreenSpec = spec(2880, 0, 1920, 1080, 1.0);
+
+#[test]
+fn tray_point_uses_the_ratio_of_the_screen_under_the_cursor() {
+    let _desktop = Desktop::new(&[PRIMARY_100, RIGHT_150]);
+    // x: 1920 + (3000 - 1920) / 1.5 = 2640; y: 400 / 1.5 = 266.7 -> 267
+    assert_eq!(
+        native_cursor_to_logical(Point::new(3000, 400)),
+        Point::new(2640, 267)
+    );
+}
+
+#[test]
+fn tray_point_keeps_the_origin_of_a_screen_left_of_the_primary() {
+    let _desktop = Desktop::new(&[PRIMARY_100, LEFT_150]);
+    // x: -2880 + (-1440 + 2880) / 1.5 = -1920; y: 300 / 1.5 = 200
+    assert_eq!(
+        native_cursor_to_logical(Point::new(-1440, 300)),
+        Point::new(-1920, 200)
+    );
+}
+
+#[test]
+fn tray_point_ignores_the_primary_ratio_on_a_100_percent_secondary() {
+    let _desktop = Desktop::new(&[PRIMARY_150, RIGHT_100]);
+    // The cursor is on the 100% screen: the point is unchanged.
+    assert_eq!(
+        native_cursor_to_logical(Point::new(3000, 400)),
+        Point::new(3000, 400)
+    );
+}
+
+#[test]
+fn tray_point_off_every_screen_uses_the_primary_screen() {
+    let _desktop = Desktop::new(&[PRIMARY_150, RIGHT_100]);
+    // Control (passes before and after): primary fallback, 1.5 -> -300 / 1.5 = -200.
+    assert_eq!(
+        native_cursor_to_logical(Point::new(-300, -300)),
+        Point::new(-200, -200)
+    );
 }

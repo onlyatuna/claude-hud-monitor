@@ -69,6 +69,12 @@ pub trait PlatformWindow: 'static {
         self.present_dirty(&mut clone, opacity, dirty.bounding_rect())
     }
     fn set_event_handler(&mut self, handler: Box<dyn WindowSystemEventHandler>);
+    /// Whether the native window delivers `MouseDoubleClick` itself. When false, the widget
+    /// window synthesizes double clicks from press pairs, as Qt's `QGuiApplication` does for
+    /// platforms without native double clicks (`qguiapplication.cpp:2419-2426`).
+    fn reports_native_double_clicks(&self) -> bool {
+        false
+    }
     /// The native desktop position the next `present_region` moves a layered window to.
     fn set_target_pos(&mut self, _pos: Option<qtrs_gui::geometry::Point>) {}
     fn native_handle(&self) -> isize;

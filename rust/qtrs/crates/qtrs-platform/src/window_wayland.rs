@@ -338,6 +338,8 @@ impl WaylandNativeWindow {
                         global_pos,
                         button: btn,
                         modifiers: mods,
+                        // `WaylandEvent::PointerButton` carries no time; the press is stamped on arrival.
+                        timestamp: crate::window_system_interface::event_time_ms(),
                     });
                 } else {
                     self.pressed.release(btn);

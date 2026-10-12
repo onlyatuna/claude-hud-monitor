@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use qtrs_core::event::EventKind;
 use qtrs_core::QObject;
 use qtrs_gui::geometry::primitives::{Margins, Rect, RectF};
-use qtrs_gui::paint::{Brush, Pen};
+use qtrs_gui::paint::{Brush, Pen, RenderHint};
 use qtrs_platform::backdrop::BackdropType;
 use qtrs_platform::WindowFlags;
 use qtrs_widgets::{
@@ -161,6 +161,9 @@ fn install_panel_painter(
             let rect_f = RectF::new(0.5, 0.5, w - 1.0, h - 1.0);
             painter.set_brush(Brush::Color(bg));
             painter.set_pen(Pen::new(border, 1.0));
+            // Python's QSS `border-radius` panel: Qt's stylesheet style draws the rounded border
+            // with anti-aliasing (`qstylesheetstyle.cpp:1266-1285`), so AA is on for this shape.
+            painter.set_render_hint(RenderHint::Antialiasing, true);
             painter.draw_rounded_rect(rect_f, radius, radius);
         });
     }

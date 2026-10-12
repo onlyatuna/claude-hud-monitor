@@ -17,7 +17,7 @@ pub use backing_store::BackingStore;
 pub use brush::*;
 pub use composition::*;
 pub use paint_device::PaintDevice;
-pub use painter::{Painter, PainterState, Pen};
+pub use painter::{Painter, PainterState, Pen, RenderHint, RenderHints};
 pub use palette::*;
 pub use path::*;
 pub use pixmap::Pixmap;

@@ -1,7 +1,9 @@
 //! Timer module modeled after Qt timer mechanism (QTimer, QTimerInfo).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::marker::PhantomPinned;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Instant;
@@ -531,60 +533,65 @@ impl TimerEvent {
 }
 
 /// High-level timer object matching `QTimer`.
+///
+/// A started timer is registered at its address, so a `Timer` is always heap-pinned: see
+/// [`Timer::new`]. Qt: `QTimer` is a heap `QObject` whose address is stable for its lifetime.
 pub struct Timer {
     data: ObjectData,
-    id: TimerId,
-    interval_ms: u64,
-    single_shot: bool,
-    timer_type: TimerType,
+    id: Cell<TimerId>,
+    interval_ms: Cell<u64>,
+    single_shot: Cell<bool>,
+    timer_type: Cell<TimerType>,
     pub timeout: Signal<()>,
-}
-
-impl Default for Timer {
-    fn default() -> Self {
-        Self::new()
-    }
+    _pinned: PhantomPinned,
 }
 
 impl Timer {
-    pub fn new() -> Self {
+    /// Heap-pins a new timer (`new QTimer`).
+    ///
+    /// The timer cannot be moved out of its box, because it may be registered at its address:
+    ///
+    /// ```compile_fail
+    /// let t = qtrs_core::timer::Timer::new();
+    /// let _moved = std::pin::Pin::into_inner(t); // `Timer: !Unpin`, so this does not compile
+    /// ```
+    pub fn new() -> Pin<Box<Self>> {
         let data = ObjectData::new(ObjectId::next());
         let timeout = Signal::with_owner(&data);
-        Self {
+        Box::pin(Self {
             data,
-            id: TimerId::INVALID,
-            interval_ms: 0,
-            single_shot: false,
-            timer_type: TimerType::Coarse,
+            id: Cell::new(TimerId::INVALID),
+            interval_ms: Cell::new(0),
+            single_shot: Cell::new(false),
+            timer_type: Cell::new(TimerType::Coarse),
             timeout,
-        }
+            _pinned: PhantomPinned,
+        })
     }
 
     /// Starts the timer with its configured interval (`QTimer::start`).
     ///
-    /// # Safety
-    /// Keep this timer alive at its current address until it is stopped and unregistered.
-    /// Do not access it through an alias while event callbacks may run; callbacks are dispatched
-    /// on the physical registration thread.
-    pub unsafe fn start(&mut self) -> TimerId {
+    /// Safe: a timer is only reachable as `Pin<Box<Timer>>`, so its registered address cannot
+    /// change, and `Drop` unregisters it before the memory is freed.
+    pub fn start(mut self: Pin<&mut Self>) -> TimerId {
         if self.is_active() {
             self.stop();
         }
 
-        // SAFETY: Timer::start requires the caller to keep this timer pinned in place until
-        // stop/unregister; see the method's Safety contract.
-        unsafe { crate::object::register_qobject(self) };
+        // SAFETY: `self` is pinned and never leaves its heap box except through `Drop`, which
+        // unregisters the address first. The registry therefore never holds a stale pointer.
+        unsafe { crate::object::register_pinned_qobject(self.as_mut()) };
 
         self.rearm()
     }
 
     /// Registers this timer's current configuration with the thread timer context and records
     /// the new id. Callers must have stopped the timer first, or it must never have been started.
-    fn rearm(&mut self) -> TimerId {
+    fn rearm(&self) -> TimerId {
         let receiver = self.data.id;
-        let interval_ms = self.interval_ms;
-        let timer_type = self.timer_type;
-        let single_shot = self.single_shot;
+        let interval_ms = self.interval_ms.get();
+        let timer_type = self.timer_type.get();
+        let single_shot = self.single_shot.get();
 
         let id = THREAD_TIMER_CONTEXT.with(|ctx| {
             let borrow = ctx.borrow();
@@ -594,23 +601,20 @@ impl Timer {
             arm_in_context(ctx, receiver, interval_ms, timer_type, single_shot)
         });
 
-        self.id = id;
+        self.id.set(id);
         id
     }
 
     /// Starts the timer with the specified interval (`QTimer::start(msec)`).
-    ///
-    /// # Safety
-    /// Follows the safety requirements of [`Timer::start`].
-    pub unsafe fn start_with_interval(&mut self, ms: u64) -> TimerId {
-        self.interval_ms = ms;
-        unsafe { self.start() }
+    pub fn start_with_interval(self: Pin<&mut Self>, ms: u64) -> TimerId {
+        self.interval_ms.set(ms);
+        self.start()
     }
 
     /// Stops the timer (`QTimer::stop`).
-    pub fn stop(&mut self) {
+    pub fn stop(&self) {
         if self.is_active() {
-            let id = self.id;
+            let id = self.id.get();
             let _ = THREAD_TIMER_CONTEXT.try_with(|ctx| {
                 if let Ok(borrow) = ctx.try_borrow() {
                     if let Some(ctx) = borrow.as_ref() {
@@ -618,34 +622,34 @@ impl Timer {
                     }
                 }
             });
-            self.id = TimerId::INVALID;
+            self.id.set(TimerId::INVALID);
         }
     }
 
     pub fn is_active(&self) -> bool {
-        self.id.is_valid()
+        self.id.get().is_valid()
     }
 
     /// Sets the interval (`QTimer::setInterval`); an active timer is restarted with it.
-    pub fn set_interval(&mut self, ms: u64) {
+    pub fn set_interval(&self, ms: u64) {
         if self.is_active() {
             self.stop();
-            self.interval_ms = ms;
+            self.interval_ms.set(ms);
             self.rearm();
         } else {
-            self.interval_ms = ms;
+            self.interval_ms.set(ms);
         }
     }
 
     pub fn interval(&self) -> u64 {
-        self.interval_ms
+        self.interval_ms.get()
     }
 
     /// Sets single-shot mode; an active timer's registry entry is updated to match.
-    pub fn set_single_shot(&mut self, v: bool) {
-        self.single_shot = v;
+    pub fn set_single_shot(&self, v: bool) {
+        self.single_shot.set(v);
         if self.is_active() {
-            let id = self.id;
+            let id = self.id.get();
             with_thread_timer_context(|ctx| {
                 if let Some(entry) = ctx.registry.lock().unwrap().get_mut(id) {
                     entry.single_shot = v;
@@ -655,19 +659,19 @@ impl Timer {
     }
 
     pub fn is_single_shot(&self) -> bool {
-        self.single_shot
+        self.single_shot.get()
     }
 
-    pub fn set_timer_type(&mut self, t: TimerType) {
-        self.timer_type = t;
+    pub fn set_timer_type(&self, t: TimerType) {
+        self.timer_type.set(t);
     }
 
     pub fn timer_type(&self) -> TimerType {
-        self.timer_type
+        self.timer_type.get()
     }
 
     pub fn timer_id(&self) -> TimerId {
-        self.id
+        self.id.get()
     }
 
     /// Returns remaining time in milliseconds (`QTimer::remainingTime`).
@@ -680,7 +684,7 @@ impl Timer {
             ctx.registry
                 .lock()
                 .unwrap()
-                .get(self.id)
+                .get(self.id.get())
                 .map(|e| e.next_fire_ms)
         })
         .flatten();
@@ -698,74 +702,78 @@ impl Timer {
 
     /// Starts a timer in a caller-supplied registry.
     ///
-    /// # Safety
-    /// Keep this timer alive at its current address until it is stopped and unregistered.
-    /// Do not access it through an alias while timer event callbacks may run.
-    pub unsafe fn start_with_registry(&mut self, registry: &mut TimerRegistry) -> TimerId {
+    /// The timer is heap-pinned (see [`Timer::new`]), so its registered address stays valid
+    /// until `Drop` unregisters it.
+    pub fn start_with_registry(mut self: Pin<&mut Self>, registry: &mut TimerRegistry) -> TimerId {
         if self.is_active() {
             self.stop_with_registry(registry);
         }
-        unsafe { crate::object::register_qobject(self) };
-        self.id = registry.register(
+        // SAFETY: `self` is pinned in its heap box; `Drop` unregisters the address before the
+        // box is freed, so the registry never holds a stale pointer (see `Timer::start`).
+        unsafe { crate::object::register_pinned_qobject(self.as_mut()) };
+        let id = registry.register(
             self.data.id,
-            self.interval_ms,
-            self.timer_type,
-            self.single_shot,
+            self.interval_ms.get(),
+            self.timer_type.get(),
+            self.single_shot.get(),
         );
-        self.id
+        self.id.set(id);
+        id
     }
 
     /// Starts a timer in a caller-supplied registry and dispatcher.
     ///
-    /// # Safety
-    /// Keep this timer alive at its current address until it is stopped and unregistered.
-    /// Do not access it through an alias while timer event callbacks may run.
-    pub unsafe fn start_with<D: crate::event_loop::EventDispatcher + ?Sized>(
-        &mut self,
+    /// The timer is heap-pinned (see [`Timer::new`]), so its registered address stays valid
+    /// until `Drop` unregisters it.
+    pub fn start_with<D: crate::event_loop::EventDispatcher + ?Sized>(
+        mut self: Pin<&mut Self>,
         registry: &mut TimerRegistry,
         dispatcher: &mut D,
     ) -> TimerId {
         if self.is_active() {
             self.stop_with(registry, dispatcher);
         }
-        unsafe { crate::object::register_qobject(self) };
-        self.id = registry.register(
+        // SAFETY: `self` is pinned in its heap box; `Drop` unregisters the address before the
+        // box is freed, so the registry never holds a stale pointer (see `Timer::start`).
+        unsafe { crate::object::register_pinned_qobject(self.as_mut()) };
+        let id = registry.register(
             self.data.id,
-            self.interval_ms,
-            self.timer_type,
-            self.single_shot,
+            self.interval_ms.get(),
+            self.timer_type.get(),
+            self.single_shot.get(),
         );
-        if let Some(entry) = registry.get(self.id) {
+        self.id.set(id);
+        if let Some(entry) = registry.get(id) {
             dispatcher.register_timer(entry);
         }
-        self.id
+        id
     }
 
     /// Timer registry matching Qt `WinTimerDict`.
     pub fn stop_with<D: crate::event_loop::EventDispatcher + ?Sized>(
-        &mut self,
+        &self,
         registry: &mut TimerRegistry,
         dispatcher: &mut D,
     ) {
         if self.is_active() {
-            if let Some(entry) = registry.unregister(self.id) {
+            if let Some(entry) = registry.unregister(self.id.get()) {
                 dispatcher.unregister_timer(&entry);
             }
-            self.id = TimerId::INVALID;
+            self.id.set(TimerId::INVALID);
         }
     }
 
     /// Timer registry matching Qt `WinTimerDict`.
-    pub fn stop_with_registry(&mut self, registry: &mut TimerRegistry) {
+    pub fn stop_with_registry(&self, registry: &mut TimerRegistry) {
         if self.is_active() {
-            registry.unregister(self.id);
-            self.id = TimerId::INVALID;
+            registry.unregister(self.id.get());
+            self.id.set(TimerId::INVALID);
         }
     }
 
-    pub fn timer_event_with_registry(&mut self, event: &TimerEvent, registry: &mut TimerRegistry) {
-        if event.timer_id == self.id {
-            if self.single_shot {
+    pub fn timer_event_with_registry(&self, event: &TimerEvent, registry: &mut TimerRegistry) {
+        if event.timer_id == self.id.get() {
+            if self.single_shot.get() {
                 self.stop_with_registry(registry);
             }
             self.timeout.emit(&());
@@ -858,8 +866,8 @@ impl QObject for Timer {
     }
     /// Handles timer events for this object (`QObject::timerEvent`).
     fn timer_event(&mut self, timer_id: u64) {
-        if timer_id == self.id.0 as u64 {
-            if self.single_shot {
+        if timer_id == self.id.get().0 as u64 {
+            if self.single_shot.get() {
                 self.stop();
             }
             self.timeout.emit(&());
@@ -996,9 +1004,9 @@ mod tests {
             log2.lock().unwrap().push("timeout");
         });
 
-        unsafe { timer.start_with_registry(&mut registry) };
+        timer.as_mut().start_with_registry(&mut registry);
         assert!(timer.is_active());
-        let id = timer.id;
+        let id = timer.timer_id();
         assert!(registry.get(id).is_some());
 
         timer.timer_event_with_registry(&TimerEvent::new(id), &mut registry);
@@ -1024,7 +1032,7 @@ mod tests {
             f_clone.store(true, Ordering::SeqCst);
         });
 
-        unsafe { timer.start() };
+        timer.as_mut().start();
         assert!(timer.is_active());
 
         let deadline = std::time::Instant::now() + Duration::from_millis(500);
@@ -1075,7 +1083,9 @@ mod tests {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        unsafe { timer.start_with(&mut registry.lock().unwrap(), &mut dispatcher) };
+        timer
+            .as_mut()
+            .start_with(&mut registry.lock().unwrap(), &mut dispatcher);
         assert!(timer.is_active());
 
         let ok = spin_until(
@@ -1116,7 +1126,9 @@ mod tests {
             counter_clone.fetch_add(1, Ordering::SeqCst);
         });
 
-        unsafe { timer.start_with(&mut registry.lock().unwrap(), &mut dispatcher) };
+        timer
+            .as_mut()
+            .start_with(&mut registry.lock().unwrap(), &mut dispatcher);
 
         timer.stop_with(&mut registry.lock().unwrap(), &mut dispatcher);
         assert!(!timer.is_active());
@@ -1146,7 +1158,7 @@ mod tests {
             f_clone.store(true, Ordering::SeqCst);
         });
 
-        unsafe { timer.start() };
+        timer.as_mut().start();
         assert!(timer.is_active());
 
         assert!(!fired.load(Ordering::SeqCst));
@@ -1182,7 +1194,7 @@ mod tests {
         timer.timeout.connect(move |_| {
             f.store(true, Ordering::SeqCst);
         });
-        unsafe { timer.start() };
+        timer.as_mut().start();
         el.process_events(false);
         assert!(fired.load(Ordering::SeqCst));
         assert_eq!(
@@ -1210,7 +1222,7 @@ mod tests {
         timer.timeout.connect(move |_| {
             c.fetch_add(1, Ordering::SeqCst);
         });
-        unsafe { timer.start() };
+        timer.as_mut().start();
         for _ in 0..100 {
             if count.load(Ordering::SeqCst) >= 5 {
                 break;
@@ -1238,7 +1250,7 @@ mod tests {
         timer.timeout.connect(move |_| {
             c.fetch_add(1, Ordering::SeqCst);
         });
-        unsafe { timer.start() };
+        timer.as_mut().start();
         timer.set_interval(0);
         for _ in 0..100 {
             if count.load(Ordering::SeqCst) >= 1 {
@@ -1279,7 +1291,7 @@ mod tests {
         timer.timeout.connect(move |_| {
             c.fetch_add(1, Ordering::SeqCst);
         });
-        unsafe { timer.start() };
+        timer.as_mut().start();
         timer.set_single_shot(true);
         // QTimer::timerEvent reads `single` at fire time (qtimer.cpp:330-331).
         assert_eq!(pump_for(&mut el, 300, &count), 1);
@@ -1299,7 +1311,7 @@ mod tests {
         timer.timeout.connect(move |_| {
             c.fetch_add(1, Ordering::SeqCst);
         });
-        unsafe { timer.start() };
+        timer.as_mut().start();
         timer.set_single_shot(false);
         let fired = pump_for(&mut el, 300, &count);
         assert!(
@@ -1320,7 +1332,7 @@ mod tests {
         assert_eq!(timer.remaining_time(), -1);
 
         let _event_loop = EventLoop::new();
-        unsafe { timer.start() };
+        timer.as_mut().start();
         assert!(timer.is_active());
 
         let rem = timer.remaining_time();

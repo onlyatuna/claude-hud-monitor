@@ -15,7 +15,7 @@ use std::rc::Rc;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Margins, PointF, Rect, RectF};
 use qtrs_gui::paint::brush::Brush;
-use qtrs_gui::paint::painter::{create_donut_arc_path, create_pie_path, Painter, Pen};
+use qtrs_gui::paint::painter::{create_donut_arc_path, create_pie_path, Painter, Pen, RenderHint};
 use qtrs_gui::paint::pixmap::Pixmap;
 use qtrs_gui::text::font::{Font, FontWeight};
 use qtrs_gui::text::font_metrics::FontMetrics;
@@ -220,6 +220,8 @@ impl Widget for UsageDial {
     fn remove_child(&mut self, _child_id: ObjectId) {}
 
     fn paint_event(&mut self, painter: &mut Painter) {
+        // Python `UsageDial.paintEvent` sets Antialiasing on its painter (usage_table.py:162).
+        painter.set_render_hint(RenderHint::Antialiasing, true);
         let geo = self.base.geometry();
         let w = geo.width as f32;
         let h = geo.height as f32;
@@ -579,9 +581,16 @@ impl Widget for ProviderIconWidget {
         };
         {
             let mut inner = Painter::begin(&mut pixmap);
+            // Python `provider_icon` sets Antialiasing on its painter (usage_table.py:56).
+            inner.set_render_hint(RenderHint::Antialiasing, true);
             self.draw_glyph(&mut inner);
         }
+        // Qt QLabel::paintEvent (qlabel.cpp:1089-1097) scales a pixmap whose size differs from
+        // size*dpr with Qt::SmoothTransformation before drawItemPixmap; the 2x glyph hits that
+        // path on a DPR-1 screen, so this downscale must be smooth.
+        painter.set_render_hint(RenderHint::SmoothPixmapTransform, true);
         painter.draw_pixmap(RectF::new(0.0, 0.0, s, s), &pixmap, None);
+        painter.set_render_hint(RenderHint::SmoothPixmapTransform, false);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -697,6 +706,8 @@ impl Widget for GlyphWidget {
     fn remove_child(&mut self, _child_id: ObjectId) {}
 
     fn paint_event(&mut self, painter: &mut Painter) {
+        // Python `legend_glyph` sets Antialiasing on its painter (usage_table.py:84).
+        painter.set_render_hint(RenderHint::Antialiasing, true);
         let size = self.size;
         let r = RectF::new(1.5, 1.5, (size - 3.0).max(1.0), (size - 3.0).max(1.0));
 

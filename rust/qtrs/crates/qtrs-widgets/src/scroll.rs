@@ -7,7 +7,7 @@ use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_core::signal::Signal;
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
 use qtrs_gui::paint::brush::Brush;
-use qtrs_gui::paint::painter::Painter;
+use qtrs_gui::paint::painter::{Painter, RenderHint};
 use qtrs_gui::tiny_skia::Color;
 
 /// Orientation of a scroll bar or slider (`Qt::Orientation`).
@@ -360,6 +360,8 @@ impl Widget for ScrollBar {
     }
 
     fn paint_event(&mut self, painter: &mut Painter) {
+        // Track and thumb are anti-aliased (`qfusionstyle.cpp:2108-2111`, `qstylesheetstyle.cpp:4370-4373`).
+        painter.set_render_hint(RenderHint::Antialiasing, true);
         let geom = self.base.geometry();
         let rect_f = RectF::new(0.0, 0.0, geom.width as f32, geom.height as f32);
         // 1. Draw track

@@ -10,7 +10,7 @@ use qtrs_core::signal::Signal;
 use qtrs_core::timer::{kill_object_timer, TimerId, TimerType};
 use qtrs_gui::geometry::primitives::{Point, PointF, Rect, RectF, Size};
 use qtrs_gui::paint::palette::{ColorGroup, ColorRole, Palette};
-use qtrs_gui::paint::{Brush, Painter, Pen};
+use qtrs_gui::paint::{Brush, Painter, Pen, RenderHint};
 use qtrs_gui::text::{Font, FontMetrics};
 
 use crate::focus::FocusPolicy;
@@ -1063,6 +1063,8 @@ impl Widget for KeySequenceEdit {
         } else {
             self.palette.color(group, ColorRole::Mid)
         };
+        // Frame and clear cross are anti-aliased (`qfusionstyle.cpp:538-552`); the cross has no Qt vector counterpart (doubt).
+        painter.set_render_hint(RenderHint::Antialiasing, true);
         painter.set_pen(Pen::new(
             border,
             if self.base.has_focus() { 1.5 } else { 1.0 },

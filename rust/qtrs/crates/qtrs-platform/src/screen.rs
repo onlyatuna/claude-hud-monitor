@@ -8,6 +8,32 @@ pub trait PlatformScreen: Send + Sync {
     fn device_pixel_ratio(&self) -> f32;
 }
 
+/// Physical cursor point to logical, through the screen that contains it. Qt does the same:
+/// `QWindowsSystemTrayIcon` uses `screenAtDp(globalPos)` (`qwindowssystemtrayicon.cpp:398-404`)
+/// and `QSystemTrayIcon` maps with `QHighDpi::fromNativePixels(pos, screen)` (`qsystemtrayicon.cpp:184`).
+/// Falls back to the primary screen, as Qt does (`screens().value(0)`).
+pub fn native_cursor_to_logical(native: Point) -> Point {
+    let platform = crate::integration::platform();
+    let screens = platform.screens();
+    let hit = screens.iter().find(|s| {
+        let g = s.geometry();
+        crate::high_dpi::to_native_global_rect(g, Point::new(g.x, g.y), s.device_pixel_ratio())
+            .contains(native)
+    });
+    let (origin, dpr) = match hit {
+        Some(s) => {
+            let g = s.geometry();
+            (Point::new(g.x, g.y), s.device_pixel_ratio())
+        }
+        None => {
+            let primary = platform.primary_screen();
+            let g = primary.geometry();
+            (Point::new(g.x, g.y), primary.device_pixel_ratio())
+        }
+    };
+    crate::high_dpi::from_native_global_point(native, origin, dpr)
+}
+
 #[cfg(windows)]
 pub mod win32_screen {
     use super::*;

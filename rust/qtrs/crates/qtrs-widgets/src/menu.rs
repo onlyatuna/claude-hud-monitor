@@ -10,7 +10,7 @@ use qtrs_core::signal::Signal;
 use qtrs_gui::geometry::primitives::{Point, PointF, Rect, RectF, Size};
 use qtrs_gui::image::{Icon, IconMode, IconState};
 use qtrs_gui::paint::brush::Brush;
-use qtrs_gui::paint::painter::{Painter, Pen};
+use qtrs_gui::paint::painter::{Painter, Pen, RenderHint};
 use qtrs_gui::text::{Font, FontMetrics};
 use qtrs_gui::tiny_skia::Color;
 
@@ -1284,7 +1284,8 @@ impl Menu {
 
         // `side` is +1 when the submenu opens to the right, -1 when it opens to the left; all
         // x distances below are measured towards the submenu.
-        let (side, edge_x) = if sg.x >= item.right() - SUBMENU_OVERLAP - 4 {
+        // Qt uses the inclusive QRect::right() (last pixel), i.e. exclusive right() - 1 (qmenu.cpp:2523-2535).
+        let (side, edge_x) = if sg.x >= (item.right() - 1) - SUBMENU_OVERLAP - 4 {
             (1i64, sg.x)
         } else {
             (-1i64, sg.x + sg.width)
@@ -1416,6 +1417,7 @@ impl Menu {
                     rect.y as f32 + rect.height as f32 / 2.0,
                 ),
             };
+            painter.set_render_hint(RenderHint::Antialiasing, false);
             painter.set_pen(Pen::new(colors.separator, 1.0));
             painter.draw_line(PointF::new(x0, line_y), PointF::new(x1, line_y));
             return;
@@ -1424,6 +1426,9 @@ impl Menu {
         if active && enabled {
             painter.set_brush(Brush::Color(colors.hover_background));
             painter.set_pen(None);
+            // Win11-style rounded highlight (no style sheet) is anti-aliased; the square
+            // style-sheet highlight is not.
+            painter.set_render_hint(RenderHint::Antialiasing, style.is_none());
             let (hl, radius) = if style.is_some() {
                 (rect, 0.0)
             } else {
@@ -1469,8 +1474,11 @@ impl Menu {
                 if action.is_exclusive_in_group() {
                     painter.set_brush(Brush::Color(check_color));
                     painter.set_pen(None);
+                    // `qfusionstyle.cpp:1395, 1404`: radio indicator is anti-aliased.
+                    painter.set_render_hint(RenderHint::Antialiasing, true);
                     painter.draw_ellipse(RectF::new(10.0, mid_y - 4.0, 8.0, 8.0));
                 } else {
+                    painter.set_render_hint(RenderHint::Antialiasing, true);
                     painter.set_pen(Pen::new(check_color, 2.0));
                     painter.draw_line(PointF::new(9.0, mid_y), PointF::new(12.5, mid_y + 3.5));
                     painter.draw_line(
@@ -1489,6 +1497,7 @@ impl Menu {
                 action
                     .icon()
                     .pixmap(Size::new(ICON_SIZE, ICON_SIZE), mode, IconState::Off);
+            painter.set_render_hint(RenderHint::Antialiasing, false);
             painter.draw_pixmap(
                 RectF::new(
                     6.0,
@@ -1514,6 +1523,7 @@ impl Menu {
             let ch: String = text[offset..].chars().take(1).collect();
             let ch_w = metrics.horizontal_advance(&ch, &font);
             let underline_y = baseline + 2.0;
+            painter.set_render_hint(RenderHint::Antialiasing, false);
             painter.set_pen(Pen::new(color, 1.0));
             painter.draw_line(
                 PointF::new(text_x + prefix_w, underline_y),
@@ -1535,6 +1545,7 @@ impl Menu {
             } else {
                 let ax = (width - 14) as f32;
                 painter.set_pen(Pen::new(color, 1.5));
+                painter.set_render_hint(RenderHint::Antialiasing, true);
                 painter.draw_line(PointF::new(ax, mid_y - 4.0), PointF::new(ax + 4.0, mid_y));
                 painter.draw_line(PointF::new(ax + 4.0, mid_y), PointF::new(ax, mid_y + 4.0));
             }
@@ -1780,6 +1791,7 @@ impl Widget for Menu {
         let s = self.effective_style().unwrap_or_else(|| self.hard_style());
         painter.set_brush(Brush::Color(s.background));
         painter.set_pen(Pen::new(s.border, 1.0));
+        painter.set_render_hint(RenderHint::Antialiasing, true);
         painter.draw_rounded_rect(
             RectF::new(
                 0.5,
@@ -1833,6 +1845,7 @@ impl Widget for Menu {
 /// `macos` instead draws a Core Text glyph (`kCTFontUIFontMenuItemMark`), which is not
 /// reproduced; this check stands in for it there.
 fn paint_common_check_mark(painter: &mut Painter, rect: Rect, color: Color, anti_aliased: bool) {
+    painter.set_render_hint(RenderHint::Antialiasing, anti_aliased);
     let mark = rect.width.min(7);
     let pos_x = rect.x + (rect.width - mark) / 2 + 1;
     let pos_y = rect.y + (rect.height - mark) / 2;
@@ -1873,6 +1886,7 @@ fn paint_common_check_mark(painter: &mut Painter, rect: Rect, color: Color, anti
 /// half-size `min(w, h) / 2`, the "down" chevron rotated by -90 degrees about the square's centre
 /// shifted by (1, 2) px (`qmacstyle_mac.mm`). Qt strokes it with the palette's text colour.
 fn paint_macos_arrow(painter: &mut Painter, rect: Rect, color: Color) {
+    painter.set_render_hint(RenderHint::Antialiasing, true);
     let half = 0.5 * rect.width.min(rect.height) as f32;
     let pen_width = (half / 3.0).max(1.25);
     let cx = (rect.x + (rect.width - 1) / 2 + 1) as f32; // QRect::center().x() + 1
@@ -1930,6 +1944,8 @@ fn paint_fluent_chevron(painter: &mut Painter, rect: Rect, color: Color) {
 /// `QCommonStyle::drawPrimitive(PE_IndicatorArrowRight)`: an un-anti-aliased triangle of
 /// `size - 3` by `(size - 3) / 2` px, centred in the square.
 fn paint_common_arrow(painter: &mut Painter, rect: Rect, color: Color) {
+    // `QCommonStyle` triangle: un-anti-aliased pixel rows.
+    painter.set_render_hint(RenderHint::Antialiasing, false);
     let size = rect.width.min(rect.height);
     let long = size - 3;
     let (width, height) = (long / 2, long); // transposed for a right arrow
@@ -1958,6 +1974,8 @@ fn paint_fusion_arrow(painter: &mut Painter, rect: Rect, color: Color) {
     pb.line_to(x, y + h);
     pb.line_to(x + w, y + h / 2.0);
     pb.close();
+    // `qt_fusion_draw_arrow` is anti-aliased (`qfusionstyle.cpp:392-405`).
+    painter.set_render_hint(RenderHint::Antialiasing, true);
     if let Some(path) = pb.finish() {
         let mut tint = color;
         tint.set_alpha(160.0 / 255.0);
