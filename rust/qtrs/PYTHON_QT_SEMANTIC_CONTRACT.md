@@ -193,7 +193,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior** `[QT-SRC qcoreapplication.cpp:1717-1753; qapplication.cpp:790-840]`：核心只壓 `Timer`（按 receiver + timerId）與 `Quit`（舊的留下）；widgets 壓 `UpdateRequest`、`UpdateLater`、`LayoutRequest`、`LanguageChange`，`Resize`/`Move` 保留舊事件並更新為最新值；posted `MouseMove` **不**在這一層壓縮。
 - **qtrs required**：HUD 相關的壓縮（`UpdateRequest`、`LayoutRequest`、`Resize`、per-id `Timer`）MUST 與 Qt 一致；壓縮 MUST 按 receiver 區分。
 - **Current implementation**：`IMPLEMENTED`（`event/compressor.rs`：`UpdateRequest`、`LayoutRequest`、`Timer`/`ZeroTimer` 按 id、`Resize`）；測試見 `compressor.rs::tests::*`、`loop.rs::test_event_compression`。
-- **Known gap**：**G3.3.a [P2, READ]** `Quit` 保留**新的** exit code（Qt 保留舊的）；**G3.3.b [P2, READ]** `MouseMove`/`HoverMove` 被壓縮（Qt 不壓）；**G3.3.c [P2, READ]** `Move`/`UpdateLater`/`LanguageChange` 壓縮不存在；**G3.3.d [P2, READ]** 每次 post 都 O(queue) 掃描（Qt 以 `postedEvents` 計數把關）；**G3.3.e [D]** `Quit{exit_code}` 是 qtrs 擴充（Qt 的 Quit 不帶 code）。理由：qtrs 以 `Quit{code}` 事件攜帶 exit code 給 `exec` 的回傳值；只要 `exec` 回傳碼與 Qt 的 `exit(code)` 相同，可觀察行為不變；誤用（多個 Quit 帶不同 code）的取捨由 G3.3.a 追蹤。
+- **Known gap**：**G3.3.a [P2, READ]** `Quit` 保留**新的** exit code（Qt 保留舊的）；**G3.3.b [P2, READ；已修復：RC-181]** MouseMove 與 HoverMove 事件不壓縮（qapplication.cpp:794-804, RC-181）；**G3.3.c [P2, READ]** `Move`/`UpdateLater`/`LanguageChange` 壓縮不存在；**G3.3.d [P2, READ]** 每次 post 都 O(queue) 掃描（Qt 以 `postedEvents` 計數把關）；**G3.3.e [D]** `Quit{exit_code}` 是 qtrs 擴充（Qt 的 Quit 不帶 code）。理由：qtrs 以 `Quit{code}` 事件攜帶 exit code 給 `exec` 的回傳值；只要 `exec` 回傳碼與 Qt 的 `exit(code)` 相同，可觀察行為不變；誤用（多個 Quit 帶不同 code）的取捨由 G3.3.a 追蹤。
 - **Test**：既有如上。必要：`Move`/`UpdateLater` 壓縮（待 `EventKind` 補齊）。
 - **HUD usage**：Rust 每次 `update()` post 一個 `UpdateRequest`（`widget.rs:295-300`），依賴壓縮避免渲染風暴。
 
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 242 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.4.c、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.c、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.b、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.10.c、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 243 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.3.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.4.c、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.c、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.b、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.10.c、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1270,7 +1270,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G3.2.e | D | 無 `sendPostedEvents(receiver, type)` 篩選式 flush、`removePostedEvents`、`hasPendingEvents` |
 | G3.2.f | P2, READ | RC-04 之後，投遞給「永遠不會建立 loop 的執行緒」的事件會一直留在 pending 佇列直到行程結束 |
 | G3.3.a | P2, READ | `Quit` 保留**新的** exit code |
-| G3.3.b | P2, READ | `MouseMove`/`HoverMove` 被壓縮 |
+| G3.3.b | P2, READ；已修復：RC-181 | MouseMove 與 HoverMove 不壓縮 |
 | G3.3.c | P2, READ | `Move`/`UpdateLater`/`LanguageChange` 壓縮不存在 |
 | G3.3.d | P2, READ | 每次 post 都 O(queue) 掃描 |
 | G3.3.e | D | `Quit{exit_code}` 是 qtrs 擴充 |
@@ -3752,6 +3752,22 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **驗證**：
   - 單元測試：`crates/qtrs-core/tests/test_move_to_thread_state.rs:364-400`（`transferred_events_preserve_priority_ordering`，pin 測試）。
   - **PASS**：`assert_eq!(*ran.lock().unwrap(), vec![("high-priority", owner_tid), ("low-priority", owner_tid)])`。
+- **全套回歸**：
+  - `qtrs-core` 全套 329 項測試通過（40 suites, 0.10s）。
+  - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
+  - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
+  - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
+- **Residual**：無。
+
+#### RC-181 MouseMove 與 HoverMove 事件不進行佇列壓縮（G3.3.b）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qapplication.cpp:790-804]`（`QApplicationPrivate::compressEvent`）：Qt 僅對 `UpdateRequest`、`UpdateLater`、`LayoutRequest`、`Resize`、`Move`、`LanguageChange`（以及 `Timer`/`Quit`）進行壓縮，其餘事件一律不壓縮，`MouseMove` 與 `HoverMove` 均不在壓縮範圍內。
+- **根因**：`event/compressor.rs` 的 `CoreCompressor` 過去將相鄰之 `MouseMove` 與 `HoverMove` 事件合併更新坐標並回傳 `true`，導致滑鼠移動軌跡事件遭到壓縮吞併，與 Qt 行為不符（G3.3.b）。
+- **修正**：
+  - `crates/qtrs-core/src/event/compressor.rs`：自 `CoreCompressor::try_compress` 移除 `MouseMove` 與 `HoverMove` 壓縮分支，使其依 Qt 規範回傳 `false` 不壓縮。
+- **驗證**：
+  - 單元測試：`crates/qtrs-core/tests/test_advanced_event_system.rs:313-336`（`test_event_compression_with_high_frequency_events`）。
+  - **修改前 FAIL**：`crates\qtrs-core	ests	est_advanced_event_system.rs:316:5: MouseMove events must not be compressed (G3.3.b)`。
+  - **修改後 PASS**：`test test_event_compression_with_high_frequency_events ... ok`；驗證連續 `MouseMove` 與 `HoverMove` 事件皆回傳 `false` 不被壓縮。
 - **全套回歸**：
   - `qtrs-core` 全套 329 項測試通過（40 suites, 0.10s）。
   - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。

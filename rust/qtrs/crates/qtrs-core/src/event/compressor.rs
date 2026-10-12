@@ -33,15 +33,6 @@ impl EventCompressor for CoreCompressor {
                 *code1 = *code2;
                 true
             }
-            (EventKind::MouseMove { x: x1, y: y1 }, EventKind::MouseMove { x: x2, y: y2 }) => {
-                *x1 = *x2;
-                *y1 = *y2;
-                true
-            }
-            (EventKind::HoverMove { pos: p1, .. }, EventKind::HoverMove { pos: p2, .. }) => {
-                *p1 = *p2;
-                true
-            }
             (
                 EventKind::Resize {
                     width: w1,

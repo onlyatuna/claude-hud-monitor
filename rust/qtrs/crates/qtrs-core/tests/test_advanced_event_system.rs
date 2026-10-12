@@ -310,18 +310,15 @@ fn test_event_compression_with_high_frequency_events() {
     let compressor = compressor::CoreCompressor;
     let target = ObjectId::next();
 
-    // 1. MouseMove compression
+    // 1. MouseMove is not compressed (QApplicationPrivate::compressEvent: qapplication.cpp:794-804 / G3.3.b)
     let mut ev_move1 = Event::new(EventKind::MouseMove { x: 10, y: 10 });
     let ev_move2 = Event::new(EventKind::MouseMove { x: 25, y: 35 });
-    assert!(compressor.try_compress(&mut ev_move1, &ev_move2, target));
-    if let EventKind::MouseMove { x, y } = ev_move1.kind {
-        assert_eq!(x, 25);
-        assert_eq!(y, 35);
-    } else {
-        panic!("Expected MouseMove");
-    }
+    assert!(
+        !compressor.try_compress(&mut ev_move1, &ev_move2, target),
+        "MouseMove events must not be compressed (G3.3.b)"
+    );
 
-    // 2. HoverMove compression
+    // 2. HoverMove is not compressed (QApplicationPrivate::compressEvent: qapplication.cpp:794-804 / G3.3.b)
     let mut ev_hover1 = Event::new(EventKind::HoverMove {
         pos: EventPointPos::new(10.0, 10.0),
         old_pos: EventPointPos::new(0.0, 0.0),
@@ -332,13 +329,10 @@ fn test_event_compression_with_high_frequency_events() {
         old_pos: EventPointPos::new(10.0, 10.0),
         modifiers: KeyboardModifiers::NO_MODIFIER,
     });
-    assert!(compressor.try_compress(&mut ev_hover1, &ev_hover2, target));
-    if let EventKind::HoverMove { pos, .. } = ev_hover1.kind {
-        assert_eq!(pos.x, 88.0);
-        assert_eq!(pos.y, 99.0);
-    } else {
-        panic!("Expected HoverMove");
-    }
+    assert!(
+        !compressor.try_compress(&mut ev_hover1, &ev_hover2, target),
+        "HoverMove events must not be compressed (G3.3.b)"
+    );
 
     // 3. Resize compression
     let mut ev_resize1 = Event::new(EventKind::Resize {
