@@ -511,7 +511,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G7.6.b [P1, RAN；已修復：RC-121]** （修復前）`ThreadBuilder::priority` 存了但從不套用。
   - **G7.6.c [P1, RAN；已修復：RC-121]** （修復前）無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning`。
   - **G7.6.d [P2, RAN；已修復：RC-128]** （修復前）閉包 panic 會跳過 `clear_current`（無 guard）。
-  - **G7.6.e [P2]** `EventLoopThreadHandle` 無 Drop／join，丟棄即分離。
+  - **G7.6.e [P2；已修復：RC-182]** EventLoopThreadHandle 實作 Drop：未手動 join 時自動 exit(0) 並等待執行緒結束（qthread.cpp:465-476, RC-182）。
   - **G7.6.f [P1, RAN（macOS CI）；已修復：RC-44]** macOS 上每個執行緒的事件迴圈都用 `CocoaEventDispatcher`，它要求主執行緒，所以 `spawn_with_event_loop` 與任何非主執行緒的 `EventLoop::process_events`／`exec` 一定 panic。
   - **G7.6.g [P1, RAN（macOS CI）；已修復：RC-45]** dispatcher 依「是否主執行緒」選擇（RC-44），不是依事件迴圈的建立路徑：macOS 上只有 core 應用程式的主執行緒用 Cocoa（Qt 用 UNIX），而未呼叫 `init_current` 的 `std::thread` 若先搶到主執行緒判定也會拿到 Cocoa。
   - **G7.6.h [P1, RAN（macOS CI）；已修復：RC-61]** `CocoaEventDispatcher` 是純 Rust 模擬：以 Condvar 等待（主 run loop 從不執行）、只處理 `post_appkit_event` 餵入的 Rust 列舉佇列，不從 AppKit 取出 `NSEvent`、不呼叫 `[NSApp sendEvent:]`、不 launch `NSApp`。Qt 在 AppKit 的事件佇列上等待與派送（`qcocoaeventdispatcher.mm:273-285,378-466,537-575`）。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 243 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.3.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.4.c、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.c、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.b、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.10.c、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 244 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.3.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.4.c、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.c、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.e、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.b、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.10.c、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1370,7 +1370,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.6.b | P1, RAN；已修復：RC-121 | `ThreadBuilder::priority` 存了但從不套用 |
 | G7.6.c | P1, RAN；已修復：RC-121 | 無 `started/finished` 信號、`wait(timeout)`、`exit(code)`、`terminate`、`isRunning` |
 | G7.6.d | P2, RAN；已修復：RC-128 | 閉包 panic 會跳過 `clear_current` |
-| G7.6.e | P2 | `EventLoopThreadHandle` 無 Drop／join，丟棄即分離 |
+| G7.6.e | P2；已修復：RC-182 | EventLoopThreadHandle 實作 Drop 等待執行緒結束 |
 | G7.6.f | P1, RAN（macOS CI）；已修復：RC-44 | macOS 非主執行緒的事件迴圈用 Cocoa dispatcher 而 panic |
 | G7.6.g | P1, RAN（macOS CI）；已修復：RC-45 | dispatcher 依主執行緒身分而非建立路徑選擇 |
 | G7.6.h | P1, RAN（macOS CI）；已修復：RC-61 | `CocoaEventDispatcher` 不派送 NSEvent、不跑 CFRunLoop |
@@ -3770,6 +3770,21 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **修改後 PASS**：`test test_event_compression_with_high_frequency_events ... ok`；驗證連續 `MouseMove` 與 `HoverMove` 事件皆回傳 `false` 不被壓縮。
 - **全套回歸**：
   - `qtrs-core` 全套 329 項測試通過（40 suites, 0.10s）。
+  - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
+  - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
+  - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
+- **Residual**：無。
+
+#### RC-182 EventLoopThreadHandle 實作 Drop 等待執行緒結束（G7.6.e）
+- **Qt 依據**：`[QT-SRC corelib/thread/qthread.cpp:465-476]`（`QThread::~QThread`）：解構時若執行緒仍在運行或正在結束，等待（`wait`）執行緒完全終止，避免資源洩漏或 detached orphan 執行緒。
+- **根因**：`EventLoopThreadHandle` 過去未實作 `Drop`，若呼叫端未手動呼叫 `.join()`，內部的 `std::thread::JoinHandle` 在 drop 時將執行緒分離（detach），造成背景執行緒與資源孤立運行（G7.6.e）。
+- **修正**：
+  - `crates/qtrs-core/src/thread/thread.rs`：為 `EventLoopThreadHandle` 實作 `Drop`，在未被手動 `join` 時呼叫 `exit(0)` 並執行 `h.join()`，安全收回執行緒資源。
+- **驗證**：
+  - 單元測試：`crates/qtrs-core/tests/test_thread_gap_g7_6.rs:85-99`（`event_loop_thread_handle_drop_quits_and_joins`）。
+  - **PASS**：`test event_loop_thread_handle_drop_quits_and_joins ... ok`；驗證丟棄 handle 後背景迴圈如期退出並 join 完成。
+- **全套回歸**：
+  - `qtrs-core` 全套 330 項測試通過（40 suites, 0.10s）。
   - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
   - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
   - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。

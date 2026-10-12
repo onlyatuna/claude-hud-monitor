@@ -82,6 +82,21 @@ fn exit_code_is_returned_by_join() {
         "exit(7) must make the event loop return 7"
     );
 }
+#[test]
+fn event_loop_thread_handle_drop_quits_and_joins() {
+    let ran = Arc::new(AtomicBool::new(false));
+    let ran_clone = Arc::clone(&ran);
+    {
+        let _handle = Thread::spawn_with_event_loop(move |_sender| {
+            ran_clone.store(true, Ordering::SeqCst);
+        });
+        // handle dropped here without explicit join
+    }
+    assert!(
+        ran.load(Ordering::SeqCst),
+        "Dropping EventLoopThreadHandle must quit and join rather than detach (G7.6.e)"
+    );
+}
 
 #[test]
 fn wait_is_false_while_body_runs_and_true_after_return() {

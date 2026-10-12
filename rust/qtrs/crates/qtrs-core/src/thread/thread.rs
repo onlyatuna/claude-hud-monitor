@@ -566,3 +566,16 @@ impl EventLoopThreadHandle {
         }
     }
 }
+
+impl Drop for EventLoopThreadHandle {
+    fn drop(&mut self) {
+        // Qt QThread::~QThread (qthread.cpp:465-476): if still running, wait for it or join.
+        // If the thread was not manually joined, ask it to quit and wait/join so resources do not leak.
+        if let Some(h) = self.join_handle.take() {
+            if !self.is_finished() {
+                self.exit(0);
+            }
+            let _ = h.join();
+        }
+    }
+}
