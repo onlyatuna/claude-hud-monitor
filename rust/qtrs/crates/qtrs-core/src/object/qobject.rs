@@ -544,6 +544,21 @@ impl ObjectData {
     pub fn remove_child(&mut self, child_id: ObjectId) {
         self.children.retain(|&id| id != child_id);
     }
+
+    /// Returns the parent object ID if any (`QObject::parent`).
+    pub fn parent(&self) -> Option<ObjectId> {
+        self.parent
+    }
+
+    /// Returns a slice of direct children object IDs (`QObject::children`).
+    pub fn children(&self) -> &[ObjectId] {
+        &self.children
+    }
+
+    /// Returns the thread affinity of this object (`QObject::thread`).
+    pub fn thread(&self) -> ThreadId {
+        self.thread_id
+    }
     /// Sets object name for reflection and hierarchy queries (`QObject::setObjectName`).
     pub fn set_object_name(&mut self, name: impl Into<String>) {
         let name = name.into();
@@ -1014,6 +1029,22 @@ pub trait QObject: std::any::Any {
     /// Signal emitted when object name changes (`QObject::objectNameChanged`).
     fn object_name_changed(&self) -> &Signal<String> {
         &self.object_data().object_name_changed
+    }
+
+    /// Returns parent object ID (`QObject::parent`).
+    fn parent(&self) -> Option<ObjectId> {
+        self.object_data().parent()
+    }
+
+    /// Returns direct children object IDs (`QObject::children`).
+    ///
+    /// Named `children_ids` to avoid name collision with GUI/Widget tree `Widget::children()`.
+    fn children_ids(&self) -> Vec<ObjectId> {
+        self.object_data().children().to_vec()
+    }
+    /// Returns the thread affinity of this object (`QObject::thread`).
+    fn thread(&self) -> ThreadId {
+        self.object_data().thread()
     }
 
     /// Blocks or unblocks signals emitted by this object (`QObject::blockSignals`).

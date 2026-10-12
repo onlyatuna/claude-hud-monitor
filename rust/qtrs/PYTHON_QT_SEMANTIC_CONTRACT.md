@@ -136,7 +136,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### C2.3 objectName 與階層查詢
 - **已遷移**：要求見 `QTRS_SPEC.md` §02（R-00015～R-00021）。本節只保留缺陷（G）與 HUD 使用位置；Qt behavior、qtrs required、Current implementation、Test 以新規格為準。
-- **Known gap**：**G2.3.a [P2, READ]** 型別為 exact `TypeId`（無子類別語意）；**G2.3.b [P2, READ；已修復：RC-171]** 深度優先逐 child，而非先掃完直接子物件。RC-171 依 Qt `qt_qFindChild_helper`（`[QT-SRC corelib/kernel/qobject.cpp:2242-2256]`）改為兩階段搜尋：第一階段先遍歷所有直接 children 比對名稱與型別，第二階段若無直接 child 符合才依序對各 child 遞迴深入；**G2.3.c [P2, READ]** 只搜 `owned_children`；**G2.3.d [P2, READ；已修復：RC-172]** （修復前）無 `objectNameChanged`。RC-172 依 Qt `[QT-SRC corelib/kernel/qobject.cpp:1363-1373]` 實作：`ObjectData` 持有 owner-bound 之 `object_name_changed: Signal<String>`，於 `set_object_name` 且名稱不同時發射新名稱；受 `block_signals` 控制；**G2.3.e [P2, READ]** `parent()/children()/thread()` 取用器不存在（欄位為 `pub`）。
+- **Known gap**：**G2.3.a [P2, READ]** 型別為 exact `TypeId`（無子類別語意）；**G2.3.b [P2, READ；已修復：RC-171]** 深度優先逐 child，而非先掃完直接子物件。RC-171 依 Qt `qt_qFindChild_helper`（`[QT-SRC corelib/kernel/qobject.cpp:2242-2256]`）改為兩階段搜尋：第一階段先遍歷所有直接 children 比對名稱與型別，第二階段若無直接 child 符合才依序對各 child 遞迴深入；**G2.3.c [P2, READ]** 只搜 `owned_children`；**G2.3.d [P2, READ；已修復：RC-172]** （修復前）無 `objectNameChanged`。RC-172 依 Qt `[QT-SRC corelib/kernel/qobject.cpp:1363-1373]` 實作：`ObjectData` 持有 owner-bound 之 `object_name_changed: Signal<String>`，於 `set_object_name` 且名稱不同時發射新名稱；受 `block_signals` 控制；**G2.3.e [P2, READ；已修復：RC-174]** parent()/children_ids()/thread() 取用器實作（qobject.h:173, RC-174）。
 - **HUD usage**：Python 到處 `setObjectName` 供 QSS `#id` 選擇器（`hud_window.py:139…`、`provider_card.py:45-104`、`usage_table.py:121…`）；`findChild` 未用。Rust 走 widget 層的 `set_object_name`。
 
 ### C2.4 blockSignals / QSignalBlocker
@@ -449,7 +449,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Current implementation**：`ThreadId` 包 `std::thread::ThreadId`。RC-82 起：`CoreApplication::with_dispatcher_kind` 以 `set_main_thread_id`（`pub(crate)`）記錄建構執行緒；`main_thread_id()` 回 `Option<ThreadId>`，Application 建構前為 `None`，查詢不佔位。（修復前：`get_or_init(ThreadId::current)`，先呼叫者勝；僅 macOS 範例 `appkit_main_thread.rs` 預先呼叫 `set_main_thread_id` 繞過。）測試 `test_main_thread_first_caller.rs::application_constructing_thread_is_main_and_pool_worker_is_not`、`test_pool_worker_not_main.rs::pool_worker_is_not_main_thread_when_queried_first`。
 - **Known gap**
   - **G7.1.a [P1, RAN；已修復：RC-82]** （修復前）無 TLS context 的執行緒（pool worker、一般 `std::thread`、HUD 熱鍵執行緒）若在別人初始化之前呼叫 `is_main_thread()`，自己會變成「主執行緒」。
-  - **G7.1.b [P2]** 無 `QObject::thread()`（只有自由函式 `query_object_thread`）。
+  - **G7.1.b [P2；已修復：RC-174]** QObject::thread() 與 ObjectData::thread() 取用器實作（RC-174）。
   - **G7.1.c [P1, RAN；已修復：RC-82]** （修復前）`ThreadPool` worker 從不呼叫 `init_current`，因此會落到「先呼叫者勝」而成為主執行緒。RC-82 後 worker 仍無 TLS context，但 `is_main_thread()` 回 false。
 - **Test**：必要：`main_thread_id_is_app_thread_even_if_worker_asks_first`；`pool_worker_is_not_main`。
 - **HUD usage**：Rust 把 UI 執行緒的 `ThreadId::current()` 傳進 `run_on_main_thread`（`main.rs:324,40-55`），不呼叫 `is_main_thread`；Python 無。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 234 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 236 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1247,7 +1247,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.3.b | P2, READ；已修復：RC-171 | 依 qt_qFindChild_helper 採兩階段搜尋：先掃完同層直接 child 再遞迴深入子樹（qobject.cpp:2242-2256） |
 | G2.3.c | P2, READ | 只搜 `owned_children` |
 | G2.3.d | P2, READ；已修復：RC-172 | set_object_name 於名稱改變時發射 object_name_changed（qobject.cpp:1363-1373） |
-| G2.3.e | P2, READ | `parent()/children()/thread()` 取用器不存在 |
+| G2.3.e | P2, READ；已修復：RC-174 | parent()/children_ids()/thread() 取用器實作 |
 | G2.4.a | P1, RAN；已修復：RC-98 | `Signal::new()` 沒有 emitter id → `block_signals` 被忽略 |
 | G2.4.b | P1, RAN；已修復：RC-97 | 即使有 emitter id，物件若未 `register_qobject`，`query_object_signals_blocked` 回 `None`，被當成「未封鎖」 |
 | G2.4.c | P2, RAN；部分修復：RC-97 | unregister 後封鎖靜默失效 |
@@ -1347,7 +1347,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G6.6.d | P2 | `index_of_signal` 以名稱或完整簽章比對，property 的 notify signal 不解析成索引 |
 | G6.7.a | D | 無法表達「Python 風格鬆散 slot」 |
 | G7.1.a | P1, RAN；已修復：RC-82 | 無 TLS context 的執行緒 |
-| G7.1.b | P2 | 無 `QObject::thread()` |
+| G7.1.b | P2；已修復：RC-174 | QObject::thread() 取用器實作 |
 | G7.1.c | P1, RAN；已修復：RC-82 | `ThreadPool` worker 從不呼叫 `init_current` |
 | G7.2.a | P0, READ；已修復：RC-04 | 目標執行緒無已註冊 loop 時回 false／靜默丟 |
 | G7.2.b | P2, READ | `EventSender::send` 直接推進 `q.events`，**不壓縮、無優先序、忽略 `insertion_offset`** |
@@ -3638,6 +3638,27 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **全套回歸**：
   - `qtrs-core` 全套 326 項測試通過（40 suites, 0.10s）。
   - `qtrs` workspace 1018 項測試通過（4 ignored, 3 filtered, 0.13s）。
+  - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
+  - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
+  - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
+- **Residual**：無。
+
+#### RC-174 QObject 與 ObjectData 提供 parent()、children() 與 thread() 取用器（G2.3.e, G7.1.b, R-00021）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.h:173-176]`（`QObject::parent()`、`QObject::children()`、`QObject::thread()`）；PySide6 6.11.2 實測（`spec02_qobject.py`）：`R-00021: c.parent() is p True; p.children() len 1; c.thread() is main True`。
+- **根因**：
+  - `ObjectData` 與 `QObject` trait 先前僅有 `pub` 欄位（`parent`、`children`、`thread_id`），缺乏規範的取用器方法。
+  - `QObject::thread()` 缺失，先前僅能透過全域註冊表自由函式 `query_object_thread` 查詢（G7.1.b）。
+- **修正**：
+  - `crates/qtrs-core/src/object/qobject.rs`：
+    - `ObjectData` 提供 `parent(&self) -> Option<ObjectId>`、`children(&self) -> &[ObjectId]` 與 `thread(&self) -> ThreadId`。
+    - `QObject` trait 提供 `parent(&self) -> Option<ObjectId>`、`children_ids(&self) -> Vec<ObjectId>` 與 `thread(&self) -> ThreadId`。
+    - （為避免與 `qtrs-widgets` 的 `Widget::children(&self) -> Vec<WidgetRef>` 在同時引入時發生同名衝突，`QObject` trait 的取用器命名為 `children_ids`，底層 `ObjectData` 則提供 `children` 參照）。
+- **驗證**：
+  - 單元測試：`crates/qtrs-core/tests/test_qobject_lifecycle_and_hierarchy.rs:334-353`（`test_qobject_hierarchy_accessors`）。
+  - **修改前 FAIL**：`error[E0599]: no method named parent found for struct MockButton`、`no method named children found`、`no method named thread found`。
+  - **修改後 PASS**：`test test_qobject_hierarchy_accessors ... ok`；驗證初始狀態無 parent、無 children、thread 為當前執行緒；建立關係後 `parent()`、`children_ids()` 與 `thread()` 回傳正確 ID。
+- **全套回歸**：
+  - `qtrs-core` 全套 327 項測試通過（40 suites, 0.10s）。
   - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
   - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
   - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。

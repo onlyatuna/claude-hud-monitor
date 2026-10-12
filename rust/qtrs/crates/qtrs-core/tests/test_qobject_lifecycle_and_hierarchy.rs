@@ -331,6 +331,26 @@ fn test_object_name_changed_signal() {
         "setObjectName must emit objectNameChanged only on distinct changes (qobject.cpp:1371 / R-00016 / G2.3.d)"
     );
 }
+#[test]
+fn test_qobject_hierarchy_accessors() {
+    let mut parent = MockContainer::new("p");
+    let mut child = MockButton::new("c", "Click");
+    let child_id = child.object_data().id;
+    let parent_id = parent.object_data().id;
+
+    assert_eq!(child.parent(), None);
+    assert!(child.children_ids().is_empty());
+    assert!(child.object_data().children().is_empty());
+    assert_eq!(child.thread(), ThreadId::current());
+
+    parent.object_data_mut().add_child(child_id);
+    child.object_data_mut().parent = Some(parent_id);
+
+    assert_eq!(child.parent(), Some(parent_id));
+    assert_eq!(parent.children_ids(), vec![child_id]);
+    assert_eq!(parent.object_data().children(), &[child_id]);
+    assert_eq!(parent.thread(), ThreadId::current());
+}
 
 // --- 3. Thread Migration Cascading Tests ---
 
