@@ -681,7 +681,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G9.2.c [P1, RAN；已修復：RC-110, RC-144]** （修復前）無 `setRowStretch`／`setColumnStretch`／`setColumnMinimumWidth` 讀回；無 `addLayout` 進格；GridLayout 沒有 `remove_widget`。
   - **G9.2.d [P1, RAN；已修復：RC-125, RC-145, RC-155]** （修復前；RC-155 完全修復 (1)-(5)）RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth`（G9.1.d）時，垂直對齊的 widget 以 size hint 高度為準；Qt 的 `QWidgetItem::setGeometry` 在 `hasHeightForWidth()` 時改用 `heightForWidth(寬度)`（`qlayoutitem.cpp:443-446`）；(2) 沒有 layout 自身的對齊（`QLayout::setAlignment(Qt::Alignment)` 影響 `maximumSize` 與 `setGeometry`，`qgridlayout.cpp:1216,1324`、`qboxlayout.cpp:620,743`）；(3) 沒有 RTL，所以 `AlignAbsolute` 與 `QStyle::visualAlignment` 的翻轉不存在；(4) `QLayout::setAlignment(QLayout*, …)`（巢狀 layout 的對齊）隨 `addLayout`（C9.3）一起缺；(5) `ItemAlignment` 與 `Label` 的文字 `Alignment`、`qtrs_gui::TextAlignment` 是三個互不相通的型別，Qt 只有一個 `Qt::Alignment`。
 
-**G9.2.e [P1, RAN；已修復：RC-146]** （修復前）`GridLayout` 沒有 `hasHeightForWidth`／`heightForWidth`，含 HFW 子項的 grid 以 size hint 高度排版（`[QT-SRC widgets/kernel/qgridlayout.cpp:358-372]`）。
+**G9.2.e [P1, RAN；已修復：RC-146]**
+  - **G9.2.f [P1, RAN；已修復：RC-156]** （修復前）`GridLayout` 與 `Layout` trait 沒有 `minimumHeightForWidth`（`qgridlayout.cpp:374-382`、`qlayoutitem.cpp:355-358`）。 （修復前）`GridLayout` 沒有 `hasHeightForWidth`／`heightForWidth`，含 HFW 子項的 grid 以 size hint 高度排版（`[QT-SRC widgets/kernel/qgridlayout.cpp:358-372]`）。
 - **Test**：既有 `test_layout_stretch_minimum.rs`、`test_grid_matches_qt_geometry`、`test_columns_follow_widest_cell_hint`。必要：grid 對齊測試；harness 擴充 `setRowMinimumHeight/setColumnMinimumWidth` 與對齊旗標。
 - **HUD usage**：Python `QGridLayout`（`usage_table.py:384-434`：`setHorizontalSpacing(10)`、`setVerticalSpacing(4)`、`setColumnStretch`、`setRowStretch(5,1)`、`setRowMinimumHeight(2,18)`、span `:396`）；Rust `usage_table.rs:1136-1221`。
 
@@ -1226,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 381 項：D 10、DV 1、P0 35、P1 173、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 214 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 215 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1438,7 +1439,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G9.2.b | P1, RAN；已修復：RC-110 | `Layout::add_widget_with_stretch` 對 grid **靜默忽略 stretch** 並新增一列 |
 | G9.2.c | P1, RAN；已修復：RC-110, RC-144 | 無 `setRowStretch`／`setColumnStretch`／`setColumnMinimumWidth` 讀回 |
 | G9.2.d | P1, RAN；已修復：RC-125, RC-145, RC-155 | RC-07 之後仍存在的對齊限制 (1)-(5) 完全修復 |
-| G9.2.e | P1, RAN；已修復：RC-146 | GridLayout 沒有 heightForWidth | RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth` |
+| G9.2.e | P1, RAN；已修復：RC-146 |
+| G9.2.f | P1, RAN；已修復：RC-156 | GridLayout 與 Layout trait 沒有 minimumHeightForWidth | GridLayout 沒有 heightForWidth | RC-07 之後仍存在的對齊限制：(1) 沒有 `heightForWidth` |
 | G9.3.a | P1, RAN；已修復：RC-111 | wrapper 是 QWidget item：其 `maximum_size` 為 16777215，而巢狀 `QLayout` 回報其子項最大值之和 |
 | G9.3.b | P2；部分修復：RC-147 | wrapper 多一個 child widget 進入 hit-test／paint 樹 |
 | G9.3.c | P0, READ；已修復：RC-16 | HUD 的 `header_widget` 額外被設為 `Expanding/Fixed` |
@@ -3321,7 +3323,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt 依據**：`[QT-SRC widgets/kernel/qgridlayout.cpp:358-372]` `hasHeightForWidth`／`heightForWidth`；`879-928` `distribute` 在有 HFW 項時以 HFW 列高排版。
 - **修正**：`GridLayout::has_height_for_width`／`height_for_width`，`activate` 使用 HFW 列高。
 - **驗證**：`grid_height_for_width_follows_its_height_for_width_child` 停用時 FAIL `test_layout_grid_alignment.rs:286 left -1 right 80`。PySide6：`QLabel(wordWrap)` 在 grid 中 `hasHeightForWidth` 為 true。
-- **Residual**：grid 沒有 `minimumHeightForWidth`（`qgridlayout.cpp:374-382`）。
+- **Residual**：grid 沒有 `minimumHeightForWidth`（`qgridlayout.cpp:374-382`；後由 RC-156 修復）。
 
 #### RC-147 巢狀 layout 項目：在 holder 座標排版、空判定、spacing 繼承（G9.3.b 部分）
 - **Qt 依據**：`[QT-SRC widgets/kernel/qboxlayout.cpp:743]`、`qgridlayout.cpp:1320-1326` 把 slot 交給巢狀 layout；`[QT-SRC widgets/kernel/qlayout.cpp:424-435]` 巢狀 layout 的 `isEmpty` 是其所有項目皆空；`[QT-SRC widgets/kernel/qlayoutengine.cpp:390-401]` 未設 spacing 的巢狀 layout 取 parent layout 的 `spacing()`。
@@ -3386,3 +3388,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **驗證**：新 test binary `qtrs-widgets/tests/test_layout_alignment_residual.rs`（21 項全部通過）。修改前 FAIL：`:204 left (0, 40, 200, 20) right (0, 46, 200, 8)`；`:243 left (0, 80, 200, 20) right (160, 80, 40, 20)`（maximum_of left (200, 20) right (524287, 524287)）；`:298 left (160, 40, 40, 20) right (0, 40, 40, 20)`；`:346 left (0, 0, 200, 100) right (160, 80, 40, 20)`；Label 垂直旗標在修改前不存在。qtrs workspace 993 passed (0 FAILED)；HUD 134 passed、5 ignored；clippy、cargo fmt 通過；`cargo check -p qtrs-core -p qtrs-gui --tests` linux／macOS 無錯誤。`--snapshot` 與修正前逐像素比對無版面位移。
 - **HUD 影響**：無版面位移；快照像素差異僅為時鐘文字與重置時間。
 - **Residual**：(1) QLabel 暫不支援 AlignJustify。(2) Label ink 測試依賴 Windows 字型，未在 Linux/macOS 執行。
+
+#### RC-156 GridLayout 與 Layout trait 支援 minimumHeightForWidth（G9.2.f）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qgridlayout.cpp:374-382]` `QGridLayoutPrivate::minimumHeightForWidth` 呼叫 `heightForWidth` 後回傳 `hfw_minheight + top + bottom`，其中 `hfw_minheight` 依各 row 的 minimumSize 加總（`:346-356`）；`[QT-SRC widgets/kernel/qlayoutitem.cpp:355-358]` `QLayoutItem::minimumHeightForWidth` 預設回傳 `heightForWidth(w)`。`[PYSIDE-RUN 6.11.2 offscreen Win11-26200 dpr=1.0 tools/pyside_probes/grid_minimum_height_for_width.py]` 輸出 `hfw=130 min_hfw=100`。
+- **根因**：`Layout` trait 與 `GridLayout` 均無 `minimum_height_for_width`；含 HFW 子項的 grid 無法按指定寬度回報最小高度。
+- **修正**：`Layout` trait 新增 `minimum_height_for_width(&self, width: i32) -> i32`，預設回傳 `self.height_for_width(width)`（與 Qt `QLayoutItem` 一致）；`GridLayout` 覆寫該方法，以各列的 `minimum_size` 加總計算 `find_size(&rows, &cols, |d| d.minimum_size).height + m.top + m.bottom`。
+- **驗證**：`test_layout_grid_alignment.rs` 新增 `grid_minimum_height_for_width_uses_row_minimum_size`。修改前 FAIL：`test_layout_grid_alignment.rs:382 left: 130 right: 100`。修改後 11/11 通過。qtrs workspace 994 passed（0 FAILED）；HUD 134 passed、5 ignored；clippy 0 warning、`cargo fmt --check` 通過；`cargo check -p qtrs-core --tests` linux／macOS 無錯誤。`--snapshot` 與修正前比對無版面位移。
+- **HUD 影響**：無可見影響（Python HUD 的 grid 無 HFW 子項）。
+- **Residual**：無。

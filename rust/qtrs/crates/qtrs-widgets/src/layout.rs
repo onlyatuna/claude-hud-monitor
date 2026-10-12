@@ -176,6 +176,11 @@ pub trait Layout: 'static {
     fn height_for_width(&self, _width: i32) -> i32 {
         -1
     }
+    /// The minimum height the layout needs for the given width (`QLayout::minimumHeightForWidth`,
+    /// `qlayoutitem.cpp:355-358`). The default implementation returns `height_for_width(width)`.
+    fn minimum_height_for_width(&self, width: i32) -> i32 {
+        self.height_for_width(width)
+    }
 
     /// Marks this layout as dirty/invalid, requiring recalculation on next activation.
     fn invalidate(&mut self);
@@ -1506,6 +1511,22 @@ impl Layout for GridLayout {
         q_geom_calc(&mut cols, 0, cc, 0, inner, -1);
         let rows = self.hfw_rows(&geom.rows, &cols);
         find_size(&rows, &cols, |d| d.size_hint).height + m.top + m.bottom
+    }
+    fn minimum_height_for_width(&self, width: i32) -> i32 {
+        // `QGridLayoutPrivate::minimumHeightForWidth` (qgridlayout.cpp:374-382).
+        self.ensure_geom();
+        let cache = self.geom_cache.borrow();
+        let geom = cache.as_ref().unwrap();
+        if !geom.has_hfw {
+            return -1;
+        }
+        let m = self.margins;
+        let inner = width - m.left - m.right;
+        let mut cols = geom.cols.clone();
+        let cc = cols.len();
+        q_geom_calc(&mut cols, 0, cc, 0, inner, -1);
+        let rows = self.hfw_rows(&geom.rows, &cols);
+        find_size(&rows, &cols, |d| d.minimum_size).height + m.top + m.bottom
     }
 
     fn size_hint(&self) -> Size {

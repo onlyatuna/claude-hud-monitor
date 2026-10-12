@@ -15,6 +15,7 @@ use std::rc::Rc;
 struct Probe {
     base: WidgetBase,
     hint: Size,
+    min_hint: Size,
     hfw: bool,
 }
 
@@ -47,7 +48,7 @@ impl Widget for Probe {
         self.hint
     }
     fn minimum_size_hint(&self) -> Size {
-        Size::new(0, 0)
+        self.min_hint
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -100,6 +101,17 @@ fn widget_with(w: i32, h: i32, policy: Policy, hfw: bool) -> WidgetRef {
     let p = Probe {
         base: WidgetBase::new(),
         hint: Size::new(w, h),
+        min_hint: Size::new(0, 0),
+        hfw,
+    };
+    p.base.set_size_policy(QSizePolicy::new(policy, policy));
+    Rc::new(RefCell::new(Box::new(p)))
+}
+fn widget_with_min(w: i32, h: i32, min_w: i32, min_h: i32, policy: Policy, hfw: bool) -> WidgetRef {
+    let p = Probe {
+        base: WidgetBase::new(),
+        hint: Size::new(w, h),
+        min_hint: Size::new(min_w, min_h),
         hfw,
     };
     p.base.set_size_policy(QSizePolicy::new(policy, policy));
@@ -339,4 +351,26 @@ fn grid_height_for_width_follows_its_height_for_width_child() {
     grid.add_widget(widget_with(40, 20, Policy::Preferred, true), 0, 0);
     assert!(grid.has_height_for_width());
     assert_eq!(grid.height_for_width(40), 80);
+}
+#[test]
+fn grid_minimum_height_for_width_uses_row_minimum_size() {
+    // Probe: two-row grid with 0 margins, 0 spacing.
+    // Row 0: sizeHint (40, 50), minimumSize (40, 20)
+    // Row 1: HFW widget with heightForWidth(w) = 2 * w (at w=40, h=80)
+    // Total heightForWidth(40) = 50 + 80 = 130
+    // Total minimumHeightForWidth(40) = 20 + 80 = 100
+    // [QT-SRC qgridlayout.cpp:374-382]; PySide: tools/pyside_probes/grid_minimum_height_for_width.py
+    let mut grid = GridLayout::new();
+    grid.set_margins(Margins::new(0, 0, 0, 0));
+    grid.set_horizontal_spacing(0);
+    grid.set_vertical_spacing(0);
+    grid.add_widget(
+        widget_with_min(40, 50, 40, 20, Policy::Preferred, false),
+        0,
+        0,
+    );
+    grid.add_widget(widget_with(40, 20, Policy::Preferred, true), 1, 0);
+    assert!(grid.has_height_for_width());
+    assert_eq!(grid.height_for_width(40), 130);
+    assert_eq!(grid.minimum_height_for_width(40), 100);
 }
