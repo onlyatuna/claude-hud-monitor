@@ -581,7 +581,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Known gap**
   - **G8.3.a [P1, RAN；已修復：RC-124]** （修復前）無通用 min/max/fixed API。
   - **G8.3.b [P0, READ；已修復：RC-05]** **`Label.set_size_policy` 被丟棄**。Python `title.setSizePolicy(Minimum, Preferred)`（`provider_card.py:39`）在 Rust 無對應呼叫（grep `set_size_policy` 於 `provider_card.rs` 為空）→ 卡片模式標題寬度行為可能不同。
-  - **G8.3.c [P2, READ]** `WidgetBase::set_geometry` 不夾 min/max（只有 `item_set_geometry` 夾）。
+  - **G8.3.c [P2, READ；已修復：RC-159]** （修復前）`WidgetBase::set_geometry` 不夾 min/max（只有 `item_set_geometry` 夾）。RC-159 依 `QWidgetPrivate::setGeometry_sys` 夾至 min/max。
   - **G8.3.d [P2]** 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值。
   - **G8.3.e [P1, READ；已修復：RC-29]** （修復前：） `UsageDial`：Python `setMinimumSize(84,84)`（`usage_table.py:138`）；Rust `minimum_size()` 為 0×0，並註解稱最小值「會限制 dial」（`usage_table.rs:160-163`）——最小值不會限制上限，`[INFERENCE]` 非刻意，視窗很窄時 dial 可縮到 84 以下。 RC-29：`UsageDial::minimum_size()` 改為 84×84（Python 同值），policy 維持 Expanding/Expanding、`size_hint` 維持 84×84；註解改正為「最小值只是下限，上限由最大值決定」。
 - **Test**：既有 `test_button_layout_toggle_btn_size_hint_matches_qt`、`test_label_box_model.rs::*`。必要：`label_set_size_policy_is_honoured`；`set_minimum_size_clamps_geometry_and_layout`。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 217 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 218 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.o、G12.8.p）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1391,7 +1391,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G8.2.a | P1, READ；傳遞與重繪已修復：RC-33；焦點旗標同步清除已修復：RC-36；同步焦點移交已修復：RC-37（borrow 衝突時延後）；`EnabledChange` 已修復：RC-38；停用焦點容器時的焦點候選已修復：RC-42；`Widget::set_enabled` 不送事件的入口已移除：RC-43 | （修復前）傳遞、重繪、`EnabledChange`、焦點清除、`:disabled` 全缺；殘餘：borrow 中的 widget 收不到 `EnabledChange` |
 | G8.3.a | P1, RAN；已修復：RC-124 | 無通用 min/max/fixed API |
 | G8.3.b | P0, READ；已修復：RC-05 | **`Label.set_size_policy` 被丟棄** |
-| G8.3.c | P2, READ | `WidgetBase::set_geometry` 不夾 min/max |
+| G8.3.c | P2, READ；已修復：RC-159 | `WidgetBase::set_geometry` 不夾 min/max |
 | G8.3.d | P2 | 預設 size_hint 100×30 會讓忘了覆寫的自訂 widget 得到假值 |
 | G8.3.e | P1, READ；已修復：RC-29 | `UsageDial`：Python `setMinimumSize(84,84)` |
 | G8.4.a | P0, READ；已修復：RC-06 | 無 parent 傳遞 |
@@ -3411,4 +3411,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：`hotkey.rs` 宣告常數 `LOCKOUT_WARNING_MESSAGE` 為 Python 確切文字；`main.rs:567` 呼叫 `tray.show_message` 時改用該常數。
 - **驗證**：新增測試 `test_lockout_warning_message_matches_python`。修改前 FAIL：`src\hotkey.rs:677:9 assertion left == right failed`（left: `"全域快捷鍵未註冊成功..."`，right: `"全域快捷鍵註冊失敗..."`）。修改後通過。HUD 135 passed、5 ignored；clippy 0 warning；`cargo fmt --check` 通過。`--snapshot` 比對無版面位移。
 - **HUD 影響**：穿透模式於熱鍵未註冊啟動時送出的系統匣警告內文與 Python 完全一致。
+- **Residual**：無。
+
+#### RC-159 WidgetBase::set_geometry 依 min/max 夾取大小（G8.3.c）
+- **Qt 依據**：`[QT-SRC qwidget.cpp:7286, 7300-7305]` `QWidget::setGeometry` 在直接設定或經由 `setGeometry_sys` 時，寬度與高度皆被限制於 `[min, max]` 範圍內（`w = qMin(w, extra->maxw); h = qMin(h, extra->maxh); w = qMax(w, extra->minw); h = qMax(h, extra->minh);`，若 min > max 則 min 優先勝出）。
+- **根因**：`WidgetBase::set_geometry` 與 `EmptyWidget::set_geometry` 過去直接存入傳入之 rect，未依 `min_size` 與 `max_size` 限制寬高；只有版面佈局的 `item_set_geometry` 有夾取。
+- **修正**：`WidgetBase::set_geometry` 與 `EmptyWidget::set_geometry` 依 Qt 的 `qMin(max).max(min)` 邏輯夾取 rect 之寬高後再存入並發送失效與重繪。
+- **驗證**：新增測試 `test_set_geometry_clamps_to_explicit_minimum_and_maximum_size`。修改前 FAIL：`crates\qtrs-widgets\tests\test_explicit_size_and_hfw.rs:201:5 assertion left == right failed`（left: `(10, 10, 20, 20)`，right: `(10, 10, 50, 50)`）。修改後通過。`qtrs-widgets` 408 項測試全過；HUD 135 passed；clippy 0 warning；`cargo fmt --check` 通過。`--snapshot` 比對無版面位移。
+- **HUD 影響**：無負面影響。手動 `set_geometry` 之 widget 尺寸不會再突破顯式設定之 min/max 邊界。
 - **Residual**：無。

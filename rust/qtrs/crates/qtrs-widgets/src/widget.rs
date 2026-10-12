@@ -681,9 +681,18 @@ impl WidgetBase {
     }
 
     pub fn set_geometry(&self, rect: Rect) {
+        let min = self.min_size.get();
+        let max = self.max_size.get();
+        // `QWidgetPrivate::setGeometry_sys` (qwidget.cpp:7301-7304):
+        // w = qMin(w, extra->maxw); h = qMin(h, extra->maxh);
+        // w = qMax(w, extra->minw); h = qMax(h, extra->minh);
+        // Minimum wins if min > max.
+        let width = rect.width.min(max.width).max(min.width);
+        let height = rect.height.min(max.height).max(min.height);
+        let clamped = Rect::new(rect.x, rect.y, width, height);
         let old = self.geometry.get();
-        if old != rect {
-            self.geometry.set(rect);
+        if old != clamped {
+            self.geometry.set(clamped);
             self.invalidate_vacated_rect(old);
             self.update();
         }
@@ -1201,6 +1210,11 @@ impl Widget for EmptyWidget {
     }
 
     fn set_geometry(&self, rect: Rect) {
+        let min = self.base.min_size.get();
+        let max = self.base.max_size.get();
+        let width = rect.width.min(max.width).max(min.width);
+        let height = rect.height.min(max.height).max(min.height);
+        let rect = Rect::new(rect.x, rect.y, width, height);
         let old_rect = self.base.geometry.get();
         let size_changed = old_rect.width != rect.width || old_rect.height != rect.height;
         let old_size = Size::new(old_rect.width, old_rect.height);

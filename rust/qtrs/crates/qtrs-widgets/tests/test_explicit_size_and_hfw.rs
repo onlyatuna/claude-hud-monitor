@@ -166,16 +166,20 @@ fn set_fixed_size_caps_an_expanding_item_and_keeps_its_policy() {
 
 #[test]
 fn set_minimum_size_grows_the_widget_and_set_maximum_size_shrinks_it() {
-    // PySide6: a 100x30 widget, setMinimumSize(120, 40) -> 120x40; then setMaximumSize(60, 10)
-    // -> 60x10 (qwidget.cpp:4005-4028 and the maximum counterpart).
-    let w = probe(50, 20, Policy::Preferred);
-    assert_eq!(rect_of(&w), (0, 0, 100, 30));
-    w.borrow().set_minimum_size(Size::new(120, 40));
-    assert_eq!(rect_of(&w), (0, 0, 120, 40));
-    assert_eq!(w.borrow().minimum_size(), Size::new(120, 40));
-    w.borrow().set_maximum_size(Size::new(60, 10));
-    assert_eq!(rect_of(&w), (0, 0, 60, 10));
-    assert_eq!(w.borrow().maximum_size(), Size::new(60, 10));
+    // PySide6: a 100x30 widget, setMinimumSize(120, 40) -> 120x40 (qwidget.cpp:4005-4028).
+    let w1 = probe(50, 20, Policy::Preferred);
+    assert_eq!(rect_of(&w1), (0, 0, 100, 30));
+    w1.borrow().set_minimum_size(Size::new(120, 40));
+    assert_eq!(rect_of(&w1), (0, 0, 120, 40));
+    assert_eq!(w1.borrow().minimum_size(), Size::new(120, 40));
+
+    // PySide6: another 100x30 widget, setMaximumSize(60, 10) -> 60x10 (qwidget.cpp:4065-4087).
+    // (If min > max, Qt's setGeometry_sys keeps the minimum size).
+    let w2 = probe(50, 20, Policy::Preferred);
+    assert_eq!(rect_of(&w2), (0, 0, 100, 30));
+    w2.borrow().set_maximum_size(Size::new(60, 10));
+    assert_eq!(rect_of(&w2), (0, 0, 60, 10));
+    assert_eq!(w2.borrow().maximum_size(), Size::new(60, 10));
 }
 
 #[test]
@@ -186,6 +190,22 @@ fn set_fixed_size_sets_minimum_and_maximum_and_resizes() {
     assert_eq!(rect_of(&w), (0, 0, 40, 20));
     assert_eq!(w.borrow().minimum_size(), Size::new(40, 20));
     assert_eq!(w.borrow().maximum_size(), Size::new(40, 20));
+}
+#[test]
+fn set_geometry_clamps_to_explicit_minimum_and_maximum_size() {
+    // PySide6: a widget with setMinimumSize(50, 50) and setMaximumSize(150, 150):
+    // setGeometry(10, 10, 20, 20) -> (10, 10, 50, 50)
+    // setGeometry(10, 10, 200, 200) -> (10, 10, 150, 150)
+    // (qwidget.cpp:7286, 7300-7305).
+    let w = probe(50, 20, Policy::Preferred);
+    w.borrow().set_minimum_size(Size::new(50, 50));
+    w.borrow().set_maximum_size(Size::new(150, 150));
+
+    w.borrow().set_geometry(Rect::new(10, 10, 20, 20));
+    assert_eq!(rect_of(&w), (10, 10, 50, 50));
+
+    w.borrow().set_geometry(Rect::new(10, 10, 200, 200));
+    assert_eq!(rect_of(&w), (10, 10, 150, 150));
 }
 
 #[test]
