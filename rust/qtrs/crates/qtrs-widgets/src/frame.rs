@@ -552,14 +552,14 @@ impl Widget for Frame {
     fn size_hint(&self) -> Size {
         let fw = self.frame_width();
         match self.style.shape {
-            FrameShape::HLine => Size::new(0, self.style.line_thickness().max(3)),
-            FrameShape::VLine => Size::new(self.style.line_thickness().max(3), 0),
+            FrameShape::HLine => Size::new(-1, self.style.line_thickness().max(3)),
+            FrameShape::VLine => Size::new(self.style.line_thickness().max(3), -1),
             _ => match self.base.layout.borrow().as_ref() {
                 Some(layout) => {
                     let hint = layout.size_hint();
                     Size::new(hint.width + 2 * fw, hint.height + 2 * fw)
                 }
-                None => Size::new(100, 30),
+                None => Size::new(-1, -1),
             },
         }
     }
@@ -577,7 +577,16 @@ impl Widget for Frame {
 
     fn minimum_size_hint(&self) -> Size {
         let fw = self.frame_width();
-        Size::new(2 * fw, 2 * fw)
+        match self.style.shape {
+            FrameShape::HLine | FrameShape::VLine => Size::new(-1, -1),
+            _ => match self.base.layout.borrow().as_ref() {
+                Some(layout) => {
+                    let min = layout.minimum_size();
+                    Size::new(min.width + 2 * fw, min.height + 2 * fw)
+                }
+                None => Size::new(-1, -1),
+            },
+        }
     }
 
     fn is_visible(&self) -> bool {
