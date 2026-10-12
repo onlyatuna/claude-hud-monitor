@@ -341,6 +341,11 @@ impl Widget for Button {
         }
     }
 
+    /// `QPushButton::minimumSizeHint` returns `sizeHint()` (`qpushbutton.cpp:398-401`).
+    fn minimum_size_hint(&self) -> Size {
+        self.size_hint()
+    }
+
     fn minimum_size(&self) -> Size {
         let style = self.resolved_style();
         let (w, h) = style.min_box_size();
