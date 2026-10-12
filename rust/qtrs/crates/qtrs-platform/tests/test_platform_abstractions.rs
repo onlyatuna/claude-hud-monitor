@@ -554,8 +554,8 @@ fn test_generic_platform_integration_full_lifecycle() {
         .expect("failed to create hotkey manager");
     assert!(hotkey_mgr
         .register_hotkey(1, qtrs_platform::HotkeyModifiers::ALT, 0x41)
-        .is_ok());
-    assert!(hotkey_mgr.unregister_hotkey(1).is_ok());
+        .is_err());
+    assert!(hotkey_mgr.unregister_hotkey(1).is_err());
 }
 
 #[test]

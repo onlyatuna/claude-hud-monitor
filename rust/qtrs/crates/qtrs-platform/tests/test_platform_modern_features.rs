@@ -342,18 +342,18 @@ fn test_cross_platform_hotkeys() {
         .expect("Cocoa hotkey manager");
     assert!(cocoa_mgr
         .register_hotkey(9527, HotkeyModifiers::ALT, 8)
-        .is_ok());
+        .is_err());
     assert!(cocoa_mgr
         .register_hotkey(9528, HotkeyModifiers::ALT | HotkeyModifiers::SHIFT, 8)
-        .is_ok());
-    assert!(cocoa_mgr.unregister_hotkey(9527).is_ok());
-    assert!(cocoa_mgr.unregister_hotkey(9528).is_ok());
+        .is_err());
+    assert!(cocoa_mgr.unregister_hotkey(9527).is_err());
+    assert!(cocoa_mgr.unregister_hotkey(9528).is_err());
 
     let mut standalone_cocoa = CocoaHotkeyManager::new();
     assert!(standalone_cocoa
         .register_hotkey(1, HotkeyModifiers::ALT, 8)
-        .is_ok());
-    assert_eq!(standalone_cocoa.registered_ids().len(), 1);
+        .is_err());
+    assert_eq!(standalone_cocoa.registered_ids().len(), 0);
 
     // Unix hotkeys
     let unix_integration = UnixPlatformIntegration::default();
@@ -362,18 +362,18 @@ fn test_cross_platform_hotkeys() {
         .expect("Unix hotkey manager");
     assert!(unix_mgr
         .register_hotkey(9527, HotkeyModifiers::ALT, 67)
-        .is_ok());
+        .is_err());
     assert!(unix_mgr
         .register_hotkey(9528, HotkeyModifiers::ALT | HotkeyModifiers::SHIFT, 67)
-        .is_ok());
-    assert!(unix_mgr.unregister_hotkey(9527).is_ok());
-    assert!(unix_mgr.unregister_hotkey(9528).is_ok());
+        .is_err());
+    assert!(unix_mgr.unregister_hotkey(9527).is_err());
+    assert!(unix_mgr.unregister_hotkey(9528).is_err());
 
     let mut standalone_unix = UnixHotkeyManager::new();
     assert!(standalone_unix
         .register_hotkey(2, HotkeyModifiers::ALT, 67)
-        .is_ok());
-    assert_eq!(standalone_unix.registered_ids().len(), 1);
+        .is_err());
+    assert_eq!(standalone_unix.registered_ids().len(), 0);
 }
 
 #[test]

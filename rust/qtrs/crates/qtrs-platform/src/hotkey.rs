@@ -111,17 +111,15 @@ impl GenericHotkeyManager {
 impl PlatformHotkeyManager for GenericHotkeyManager {
     fn register_hotkey(
         &mut self,
-        id: u32,
+        _id: u32,
         _modifiers: HotkeyModifiers,
         _vk: u32,
     ) -> Result<(), &'static str> {
-        self.registered_ids.insert(id);
-        Ok(())
+        Err("GenericHotkeyManager does not support global hotkeys")
     }
 
-    fn unregister_hotkey(&mut self, id: u32) -> Result<(), &'static str> {
-        self.registered_ids.remove(&id);
-        Ok(())
+    fn unregister_hotkey(&mut self, _id: u32) -> Result<(), &'static str> {
+        Err("GenericHotkeyManager does not support global hotkeys")
     }
 }
 
@@ -176,17 +174,15 @@ pub mod cocoa_hotkey {
     impl PlatformHotkeyManager for CocoaHotkeyManager {
         fn register_hotkey(
             &mut self,
-            id: u32,
+            _id: u32,
             _modifiers: HotkeyModifiers,
             _vk: u32,
         ) -> Result<(), &'static str> {
-            self.registered_ids.insert(id);
-            Ok(())
+            Err("CocoaHotkeyManager: global hotkeys not implemented")
         }
 
-        fn unregister_hotkey(&mut self, id: u32) -> Result<(), &'static str> {
-            self.registered_ids.remove(&id);
-            Ok(())
+        fn unregister_hotkey(&mut self, _id: u32) -> Result<(), &'static str> {
+            Err("CocoaHotkeyManager: global hotkeys not implemented")
         }
     }
 
@@ -241,21 +237,18 @@ pub mod unix_hotkey {
             mask
         }
     }
-
     impl PlatformHotkeyManager for UnixHotkeyManager {
         fn register_hotkey(
             &mut self,
-            id: u32,
+            _id: u32,
             _modifiers: HotkeyModifiers,
             _vk: u32,
         ) -> Result<(), &'static str> {
-            self.registered_ids.insert(id);
-            Ok(())
+            Err("UnixHotkeyManager: global hotkeys not implemented")
         }
 
-        fn unregister_hotkey(&mut self, id: u32) -> Result<(), &'static str> {
-            self.registered_ids.remove(&id);
-            Ok(())
+        fn unregister_hotkey(&mut self, _id: u32) -> Result<(), &'static str> {
+            Err("UnixHotkeyManager: global hotkeys not implemented")
         }
     }
 
@@ -281,10 +274,9 @@ mod tests {
         assert_eq!(CocoaHotkeyManager::map_to_mac_keycode(b'C' as u32), 8);
         assert_eq!(CocoaHotkeyManager::map_to_mac_keycode(b'A' as u32), 0);
 
-        assert!(mgr.register_hotkey(9527, HotkeyModifiers::ALT, 8).is_ok());
-        assert!(mgr.registered_ids().contains(&9527));
-        assert!(mgr.unregister_hotkey(9527).is_ok());
+        assert!(mgr.register_hotkey(9527, HotkeyModifiers::ALT, 8).is_err());
         assert!(!mgr.registered_ids().contains(&9527));
+        assert!(mgr.unregister_hotkey(9527).is_err());
     }
 
     #[test]
@@ -295,9 +287,8 @@ mod tests {
 
         assert!(mgr
             .register_hotkey(9528, HotkeyModifiers::ALT | HotkeyModifiers::SHIFT, 67)
-            .is_ok());
-        assert!(mgr.registered_ids().contains(&9528));
-        assert!(mgr.unregister_hotkey(9528).is_ok());
+            .is_err());
         assert!(!mgr.registered_ids().contains(&9528));
+        assert!(mgr.unregister_hotkey(9528).is_err());
     }
 }
