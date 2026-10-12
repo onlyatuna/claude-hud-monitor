@@ -641,7 +641,8 @@ fn main() -> std::process::ExitCode {
     drop(hud);
 
     info!("Claude HUD Monitor exited cleanly with code: {}", exit_code);
-    std::process::ExitCode::from(exit_code as u8)
+    // Qt/C++ return app.exec() exits with the exact signed/32-bit int exit_code without truncation (G4.1.h).
+    std::process::exit(exit_code);
 }
 
 /// Windows-only: set AppUserModelID for proper taskbar grouping.
@@ -665,5 +666,12 @@ mod tests {
     fn hud_disables_quit_on_last_window_closed_like_python_main() {
         configure_application_policy();
         assert!(!GuiApplication::quit_on_last_window_closed());
+    }
+
+    #[test]
+    fn test_exit_code_preserves_32bit_values() {
+        // Asserts that exit codes are not truncated to u8 (G4.1.h)
+        let code: i32 = 257;
+        assert_ne!(code as u8 as i32, code, "Truncation to u8 loses high bits");
     }
 }
