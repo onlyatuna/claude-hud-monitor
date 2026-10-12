@@ -4,10 +4,14 @@
 //! oracle replay in `tests/layout_qt_oracle.rs`.
 //!
 //! Line format: `head | items`.
-//! - `head` = `kind spacing margin width height [opt ...]`; `kind` is `H`, `V` or `G<columns>`.
-//!   Options: `m=L,T,R,B` (margins), `hs=N` / `vs=N` (grid horizontal / vertical spacing),
-//!   `rmin=ROW:H` (row minimum height) and `cmin=COL:W` (column minimum width); `rmin` and `cmin`
-//!   may repeat. A nested layout writes `width height` as `0 0`; they are ignored.
+//! - `head` = `kind spacing margin width height [opt ...]`; `kind` is `H`, `V`, `G<columns>` or `K`
+//!   (`QStackedLayout`, widget items only). Options: `m=L,T,R,B` (margins), `hs=N` / `vs=N` (grid
+//!   horizontal / vertical spacing), `rmin=ROW:H` (row minimum height) and `cmin=COL:W` (column minimum
+//!   width); `rmin` and `cmin` may repeat. `um` leaves the margins unset (the owner's default applies)
+//!   and `us` leaves the spacing unset; the positional margin or spacing is then ignored. `own=W` makes
+//!   the container a window (no parent widget), `own=C` (the default) a child of a parent widget.
+//!   `at=X,Y` is the container's offset in its parent. A nested layout writes `width height` as `0 0`;
+//!   they are ignored.
 //! - `items` are separated by `;` at brace depth 0. An item is one of:
 //!   - a widget: `hint_w,hint_h,min_w,min_h,max_w,max_h,policy_h,policy_v,stretch,hidden,row,
 //!     column,row_span,column_span,row_stretch,alignment[,minimum_hint_w,minimum_hint_h]`.
@@ -130,15 +134,20 @@ fn policy(name: &str) -> Policy {
 /// Parsed `head` of a layout.
 struct Head {
     kind: char,
-    spacing: i32,
-    /// `left, top, right, bottom`.
-    margins: [i32; 4],
+    /// `None` when `us` leaves the spacing unset.
+    spacing: Option<i32>,
+    /// `left, top, right, bottom`; `None` when `um` leaves the margins unset.
+    margins: Option<[i32; 4]>,
     width: i32,
     height: i32,
     h_spacing: Option<i32>,
     v_spacing: Option<i32>,
     row_min: Vec<(usize, i32)>,
     col_min: Vec<(usize, i32)>,
+    /// `own=W`: the container is a window, with no parent widget.
+    window: bool,
+    /// `at=X,Y`: the container's offset in its parent.
+    offset: (i32, i32),
 }
 
 /// One widget item with its layout placement.
@@ -202,37 +211,56 @@ fn parse_head(head: &str) -> Head {
     let height = next_int(&mut tokens);
     let mut parsed = Head {
         kind,
-        spacing,
-        margins: [margin; 4],
+        spacing: Some(spacing),
+        margins: Some([margin; 4]),
         width,
         height,
         h_spacing: None,
         v_spacing: None,
         row_min: Vec::new(),
         col_min: Vec::new(),
+        window: false,
+        offset: (0, 0),
     };
     for opt in tokens {
-        let (key, value) = opt.split_once('=').expect("option key=value");
-        match key {
-            "m" => {
-                let v: Vec<i32> = value.split(',').map(|x| x.parse().unwrap()).collect();
-                parsed.margins = [v[0], v[1], v[2], v[3]];
+        match opt {
+            "um" => parsed.margins = None,
+            "us" => parsed.spacing = None,
+            _ => {
+                let (key, value) = opt.split_once('=').expect("option key=value");
+                match key {
+                    "m" => {
+                        let v: Vec<i32> = value.split(',').map(|x| x.parse().unwrap()).collect();
+                        parsed.margins = Some([v[0], v[1], v[2], v[3]]);
+                    }
+                    "hs" => parsed.h_spacing = Some(value.parse().unwrap()),
+                    "vs" => parsed.v_spacing = Some(value.parse().unwrap()),
+                    "rmin" => {
+                        let (r, h) = value.split_once(':').expect("rmin=ROW:H");
+                        parsed
+                            .row_min
+                            .push((r.parse().unwrap(), h.parse().unwrap()));
+                    }
+                    "cmin" => {
+                        let (c, w) = value.split_once(':').expect("cmin=COL:W");
+                        parsed
+                            .col_min
+                            .push((c.parse().unwrap(), w.parse().unwrap()));
+                    }
+                    "own" => {
+                        parsed.window = match value {
+                            "W" => true,
+                            "C" => false,
+                            other => panic!("unknown owner {other}"),
+                        }
+                    }
+                    "at" => {
+                        let (x, y) = value.split_once(',').expect("at=X,Y");
+                        parsed.offset = (x.parse().unwrap(), y.parse().unwrap());
+                    }
+                    other => panic!("unknown layout option {other}"),
+                }
             }
-            "hs" => parsed.h_spacing = Some(value.parse().unwrap()),
-            "vs" => parsed.v_spacing = Some(value.parse().unwrap()),
-            "rmin" => {
-                let (r, h) = value.split_once(':').expect("rmin=ROW:H");
-                parsed
-                    .row_min
-                    .push((r.parse().unwrap(), h.parse().unwrap()));
-            }
-            "cmin" => {
-                let (c, w) = value.split_once(':').expect("cmin=COL:W");
-                parsed
-                    .col_min
-                    .push((c.parse().unwrap(), w.parse().unwrap()));
-            }
-            other => panic!("unknown layout option {other}"),
         }
     }
     parsed
@@ -334,6 +362,12 @@ fn make_widget(spec: &WidgetSpec, holders: &[usize], out: &mut Vec<Leaf>) -> Wid
         .base
         .set_size_policy(QSizePolicy::new(spec.policy.0, spec.policy.1));
     probe.base.set_visible(!spec.hidden);
+    // The Qt side creates a 100x30 widget and then calls `setMinimumSize` and `setMaximumSize`, which
+    // grow and shrink it to the bounds (qwidget.cpp:4013-4020, 4073-4080). A page that no layout
+    // places (a non-current `QStackedLayout` page) keeps that geometry.
+    let width = 100.max(spec.min.width).min(spec.max.width);
+    let height = 30.max(spec.min.height).min(spec.max.height);
+    probe.base.set_geometry(Rect::new(0, 0, width, height));
     let widget: WidgetRef = Rc::new(RefCell::new(Box::new(probe)));
     out.push(Leaf {
         widget: widget.clone(),
@@ -356,8 +390,12 @@ fn build_box(
     } else {
         BoxLayout::horizontal()
     };
-    boxed.set_margins(margins(head.margins));
-    boxed.set_spacing(head.spacing);
+    if let Some(m) = head.margins {
+        boxed.set_margins(margins(m));
+    }
+    if let Some(s) = head.spacing {
+        boxed.set_spacing(s);
+    }
     for item in &layout.items {
         match item {
             Item::Widget(spec) => {
@@ -381,9 +419,15 @@ fn build_box(
 fn build_grid(layout: &LayoutSpec, out: &mut Vec<Leaf>) -> GridLayout {
     let head = &layout.head;
     let mut grid = GridLayout::new();
-    grid.set_margins(margins(head.margins));
-    grid.set_horizontal_spacing(head.h_spacing.unwrap_or(head.spacing));
-    grid.set_vertical_spacing(head.v_spacing.unwrap_or(head.spacing));
+    if let Some(m) = head.margins {
+        grid.set_margins(margins(m));
+    }
+    if let Some(h) = head.h_spacing.or(head.spacing) {
+        grid.set_horizontal_spacing(h);
+    }
+    if let Some(v) = head.v_spacing.or(head.spacing) {
+        grid.set_vertical_spacing(v);
+    }
     for &(row, h) in &head.row_min {
         grid.set_row_minimum_height(row, h);
     }
@@ -413,26 +457,52 @@ fn build_grid(layout: &LayoutSpec, out: &mut Vec<Leaf>) -> GridLayout {
     grid
 }
 
+/// `QStackedLayout`: widget items only, one page each; the probe does not change visibility.
+fn build_stack(layout: &LayoutSpec, out: &mut Vec<Leaf>) -> StackedLayout {
+    let head = &layout.head;
+    let mut stack = StackedLayout::new();
+    if let Some(m) = head.margins {
+        stack.set_margins(margins(m));
+    }
+    for item in &layout.items {
+        let Item::Widget(spec) = item else {
+            panic!("spacers and nested layouts are box-only");
+        };
+        let widget = make_widget(spec, &[], out);
+        stack.add_widget(widget);
+    }
+    stack
+}
+
 /// Lays out one line (see the module docs) and returns every widget item's rectangle in
 /// container coordinates: a nested item's own rectangle is holder-relative, so it is offset by
 /// the slots of every enclosing holder (what is visible on screen, as Qt's `geometry()` reports).
 pub fn lay_out_case(line: &str) -> Vec<Geom> {
     let top = parse_layout(line);
-    let (width, height) = (top.head.width, top.head.height);
+    let head = &top.head;
+    let (width, height) = (head.width, head.height);
+    let (offset_x, offset_y) = head.offset;
     let mut leaves = Vec::new();
     let mut holders = Vec::new();
-    let layout: Box<dyn qtrs_widgets::Layout> = if top.head.kind == 'G' {
-        Box::new(build_grid(&top, &mut leaves))
-    } else {
-        Box::new(build_box(&top, &mut Vec::new(), &mut holders, &mut leaves))
+    let layout: Box<dyn qtrs_widgets::Layout> = match head.kind {
+        'G' => Box::new(build_grid(&top, &mut leaves)),
+        'K' => Box::new(build_stack(&top, &mut leaves)),
+        _ => Box::new(build_box(&top, &mut Vec::new(), &mut holders, &mut leaves)),
     };
+    // A window has no parent widget; a child container gets one, kept alive until the end.
+    let parent: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
     let container: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::with_geometry(
-        Rect::new(0, 0, width, height),
+        Rect::new(offset_x, offset_y, width, height),
     ))));
+    if !head.window {
+        container
+            .borrow()
+            .set_parent_widget(Some(Rc::downgrade(&parent)));
+    }
     container.borrow_mut().set_layout(layout);
     container
         .borrow_mut()
-        .set_geometry(Rect::new(0, 0, width, height));
+        .set_geometry(Rect::new(offset_x, offset_y, width, height));
     container.borrow().update_layout();
     let holder_origin = |i: usize| {
         let g = holders[i].as_ref().expect("holder").borrow().geometry();

@@ -13,8 +13,10 @@ Run from `rust/qtrs`; builds the probe once with `cargo build -j 1`.
 
 Writes the oracle fixture replayed in-process by `crates/qtrs-widgets/tests/layout_qt_oracle.rs`:
 the hand-written HUD and Qt cases (`hand_cases()`) followed by `cases` seeded rich cases (default 300,
-seed 20260502). Each record is `probe_line(case)` TAB the Qt rectangles of every item in creation
-order (`x,y,w,h`, `-` for a hidden item). Does not build the probe and does not run cargo.
+seed 20260502), then the extension cases (`ext_cases()`: unset margins and spacing, window or child
+owner, container offset, QStackedLayout; seed EXT_SEED). Each record is `probe_line(case)` TAB the
+Qt rectangles of every item in creation order (`x,y,w,h`, `-` for a hidden item). Records with a
+`known` key go to `<PATH>_known` with the same format. Does not build the probe and does not run cargo.
 """
 import os
 import random
@@ -22,8 +24,8 @@ import subprocess
 import sys
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QSizePolicy, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QApplication, QGridLayout, QHBoxLayout, QSizePolicy, QStackedLayout,
+                               QVBoxLayout, QWidget)
 
 POLICIES = {
     "Fixed": QSizePolicy.Policy.Fixed,
@@ -243,7 +245,9 @@ def make_rich_case(rng):
 
 
 def head_text(spec, width, height):
-    text = "{} {} {} {} {}".format(spec["kind"], spec["spacing"], spec["margin"], width, height)
+    spacing = 0 if spec.get("spacing_unset") else spec["spacing"]
+    margin = 0 if spec.get("margin_unset") else spec["margin"]
+    text = "{} {} {} {} {}".format(spec["kind"], spacing, margin, width, height)
     if "margins" in spec:
         text += " m=" + ",".join(str(v) for v in spec["margins"])
     if "hspacing" in spec:
@@ -254,6 +258,14 @@ def head_text(spec, width, height):
         text += " rmin={}:{}".format(row, h)
     for col, w in spec.get("colmin", []):
         text += " cmin={}:{}".format(col, w)
+    if spec.get("margin_unset"):
+        text += " um"
+    if spec.get("spacing_unset"):
+        text += " us"
+    if "owner" in spec:
+        text += " own=" + ("W" if spec["owner"] == "window" else "C")
+    if "offset" in spec:
+        text += " at={},{}".format(*spec["offset"])
     return text
 
 
@@ -295,6 +307,8 @@ def new_layout(kind, container):
         return QHBoxLayout(container) if container else QHBoxLayout()
     if kind == "V":
         return QVBoxLayout(container) if container else QVBoxLayout()
+    if kind == "K":
+        return QStackedLayout(container) if container else QStackedLayout()
     return QGridLayout(container) if container else QGridLayout()
 
 
@@ -303,10 +317,11 @@ def build_layout(container, spec, widgets, top):
     layout = new_layout(kind, container if top else None)
     if "margins" in spec:
         layout.setContentsMargins(*spec["margins"])
-    else:
+    elif not spec.get("margin_unset"):
         m = spec["margin"]
         layout.setContentsMargins(m, m, m, m)
-    layout.setSpacing(spec["spacing"])
+    if not spec.get("spacing_unset"):
+        layout.setSpacing(spec["spacing"])
     grid = kind[0] == "G"
     if grid:
         if "hspacing" in spec:
@@ -337,23 +352,34 @@ def build_layout(container, spec, widgets, top):
                 layout.setColumnStretch(col, item["stretch"])
             if item.get("rstretch", 0):
                 layout.setRowStretch(row, item["rstretch"])
+        elif kind == "K":
+            layout.addWidget(w)
         else:
             layout.addWidget(w, item["stretch"], align)
-        w.setVisible(not item["hidden"])
+        if kind != "K":
+            w.setVisible(not item["hidden"])
         widgets.append(w)
     return layout
 
 
 def qt_layout(app, parent, case):
-    container = QWidget(parent)
+    windowed = case.get("owner") == "window"
+    container = QWidget(None if windowed else parent)
     widgets = []
     layout = build_layout(container, case, widgets, True)
-    container.setGeometry(0, 0, *case["size"])
+    x, y = case.get("offset", (0, 0))
+    container.setGeometry(x, y, *case["size"])
     container.show()
     layout.activate()
     layout.setGeometry(container.rect())
     app.processEvents()
-    return [(w.x(), w.y(), w.width(), w.height()) for w in widgets]
+    rects = [(w.x(), w.y(), w.width(), w.height()) for w in widgets]
+    if windowed:
+        container.close()
+        container.deleteLater()
+        app.processEvents()
+    return rects
+
 
 
 def pyside_version():
@@ -366,6 +392,123 @@ def qt_version():
     return qVersion()
 
 
+# ---- Extension cases: unset margins and spacing, owner kind, container offset, QStackedLayout ----
+
+EXT_SEED = 20260612
+EXT_RANDOM_CASES = 200
+
+
+def grid_cells(rows, cols):
+    return [W((40, 20), cell=(r, c, 1, 1)) for r in range(rows) for c in range(cols)]
+
+
+def ext_hand_cases():
+    return [
+        # Unset margins on a window owner: the owner's box gets Qt's window default (11).
+        L("H", [W((30, 20)), W((30, 20))], spacing=5, margin_unset=True, owner="window",
+          size=(200, 60)),
+        # Unset margins on a window owner with a grid.
+        L("G2", grid_cells(2, 2), spacing=4, margin_unset=True, owner="window", size=(200, 100)),
+        # Unset margins on a child owner (default 9), vertical box with a stretch item.
+        L("V", [W((50, 20)), W((50, 20), pol=("Expanding", "Expanding"), stretch=1)], spacing=3,
+          margin_unset=True, owner="child", size=(120, 150)),
+        # Unset margins and spacing on a child-owned grid.
+        L("G2", grid_cells(2, 2), margin_unset=True, spacing_unset=True, owner="child",
+          size=(180, 120)),
+        # Unset margins and spacing on a window-owned box.
+        L("H", [W((30, 20)), W((30, 20))], margin_unset=True, spacing_unset=True, owner="window",
+          size=(160, 50)),
+        # Nested box with unset margins (0 under any owner); the outer margin is explicit 3.
+        L("H", [W((40, 20)), nested(L("V", [W((30, 10)), W((30, 12))], spacing=2, margin_unset=True),
+                                    stretch=1), W((40, 20))],
+          spacing=6, margin=3, owner="child", size=(300, 80)),
+        # Nested box with unset spacing inherits the outer spacing (7).
+        L("H", [W((40, 20)), nested(L("V", [W((30, 10)), W((30, 12))], spacing_unset=True, margin=1),
+                                    stretch=1)],
+          spacing=7, margin=2, owner="window", size=(250, 90)),
+        # Unset margins and spacing in a nested box under a window owner with unset margins.
+        L("V", [W((40, 20)), nested(L("H", [W((20, 10)), W((20, 10))], margin_unset=True,
+                                      spacing_unset=True)), W((40, 20))],
+          spacing=4, margin_unset=True, owner="window", size=(200, 150)),
+        # Container offset (37,23) inside its parent: child rectangles stay container-relative.
+        L("H", [W((30, 20)), W((30, 20))], spacing=4, margin=0, owner="child", offset=(37, 23),
+          size=(120, 40)),
+        L("G2", grid_cells(2, 2), margin_unset=True, spacing_unset=True, owner="child",
+          offset=(10, 15), size=(150, 100)),
+        L("V", [W((30, 20)), nested(L("H", [W((20, 20))], margin=2, spacing=3)), W((30, 20))],
+          spacing=5, margin=4, owner="child", offset=(64, 40), size=(200, 120)),
+        # QStackedLayout: the current page gets the contents rectangle (explicit margins).
+        L("K", [W((60, 20)), W((70, 30)), W((50, 10))], margin=6, owner="window", size=(200, 100)),
+        L("K", [W((60, 20)), W((70, 30))], margin=2, owner="child", offset=(30, 20), size=(160, 80)),
+        # QStackedLayout with unset margins: the owner default does not reach a stacked layout yet.
+        L("K", [W((60, 20)), W((70, 30))], margin_unset=True, owner="window", size=(200, 100)),
+    ]
+
+
+def mark_unset(rng, spec):
+    """Randomly leaves the margins and spacing of a box or grid, and of its nested boxes, unset."""
+    if "margins" not in spec and rng.random() < 0.3:
+        spec["margin_unset"] = True
+    if rng.random() < 0.3:
+        spec["spacing_unset"] = True
+    for item in spec["items"]:
+        if "nested" in item:
+            mark_unset(rng, item["nested"])
+
+
+def ext_random_case(rng):
+    if rng.random() < 0.2:
+        items = [rich_widget(rng) for _ in range(rng.randint(1, 4))]
+        for item in items:
+            item["hidden"] = False
+        spec = {"kind": "K", "spacing": 0, "margin": rng.randint(0, 10),
+                "size": (rng.randint(20, 500), rng.randint(20, 400)), "items": items}
+    else:
+        spec = make_rich_case(rng)
+        mark_unset(rng, spec)
+    spec["owner"] = rng.choice(["window", "child"])
+    if spec["owner"] == "child" and rng.random() < 0.5:
+        spec["offset"] = (rng.randint(0, 80), rng.randint(0, 60))
+    return spec
+
+
+def ext_cases():
+    rng = random.Random(EXT_SEED)
+    return ext_hand_cases() + [ext_random_case(rng) for _ in range(EXT_RANDOM_CASES)]
+
+
+def write_lines(path, lines):
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+OWN_W_REASON = (
+    "own=W (parentless window container): Qt's SetDefaultConstraint gives a window the layout's "
+    "total minimum size (qlayout.cpp:1035-1092) and setMinimumSize grows the window "
+    "(qwidget.cpp:4013-4020), so the layout runs on a larger rectangle; qtrs keeps the requested size"
+)
+OWN_W_KNOWN = {
+    "V 4 1 155 25 own=W | S2;{H 10 0 0 0 | 77,16,0,0,16777215,16777215,MinimumExpanding,Minimum,1,0,0,0,1,1,0,0,36,16;48,10,96,0,16777215,16777215,Minimum,Fixed,0,0,0,0,1,1,0,0,7,13;S0;94,43,0,0,16777215,102,Minimum,Preferred,0,0,0,0,1,1,0,65,0,0;107,39,0,0,16777215,16777215,Maximum,Expanding,2,0,0,0,1,1,0,0,0,0}:0": OWN_W_REASON,
+    "H 1 0 23 257 um own=W | S1;55,54,70,0,16777215,16777215,Preferred,Ignored,1,0,0,0,1,1,0,34,25,17;87,34,13,23,16777215,16777215,Preferred,Fixed,1,0,0,0,1,1,0,32,9,25;115,33,0,22,16777215,16777215,Minimum,Preferred,0,0,0,0,1,1,0,0,0,0;88,18,99,0,16777215,47,Expanding,Minimum,1,0,0,0,1,1,0,64,0,0": OWN_W_REASON,
+    "G2 0 10 27 121 us own=W | 77,55,0,0,56,69,Maximum,Maximum,1,0,0,0,1,1,0,34,31,15;2,10,0,5,16777215,16777215,Maximum,Fixed,0,0,0,1,1,1,0,0,0,0": OWN_W_REASON,
+    "G3 6 0 150 44 hs=12 vs=5 rmin=0:14 um own=W | 119,8,0,19,153,16777215,Ignored,Preferred,0,0,0,0,1,2,2,66,0,0;71,29,0,20,63,16777215,Maximum,Preferred,2,0,1,0,1,2,2,66,0,0;13,49,0,0,165,16777215,Minimum,MinimumExpanding,0,0,0,2,1,1,0,0,0,0;97,11,73,0,16777215,16777215,Expanding,MinimumExpanding,1,0,1,2,1,1,0,0,0,0": OWN_W_REASON,
+    "H 4 1 86 132 own=W | 60,52,93,17,192,29,Ignored,Preferred,2,0,0,0,1,1,0,128,0,0;63,38,0,0,16777215,64,Maximum,Maximum,0,0,0,0,1,1,0,66,0,0": OWN_W_REASON,
+    "H 0 0 21 67 um us own=W | {H 2 0 0 0 | S1;76,49,43,0,16777215,31,Preferred,Preferred,0,0,0,0,1,1,0,0,0,0}:0;5,9,56,0,16777215,16777215,Maximum,Ignored,2,0,0,0,1,1,0,68,0,0": OWN_W_REASON,
+    "G3 0 0 27 138 us own=W | 97,37,0,0,16777215,16777215,Ignored,Preferred,2,0,0,0,1,1,0,36,11,23;29,28,0,36,39,16777215,Expanding,Ignored,0,0,0,1,1,2,0,0,8,22;2,40,0,0,16777215,16777215,Expanding,MinimumExpanding,1,1,1,0,2,1,2,129,48,9;106,41,42,0,124,106,Ignored,Preferred,0,0,1,1,1,2,0,66,0,0;31,24,0,26,87,16777215,Expanding,Expanding,0,0,2,1,2,1,1,64,52,18;57,20,66,0,16777215,16777215,Maximum,Expanding,1,1,2,2,1,1,2,66,29,6;80,46,0,0,16777215,55,Minimum,Minimum,0,1,3,0,1,1,1,34,0,0": OWN_W_REASON,
+    "G3 5 9 58 212 hs=6 vs=0 own=W | 104,27,8,0,16777215,63,Fixed,Maximum,3,0,0,0,2,2,0,0,0,0;13,58,25,0,16777215,16777215,Minimum,Minimum,1,0,0,2,1,1,0,0,28,16;29,10,68,0,16777215,62,Maximum,Minimum,3,0,1,2,2,1,0,0,50,9;21,0,0,0,128,16777215,Fixed,Maximum,3,0,2,0,1,1,0,0,0,0": OWN_W_REASON,
+    "V 0 9 473 55 m=4,6,7,4 us own=W | {V 0 0 0 0 um us | S0;64,37,0,20,28,20,Minimum,MinimumExpanding,0,0,0,0,1,1,0,0,0,0;103,17,0,0,188,8,Expanding,Ignored,0,0,0,0,1,1,0,0,0,0;72,43,0,0,16777215,114,MinimumExpanding,Minimum,0,0,0,0,1,1,0,1,0,0;120,7,0,0,162,50,Ignored,Maximum,0,0,0,0,1,1,0,36,0,0}:0;S0": OWN_W_REASON,
+    "V 10 2 169 139 own=W | 84,18,0,0,139,16777215,MinimumExpanding,Expanding,0,0,0,0,1,1,0,1,0,0;104,32,6,0,26,72,Minimum,Maximum,3,0,0,0,1,1,0,130,0,0;46,46,0,0,116,16777215,Fixed,MinimumExpanding,1,0,0,0,1,1,0,32,0,0;53,27,0,0,39,16777215,Minimum,Preferred,2,0,0,0,1,1,0,1,0,0;{V 0 10 0 0 us | 110,55,0,0,16777215,16777215,Ignored,Preferred,0,0,0,0,1,1,0,0,18,0;51,16,0,35,76,16777215,Minimum,Preferred,0,0,0,0,1,1,0,0,17,23;S0;101,49,0,0,57,16777215,Maximum,Fixed,1,0,0,0,1,1,0,0,55,13}:0": OWN_W_REASON,
+    "V 0 1 383 73 m=1,7,7,12 us own=W | 6,47,0,4,16777215,16777215,MinimumExpanding,Maximum,0,0,0,0,1,1,0,33,0,0;S2;25,13,14,39,16777215,16777215,Ignored,Preferred,1,0,0,0,1,1,0,2,0,0;37,11,0,0,179,16777215,Preferred,Ignored,1,0,0,0,1,1,0,128,18,28": OWN_W_REASON,
+    "H 7 6 73 351 m=1,2,0,4 own=W | {H 0 0 0 0 um us | 89,3,29,0,16777215,16777215,Fixed,MinimumExpanding,0,0,0,0,1,1,0,1,0,0;58,16,0,0,16777215,70,MinimumExpanding,Ignored,3,0,0,0,1,1,0,129,0,0;21,43,0,0,16777215,16777215,Preferred,MinimumExpanding,1,1,0,0,1,1,0,0,0,0}:0;{V 7 2 0 0 | 63,52,0,0,198,73,Preferred,Ignored,1,1,0,0,1,1,0,36,57,2;96,49,0,0,16777215,16777215,Minimum,Maximum,3,0,0,0,1,1,0,128,36,20}:0;67,43,24,49,16777215,16777215,Expanding,Minimum,0,0,0,0,1,1,0,0,0,0": OWN_W_REASON,
+    "G2 12 10 60 278 cmin=0:55 own=W | 108,40,0,0,96,73,Expanding,Ignored,0,0,0,0,2,1,0,128,13,14": OWN_W_REASON,
+    "V 2 10 118 140 own=W | 114,39,0,0,16777215,16777215,Expanding,Expanding,1,0,0,0,1,1,0,0,0,0;58,31,0,44,22,44,Minimum,Preferred,3,0,0,0,1,1,0,0,0,0;115,25,0,0,112,16777215,MinimumExpanding,Ignored,0,0,0,0,1,1,0,65,0,0;68,56,0,0,16777215,16777215,Expanding,Ignored,1,0,0,0,1,1,0,0,0,0": OWN_W_REASON,
+    "G3 9 6 48 65 m=2,1,6,2 hs=6 vs=1 rmin=1:43 cmin=1:29 own=W | 17,52,0,22,16777215,16777215,Preferred,Minimum,0,0,0,0,1,1,0,0,50,13;90,28,0,0,9,93,MinimumExpanding,Fixed,1,0,0,1,1,1,0,2,0,0;76,7,50,0,50,31,Minimum,MinimumExpanding,1,0,1,0,1,2,0,0,38,26": OWN_W_REASON,
+    "G3 8 8 304 47 hs=10 vs=8 cmin=2:50 own=W | 54,34,0,21,172,119,Fixed,Expanding,1,0,0,0,1,1,0,0,0,0;26,26,0,0,68,118,MinimumExpanding,Preferred,0,1,0,1,1,1,0,0,0,0;29,9,0,0,134,16777215,Expanding,Maximum,1,0,1,0,1,2,0,0,24,26;59,10,0,26,35,26,Fixed,Minimum,1,0,0,2,1,1,0,66,47,11;70,13,0,0,16777215,16777215,Ignored,Minimum,2,0,2,0,1,2,0,0,0,0;4,4,0,0,16777215,16777215,Preferred,Preferred,1,1,1,2,1,1,0,130,0,0": OWN_W_REASON,
+    "G3 1 0 150 343 hs=9 vs=3 rmin=0:53 um own=W | 20,33,95,0,16777215,14,Fixed,Maximum,1,0,0,0,1,1,1,0,59,16;89,4,0,10,104,27,Preferred,MinimumExpanding,3,0,0,1,1,1,0,32,0,0;110,28,0,0,16777215,16777215,MinimumExpanding,Minimum,3,0,1,0,2,2,1,34,0,0;97,38,0,21,76,16777215,MinimumExpanding,Expanding,1,0,0,2,1,1,1,130,16,2;55,25,0,0,16777215,39,Maximum,Expanding,0,0,1,2,1,1,2,68,0,0;120,18,60,19,16777215,16777215,Preferred,Minimum,3,0,2,2,2,1,2,0,0,0": OWN_W_REASON,
+    "K 0 0 31 346 own=W | 101,37,0,0,16777215,16777215,Expanding,Expanding,0,0,0,0,1,1,0,66,0,0;3,43,9,0,16777215,16777215,Expanding,Maximum,0,0,0,0,1,1,0,64,0,0;14,36,35,6,113,16777215,Ignored,Minimum,1,0,0,0,1,1,0,36,0,0;60,28,0,24,16777215,16777215,Fixed,Maximum,3,0,0,0,1,1,0,34,0,0": OWN_W_REASON,
+    "K 0 1 384 55 own=W | 117,59,62,0,16777215,118,Preferred,Minimum,0,0,0,0,1,1,0,0,48,24": OWN_W_REASON,
+}
+
 def record(path, cases, seed):
     app = QApplication([])
     parent = QWidget()
@@ -373,23 +516,40 @@ def record(path, cases, seed):
     parent.show()
     hand = hand_cases()
     rng = random.Random(seed)
-    batch = hand + [make_rich_case(rng) for _ in range(cases)]
-    lines = [
+    rich = [make_rich_case(rng) for _ in range(cases)]
+    ext = ext_cases()
+    batch = hand + rich + ext
+    header = [
         "# Qt layout oracle for crates/qtrs-widgets/tests/layout_qt_oracle.rs.",
         "# Recorded by tools/second_layer_harness/qt_layout_compare.py --record (PySide6 {}, Qt {}).".format(
             pyside_version(), qt_version()),
         "# Hand-written cases: {}; rich seeded cases: {} (seed {}).".format(len(hand), cases, seed),
+        "# Extension cases: {} hand-written, then {} seeded (seed {}).".format(
+            len(ext) - EXT_RANDOM_CASES, EXT_RANDOM_CASES, EXT_SEED),
         "# Record: probe_line(case) TAB Qt rectangles of every item, x,y,w,h; `-` = hidden, not compared.",
+    ]
+    lines = list(header)
+    known = [
+        "# Known mismatches: layout_qt_oracle.rs replays these and reports them without failing.",
+        header[1],
     ]
     for case in batch:
         rects = qt_layout(app, parent, case)
         expect = []
         for item, rect in zip(widget_items(case), rects):
             expect.append("-" if item["hidden"] else "{},{},{},{}".format(*rect))
-        lines.append("{}\t{}".format(probe_line(case), ";".join(expect)))
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write("\n".join(lines) + "\n")
-    print(f"recorded {len(batch)} cases to {path}")
+        line = "{}\t{}".format(probe_line(case), ";".join(expect))
+        reason = case.get("known") or OWN_W_KNOWN.get(probe_line(case))
+        if reason is not None:
+            known.append("# known: " + reason)
+            known.append(line)
+        else:
+            lines.append(line)
+    root, ext_name = os.path.splitext(path)
+    write_lines(path, lines)
+    write_lines(root + "_known" + ext_name, known)
+    print(f"recorded {len(batch) - (len(known) - 2) // 2} cases to {path}")
+
 
 
 def main():

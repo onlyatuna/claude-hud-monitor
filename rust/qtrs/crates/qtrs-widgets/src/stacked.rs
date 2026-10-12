@@ -102,7 +102,7 @@ impl Layout for StackedLayout {
     }
 
     /// `QLayout::setAlignment`: finds the page, then does nothing visible, because
-    /// `QStackedLayout::setGeometry` gives every page the whole rectangle with
+    /// `QStackedLayout::setGeometry` gives the current page the whole rectangle with
     /// `widget->setGeometry(rect)` and never consults the item's alignment
     /// (qstackedlayout.cpp:453-467).
     fn set_alignment(&mut self, widget: &WidgetRef, _alignment: crate::layout::ItemAlignment) -> bool {
@@ -170,29 +170,35 @@ impl Layout for StackedLayout {
         self.dirty
     }
 
+    /// `QStackedLayout::setGeometry` (qstackedlayout.cpp:453-468), StackOne mode: only the current
+    /// page is placed, with `widget->setGeometry(rect)` on the whole rectangle. Contents margins are
+    /// not applied, other pages keep their geometry, and `QWidget::setGeometry` clamps the size to
+    /// the page's own minimum and maximum size.
     fn activate(&mut self) {
         if !self.dirty {
             return;
         }
         self.dirty = false;
 
-        let avail_x = self.geometry.x + self.margins.left;
-        let avail_y = self.geometry.y + self.margins.top;
-        let avail_w = (self.geometry.width - self.margins.left - self.margins.right).max(0);
-        let avail_h = (self.geometry.height - self.margins.top - self.margins.bottom).max(0);
-        let child_rect = Rect::new(avail_x, avail_y, avail_w, avail_h);
-
         for (idx, widget) in self.widgets.iter().enumerate() {
-            let old_size = {
+            let current = idx == self.current_index;
+            if current {
+                let old_size = {
+                    let w = widget.borrow();
+                    let g = w.geometry();
+                    Size::new(g.width, g.height)
+                };
                 let w = widget.borrow();
-                let g = w.geometry();
-                Size::new(g.width, g.height)
-            };
-            let w = widget.borrow();
-            w.set_geometry(child_rect);
-            drop(w);
-            crate::widget::set_widget_visible(widget, idx == self.current_index);
-            crate::layout::relayout_child_after_resize(widget, old_size);
+                let (min, max) = (w.minimum_size(), w.maximum_size());
+                let width = self.geometry.width.min(max.width).max(min.width);
+                let height = self.geometry.height.min(max.height).max(min.height);
+                w.set_geometry(Rect::new(self.geometry.x, self.geometry.y, width, height));
+                drop(w);
+                crate::widget::set_widget_visible(widget, true);
+                crate::layout::relayout_child_after_resize(widget, old_size);
+            } else {
+                crate::widget::set_widget_visible(widget, false);
+            }
         }
     }
     fn widgets(&self) -> Vec<WidgetRef> {
