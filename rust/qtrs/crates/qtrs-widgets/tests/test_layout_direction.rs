@@ -19,6 +19,7 @@ use qtrs_core::event::Event;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::application::{GuiApplication, LayoutDirection};
 use qtrs_gui::geometry::primitives::{Margins, Rect, Size};
+use qtrs_widgets::layout_engine::item_set_geometry_with;
 use qtrs_widgets::*;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -231,6 +232,33 @@ fn rtl_box_mirrors_order_and_retained_slots() {
         rect_of(&c),
         (142, 40, 40, 20),
         "RTL: c follows the mirrored slot"
+    );
+}
+#[test]
+fn hidden_non_retained_item_preserves_geometry() {
+    let a = probe_with(60, 20, QSizePolicy::fixed());
+    let b = probe_with(50, 30, QSizePolicy::fixed());
+    let mut h = BoxLayout::horizontal();
+    h.set_margins(Margins::new(0, 0, 0, 0));
+    h.set_spacing(4);
+    h.add_widget_aligned(a.clone(), 0, Alignment::NONE);
+    h.add_widget_aligned(b.clone(), 0, Alignment::NONE);
+    h.add_stretch(1);
+    let container = lay_out(Box::new(h), 300, 100);
+    assert_eq!(rect_of(&b), (64, 35, 50, 30));
+
+    hide(&b);
+    item_set_geometry_with(
+        &**b.borrow(),
+        Rect::new(10, 10, 100, 100),
+        Alignment::NONE,
+        qtrs_widgets::layout_engine::ItemLimits::of(&**b.borrow(), Alignment::NONE),
+    );
+    // Qt QWidgetItem::setGeometry: if (isEmpty()) return; (qlayoutitem.cpp:410 / G8.1.b)
+    assert_eq!(
+        rect_of(&b),
+        (64, 35, 50, 30),
+        "Hidden non-retained item must preserve its geometry instead of being zeroed (qlayoutitem.cpp:410 / G8.1.b)"
     );
 }
 

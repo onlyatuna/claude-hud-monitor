@@ -645,7 +645,8 @@ pub fn item_set_geometry_with(
     limits: ItemLimits,
 ) {
     if item_is_empty(widget) {
-        widget.set_geometry(Rect::new(0, 0, 0, 0));
+        // Qt QWidgetItem::setGeometry (qlayoutitem.cpp:410): if (isEmpty()) return;
+        // Empty / hidden non-retained items keep their geometry rather than being set to (0,0,0,0).
         return;
     }
     let max = limits.item_max;
