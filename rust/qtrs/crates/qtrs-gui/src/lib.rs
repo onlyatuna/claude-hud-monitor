@@ -1,5 +1,6 @@
 //! qtrs-gui: 2D graphics, windowing events, and rendering abstractions.
 
+pub mod alignment;
 pub mod application;
 pub mod color;
 pub mod geometry;
@@ -8,6 +9,7 @@ pub mod paint;
 pub mod startup_trace;
 pub mod text;
 
+pub use alignment::Alignment;
 pub use application::*;
 pub use color::*;
 pub use geometry::*;

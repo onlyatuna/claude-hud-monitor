@@ -11,7 +11,7 @@
 //!      layout items / geomArray without re-querying child widget metrics.
 //!    - Invalidation (`invalidate()`, content changes, size policy changes) clears the metric cache.
 //! 2. `item_set_geometry` respects Qt smart-max: Fixed and Maximum policies are constrained to
-//!    their size hints even under `ItemAlignment::NONE`.
+//!    their size hints even under `Alignment::NONE`.
 //! 3. Native window resize (`WindowSystemEvent::Resize`) routes through `request_layout`,
 //!    redistributing geometry without invalidating the child size metric cache.
 
@@ -539,7 +539,7 @@ fn test_grid_layout_caches_child_metrics_and_does_not_requery_during_resize() {
 
 #[test]
 fn test_item_set_geometry_respects_smart_max_for_fixed_maximum_preferred() {
-    // 1. Fixed policy: must clamp to size hint even under ItemAlignment::NONE
+    // 1. Fixed policy: must clamp to size hint even under Alignment::NONE
     let mut layout_fixed = BoxLayout::horizontal();
     let (p_fixed, _, _, _, _) = MetricCountingProbe::new(50, 30);
     p_fixed
@@ -769,11 +769,7 @@ fn test_an_aligned_item_on_an_ignored_axis_takes_the_widget_size_hint() {
         .widget_base()
         .set_size_policy(QSizePolicy::new(Policy::Ignored, Policy::Ignored));
     let mut layout = BoxLayout::vertical();
-    layout.add_widget_aligned(
-        Rc::clone(&aligned),
-        0,
-        ItemAlignment::LEFT | ItemAlignment::TOP,
-    );
+    layout.add_widget_aligned(Rc::clone(&aligned), 0, Alignment::LEFT | Alignment::TOP);
     let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
     root.borrow_mut().set_layout(Box::new(layout));
 
@@ -802,11 +798,7 @@ fn test_an_aligned_item_on_an_ignored_axis_takes_the_widget_size_hint() {
 fn test_a_changed_size_hint_reaches_an_aligned_item() {
     let (aligned, _, _, _, _) = MetricCountingProbe::new(50, 30);
     let mut layout = BoxLayout::vertical();
-    layout.add_widget_aligned(
-        Rc::clone(&aligned),
-        0,
-        ItemAlignment::LEFT | ItemAlignment::TOP,
-    );
+    layout.add_widget_aligned(Rc::clone(&aligned), 0, Alignment::LEFT | Alignment::TOP);
     let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
     root.borrow_mut().set_layout(Box::new(layout));
 
@@ -896,11 +888,7 @@ fn test_a_resize_keeps_the_ancestor_metric_caches_of_a_nested_layout() {
 fn test_a_resize_does_not_requery_an_aligned_item() {
     let (aligned, hint_q, min_q, max_q, _) = MetricCountingProbe::new(50, 30);
     let mut layout = BoxLayout::vertical();
-    layout.add_widget_aligned(
-        Rc::clone(&aligned),
-        0,
-        ItemAlignment::LEFT | ItemAlignment::TOP,
-    );
+    layout.add_widget_aligned(Rc::clone(&aligned), 0, Alignment::LEFT | Alignment::TOP);
     let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
     root.borrow_mut().set_layout(Box::new(layout));
 
@@ -942,7 +930,7 @@ fn test_an_aligned_container_is_laid_out_again_only_when_its_own_size_changes() 
     let (container, container_updates) = UpdateCountingContainer::with_layout(Box::new(inner));
 
     let mut layout = BoxLayout::vertical();
-    layout.add_widget_aligned(Rc::clone(&container), 0, ItemAlignment::LEFT);
+    layout.add_widget_aligned(Rc::clone(&container), 0, Alignment::LEFT);
     let root: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::new())));
     root.borrow_mut().set_layout(Box::new(layout));
 

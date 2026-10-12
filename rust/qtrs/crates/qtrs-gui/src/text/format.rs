@@ -7,23 +7,9 @@
 //! - `TextFrameFormat` (`QTextFrameFormat`): Container frame border, padding, and margins.
 //! - `FormatRange`: Range-based formatting override for syntax highlighting and selection rendering.
 
+use crate::alignment::Alignment;
 use crate::text::font::{Font, FontStyle, FontWeight};
 use tiny_skia::Color;
-
-/// Horizontal text alignment (`Qt::AlignmentFlag`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum TextAlignment {
-    /// Left aligned (default in LTR text).
-    #[default]
-    AlignLeft,
-    /// Right aligned.
-    AlignRight,
-    /// Centered horizontally.
-    AlignHCenter,
-    /// Fully justified across the line width.
-    AlignJustify,
-}
 
 /// Character vertical alignment relative to the baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -217,8 +203,9 @@ impl TextCharFormat {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextBlockFormat {
-    /// Paragraph text alignment.
-    pub alignment: TextAlignment,
+    /// Paragraph text alignment (`QTextBlockFormat::alignment`, which reads `AlignLeft` while
+    /// unset).
+    pub alignment: Alignment,
     /// Margin above the block in pixels.
     pub top_margin: f32,
     /// Margin below the block in pixels.
@@ -238,7 +225,7 @@ pub struct TextBlockFormat {
 impl Default for TextBlockFormat {
     fn default() -> Self {
         Self {
-            alignment: TextAlignment::AlignLeft,
+            alignment: Alignment::LEFT,
             top_margin: 0.0,
             bottom_margin: 0.0,
             left_margin: 0.0,
@@ -256,7 +243,7 @@ impl TextBlockFormat {
     }
 
     pub fn merge(&mut self, other: &Self) {
-        if other.alignment != TextAlignment::AlignLeft {
+        if other.alignment != Alignment::LEFT {
             self.alignment = other.alignment;
         }
         if other.top_margin != 0.0 {

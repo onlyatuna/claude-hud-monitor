@@ -100,7 +100,7 @@ fn changing_the_size_policy_requests_a_parent_layout_and_an_unchanged_one_does_n
 fn label_and_button_text_font_and_alignment_setters_request_a_parent_layout() {
     use qtrs_gui::text::font::Font;
     use qtrs_widgets::command::WidgetCommandQueue;
-    use qtrs_widgets::label::Alignment;
+    use qtrs_widgets::Alignment;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -123,7 +123,7 @@ fn label_and_button_text_font_and_alignment_setters_request_a_parent_layout() {
         "Label::set_text did not request a layout"
     );
     WidgetCommandQueue::clear();
-    label.set_alignment(Alignment::Center);
+    label.set_alignment(Alignment::CENTER);
     assert!(
         WidgetCommandQueue::pending_count() > 0,
         "Label::set_alignment did not request a layout"

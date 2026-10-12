@@ -167,9 +167,9 @@ fn retained_box() -> (WidgetRef, WidgetRef, WidgetRef, WidgetRef) {
     let mut h = BoxLayout::horizontal();
     h.set_margins(Margins::new(0, 0, 0, 0));
     h.set_spacing(4);
-    h.add_widget_aligned(a.clone(), 0, ItemAlignment::NONE);
-    h.add_widget_aligned(b.clone(), 0, ItemAlignment::NONE);
-    h.add_widget_aligned(c.clone(), 0, ItemAlignment::NONE);
+    h.add_widget_aligned(a.clone(), 0, Alignment::NONE);
+    h.add_widget_aligned(b.clone(), 0, Alignment::NONE);
+    h.add_widget_aligned(c.clone(), 0, Alignment::NONE);
     h.add_stretch(1);
     let container = lay_out(Box::new(h), 300, 100);
     (a, b, c, container)
@@ -279,12 +279,8 @@ fn rtl_flips_horizontal_alignment_unless_absolute() {
     let absolute = probe(60, 20, Policy::Preferred);
     let mut v = BoxLayout::vertical();
     v.set_margins(Margins::new(0, 0, 0, 0));
-    v.add_widget_aligned(logical.clone(), 0, ItemAlignment::LEFT);
-    v.add_widget_aligned(
-        absolute.clone(),
-        0,
-        ItemAlignment::LEFT | ItemAlignment::ABSOLUTE,
-    );
+    v.add_widget_aligned(logical.clone(), 0, Alignment::LEFT);
+    v.add_widget_aligned(absolute.clone(), 0, Alignment::LEFT | Alignment::ABSOLUTE);
     let _container = lay_out(Box::new(v), 300, 100);
     assert_eq!(
         rect_of(&logical).0,
@@ -304,7 +300,7 @@ fn rtl_unaligned_fixed_item_sits_at_the_right_edge_ltr_at_the_left() {
     let item = probe_with(60, 20, QSizePolicy::fixed());
     let mut v = BoxLayout::vertical();
     v.set_margins(Margins::new(0, 0, 0, 0));
-    v.add_widget_aligned(item.clone(), 0, ItemAlignment::NONE);
+    v.add_widget_aligned(item.clone(), 0, Alignment::NONE);
     v.add_stretch(1);
     {
         let _dir = with_direction(LayoutDirection::LeftToRight);
@@ -314,7 +310,7 @@ fn rtl_unaligned_fixed_item_sits_at_the_right_edge_ltr_at_the_left() {
     let item = probe_with(60, 20, QSizePolicy::fixed());
     let mut v = BoxLayout::vertical();
     v.set_margins(Margins::new(0, 0, 0, 0));
-    v.add_widget_aligned(item.clone(), 0, ItemAlignment::NONE);
+    v.add_widget_aligned(item.clone(), 0, Alignment::NONE);
     v.add_stretch(1);
     let _dir = with_direction(LayoutDirection::RightToLeft);
     let _container = lay_out(Box::new(v), 300, 100);

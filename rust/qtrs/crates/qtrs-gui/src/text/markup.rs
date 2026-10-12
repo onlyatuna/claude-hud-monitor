@@ -8,11 +8,10 @@
 //! - CommonMark-style Markdown import/export (`QTextMarkdownImporter` / `QTextMarkdownWriter`):
 //!   ATX/setext headings, paragraphs, fenced code, emphasis, strikethrough, code spans and links.
 
+use crate::alignment::Alignment;
 use crate::text::block::TextBlock;
 use crate::text::font::FontWeight;
-use crate::text::format::{
-    TextAlignment, TextBlockFormat, TextCharFormat, UnderlineStyle, VerticalAlignment,
-};
+use crate::text::format::{TextBlockFormat, TextCharFormat, UnderlineStyle, VerticalAlignment};
 use crate::text::fragment::TextFragment;
 use std::borrow::Cow;
 use tiny_skia::Color;
@@ -570,12 +569,12 @@ fn parse_attributes(s: &str) -> Vec<(String, String)> {
     attrs
 }
 
-fn parse_alignment(value: &str) -> Option<TextAlignment> {
+fn parse_alignment(value: &str) -> Option<Alignment> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "left" | "start" => Some(TextAlignment::AlignLeft),
-        "right" | "end" => Some(TextAlignment::AlignRight),
-        "center" | "middle" => Some(TextAlignment::AlignHCenter),
-        "justify" => Some(TextAlignment::AlignJustify),
+        "left" | "start" => Some(Alignment::LEFT),
+        "right" | "end" => Some(Alignment::RIGHT),
+        "center" | "middle" => Some(Alignment::H_CENTER),
+        "justify" => Some(Alignment::JUSTIFY),
         _ => None,
     }
 }
@@ -873,11 +872,21 @@ pub(crate) fn write_html(blocks: &[TextBlock], title: &str) -> String {
         };
         html.push('<');
         html.push_str(tag);
-        match b.block_format.alignment {
-            TextAlignment::AlignRight => html.push_str(" align=\"right\""),
-            TextAlignment::AlignHCenter => html.push_str(" align=\"center\""),
-            TextAlignment::AlignJustify => html.push_str(" align=\"justify\""),
-            TextAlignment::AlignLeft => {}
+        // `QTextHtmlExporter::emitAlignment` (qtextdocument.cpp:2833-2843): nothing for Left.
+        let align = b.block_format.alignment;
+        if !align.contains(Alignment::LEFT) {
+            let named = [
+                (Alignment::RIGHT, "right"),
+                (Alignment::H_CENTER, "center"),
+                (Alignment::JUSTIFY, "justify"),
+            ]
+            .into_iter()
+            .find(|(flag, _)| align.contains(*flag));
+            if let Some((_, name)) = named {
+                html.push_str(" align=\"");
+                html.push_str(name);
+                html.push('"');
+            }
         }
         if needs_preserved_whitespace(&b.text()) {
             html.push_str(" style=\"white-space:pre-wrap\"");

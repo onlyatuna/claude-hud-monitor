@@ -3,18 +3,12 @@ use crate::widget::{Widget, WidgetBase, WidgetRef, WidgetWeak};
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::notify_borrowed;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
+use qtrs_gui::application::LayoutDirection;
 use qtrs_gui::geometry::primitives::{PointF, Rect, RectF, Size};
 use qtrs_gui::paint::{Painter, Pen, RenderHint};
 use qtrs_gui::text::{Font, FontMetrics, TextDocument};
 use qtrs_gui::tiny_skia::Color;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Alignment {
-    #[default]
-    Left,
-    Center,
-    Right,
-}
+use qtrs_gui::Alignment;
 
 pub struct Label {
     pub base: WidgetBase,
@@ -22,6 +16,7 @@ pub struct Label {
     font: Font,
     color: Color,
     background_color: Option<Color>,
+    /// `QLabel::alignment`, `Qt::AlignLeft | Qt::AlignVCenter` by default (qlabel_p.h:112).
     alignment: Alignment,
     /// `QLabel::wordWrap`: lays the text out to the label width.
     word_wrap: bool,
@@ -64,7 +59,7 @@ impl Label {
             font,
             color: Color::BLACK,
             background_color: None,
-            alignment: Alignment::Left,
+            alignment: Alignment::LEFT | Alignment::V_CENTER,
             word_wrap: false,
             rich: false,
             margin: 0,
@@ -172,22 +167,18 @@ impl Label {
         )
     }
 
-    /// `QLabel`'s text indent: the advance of `'x'`, which `QLabelPrivate::sizeForWidth` adds to
-    /// the width of a left- or right-aligned label that has a frame (`frameWidth() != 0`, which a
-    /// style sheet makes the widest edge of border plus padding). A centred label has none, and
-    /// neither has a label without a box. (Measured against PySide6: `padding-left: 5px` adds
-    /// 5 + 6 to a left-aligned 12px label and 5 to a centred one; `padding: 0px 2px` adds 4 to
-    /// the centred table cells.) `QLabelPrivate::documentRect` insets the text by half of it on
-    /// the aligned side.
+    /// `QLabel`'s text indent: the advance of `'x'`, which `QLabelPrivate::sizeForWidth` adds on
+    /// each aligned side (Left or Right horizontally, Top or Bottom vertically, qlabel.cpp:558-568)
+    /// of a label that has a frame (`frameWidth() != 0`, which a style sheet makes the widest edge
+    /// of border plus padding). A label without a box has none. (Measured against PySide6:
+    /// `padding-left: 5px` adds 5 + 6 to a left-aligned 12px label and 5 to a centred one;
+    /// `padding: 0px 2px` adds 4 to the centred table cells.) `QLabelPrivate::documentRect` insets
+    /// the text by half of it on the aligned sides (qlabel.cpp:1474-1488).
     fn indent(
         style: &crate::style::stylesheet::ResolvedStyle,
         metrics: &FontMetrics,
         font: &qtrs_gui::text::Font,
-        alignment: Alignment,
     ) -> f32 {
-        if alignment == Alignment::Center {
-            return 0.0;
-        }
         let border = style.border_width.unwrap_or(0.0).max(0.0);
         let padding = style.padding.unwrap_or([0.0; 4]);
         let frame = padding.iter().map(|p| border + p).fold(0.0, f32::max);
@@ -195,6 +186,20 @@ impl Label {
             return 0.0;
         }
         metrics.horizontal_advance_exact("x", font).round()
+    }
+
+    /// The alignment the text is laid out by: `QStyle::visualAlignment` in the text's direction
+    /// (`QLabelPrivate::textDirection`, qlabel.cpp:996, 1456-1464), which is left-to-right for the
+    /// text qtrs lays out.
+    fn visual_alignment(&self) -> Alignment {
+        self.alignment.visual(LayoutDirection::LeftToRight)
+    }
+
+    /// The indent `sizeForWidth` adds horizontally and vertically for `align` (qlabel.cpp:558-568).
+    fn indent_extra(indent: f32, align: Alignment) -> (f32, f32) {
+        let h = align.contains(Alignment::LEFT) || align.contains(Alignment::RIGHT);
+        let v = align.contains(Alignment::TOP) || align.contains(Alignment::BOTTOM);
+        (if h { indent } else { 0.0 }, if v { indent } else { 0.0 })
     }
 
     /// The text as a `TextDocument` in `font`: HTML when rich, plain text otherwise.
@@ -337,9 +342,10 @@ impl Widget for Label {
         let font = self.styled_font(&style);
         let metrics = FontMetrics::from_font(&font);
         let (box_l, box_r, box_t, box_b) = Self::box_insets(&style, self.margin as f32);
-        let indent = Self::indent(&style, &metrics, &font, self.alignment);
-        let hextra = box_l + box_r + indent;
-        let vextra = box_t + box_b;
+        let indent = Self::indent(&style, &metrics, &font);
+        let (h_indent, v_indent) = Self::indent_extra(indent, self.visual_alignment());
+        let hextra = box_l + box_r + h_indent;
+        let vextra = box_t + box_b + v_indent;
         let (text_w, text_h) = self.text_size(&font, &metrics, hextra);
         // `QLabelPrivate::sizeForWidth`: the text size plus the box, expanded to `minimumSize()`
         // (`qlabel.cpp:620`). `max-height` is not a hint.
@@ -493,24 +499,46 @@ impl Widget for Label {
         let text_color = style.color.unwrap_or(self.color);
         painter.set_pen(Pen::new(text_color, 1.0));
 
-        let (box_l0, box_r0, box_t, box_b) = Self::box_insets(&style, self.margin as f32);
-        let indent = Self::indent(&style, &metrics, &font, self.alignment);
+        let (box_l0, box_r0, box_t0, box_b0) = Self::box_insets(&style, self.margin as f32);
+        let align = self.visual_alignment();
+        let indent = Self::indent(&style, &metrics, &font);
+        let (h_indent, _) = Self::indent_extra(indent, align);
+        // `QLabelPrivate::documentRect` (qlabel.cpp:1474-1488): half the indent on each aligned side.
         let half_indent = (indent / 2.0).floor();
-        let (mut box_l, mut box_r) = (box_l0, box_r0);
-        match self.alignment {
-            Alignment::Left => box_l += half_indent,
-            Alignment::Right => box_r += half_indent,
-            Alignment::Center => {}
-        }
+        let inset = |flag: Alignment| {
+            if align.contains(flag) {
+                half_indent
+            } else {
+                0.0
+            }
+        };
+        let box_l = box_l0 + inset(Alignment::LEFT);
+        let box_r = box_r0 + inset(Alignment::RIGHT);
+        let box_t = box_t0 + inset(Alignment::TOP);
+        let box_b = box_b0 + inset(Alignment::BOTTOM);
         let content_w = (geom.width as f32 - box_l - box_r).max(0.0);
         let content_h = (geom.height as f32 - box_t - box_b).max(0.0);
         let content = RectF::new(box_l, box_t, content_w, content_h);
         // The aligned offset is not clamped: centred and right text overflow symmetrically
         // (qpainter.cpp:7426-7429). Overflow is clipped to the content rect (qpainter.cpp:7442-7446).
-        let x_for = |text_w: f32| match self.alignment {
-            Alignment::Left => box_l,
-            Alignment::Center => box_l + (content_w - text_w) / 2.0,
-            Alignment::Right => box_l + content_w - text_w,
+        let x_for = |text_w: f32| {
+            if align.contains(Alignment::RIGHT) {
+                box_l + content_w - text_w
+            } else if align.contains(Alignment::H_CENTER) {
+                box_l + (content_w - text_w) / 2.0
+            } else {
+                box_l
+            }
+        };
+        // Plain text: Bottom, else VCenter, else the top, unclamped (qpainter.cpp:7419-7424).
+        let y_for = |text_h: f32| {
+            if align.contains(Alignment::BOTTOM) {
+                box_t + content_h - text_h
+            } else if align.contains(Alignment::V_CENTER) {
+                box_t + (content_h - text_h) / 2.0
+            } else {
+                box_t
+            }
         };
         let overflows = |x: f32, top: f32, w: f32, h: f32| {
             x < box_l || top < box_t || x + w > box_l + content_w || top + h > box_t + content_h
@@ -518,13 +546,21 @@ impl Widget for Label {
 
         if self.rich || self.word_wrap {
             // Rich and word-wrapped text is drawn by its `TextDocument`, wrapped to the width the
-            // frame leaves (qlabel.cpp:575-584) and centred vertically.
+            // frame leaves (qlabel.cpp:575-584). `QLabelPrivate::layoutRect` places it vertically:
+            // VCenter, else Bottom, else the top, never above the rect (qlabel.cpp:1624-1637).
             let mut doc = self.document(&font);
             if self.word_wrap {
-                doc.set_text_width((geom.width as f32 - box_l0 - box_r0 - indent).max(0.0));
+                doc.set_text_width((geom.width as f32 - box_l0 - box_r0 - h_indent).max(0.0));
             }
             let size = doc.size();
-            let origin = PointF::new(x_for(size.width), box_t + (content_h - size.height) / 2.0);
+            let y = if align.contains(Alignment::V_CENTER) {
+                box_t + ((content_h - size.height) / 2.0).max(0.0)
+            } else if align.contains(Alignment::BOTTOM) {
+                box_t + (content_h - size.height).max(0.0)
+            } else {
+                box_t
+            };
+            let origin = PointF::new(x_for(size.width), y);
             doc.draw_with_color(painter, origin, text_color);
             return;
         }
@@ -537,7 +573,7 @@ impl Widget for Label {
             let lines: Vec<&str> = self.text.split('\n').collect();
             let line_height = FontMetrics::layout_height(&font).ceil();
             let total_text_h = line_height * lines.len() as f32;
-            let top = box_t + (content_h - total_text_h) / 2.0;
+            let top = y_for(total_text_h);
             let line_ws: Vec<f32> = lines
                 .iter()
                 .map(|line| metrics.horizontal_advance_exact(line, &font))
@@ -561,7 +597,7 @@ impl Widget for Label {
         } else {
             let text_w = metrics.horizontal_advance_exact(&self.text, &font);
             let text_h = metrics.height;
-            let top = box_t + (content_h - text_h) / 2.0;
+            let top = y_for(text_h);
             let x = x_for(text_w);
             let clip = overflows(x, top, text_w, text_h);
             if clip {

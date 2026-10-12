@@ -137,7 +137,7 @@ fn maximum_of(container: &WidgetRef) -> (i32, i32) {
 // Grid layout-level alignment bounds the maximum size on the aligned axis.
 // ---------------------------------------------------------------------------------------------
 
-fn grid_with_one_fixed_leaf(alignment: Option<ItemAlignment>) -> WidgetRef {
+fn grid_with_one_fixed_leaf(alignment: Option<Alignment>) -> WidgetRef {
     let mut grid = GridLayout::new();
     grid.set_margins(Margins::new(0, 0, 0, 0));
     grid.add_widget(fixed(40, 20), 0, 0);
@@ -153,11 +153,11 @@ fn grid_layout_alignment_unbounds_maximum_on_aligned_axis() {
     // setAlignment(AlignVCenter) (40,524287). [QT-SRC qgridlayout.cpp:1216]
     assert_eq!(maximum_of(&grid_with_one_fixed_leaf(None)), (40, 20));
     assert_eq!(
-        maximum_of(&grid_with_one_fixed_leaf(Some(ItemAlignment::H_CENTER))),
+        maximum_of(&grid_with_one_fixed_leaf(Some(Alignment::H_CENTER))),
         (524287, 20)
     );
     assert_eq!(
-        maximum_of(&grid_with_one_fixed_leaf(Some(ItemAlignment::V_CENTER))),
+        maximum_of(&grid_with_one_fixed_leaf(Some(Alignment::V_CENTER))),
         (40, 524287)
     );
 }
@@ -172,7 +172,7 @@ fn fixed_horizontal_box_centres_an_h_center_leaf() {
     let leaf = fixed(40, 20);
     let mut layout = BoxLayout::horizontal();
     layout.set_margins(Margins::new(0, 0, 0, 0));
-    layout.add_widget_aligned(leaf.clone(), 0, ItemAlignment::H_CENTER);
+    layout.add_widget_aligned(leaf.clone(), 0, Alignment::H_CENTER);
     let _container = lay_out(Box::new(layout));
     assert_eq!(rect_of(&leaf), (80, 20, 40, 20));
 }
@@ -183,7 +183,7 @@ fn fixed_vertical_box_align_right_unbounds_width_and_places_right() {
     let leaf = fixed(40, 20);
     let mut layout = BoxLayout::vertical();
     layout.set_margins(Margins::new(0, 0, 0, 0));
-    layout.add_widget_aligned(leaf.clone(), 0, ItemAlignment::RIGHT);
+    layout.add_widget_aligned(leaf.clone(), 0, Alignment::RIGHT);
     let container = lay_out(Box::new(layout));
     assert_eq!(maximum_of(&container), (524287, 20));
     assert_eq!(rect_of(&leaf), (160, 20, 40, 20));
@@ -201,7 +201,7 @@ fn box_add_layout_inner_alignment_places_the_child_layout() {
     let mut inner = BoxLayout::horizontal();
     inner.set_margins(Margins::new(0, 0, 0, 0));
     inner.add_widget_with_stretch(leaf.clone(), 0);
-    inner.set_layout_alignment(ItemAlignment::RIGHT | ItemAlignment::TOP);
+    inner.set_layout_alignment(Alignment::RIGHT | Alignment::TOP);
     let mut outer = BoxLayout::horizontal();
     outer.set_margins(Margins::new(0, 0, 0, 0));
     outer.add_layout(Box::new(inner), 0);
@@ -236,7 +236,7 @@ fn grid_add_layout_places_the_child_layout_at_its_cell() {
     grid.set_horizontal_spacing(0);
     grid.set_vertical_spacing(0);
     grid.add_widget(fixed(50, 20), 0, 0);
-    let holder = grid.add_layout(Box::new(inner), 1, 1, 1, 1, ItemAlignment::NONE);
+    let holder = grid.add_layout(Box::new(inner), 1, 1, 1, 1, Alignment::NONE);
     let _container = lay_out(Box::new(grid));
     // Nested-layout leaves are relative to their holder (qtrs residual: Qt makes them
     // container-relative); compare in container coordinates.

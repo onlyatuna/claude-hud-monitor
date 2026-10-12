@@ -21,7 +21,7 @@ use qtrs_gui::text::font::{Font, FontWeight};
 use qtrs_gui::text::font_metrics::FontMetrics;
 use qtrs_gui::tiny_skia::{Color, LineCap, LineJoin, PathBuilder};
 use qtrs_widgets::{
-    BoxLayout, EmptyWidget, GridLayout, ItemAlignment, Label, Layout, Widget, WidgetBase, WidgetRef,
+    Alignment, BoxLayout, EmptyWidget, GridLayout, Label, Layout, Widget, WidgetBase, WidgetRef,
 };
 
 use super::styles::{duo_colors, scale_colors, Theme};
@@ -916,7 +916,7 @@ fn set_state(w: &WidgetRef, state: &str) {
 fn make_cell_label(text: &str, obj: &str) -> WidgetRef {
     let mut l = Label::new(text);
     l.set_object_name(obj);
-    l.set_alignment(qtrs_widgets::Alignment::Center);
+    l.set_alignment(Alignment::CENTER);
     make_widget(l)
 }
 
@@ -1283,14 +1283,7 @@ impl UsageTable {
         lv.add_stretch(1);
 
         legend.borrow_mut().set_layout(Box::new(lv));
-        grid.add_widget_aligned(
-            legend,
-            5,
-            0,
-            1,
-            1,
-            ItemAlignment::V_CENTER | ItemAlignment::LEFT,
-        );
+        grid.add_widget_aligned(legend, 5, 0, 1, 1, Alignment::V_CENTER | Alignment::LEFT);
 
         // Row 6: Separator under dials spanning all 4 columns
         let sep2 = make_widget(SeparatorWidget::new(theme.separator));
@@ -1314,7 +1307,7 @@ impl UsageTable {
                 grid.add_widget(c.m1_reset.clone(), 3, col);
                 grid.add_widget(c.m1_countdown.clone(), 4, col);
                 grid.add_widget(c.dial.clone(), 5, col);
-                grid.add_widget_aligned(c.m2_val.clone(), 7, col, 1, 1, ItemAlignment::H_CENTER);
+                grid.add_widget_aligned(c.m2_val.clone(), 7, col, 1, 1, Alignment::H_CENTER);
                 grid.add_widget(c.m2_reset.clone(), 8, col);
                 grid.add_widget(c.m2_countdown.clone(), 9, col);
                 grid.set_column_stretch(col, 1);

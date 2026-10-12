@@ -16,63 +16,11 @@ pub enum Direction {
     LeftToRight,
 }
 
-/// `Qt::Alignment` as a layout item uses it (`QLayoutItem::setAlignment`): where the item sits in
-/// the space the layout gives it. With no flag on an axis the item fills that axis (up to its
-/// maximum size); with a flag it shrinks to its size hint and is placed by the flag.
-///
-/// The bit values are Qt's (`qnamespace.h:151-170`). This is not the text alignment of a `Label`,
-/// which has its own `Alignment`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
-pub struct ItemAlignment(u32);
-
-impl ItemAlignment {
-    pub const NONE: Self = Self(0);
-    pub const LEFT: Self = Self(0x1);
-    pub const RIGHT: Self = Self(0x2);
-    pub const H_CENTER: Self = Self(0x4);
-    pub const JUSTIFY: Self = Self(0x8);
-    pub const ABSOLUTE: Self = Self(0x10);
-    pub const TOP: Self = Self(0x20);
-    pub const BOTTOM: Self = Self(0x40);
-    pub const V_CENTER: Self = Self(0x80);
-    pub const BASELINE: Self = Self(0x100);
-    pub const CENTER: Self = Self(0x4 | 0x80);
-    /// `Qt::AlignHorizontal_Mask`.
-    const HORIZONTAL_MASK: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x10;
-    /// `Qt::AlignVertical_Mask`.
-    const VERTICAL_MASK: u32 = 0x20 | 0x40 | 0x80 | 0x100;
-
-    /// From Qt's numeric flag value; bits that are not alignment flags are dropped.
-    pub const fn from_bits(bits: u32) -> Self {
-        Self(bits & (Self::HORIZONTAL_MASK | Self::VERTICAL_MASK))
-    }
-
-    pub const fn bits(self) -> u32 {
-        self.0
-    }
-
-    /// Every flag of `other` is set.
-    pub const fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-
-    /// Some horizontal flag is set (`align & Qt::AlignHorizontal_Mask`).
-    pub const fn horizontal(self) -> bool {
-        self.0 & Self::HORIZONTAL_MASK != 0
-    }
-
-    /// Some vertical flag is set (`align & Qt::AlignVertical_Mask`).
-    pub const fn vertical(self) -> bool {
-        self.0 & Self::VERTICAL_MASK != 0
-    }
-}
-
-impl std::ops::BitOr for ItemAlignment {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        Self(self.0 | rhs.0)
-    }
-}
+/// `Qt::Alignment` of a layout item (`QLayoutItem::setAlignment`): where the item sits in the
+/// space the layout gives it. With no flag on an axis the item fills that axis (up to its maximum
+/// size); with a flag it shrinks to its size hint and is placed by the flag. The same type aligns
+/// a layout, a `Label`'s text and a text block, as `Qt::Alignment` does.
+pub use qtrs_gui::Alignment;
 
 /// `QLayout::SizeConstraint` (qlayout.h): how `QLayout::activate` constrains the owner widget of a
 /// top-level layout (qlayout.cpp:1015-1095). Nested layouts ignore it.
@@ -138,7 +86,7 @@ pub struct LayoutItem {
     pub widget: WidgetRef,
     pub stretch: u32,
     /// `QLayoutItem::alignment`.
-    pub alignment: ItemAlignment,
+    pub alignment: Alignment,
     /// A `QSpacerItem`: it has no content of its own, so it takes no spacing. `widget` is then a
     /// placeholder that only records the spacer's rectangle.
     pub spacer: Option<SpacerItem>,
@@ -157,7 +105,7 @@ pub trait Layout: 'static {
     /// `QLayout::setAlignment(QWidget*, Qt::Alignment)`: sets the alignment of the item that holds
     /// `widget` (a direct child item only) and re-lays the layout out. Returns false when the
     /// layout has no such item.
-    fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool;
+    fn set_alignment(&mut self, widget: &WidgetRef, alignment: Alignment) -> bool;
 
     fn widgets(&self) -> Vec<WidgetRef> {
         Vec::new()
@@ -185,13 +133,13 @@ pub trait Layout: 'static {
 
     /// `QLayout::alignment()` (the `QLayoutItem` alignment of a layout): NONE unless the layout
     /// keeps one (`qlayout.cpp:213-227`, `qlayoutitem.cpp:151-153`).
-    fn alignment(&self) -> ItemAlignment {
-        ItemAlignment::NONE
+    fn alignment(&self) -> Alignment {
+        Alignment::NONE
     }
 
     /// Stores the layout's own alignment and invalidates it (`QLayout::setAlignment(QLayout*)`,
     /// qlayout.cpp:213-227). Layouts without an alignment ignore it.
-    fn set_layout_alignment(&mut self, _alignment: ItemAlignment) {}
+    fn set_layout_alignment(&mut self, _alignment: Alignment) {}
 
     /// The value `qSmartSpacing` gives a layout whose own spacing is unset (qlayoutengine.cpp:390-401):
     /// the style's layout spacing for a widget parent, the parent layout's `spacing()` for a nested
@@ -266,7 +214,7 @@ pub struct BoxLayout {
     /// The `qSmartSpacing` value used while the explicit spacing is unset (qlayoutengine.cpp:390-401).
     smart_spacing: i32,
     /// `QLayoutItem::align` of this layout (`QLayout::setAlignment`, qlayout.cpp:213-227).
-    alignment: ItemAlignment,
+    alignment: Alignment,
     items: Vec<LayoutItem>,
     metric_dirty: Cell<bool>,
     needs_activation: Cell<bool>,
@@ -286,7 +234,7 @@ impl BoxLayout {
             margins_explicit: false,
             spacing: -1,
             smart_spacing: -1,
-            alignment: ItemAlignment::NONE,
+            alignment: Alignment::NONE,
             items: Vec::new(),
             metric_dirty: Cell::new(true),
             needs_activation: Cell::new(true),
@@ -325,11 +273,11 @@ impl BoxLayout {
     }
 
     pub fn insert_widget(&mut self, index: usize, widget: WidgetRef, stretch: u32) {
-        self.insert_item(index, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: None, nested: false });
+        self.insert_item(index, LayoutItem { widget, stretch, alignment: Alignment::NONE, spacer: None, nested: false });
     }
 
     /// `QBoxLayout::addWidget(widget, stretch, alignment)`.
-    pub fn add_widget_aligned(&mut self, widget: WidgetRef, stretch: u32, alignment: ItemAlignment) {
+    pub fn add_widget_aligned(&mut self, widget: WidgetRef, stretch: u32, alignment: Alignment) {
         self.insert_item(usize::MAX, LayoutItem { widget, stretch, alignment, spacer: None, nested: false });
     }
 
@@ -350,7 +298,7 @@ impl BoxLayout {
 
     /// `QBoxLayout::addWidget(widget, stretch)`: alignment NONE.
     pub fn add_widget_with_stretch(&mut self, widget: WidgetRef, stretch: u32) {
-        self.add_widget_aligned(widget, stretch, ItemAlignment::NONE);
+        self.add_widget_aligned(widget, stretch, Alignment::NONE);
     }
 
     /// `QBoxLayout::addLayout(layout, stretch)`: the child layout is one item of this layout,
@@ -375,7 +323,7 @@ impl BoxLayout {
             LayoutItem {
                 widget: widget.clone(),
                 stretch,
-                alignment: ItemAlignment::NONE,
+                alignment: Alignment::NONE,
                 spacer: None,
                 nested: true,
             },
@@ -414,7 +362,7 @@ impl BoxLayout {
     /// The rectangle the content is laid out in: `QBoxLayout::setGeometry` (qboxlayout.cpp:743)
     /// places an aligned layout inside `QLayout::alignmentRect` of its geometry.
     fn placed_rect(&self) -> Rect {
-        if self.alignment == ItemAlignment::NONE {
+        if self.alignment == Alignment::NONE {
             return self.geometry;
         }
         let (hint, max, expanding, has_hfw) = {
@@ -474,7 +422,7 @@ impl BoxLayout {
     fn insert_spacer(&mut self, index: usize, spacer: SpacerItem, stretch: u32) {
         let widget = crate::widget::EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
         let widget: WidgetRef = std::rc::Rc::new(std::cell::RefCell::new(Box::new(widget)));
-        self.insert_item(index, LayoutItem { widget, stretch, alignment: ItemAlignment::NONE, spacer: Some(spacer), nested: false });
+        self.insert_item(index, LayoutItem { widget, stretch, alignment: Alignment::NONE, spacer: Some(spacer), nested: false });
     }
 
     /// `QBoxLayout::setStretchFactor(QWidget*, int)`: sets the stretch of the item holding
@@ -527,7 +475,7 @@ impl Layout for BoxLayout {
         self.add_widget_with_stretch(widget, 0);
     }
 
-    fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool {
+    fn set_alignment(&mut self, widget: &WidgetRef, alignment: Alignment) -> bool {
         let Some(item) = self
             .items
             .iter_mut()
@@ -594,11 +542,11 @@ impl Layout for BoxLayout {
         self.spacing_value()
     }
 
-    fn alignment(&self) -> ItemAlignment {
+    fn alignment(&self) -> Alignment {
         self.alignment
     }
 
-    fn set_layout_alignment(&mut self, alignment: ItemAlignment) {
+    fn set_layout_alignment(&mut self, alignment: Alignment) {
         self.alignment = alignment;
         self.invalidate();
     }
@@ -995,7 +943,7 @@ pub struct GridItem {
     pub row_span: usize,
     pub col_span: usize,
     /// `QLayoutItem::alignment`.
-    pub alignment: ItemAlignment,
+    pub alignment: Alignment,
     /// The item is a nested layout (`QGridLayout::addLayout`): `widget` holds the child layout.
     pub nested: bool,
 }
@@ -1035,7 +983,7 @@ pub struct GridLayout {
     /// Smart spacing from the parent layout or widget (`qSmartSpacing`, qlayoutengine.cpp:390-401).
     smart_spacing: i32,
     /// `QLayout::alignment`: set on this layout by its parent (`QLayoutItem::alignment`).
-    alignment: ItemAlignment,
+    alignment: Alignment,
     items: Vec<GridItem>,
     row_stretches: Vec<u32>,
     col_stretches: Vec<u32>,
@@ -1058,7 +1006,7 @@ impl GridLayout {
             h_spacing: -1,
             v_spacing: -1,
             smart_spacing: -1,
-            alignment: ItemAlignment::NONE,
+            alignment: Alignment::NONE,
             items: Vec::new(),
             row_stretches: Vec::new(),
             col_stretches: Vec::new(),
@@ -1083,7 +1031,7 @@ impl GridLayout {
         row_span: usize,
         col_span: usize,
     ) {
-        self.add_widget_aligned(widget, row, column, row_span, col_span, ItemAlignment::NONE);
+        self.add_widget_aligned(widget, row, column, row_span, col_span, Alignment::NONE);
     }
 
     /// `QGridLayout::rowStretch` (qgridlayout.cpp:1506-1510). Rows never set read 0; Qt's
@@ -1134,7 +1082,7 @@ impl GridLayout {
         column: usize,
         row_span: usize,
         col_span: usize,
-        alignment: ItemAlignment,
+        alignment: Alignment,
     ) {
         self.items.push(GridItem {
             widget,
@@ -1159,7 +1107,7 @@ impl GridLayout {
         column: usize,
         row_span: usize,
         col_span: usize,
-        alignment: ItemAlignment,
+        alignment: Alignment,
     ) -> WidgetRef {
         let mut holder = EmptyWidget::with_geometry(Rect::new(0, 0, 0, 0));
         holder.set_layout(layout);
@@ -1179,7 +1127,7 @@ impl GridLayout {
             column,
             row_span: row_span.max(1),
             col_span: col_span.max(1),
-            alignment: ItemAlignment::NONE,
+            alignment: Alignment::NONE,
             nested: true,
         });
         self.update_layout();
@@ -1291,7 +1239,7 @@ impl GridLayout {
     /// The rectangle the content is laid out in: `QGridLayout::setGeometry` places an aligned grid
     /// inside `QLayout::alignmentRect` of its geometry (qgridlayout.cpp:1324).
     fn placed_rect(&self) -> Rect {
-        if self.alignment == ItemAlignment::NONE {
+        if self.alignment == Alignment::NONE {
             return self.geometry;
         }
         self.ensure_geom();
@@ -1430,7 +1378,7 @@ impl Layout for GridLayout {
         self.add_widget(widget, r, 0);
     }
 
-    fn set_alignment(&mut self, widget: &WidgetRef, alignment: ItemAlignment) -> bool {
+    fn set_alignment(&mut self, widget: &WidgetRef, alignment: Alignment) -> bool {
         let Some(item) = self
             .items
             .iter_mut()
@@ -1504,11 +1452,11 @@ impl Layout for GridLayout {
         }
     }
 
-    fn alignment(&self) -> ItemAlignment {
+    fn alignment(&self) -> Alignment {
         self.alignment
     }
 
-    fn set_layout_alignment(&mut self, alignment: ItemAlignment) {
+    fn set_layout_alignment(&mut self, alignment: Alignment) {
         self.alignment = alignment;
         self.invalidate();
     }

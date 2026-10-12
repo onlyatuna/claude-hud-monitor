@@ -377,10 +377,10 @@ fn test_hover_enter_leave_events_transition() {
 fn test_builtin_label_widget() {
     let mut label = Label::new("HUD CPU 88% 🔥");
     assert_eq!(label.text(), "HUD CPU 88% 🔥");
-    assert_eq!(label.alignment(), Alignment::Left);
+    assert_eq!(label.alignment(), Alignment::LEFT | Alignment::V_CENTER);
 
-    label.set_alignment(Alignment::Center);
-    assert_eq!(label.alignment(), Alignment::Center);
+    label.set_alignment(Alignment::CENTER);
+    assert_eq!(label.alignment(), Alignment::CENTER);
 
     label.set_color(Color::from_rgba8(255, 100, 0, 255));
     assert_eq!(label.color(), Color::from_rgba8(255, 100, 0, 255));

@@ -164,7 +164,7 @@ struct WidgetSpec {
     row_span: usize,
     col_span: usize,
     row_stretch: u32,
-    alignment: ItemAlignment,
+    alignment: Alignment,
 }
 
 enum Item {
@@ -329,7 +329,7 @@ fn parse_item(item: &str) -> Item {
         row_span: n(12) as usize,
         col_span: n(13) as usize,
         row_stretch: n(14) as u32,
-        alignment: ItemAlignment::from_bits(n(15) as u32),
+        alignment: Alignment::from_bits(n(15) as u32),
     })
 }
 

@@ -120,8 +120,8 @@ fn hud_like_grid(aligned: bool) -> (WidgetRef, [WidgetRef; 4]) {
         probe(71, 20, Policy::Preferred),
         probe(50, 30, Policy::Preferred),
     ];
-    let left_v_center = if aligned { ItemAlignment::LEFT | ItemAlignment::V_CENTER } else { ItemAlignment::NONE };
-    let h_center = if aligned { ItemAlignment::H_CENTER } else { ItemAlignment::NONE };
+    let left_v_center = if aligned { Alignment::LEFT | Alignment::V_CENTER } else { Alignment::NONE };
+    let h_center = if aligned { Alignment::H_CENTER } else { Alignment::NONE };
     let mut grid = GridLayout::new();
     grid.set_margins(Margins::new(0, 0, 0, 0));
     grid.set_horizontal_spacing(4);
@@ -129,7 +129,7 @@ fn hud_like_grid(aligned: bool) -> (WidgetRef, [WidgetRef; 4]) {
     grid.add_widget_aligned(items[0].clone(), 0, 0, 1, 1, left_v_center);
     grid.add_widget_aligned(items[1].clone(), 1, 0, 1, 1, left_v_center);
     grid.add_widget_aligned(items[2].clone(), 0, 1, 1, 1, h_center);
-    grid.add_widget_aligned(items[3].clone(), 1, 1, 1, 1, ItemAlignment::NONE);
+    grid.add_widget_aligned(items[3].clone(), 1, 1, 1, 1, Alignment::NONE);
     grid.set_row_stretch(1, 1);
     grid.set_column_stretch(1, 1);
     (lay_out(Box::new(grid), 300, 160), items)
@@ -160,8 +160,8 @@ fn box_item_alignment_places_item_inside_the_cell() {
     let mut h = BoxLayout::horizontal();
     h.set_margins(Margins::new(0, 0, 0, 0));
     h.set_spacing(4);
-    h.add_widget_aligned(a.clone(), 0, ItemAlignment::RIGHT | ItemAlignment::BOTTOM);
-    h.add_widget_aligned(b.clone(), 1, ItemAlignment::H_CENTER);
+    h.add_widget_aligned(a.clone(), 0, Alignment::RIGHT | Alignment::BOTTOM);
+    h.add_widget_aligned(b.clone(), 1, Alignment::H_CENTER);
     let _c = lay_out(Box::new(h), 300, 100);
     assert_eq!(rect_of(&a), (0, 80, 60, 20));
     assert_eq!(rect_of(&b), (157, 0, 50, 100), "only the aligned axis shrinks");
@@ -171,8 +171,8 @@ fn box_item_alignment_places_item_inside_the_cell() {
     let mut v = BoxLayout::vertical();
     v.set_margins(Margins::new(0, 0, 0, 0));
     v.set_spacing(4);
-    v.add_widget_aligned(a.clone(), 0, ItemAlignment::RIGHT);
-    v.add_widget_aligned(b.clone(), 1, ItemAlignment::TOP);
+    v.add_widget_aligned(a.clone(), 0, Alignment::RIGHT);
+    v.add_widget_aligned(b.clone(), 1, Alignment::TOP);
     let _c = lay_out(Box::new(v), 300, 100);
     assert_eq!(rect_of(&a), (240, 0, 60, 20));
     assert_eq!(rect_of(&b), (0, 24, 300, 30));
@@ -180,20 +180,20 @@ fn box_item_alignment_places_item_inside_the_cell() {
 
 #[test]
 fn alignment_removes_the_aligned_axis_from_expanding_directions() {
-    let expanding = |align: ItemAlignment| {
+    let expanding = |align: Alignment| {
         let mut h = BoxLayout::horizontal();
         h.add_widget_aligned(probe(60, 20, Policy::Expanding), 0, align);
         h.expanding_directions()
     };
-    assert_eq!(expanding(ItemAlignment::NONE), (true, true));
-    assert_eq!(expanding(ItemAlignment::H_CENTER), (false, true));
-    assert_eq!(expanding(ItemAlignment::V_CENTER), (true, false));
-    assert_eq!(expanding(ItemAlignment::CENTER), (false, false));
+    assert_eq!(expanding(Alignment::NONE), (true, true));
+    assert_eq!(expanding(Alignment::H_CENTER), (false, true));
+    assert_eq!(expanding(Alignment::V_CENTER), (true, false));
+    assert_eq!(expanding(Alignment::CENTER), (false, false));
 }
 
 #[test]
 fn aligned_expanding_item_is_placed_not_stretched() {
-    let place = |align: ItemAlignment| {
+    let place = |align: Alignment| {
         let w = probe(60, 20, Policy::Expanding);
         let mut h = BoxLayout::horizontal();
         h.set_margins(Margins::new(0, 0, 0, 0));
@@ -201,10 +201,10 @@ fn aligned_expanding_item_is_placed_not_stretched() {
         let _c = lay_out(Box::new(h), 300, 100);
         rect_of(&w)
     };
-    assert_eq!(place(ItemAlignment::NONE), (0, 0, 300, 100));
-    assert_eq!(place(ItemAlignment::H_CENTER), (120, 0, 60, 100));
-    assert_eq!(place(ItemAlignment::V_CENTER), (0, 40, 300, 20));
-    assert_eq!(place(ItemAlignment::CENTER), (120, 40, 60, 20));
+    assert_eq!(place(Alignment::NONE), (0, 0, 300, 100));
+    assert_eq!(place(Alignment::H_CENTER), (120, 0, 60, 100));
+    assert_eq!(place(Alignment::V_CENTER), (0, 40, 300, 20));
+    assert_eq!(place(Alignment::CENTER), (120, 40, 60, 20));
 }
 
 #[test]
@@ -220,8 +220,8 @@ fn set_alignment_applies_to_an_existing_item_and_reports_unknown_widgets() {
     {
         let mut c = container.borrow_mut();
         let layout = c.layout_mut().unwrap();
-        assert!(layout.set_alignment(&w, ItemAlignment::CENTER));
-        assert!(!layout.set_alignment(&stranger, ItemAlignment::CENTER));
+        assert!(layout.set_alignment(&w, Alignment::CENTER));
+        assert!(!layout.set_alignment(&stranger, Alignment::CENTER));
     }
 
     assert_eq!(rect_of(&w), (120, 40, 60, 20), "set_alignment must re-lay the layout out");
@@ -237,7 +237,7 @@ fn stacked_layout_ignores_item_alignment_like_qt() {
     {
         let mut c = container.borrow_mut();
         let layout = c.layout_mut().unwrap();
-        assert!(layout.set_alignment(&page, ItemAlignment::RIGHT | ItemAlignment::BOTTOM));
+        assert!(layout.set_alignment(&page, Alignment::RIGHT | Alignment::BOTTOM));
     }
     container.borrow().update_layout();
     assert_eq!(rect_of(&page), (0, 0, 300, 100));

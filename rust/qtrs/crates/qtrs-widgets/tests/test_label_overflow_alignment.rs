@@ -60,7 +60,11 @@ fn assert_overflow_offset(align: Alignment, x0_of: impl Fn(f32, f32) -> f32) {
     let got = paint_into(w, H, |p| overflow.paint_event(p));
 
     // Reference: the same text left-aligned at the offset Qt computes, unclipped.
-    let mut reference = make_label(TEXT, exact.ceil() as i32 + 4, Alignment::Left);
+    let mut reference = make_label(
+        TEXT,
+        exact.ceil() as i32 + 4,
+        Alignment::LEFT | Alignment::V_CENTER,
+    );
     let want = paint_into(w, H, |p| {
         p.translate(x0, 0.0);
         reference.paint_event(p);
@@ -75,12 +79,12 @@ fn assert_overflow_offset(align: Alignment, x0_of: impl Fn(f32, f32) -> f32) {
 
 #[test]
 fn centred_overflow_text_shifts_left_by_half_the_overflow() {
-    assert_overflow_offset(Alignment::Center, |w, a| (w - a) / 2.0);
+    assert_overflow_offset(Alignment::CENTER, |w, a| (w - a) / 2.0);
 }
 
 #[test]
 fn right_overflow_text_is_not_clamped_to_the_left_edge() {
-    assert_overflow_offset(Alignment::Right, |w, a| w - a);
+    assert_overflow_offset(Alignment::RIGHT | Alignment::V_CENTER, |w, a| w - a);
 }
 
 #[test]
@@ -88,7 +92,7 @@ fn overflowing_label_text_is_clipped_to_the_label_rect_on_both_sides() {
     let exact = exact_advance(TEXT);
     let w = exact.floor() as i32 - 10;
     let pad = 20;
-    let mut l = make_label(TEXT, w, Alignment::Center);
+    let mut l = make_label(TEXT, w, Alignment::CENTER);
     let pm = paint_into(w + 2 * pad, H, |p| {
         p.translate(pad as f32, 0.0);
         l.paint_event(p);

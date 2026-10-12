@@ -3,11 +3,12 @@
 //! Coordinates text shaping, word wrapping, IME pre-edit composition display,
 //! selection highlighting, and drawing to `Painter`.
 
+use crate::alignment::Alignment;
 use crate::geometry::primitives::{PointF, RectF};
 use crate::paint::painter::Painter;
 use crate::text::font::Font;
 use crate::text::font_metrics::FontMetrics;
-use crate::text::format::{FormatRange, TextAlignment};
+use crate::text::format::FormatRange;
 use crate::text::line::{Edge, TextLine};
 use crate::text::position::TextPosition;
 use tiny_skia::Color;
@@ -28,7 +29,7 @@ pub struct TextLayout {
     /// Word wrapping width constraint (if None, single unbounded line per paragraph).
     wrap_width: Option<f32>,
     /// Horizontal paragraph alignment.
-    alignment: TextAlignment,
+    alignment: Alignment,
     /// Laid-out lines.
     lines: Vec<TextLine>,
     /// Top-left origin position.
@@ -47,7 +48,7 @@ impl TextLayout {
             preedit_text: String::new(),
             formats: Vec::new(),
             wrap_width: None,
-            alignment: TextAlignment::AlignLeft,
+            alignment: Alignment::LEFT,
             lines: Vec::new(),
             position: PointF::new(0.0, 0.0),
             layout_cursor: 0,
@@ -116,8 +117,8 @@ impl TextLayout {
         self.clear_layout();
     }
 
-    /// Sets text alignment.
-    pub fn set_alignment(&mut self, alignment: TextAlignment) {
+    /// Sets text alignment (`QTextOption::setAlignment`); only the horizontal flags apply.
+    pub fn set_alignment(&mut self, alignment: Alignment) {
         self.alignment = alignment;
     }
 
@@ -243,17 +244,16 @@ impl TextLayout {
         let line_idx = self.lines.len();
 
         let y_pos = self.position.y + (line_idx as f32) * metrics.height;
-        let x_pos = match self.alignment {
-            TextAlignment::AlignLeft => self.position.x,
-            TextAlignment::AlignHCenter => {
-                let avail = self.wrap_width.unwrap_or(natural_w);
-                self.position.x + (avail - natural_w).max(0.0) * 0.5
-            }
-            TextAlignment::AlignRight => {
-                let avail = self.wrap_width.unwrap_or(natural_w);
-                self.position.x + (avail - natural_w).max(0.0)
-            }
-            TextAlignment::AlignJustify => self.position.x,
+        // `QTextEngine::alignLine` (qtextengine.cpp:3558-3572): Right, else HCenter, else the
+        // line starts at the left (Left, Justify, no flag).
+        let x_pos = if self.alignment.contains(Alignment::RIGHT) {
+            let avail = self.wrap_width.unwrap_or(natural_w);
+            self.position.x + (avail - natural_w).max(0.0)
+        } else if self.alignment.contains(Alignment::H_CENTER) {
+            let avail = self.wrap_width.unwrap_or(natural_w);
+            self.position.x + (avail - natural_w).max(0.0) * 0.5
+        } else {
+            self.position.x
         };
 
         self.layout_cursor = curr_grapheme;

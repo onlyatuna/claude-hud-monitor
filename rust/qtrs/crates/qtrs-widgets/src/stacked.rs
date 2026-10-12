@@ -111,7 +111,7 @@ impl Layout for StackedLayout {
     /// `QStackedLayout::setGeometry` gives the current page the whole rectangle with
     /// `widget->setGeometry(rect)` and never consults the item's alignment
     /// (qstackedlayout.cpp:453-467).
-    fn set_alignment(&mut self, widget: &WidgetRef, _alignment: crate::layout::ItemAlignment) -> bool {
+    fn set_alignment(&mut self, widget: &WidgetRef, _alignment: crate::layout::Alignment) -> bool {
         self.widgets.iter().any(|page| std::rc::Rc::ptr_eq(page, widget))
     }
 
@@ -167,7 +167,7 @@ impl Layout for StackedLayout {
 
     fn expanding_directions(&self) -> (bool, bool) {
         self.current_widget()
-            .map(|curr| crate::layout_engine::item_expanding(&**curr.borrow(), crate::layout::ItemAlignment::NONE))
+            .map(|curr| crate::layout_engine::item_expanding(&**curr.borrow(), crate::layout::Alignment::NONE))
             .unwrap_or((false, false))
     }
 

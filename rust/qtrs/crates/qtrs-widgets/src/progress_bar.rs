@@ -15,10 +15,10 @@ use qtrs_gui::paint::brush::Brush;
 use qtrs_gui::paint::painter::{Painter, Pen, RenderHint};
 use qtrs_gui::text::{Font, FontMetrics};
 use qtrs_gui::tiny_skia::Color;
+use qtrs_gui::Alignment;
 
 use crate::focus::FocusPolicy;
 use crate::input_common;
-use crate::label::Alignment;
 use crate::scroll::Orientation;
 use crate::size_policy::{transposed_policy, Policy, QSizePolicy};
 use crate::widget::{Widget, WidgetBase};
@@ -41,6 +41,7 @@ pub struct ProgressBar {
     text_visible: bool,
     inverted_appearance: bool,
     orientation: Orientation,
+    /// `QProgressBar::alignment`, `Qt::AlignLeft` by default (qprogressbar.cpp:49).
     alignment: Alignment,
     text_direction: ProgressTextDirection,
     busy_phase: f32,
@@ -75,7 +76,7 @@ impl ProgressBar {
             text_visible: true,
             inverted_appearance: false,
             orientation: Orientation::Horizontal,
-            alignment: Alignment::Left,
+            alignment: Alignment::LEFT,
             text_direction: ProgressTextDirection::TopToBottom,
             busy_phase: 0.0,
             font: Font::new("Segoe UI", 12.0),
@@ -530,10 +531,12 @@ impl Widget for ProgressBar {
             Orientation::Horizontal => {
                 // The aligned offset is not clamped (qpainter.cpp:7426-7429); overflow is clipped
                 // to the bar rect (qpainter.cpp:7442-7446).
-                let x = match self.alignment {
-                    Alignment::Left => 4.0,
-                    Alignment::Center => (w - text_w) / 2.0,
-                    Alignment::Right => w - text_w - 4.0,
+                let x = if self.alignment.contains(Alignment::RIGHT) {
+                    w - text_w - 4.0
+                } else if self.alignment.contains(Alignment::H_CENTER) {
+                    (w - text_w) / 2.0
+                } else {
+                    4.0
                 };
                 let top = (h - metrics.height) / 2.0;
                 let overflow = x < 0.0 || top < 0.0 || x + text_w > w || top + metrics.height > h;

@@ -155,7 +155,7 @@ fn test_text_formats_and_merging() {
 
     // Block format
     let mut block_fmt = TextBlockFormat {
-        alignment: TextAlignment::AlignHCenter,
+        alignment: qtrs_gui::Alignment::H_CENTER,
         heading_level: 2,
         top_margin: 10.0,
         ..Default::default()
@@ -166,7 +166,7 @@ fn test_text_formats_and_merging() {
         ..Default::default()
     };
     block_fmt.merge(&merge_block);
-    assert_eq!(block_fmt.alignment, TextAlignment::AlignHCenter);
+    assert_eq!(block_fmt.alignment, qtrs_gui::Alignment::H_CENTER);
     assert_eq!(block_fmt.heading_level, 2);
     assert_eq!(block_fmt.top_margin, 10.0);
     assert_eq!(block_fmt.left_margin, 20.0);

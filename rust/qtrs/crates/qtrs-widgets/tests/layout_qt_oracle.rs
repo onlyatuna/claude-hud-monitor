@@ -231,12 +231,12 @@ fn nested_add_layout_children_are_container_relative() {
 
     let mut vbox = BoxLayout::vertical();
     vbox.set_spacing(0);
-    vbox.add_widget_aligned(a.clone(), 0, ItemAlignment::NONE);
-    vbox.add_widget_aligned(b.clone(), 0, ItemAlignment::NONE);
+    vbox.add_widget_aligned(a.clone(), 0, Alignment::NONE);
+    vbox.add_widget_aligned(b.clone(), 0, Alignment::NONE);
     let mut hbox = BoxLayout::horizontal();
     hbox.set_spacing(0);
     hbox.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
-    hbox.add_widget_aligned(first.clone(), 0, ItemAlignment::NONE);
+    hbox.add_widget_aligned(first.clone(), 0, Alignment::NONE);
     let holder = hbox.add_layout(Box::new(vbox), 0);
 
     let container: WidgetRef = Rc::new(RefCell::new(Box::new(EmptyWidget::with_geometry(

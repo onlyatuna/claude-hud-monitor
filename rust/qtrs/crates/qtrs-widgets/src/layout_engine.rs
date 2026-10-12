@@ -6,7 +6,7 @@
 //! `QBoxLayout` and `QGridLayout` do, so the spare pixels, the spacing around empty items and the
 //! rounding all come out the same.
 
-use crate::layout::ItemAlignment;
+use crate::layout::Alignment;
 use crate::size_policy::Policy;
 use crate::widget::Widget;
 use qtrs_gui::application::GuiApplication;
@@ -415,7 +415,7 @@ pub fn smart_min_size(widget: &dyn Widget) -> Size {
 
 /// `qSmartMaxSize(sizeHint, minSize, maxSize, sizePolicy, align)` for `widget`: an aligned axis
 /// may grow without limit, because the item is then placed inside the cell instead of filling it.
-pub fn smart_max_size(widget: &dyn Widget, align: ItemAlignment) -> Size {
+pub fn smart_max_size(widget: &dyn Widget, align: Alignment) -> Size {
     if align.horizontal() && align.vertical() {
         return Size::new(LAYOUT_SIZE_MAX, LAYOUT_SIZE_MAX);
     }
@@ -446,22 +446,10 @@ pub fn item_is_empty(widget: &dyn Widget) -> bool {
     !widget.is_visible() && !widget.size_policy().retain_size_when_hidden
 }
 
-/// `QStyle::visualAlignment` (qguiapplication_p.h:176-186): without a horizontal flag `AlignLeft` is
-/// assumed; under right-to-left the horizontal flag is mirrored unless `AlignAbsolute` is set.
-/// `AlignAbsolute` is not returned: nothing that reads the visual alignment checks it.
-pub fn visual_alignment(align: ItemAlignment) -> ItemAlignment {
-    let mut bits = align.bits();
-    if !align.horizontal() {
-        bits |= ItemAlignment::LEFT.bits();
-    }
-    let horizontal = ItemAlignment::LEFT.bits() | ItemAlignment::RIGHT.bits();
-    if bits & ItemAlignment::ABSOLUTE.bits() == 0
-        && bits & horizontal != 0
-        && GuiApplication::is_right_to_left()
-    {
-        bits ^= horizontal;
-    }
-    ItemAlignment::from_bits(bits)
+/// `QStyle::visualAlignment(widget->layoutDirection(), align)` (qguiapplication_p.h:176-186) in
+/// the application's layout direction, which every widget has here.
+pub fn visual_alignment(align: Alignment) -> Alignment {
+    align.visual(GuiApplication::layout_direction())
 }
 
 /// `QLayout::alignmentRect` (qlayout.cpp:1410-1455): the rectangle an aligned layout lays its
@@ -470,7 +458,7 @@ pub fn visual_alignment(align: ItemAlignment) -> ItemAlignment {
 /// height it wants at the width it gets. The alignment then places that size inside `rect`.
 pub fn alignment_rect(
     rect: Rect,
-    align: ItemAlignment,
+    align: Alignment,
     hint: Size,
     max: Size,
     expanding: (bool, bool),
@@ -494,14 +482,14 @@ pub fn alignment_rect(
     let mut x = rect.x;
     let mut y = rect.y;
     let visual = visual_alignment(align);
-    if visual.contains(ItemAlignment::RIGHT) {
+    if visual.contains(Alignment::RIGHT) {
         x += rect.width - s.width;
-    } else if !visual.contains(ItemAlignment::LEFT) {
+    } else if !visual.contains(Alignment::LEFT) {
         x += (rect.width - s.width) / 2;
     }
-    if align.contains(ItemAlignment::BOTTOM) {
+    if align.contains(Alignment::BOTTOM) {
         y += rect.height - s.height;
-    } else if !align.contains(ItemAlignment::TOP) {
+    } else if !align.contains(Alignment::TOP) {
         y += (rect.height - s.height) / 2;
     }
     Rect::new(x, y, s.width, s.height)
@@ -538,7 +526,7 @@ pub fn item_minimum_size(widget: &dyn Widget) -> Size {
 }
 
 /// `QWidgetItem::maximumSize`.
-pub fn item_maximum_size(widget: &dyn Widget, align: ItemAlignment) -> Size {
+pub fn item_maximum_size(widget: &dyn Widget, align: Alignment) -> Size {
     if item_is_empty(widget) {
         Size::new(0, 0)
     } else {
@@ -571,7 +559,7 @@ pub fn item_height_for_width(widget: &dyn Widget, width: i32) -> i32 {
 
 /// `QWidgetItem::expandingDirections` as (horizontal, vertical): the size policy's, plus those of
 /// the widget's own layout when the policy lets it grow, minus the axes the item is aligned in.
-pub fn item_expanding(widget: &dyn Widget, align: ItemAlignment) -> (bool, bool) {
+pub fn item_expanding(widget: &dyn Widget, align: Alignment) -> (bool, bool) {
     if item_is_empty(widget) {
         return (false, false);
     }
@@ -597,7 +585,7 @@ pub fn item_expanding(widget: &dyn Widget, align: ItemAlignment) -> (bool, bool)
 /// alignment means `AlignLeft` (`QStyle::visualAlignment`), a missing vertical one centres. A
 /// hidden widget keeps no geometry. A vertically aligned widget is cut to its height for its width
 /// when it has `heightForWidth`, else to its size hint height.
-pub fn item_set_geometry(widget: &dyn Widget, rect: Rect, align: ItemAlignment) {
+pub fn item_set_geometry(widget: &dyn Widget, rect: Rect, align: Alignment) {
     item_set_geometry_with(widget, rect, align, ItemLimits::of(widget, align));
 }
 
@@ -620,7 +608,7 @@ pub struct ItemLimits {
 }
 
 impl ItemLimits {
-    pub fn of(widget: &dyn Widget, align: ItemAlignment) -> Self {
+    pub fn of(widget: &dyn Widget, align: Alignment) -> Self {
         let aligned_pref = if align.horizontal() || align.vertical() {
             let policy = widget.size_policy();
             let mut pref = item_size_hint(widget);
@@ -653,7 +641,7 @@ impl ItemLimits {
 pub fn item_set_geometry_with(
     widget: &dyn Widget,
     rect: Rect,
-    align: ItemAlignment,
+    align: Alignment,
     limits: ItemLimits,
 ) {
     if item_is_empty(widget) {
@@ -677,15 +665,15 @@ pub fn item_set_geometry_with(
     let mut y = rect.y;
     // `QWidgetItem::setGeometry` (qlayoutitem.cpp:451-455) decides on the visual alignment.
     let visual = visual_alignment(align);
-    let left = !visual.contains(ItemAlignment::RIGHT) && visual.contains(ItemAlignment::LEFT);
-    if visual.contains(ItemAlignment::RIGHT) {
+    let left = !visual.contains(Alignment::RIGHT) && visual.contains(Alignment::LEFT);
+    if visual.contains(Alignment::RIGHT) {
         x += rect.width - width;
     } else if !left {
         x += (rect.width - width) / 2;
     }
-    if align.contains(ItemAlignment::BOTTOM) {
+    if align.contains(Alignment::BOTTOM) {
         y += rect.height - height;
-    } else if !align.contains(ItemAlignment::TOP) {
+    } else if !align.contains(Alignment::TOP) {
         y += (rect.height - height) / 2;
     }
     // Do not move outside of the parent.

@@ -212,14 +212,7 @@ fn a_grid_cell_on_an_aligned_vertical_axis_takes_height_for_width() {
     let w = probe_with(40, 20, Policy::Preferred, true);
     let mut grid = GridLayout::new();
     grid.set_margins(Margins::new(0, 0, 0, 0));
-    grid.add_widget_aligned(
-        w.clone(),
-        0,
-        0,
-        1,
-        1,
-        ItemAlignment::LEFT | ItemAlignment::V_CENTER,
-    );
+    grid.add_widget_aligned(w.clone(), 0, 0, 1, 1, Alignment::LEFT | Alignment::V_CENTER);
     let _c = lay_out(Box::new(grid), 100, 100);
     assert_eq!(rect_of(&w), (0, 10, 40, 80));
 }
