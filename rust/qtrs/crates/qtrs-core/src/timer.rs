@@ -22,7 +22,7 @@ static START_TIME: LazyLock<Instant> = LazyLock::new(Instant::now);
 /// object's timers keep their ids on the target thread (Qt `reRegisterTimers`, qobject.cpp:1496-1500).
 static NEXT_TIMER_ID: AtomicU32 = AtomicU32::new(1);
 
-fn allocate_timer_id() -> TimerId {
+pub fn allocate_timer_id() -> TimerId {
     loop {
         let id = NEXT_TIMER_ID.fetch_add(1, Ordering::Relaxed);
         if id != 0 {
@@ -897,6 +897,21 @@ mod tests {
         assert!(valid_id.is_valid());
         assert_ne!(valid_id, TimerId::INVALID);
         assert_eq!(valid_id.0, 1);
+    }
+    #[test]
+    fn test_timer_id_global_monotonicity() {
+        let id1 = allocate_timer_id();
+        let id2 = allocate_timer_id();
+        assert!(id1.is_valid());
+        assert!(id2.is_valid());
+        assert_ne!(
+            id1, id2,
+            "TimerId must be unique globally across registries (G5.4.c)"
+        );
+        assert!(
+            id2.0 > id1.0,
+            "TimerId must increment monotonically globally"
+        );
     }
 
     #[test]
