@@ -140,10 +140,7 @@ pub fn derive_qobject(input: TokenStream) -> TokenStream {
             .to_compile_error()
             .into();
         }
-        let Some((_, payload_types)) = signals
-            .iter()
-            .find(|(sig, _)| sig.to_string() == notify_name)
-        else {
+        let Some((_, payload_types)) = signals.iter().find(|(sig, _)| *sig == notify_name) else {
             return syn::Error::new(
                 notify_lit.span(),
                 format!(
@@ -443,7 +440,7 @@ fn parse_property_attr(attr: &Attribute) -> syn::Result<(bool, Option<LitStr>)> 
     })?;
     Ok((readonly, notify))
 }
-
+#[allow(clippy::too_many_arguments)]
 fn generate_property_accessors(
     struct_name: &Ident,
     field_ident: &Ident,

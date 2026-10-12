@@ -6,7 +6,7 @@ use crate::layout_engine::{owner_layout_margin, WIDGET_LAYOUT_SPACING, WIDGET_SI
 pub use crate::size_policy::{Policy, QSizePolicy};
 use qtrs_core::event::{Event, EventKind, FocusReason};
 use qtrs_core::event_loop::{filters_consume, notify_borrowed, post_event_to_thread};
-use qtrs_core::object::{ObjectData, ObjectId, QObject, ThreadId};
+use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
 use qtrs_gui::paint::Painter;
 use std::cell::{Cell, RefCell, RefMut};
@@ -857,8 +857,10 @@ impl WidgetBase {
         if crate::window::schedule_widget_update(target_receiver) {
             return;
         }
+        let target_thread = qtrs_core::object::query_object_thread(target_receiver)
+            .unwrap_or(self.object_data.thread_id);
         post_event_to_thread(
-            ThreadId::current(),
+            target_thread,
             target_receiver,
             Event::new(EventKind::UpdateRequest),
         );

@@ -463,7 +463,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G7.2.b [P2, READ]** `EventSender::send` 直接推進 `q.events`，**不壓縮、無優先序、忽略 `insertion_offset`**（僅 `move_to_thread` 與 `EventLoopThreadHandle::quit/post_event` 用）。
   - **G7.2.c [P2]** 兩份登記表可能分歧。
   - **G7.2.d [P1, RAN；已修復：RC-88]** （修復前）無 `removePostedEvents`（→ G3.6.a）。
-  - **G7.2.e [P2, READ]** `Widget::update()` 以 `ThreadId::current()` 為目的地而非 widget 親和性（`widget.rs:296`、`input_common.rs:231`、`menu.rs:1567`）；worker 呼叫 `update()` 會 post 進錯誤／不存在的佇列。
+  - **G7.2.e [P2, READ；已修復：RC-170]** （修復前）`Widget::update()`／`Menu::update()` 以 `ThreadId::current()` 為目的地 post `UpdateRequest`。RC-170 依 Qt `QWidget::update`（`[QT-SRC widgets/kernel/qwidget.cpp:11367-11420]`）實作：改以 target 接收者之 thread affinity（`query_object_thread(target).unwrap_or(self.object_data.thread_id)`）為目標，確保跨執行緒呼叫精準送達接收者所屬執行緒之事件佇列。
 - **Test**：必要：`post_before_loop_exists_is_delivered_when_loop_starts`；`event_sender_send_applies_compression`；`destroyed_receiver_drops_pending_events`。
 - **HUD usage**：Rust `run_on_main_thread`（`main.rs:40-55`，用於 `:473` 熱鍵、`:518` 主題、`:527` 刷新結果）。Python 無。
 
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 229 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 230 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.4.a、G2.4.b、G2.5.a、G2.6.c、G2.7.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1353,7 +1353,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.2.b | P2, READ | `EventSender::send` 直接推進 `q.events`，**不壓縮、無優先序、忽略 `insertion_offset`** |
 | G7.2.c | P2 | 兩份登記表可能分歧 |
 | G7.2.d | P1, RAN；已修復：RC-88 | 無 `removePostedEvents` |
-| G7.2.e | P2, READ | `Widget::update()` 以 `ThreadId::current()` 為目的地而非 widget 親和性 |
+| G7.2.e | P2, READ；已修復：RC-170 | Widget::update() 以 widget 親和性為目的地（qwidget.cpp:11367-11420） |
 | G7.3.a | P1, RAN；已修復：RC-131 | `FutureWatcher`／`Promise` 的信號在**生產者執行緒**以普通 `connect` |
 | G7.4.a | P1, RAN；已修復：RC-109 | foreign-thread `send_event` 對存活物件回 false 且**無診斷** |
 | G7.4.b | D；已修復：RC-107 | `move_to_thread` 之後事件被路由到目標佇列，但 `with_object_mut` 在那邊失敗 |
@@ -3564,4 +3564,16 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：在 `rust/qtrs/crates/qtrs-core/src/object/qobject.rs` 移除自身與直接環拒絕邏輯，僅保留跨執行緒檢查。更新 `test_qobject_safety_and_qt6_features.rs` 斷言。
 - **驗證**：新增測試 `crates/qtrs-core/tests/test_install_event_filter_self_and_mutual.rs`（3 個測試項目，包含 self filter 允許、mutual cycle 允許、self filter 事件遞送與攔截測試）。修改前 3 項全 FAIL，修改後全 PASS。並新增 `crates/qtrs-core/tests/test_move_to_thread_three_levels.rs` 補齊 C7.5 / G7.5.d 所要求的 3 層後代 thread_id 更新 pin 測試。qtrs-core 324 項全過；qtrs workspace 1014 項全過；HUD 135 項全過；clippy 0 warning；`cargo fmt --check` 通過；`--snapshot` 比對版面 0 px 差異。
 - **HUD 影響**：無負面影響。HUD 不使用自身或直接環過濾器。
+- **Residual**：無。
+
+#### RC-170 Widget::update() 以接收者 thread affinity 為目的地 post UpdateRequest（G7.2.e）
+- **Qt 依據**：`[QT-SRC widgets/kernel/qwidget.cpp:11367-11420]` `QWidget::update`：
+  ```cpp
+  QCoreApplication::postEvent(this, new QEvent(QEvent::UpdateRequest));
+  ```
+  在 Qt 中，`QCoreApplication::postEvent` 恆將事件 post 進接收者所屬之執行緒佇列（`receiver->d_func()->threadData`），而非呼叫端執行緒。
+- **根因**：qtrs `qtrs-widgets/src/widget.rs` 與 `menu.rs` 在呼叫 `post_event_to_thread` 時，硬編碼使用 `ThreadId::current()` 作為目標執行緒；當非 GUI 的 worker thread 呼叫 `widget.update()` 時，事件會被 post 進 worker thread 的佇列（甚至滯留在 pending buffer），導致所屬 GUI 執行緒永不處理該更新請求。
+- **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/widget.rs` 與 `rust/qtrs/crates/qtrs-widgets/src/menu.rs`，目標執行緒改由 `query_object_thread(target).unwrap_or(self.object_data.thread_id)` 解析，並在 `qtrs-derive/src/lib.rs` 修正 2 處 clippy 警告確保零警告。
+- **驗證**：新增測試 `crates/qtrs-widgets/tests/test_widget_update_cross_thread.rs`（2 項測試，包含已註冊 widget 及未註冊於 global registry 之 widget，驗證由 worker thread 呼叫 `update()` 時，事件確實送達所屬 GUI 執行緒之 event loop）。未修正前 FAIL：`Unregistered widget update() from worker thread must post to widget's thread affinity`。修正後 PASS。qtrs-widgets 418 項全過；HUD 135 項全過；`cargo clippy -j 1 -- -D warnings` 0 warning；`rustfmt` 格式檢查通過；`--snapshot` 版面 0 px 差異。
+- **HUD 影響**：無負面影響。HUD 若由背景任務觸發 widget 更新能更安全送達主執行緒。
 - **Residual**：無。
