@@ -308,6 +308,30 @@ fn test_find_child_searches_direct_children_before_descendants() {
     );
 }
 
+#[test]
+fn test_object_name_changed_signal() {
+    // G2.3.d: [QT-SRC corelib/kernel/qobject.cpp:1363-1373]
+    // QObject::setObjectName emits objectNameChanged when name changes (spec02_qobject.py R-00016).
+    let mut obj = MockButton::new("", "");
+    let emissions = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let em_clone = Arc::clone(&emissions);
+    obj.object_name_changed().connect(move |name| {
+        em_clone.lock().unwrap().push(name.clone());
+    });
+
+    obj.set_object_name("a");
+    obj.set_object_name("a");
+    obj.set_object_name("");
+    obj.set_object_name("");
+
+    let got = emissions.lock().unwrap().clone();
+    assert_eq!(
+        got,
+        vec!["a".to_string(), "".to_string()],
+        "setObjectName must emit objectNameChanged only on distinct changes (qobject.cpp:1371 / R-00016 / G2.3.d)"
+    );
+}
+
 // --- 3. Thread Migration Cascading Tests ---
 
 #[test]

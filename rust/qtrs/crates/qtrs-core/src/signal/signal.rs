@@ -326,14 +326,16 @@ impl<T> Signal<T> {
     /// Emission is suppressed while `owner` has signals blocked (`QObject::blockSignals`), whether
     /// or not `owner` is registered. Slots see `owner` as `sender()`.
     pub fn with_owner(owner: &ObjectData) -> Self {
+        Self::with_owner_parts(owner.id, Arc::clone(&owner.signals_blocked))
+    }
+
+    /// Creates a signal owned by an explicit `(ObjectId, signals_blocked)` pair.
+    pub fn with_owner_parts(id: ObjectId, blocked: Arc<AtomicBool>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(SignalInner {
                 subscribers: Vec::new(),
             })),
-            emitter: Some(Emitter {
-                id: owner.id,
-                blocked: Arc::clone(&owner.signals_blocked),
-            }),
+            emitter: Some(Emitter { id, blocked }),
         }
     }
 

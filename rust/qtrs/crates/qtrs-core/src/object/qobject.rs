@@ -1,4 +1,5 @@
 use crate::event::EventFilterChain;
+use crate::signal::Signal;
 use crate::variant::Variant;
 
 use super::thread::{ThreadContext, ThreadId};
@@ -412,6 +413,9 @@ pub struct ObjectData {
     /// Object name for hierarchy queries (`QObject::objectName`).
     pub object_name: Option<String>,
 
+    /// Emitted when object name changes (`QObject::objectNameChanged`).
+    pub object_name_changed: Signal<String>,
+
     /// Shared liveness token for guarded weak references (`QPointer`).
     pub liveness: Arc<AtomicBool>,
 
@@ -458,13 +462,16 @@ impl ObjectData {
     pub fn new(id: ObjectId) -> Self {
         let thread_id = ThreadId::current();
         register_object_thread(id, thread_id);
+        let signals_blocked = Arc::new(AtomicBool::new(false));
+        let object_name_changed = Signal::with_owner_parts(id, Arc::clone(&signals_blocked));
         Self {
             id,
             parent: None,
             children: Vec::new(),
             thread_id,
             delete_later_called: AtomicBool::new(false),
-            signals_blocked: Arc::new(AtomicBool::new(false)),
+            signals_blocked,
+            object_name_changed,
             event_filters: EventFilterChain::new(),
             dynamic_properties: HashMap::new(),
             object_name: None,
@@ -484,13 +491,16 @@ impl ObjectData {
     /// Core object metadata: ObjectData (`QObjectData` equivalent).
     pub fn with_thread(id: ObjectId, thread_id: ThreadId) -> Self {
         register_object_thread(id, thread_id);
+        let signals_blocked = Arc::new(AtomicBool::new(false));
+        let object_name_changed = Signal::with_owner_parts(id, Arc::clone(&signals_blocked));
         Self {
             id,
             parent: None,
             children: Vec::new(),
             thread_id,
             delete_later_called: AtomicBool::new(false),
-            signals_blocked: Arc::new(AtomicBool::new(false)),
+            signals_blocked,
+            object_name_changed,
             event_filters: EventFilterChain::new(),
             dynamic_properties: HashMap::new(),
             object_name: None,
@@ -536,7 +546,12 @@ impl ObjectData {
     }
     /// Sets object name for reflection and hierarchy queries (`QObject::setObjectName`).
     pub fn set_object_name(&mut self, name: impl Into<String>) {
-        self.object_name = Some(name.into());
+        let name = name.into();
+        let prev = self.object_name.as_deref().unwrap_or("");
+        if prev != name {
+            self.object_name = Some(name.clone());
+            self.object_name_changed.emit(&name);
+        }
     }
 
     /// Returns object name (`QObject::objectName`).
@@ -984,6 +999,11 @@ pub trait QObject: std::any::Any {
     /// Sets object name (`QObject::setObjectName`).
     fn set_object_name(&mut self, name: &str) {
         self.object_data_mut().set_object_name(name);
+    }
+
+    /// Signal emitted when object name changes (`QObject::objectNameChanged`).
+    fn object_name_changed(&self) -> &Signal<String> {
+        &self.object_data().object_name_changed
     }
 
     /// Blocks or unblocks signals emitted by this object (`QObject::blockSignals`).
