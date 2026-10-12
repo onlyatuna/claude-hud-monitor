@@ -176,8 +176,10 @@ impl CoreApplication {
     /// `GuiApplication` passes `DispatcherKind::Gui`, as `QGuiApplication` takes its dispatcher
     /// from the platform plugin.
     pub fn with_dispatcher_kind(args: Vec<String>, kind: DispatcherKind) -> Self {
-        APP_INSTANCE_EXISTS.store(true, Ordering::SeqCst);
-
+        assert!(
+            !APP_INSTANCE_EXISTS.swap(true, Ordering::SeqCst),
+            "QCoreApplication: there should be only one application object"
+        );
         // Initialize main thread context
         ThreadContext::init_current(true, None);
         ThreadContext::set_main_thread_id(ThreadId::current());

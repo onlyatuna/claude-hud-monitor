@@ -71,6 +71,32 @@ fn test_core_application_metadata_and_attributes() {
     drop(app);
     assert!(!CoreApplication::instance_exists());
 }
+#[test]
+fn test_second_core_application_instance_panics() {
+    let _guard = TEST_MUTEX.lock().unwrap();
+    CoreApplication::reset_for_test();
+    let _app1 = CoreApplication::new(vec!["app1".to_string()]);
+    let res = std::panic::catch_unwind(|| {
+        let _app2 = CoreApplication::new(vec!["app2".to_string()]);
+    });
+    assert!(
+        res.is_err(),
+        "Second CoreApplication instance must panic (qcoreapplication.cpp:801 / G4.1.f)"
+    );
+    if let Err(err) = res {
+        let msg = if let Some(s) = err.downcast_ref::<&str>() {
+            *s
+        } else if let Some(s) = err.downcast_ref::<String>() {
+            s.as_str()
+        } else {
+            ""
+        };
+        assert!(
+            msg.contains("there should be only one application object"),
+            "Panic message must mention single application object: {msg}"
+        );
+    }
+}
 
 // -----------------------------------------------------------------------------
 // Test 2: CoreApplication Exec, ProcessEvents, and AboutToQuit Signal

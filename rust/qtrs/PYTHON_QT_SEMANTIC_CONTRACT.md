@@ -253,7 +253,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G4.1.c [P1, RAN；已修復：RC-106]** （修復前）worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op**（`get_thread_event_sender(ThreadId::current())` 找不到 loop，退回讀 worker 自己空的 `LOCAL_EVENT_LOOP`）。
   - **G4.1.d [P1, RAN；已修復：RC-79]** （修復前）`aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內；`exit` 無 `exec` 時不發。
   - **G4.1.e [P1, RAN；已修復：RC-115, RC-141]** （修復前）`quit()` 不是 `Quit` 事件：不關視窗、不能被否決；pump 在遞送前就鎖定 `quit_code`，filter 否決不了 posted `Quit`。
-  - **G4.1.f [P2, READ]** `CoreApplication::new` 文件寫會 panic，實際沒有第二個實例檢查。
+  - **G4.1.f [P2, READ；已修復：RC-176]** CoreApplication 實例檢查：第二個實例建構時 panic（qcoreapplication.cpp:801, RC-176）。
   - **G4.1.g [P1, RAN；已修復：RC-104]** （修復前）無獨立的巢狀 `QEventLoop`（`isRunning`、自己的 `exit`、`QEventLoopLocker`）。`EventLoop::new` 取代該執行緒已註冊的 handle 與 timer context，`Drop` 取消註冊——**在同一執行緒建立並丟棄第二個 `EventLoop` 會破壞第一個**。
   - **G4.1.h [P2]** `ExitCode::from(exit_code as u8)` 截斷（`main.rs:620`）；HUD 以 0 退出。
   - **G4.1.i [P1, RAN；已修復：RC-113]** （修復前；drop 不再 quit。「以可取消 Quit」部分歸 G4.1.e）`qtrs-widgets::Application` 在最後一個視窗被 `unregister_window`（drop）時直接 `quit()`，而不是在**關閉**時以可取消 `Quit`（見 C11.2）。
@@ -1227,7 +1227,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ## 附錄 A：Gap 總表
 
-共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 237 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
+共 382 項：D 10、DV 1、P0 35、P1 174、P2 157、test gap 5（計數含已修復項；標籤含「已修復」者共 238 項：G2.1.a、G2.1.b、G2.1.d、G2.2.a、G2.2.b、G2.2.d、G2.3.b、G2.3.d、G2.3.e、G2.4.a、G2.4.b、G2.5.a、G2.6.a、G2.6.b、G2.6.c、G2.7.a、G3.1.a、G3.1.c、G3.2.a、G3.2.b、G3.4.a、G3.4.c、G3.4.e、G3.4.f、G3.5.a、G3.5.b、G3.5.c、G3.6.a、G4.1.a、G4.1.b、G4.1.c、G4.1.d、G4.1.e、G4.1.f、G4.1.g、G4.1.i、G4.2.a、G4.3.a、G5.1.a、G5.1.b、G5.1.c、G5.1.f、G5.2.a、G5.3.a、G5.3.b、G5.4.a、G5.4.b、G5.5.b、G6.1.a、G6.1.b、G6.1.d、G6.1.f、G6.2.a、G6.2.c、G6.3.a、G6.4.a、G6.4.b、G6.4.d、G6.5.a、G6.5.b、G6.5.c、G6.6.a、G7.1.a、G7.1.b、G7.1.c、G7.2.a、G7.2.d、G7.2.e、G7.3.a、G7.4.a、G7.4.b、G7.4.c、G7.5.a、G7.5.b、G7.5.d、G7.5.e、G7.5.h、G7.6.a、G7.6.b、G7.6.c、G7.6.d、G7.6.f、G7.6.g、G7.6.h、G7.6.i、G7.9.b、G8.1.a、G8.1.c、G8.1.d、G8.1.e、G8.2.a、G8.3.a、G8.3.b、G8.3.c、G8.3.d、G8.3.e、G8.4.a、G8.4.b、G8.4.c、G8.4.d、G8.4.f、G8.4.g、G8.4.h、G8.5.a、G8.5.b、G8.5.c、G8.5.d、G8.5.e、G8.5.f、G8.5.g、G8.5.i、G8.5.k、G8.6.b、G8.6.c、G8.7.a、G8.7.c、G8.7.d、G8.8.a、G8.8.d、G9.1.a、G9.1.b、G9.1.c、G9.1.d、G9.1.e、G9.1.f、G9.2.a、G9.2.b、G9.2.c、G9.2.d、G9.2.e、G9.2.f、G9.3.a、G9.3.c、G9.4.b、G9.5.a、G9.5.b、G9.5.d、G9.5.e、G9.6.a、G9.6.b、G9.6.c、G9.6.d、G9.7.a、G10.1.a、G10.1.b、G10.3.a、G10.3.b、G10.3.c、G10.4.a、G10.4.c、G10.4.d、G10.5.a、G10.5.c、G10.6.b、G10.7.a、G10.7.b、G10.7.c、G10.7.d、G10.7.e、G10.7.g、G11.1.b、G11.1.d、G11.2.a、G11.2.b、G11.2.c、G11.2.e、G11.2.g、G11.2.h、G11.2.i、G11.3.a、G11.3.c、G11.4.a、G11.4.b、G11.4.c、G11.5.a、G11.5.d、G11.6.b、G11.7.a、G11.8.a、G11.8.c、G11.9.a、G11.9.c、G11.9.e、G11.13.a、G11.13.b、G11.13.c、G11.13.d、G11.13.e、G11.13.f、G11.13.g、G11.13.h、G11.13.i、G11.13.j、G11.13.k、G11.13.l、G11.13.m、G11.13.n、G11.13.o、G11.13.p、G12.3.a、G12.3.b、G12.3.c、G12.3.d、G12.3.h、G12.5.a、G12.5.b、G12.5.c、G12.5.d、G12.5.e、G12.5.f、G12.5.g、G12.5.i、G12.5.j、G12.5.k、G12.5.l、G12.5.m、G12.5.n、G12.5.o、G12.5.p、G12.5.q、G12.5.s、G12.5.t、G12.5.v、G12.5.w、G12.8.a、G12.8.b、G12.8.c、G12.8.d、G12.8.f、G12.8.g、G12.8.h、G12.8.i、G12.8.j、G12.8.l、G12.8.m、G12.8.o、G12.8.p、G12.8.q）。依章節排序。嚴重度與驗證等級見 §0。`D` 項必須附理由，且誤用時可見失敗。P0 項的修復單位見附錄 D（root cause）。
 
 | ID | 嚴重度／驗證 | 摘要 |
 |---|---|---|
@@ -1290,7 +1290,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G4.1.c | P1, RAN；已修復：RC-106 | worker 執行緒呼叫 `quit()/exit()` 是**靜默 no-op** |
 | G4.1.d | P1, RAN；已修復：RC-79 | `aboutToQuit` 在 `exec` **返回後**才發，不是在 `exit()` 內 |
 | G4.1.e | P1, RAN；已修復：RC-115, RC-141 | `quit()` 不是 `Quit` 事件：不關視窗、不能被否決 |
-| G4.1.f | P2, READ | `CoreApplication::new` 文件寫會 panic，實際沒有第二個實例檢查 |
+| G4.1.f | P2, READ；已修復：RC-176 | CoreApplication 第二個實例建構時 panic |
 | G4.1.g | P1, RAN；已修復：RC-104 | 無獨立的巢狀 `QEventLoop` |
 | G4.1.h | P2 | `ExitCode::from(exit_code as u8)` 截斷 |
 | G4.1.i | P1, RAN；已修復：RC-113 | `qtrs-widgets::Application` 在最後一個視窗被 `unregister_window` |
@@ -3675,6 +3675,23 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **修改後 PASS**：`test test_event_type_mapping ... ok`；驗證 `Pointer as u32 == 218` 與 `DpiChanged as u32 == 222`。
 - **全套回歸**：
   - `qtrs-core` 全套 327 項測試通過（40 suites, 0.11s）。
+  - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
+  - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
+  - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
+- **Residual**：無。
+
+#### RC-176 CoreApplication 單一實例檢查與 panic 語意（G4.1.f）
+- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:801]`（`QCoreApplicationPrivate::init`）：`Q_ASSERT_X(!QCoreApplication::self, "QCoreApplication", "there should be only one application object");`。
+- **根因**：`CoreApplication::with_dispatcher_kind` 雖然將 `APP_INSTANCE_EXISTS` 設為 `true`，但未在建立前檢查此旗標，若已有實例存在不會觸發 panic，與說明文件及 Qt 行為不符（G4.1.f）。
+- **修正**：
+  - `crates/qtrs-core/src/application/mod.rs`：在 `CoreApplication::with_dispatcher_kind` 開頭加入 `assert!(!APP_INSTANCE_EXISTS.swap(true, Ordering::SeqCst), "QCoreApplication: there should be only one application object");`。
+- **驗證**：
+  - 單元測試：`crates/qtrs-widgets/tests/test_application_layers.rs:74-96`（`test_second_core_application_instance_panics`）。
+  - **修改前 FAIL**：`note: test did not panic as expected at crates\qtrs-widgets	ests	est_application_layers.rs:76:4`。
+  - **修改後 PASS**：`test test_second_core_application_instance_panics ... ok`；驗證第二個實例建構時如期 panic，且 panic 訊息包含 `"there should be only one application object"`。
+- **全套回歸**：
+  - `qtrs-core` 全套 327 項測試通過（40 suites, 0.11s）。
+  - `qtrs-widgets` `test_application_layers` 全套 15 項測試通過（1.99s）。
   - 跨平台編譯：`x86_64-unknown-linux-gnu` 與 `aarch64-apple-darwin` 均 0 error, 0 warning。
   - HUD 全套測試：135 passed（5 ignored），`clippy -D warnings` 0 warning，`fmt --check` 0 diff。
   - 視覺快照檢驗（`--snapshot`）：0 px 版面差異（僅時間文字）。
