@@ -289,23 +289,29 @@ impl HUDWindow {
         refresh_ctrl: Arc<Mutex<RefreshController>>,
         providers: HashMap<String, Arc<dyn Provider + Send + Sync>>,
     ) -> Result<Self, &'static str> {
-        let (init_x, init_y, init_w, init_h, opacity, aot, ct, ui_mode, dark) = {
+        let (init_x, init_y, init_w, init_h, min_w, min_h, opacity, aot, ct, ui_mode, dark) = {
             let cfg = config.lock();
             let is_dark = crate::ui::resolve_is_dark(&cfg.appearance);
-            let (w, h) = if cfg.ui_mode == "table" {
+            let (w, h, min_w, min_h) = if cfg.ui_mode == "table" {
                 (
                     cfg.table_width.max(MIN_TABLE_WIDTH) as i32,
                     cfg.table_height.max(MIN_TABLE_HEIGHT) as i32,
+                    MIN_TABLE_WIDTH as i32,
+                    MIN_TABLE_HEIGHT as i32,
                 )
             } else if cfg.layout_mode == "horizontal" {
                 (
                     cfg.horizontal_width.max(MIN_HORIZONTAL_WIDTH) as i32,
                     cfg.horizontal_height.max(MIN_HORIZONTAL_HEIGHT) as i32,
+                    MIN_HORIZONTAL_WIDTH as i32,
+                    MIN_HORIZONTAL_HEIGHT as i32,
                 )
             } else {
                 (
                     cfg.vertical_width.max(MIN_VERTICAL_WIDTH) as i32,
                     cfg.vertical_height.max(MIN_VERTICAL_HEIGHT) as i32,
+                    MIN_VERTICAL_WIDTH as i32,
+                    MIN_VERTICAL_HEIGHT as i32,
                 )
             };
             // `_restore_or_default_position`: the saved position if it shows enough of some
@@ -323,6 +329,8 @@ impl HUDWindow {
                 cl_y,
                 w,
                 h,
+                min_w,
+                min_h,
                 cfg.opacity,
                 cfg.always_on_top,
                 cfg.click_through,
@@ -347,6 +355,9 @@ impl HUDWindow {
 
         let geom = Rect::new(init_x, init_y, init_w, init_h);
         let mut window = Window::new("Claude HUD Monitor", geom, flags)?;
+        // Python `_apply_ui_mode(..., initial=True)` sets the mode's minimum size on construction
+        // (`hud_window.py:102, 296, 327, 347`; G12.8.q / RC-161).
+        window.set_minimum_size(min_w, min_h);
         window.set_opacity(opacity);
         // The window is not shown yet, so table mode starts on the solid panel; `show` installs the
         // blur (Python: `showEvent` -> `_apply_theme`).
@@ -1091,8 +1102,12 @@ mod tests {
                     .unwrap();
             let g = hud.window.geometry();
             assert_eq!((g.width, g.height), size, "{mode} default size (PySide6)");
-            // The minimum is applied by the layout-mode path (`_apply_cards_layout`); applying it at
-            // construction is a separate gap (G12.8.q), so it is exercised through that path.
+            assert_eq!(
+                hud.window.minimum_size(),
+                min,
+                "{mode} initial minimum size on construction (G12.8.q)"
+            );
+            // RC-161: The minimum size is now applied immediately on construction (G12.8.q).
             hud.apply_cards_layout_mode(mode);
             assert_eq!(hud.window.minimum_size(), min, "{mode} minimum (PySide6)");
             let g = hud.window.geometry();
