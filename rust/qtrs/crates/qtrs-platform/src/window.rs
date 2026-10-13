@@ -1893,6 +1893,10 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
         self.set_click_through(enabled);
     }
 
+    fn flags(&self) -> WindowFlags {
+        self.flags
+    }
+
     fn start_system_drag(&self) {
         let _ = self.start_system_move();
     }

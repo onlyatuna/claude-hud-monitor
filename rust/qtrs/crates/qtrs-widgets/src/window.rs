@@ -907,13 +907,37 @@ impl Window {
     pub fn set_window_event_handler<F: Fn(&mut Event) + 'static>(&mut self, handler: F) {
         *self.core.event_cb.borrow_mut() = Some(Box::new(handler));
     }
-
     pub fn set_stays_on_top(&mut self, enabled: bool) {
         self.platform_window.borrow_mut().set_stays_on_top(enabled);
     }
 
     pub fn set_click_through(&mut self, enabled: bool) {
         self.platform_window.borrow_mut().set_click_through(enabled);
+    }
+
+    /// Sets or clears a window flag (`QWidget::setWindowFlag`, qwidget.cpp:10641-10648).
+    pub fn set_window_flag(&mut self, flag: WindowFlags, on: bool) {
+        self.platform_window.borrow_mut().set_window_flag(flag, on);
+    }
+
+    /// Sets window flags (`QWidget::setWindowFlags`, qwidget.cpp:10623-10627).
+    pub fn set_window_flags(&mut self, flags: WindowFlags) {
+        let mut pw = self.platform_window.borrow_mut();
+        let cur = pw.flags();
+        // Update diff for dynamically toggleable flags
+        let stays_on_top = flags.contains(WindowFlags::STAYS_ON_TOP);
+        if cur.contains(WindowFlags::STAYS_ON_TOP) != stays_on_top {
+            pw.set_stays_on_top(stays_on_top);
+        }
+        let click_through = flags.contains(WindowFlags::CLICK_THROUGH);
+        if cur.contains(WindowFlags::CLICK_THROUGH) != click_through {
+            pw.set_click_through(click_through);
+        }
+    }
+
+    /// Current window flags (`QWidget::windowFlags`).
+    pub fn window_flags(&self) -> WindowFlags {
+        self.platform_window.borrow().flags()
     }
 
     pub fn set_opacity(&mut self, opacity: f32) {

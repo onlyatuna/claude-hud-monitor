@@ -30,6 +30,19 @@ pub trait PlatformWindow: 'static {
     fn set_geometry(&mut self, rect: Rect);
     fn set_stays_on_top(&mut self, enabled: bool);
     fn set_click_through(&mut self, enabled: bool);
+    /// Sets or clears a window flag (`QWidget::setWindowFlag`, qwidget.cpp:10641-10648).
+    fn set_window_flag(&mut self, flag: WindowFlags, on: bool) {
+        if flag.contains(WindowFlags::STAYS_ON_TOP) {
+            self.set_stays_on_top(on);
+        }
+        if flag.contains(WindowFlags::CLICK_THROUGH) {
+            self.set_click_through(on);
+        }
+    }
+    /// Current window flags (`QWidget::windowFlags`).
+    fn flags(&self) -> WindowFlags {
+        WindowFlags::NORMAL
+    }
     fn start_system_drag(&self) {
         let _ = self.start_system_move();
     }
@@ -121,6 +134,7 @@ pub struct GenericWindow {
     visible: AtomicBool,
     stays_on_top: bool,
     click_through: bool,
+    flags: WindowFlags,
     handler: Option<Box<dyn WindowSystemEventHandler>>,
     pending_events: Mutex<Vec<crate::window_system_interface::WindowSystemEvent>>,
     last_pixmap: Mutex<Option<Pixmap>>,
@@ -138,6 +152,7 @@ impl GenericWindow {
             stays_on_top: flags.contains(WindowFlags::STAYS_ON_TOP)
                 || flags.contains(WindowFlags::TOOLTIP),
             click_through: flags.contains(WindowFlags::CLICK_THROUGH),
+            flags,
             handler: None,
             pending_events: Mutex::new(Vec::new()),
             last_pixmap: Mutex::new(None),
@@ -187,10 +202,16 @@ impl PlatformWindow for GenericWindow {
 
     fn set_stays_on_top(&mut self, enabled: bool) {
         self.stays_on_top = enabled;
+        self.flags.set(WindowFlags::STAYS_ON_TOP, enabled);
     }
 
     fn set_click_through(&mut self, enabled: bool) {
         self.click_through = enabled;
+        self.flags.set(WindowFlags::CLICK_THROUGH, enabled);
+    }
+
+    fn flags(&self) -> WindowFlags {
+        self.flags
     }
 
     fn start_system_drag(&self) {
