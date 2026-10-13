@@ -19,9 +19,11 @@ use qtrs_gui::geometry::primitives::{Rect, Size};
 use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::ptr;
+#[cfg(windows)]
 use std::sync::atomic::{AtomicI8, Ordering};
 #[allow(unused_imports)]
 use std::sync::{Mutex, Once, RwLock};
+#[cfg(windows)]
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 #[cfg(windows)]
 use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
