@@ -16,6 +16,7 @@ pub struct EventTreeDispatcher {
     press_grab: Option<(ObjectId, WidgetRef)>,
     /// One bit per button held down (`1 << (button - 1)`); the grab ends with the last button.
     held_buttons: u32,
+    last_dpr: f32,
 }
 
 impl EventTreeDispatcher {
@@ -26,6 +27,7 @@ impl EventTreeDispatcher {
             popup_manager: PopupManager::new(),
             press_grab: None,
             held_buttons: 0,
+            last_dpr: 1.0,
         }
     }
 
@@ -376,7 +378,9 @@ impl EventTreeDispatcher {
             }
             EventKind::DpiChanged { dpi_x, .. } => {
                 let new_dpr = qtrs_gui::round_scale_factor(*dpi_x as f64 / 96.0) as f32;
-                crate::window::propagate_dpi_change_recursive(root, 1.0, new_dpr);
+                let old_dpr = self.last_dpr;
+                self.last_dpr = new_dpr;
+                crate::window::propagate_dpi_change_recursive(root, old_dpr, new_dpr);
                 true
             }
             _ => false,
