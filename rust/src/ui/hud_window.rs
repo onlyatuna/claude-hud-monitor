@@ -1317,7 +1317,6 @@ mod tests {
             462,
             "table mode table height (PySide6: 462)"
         );
-
         hud.apply_ui_mode("cards");
         hud.window.root_widget().borrow().update_layout();
         assert_eq!(
@@ -1325,6 +1324,102 @@ mod tests {
             86,
             "cards mode title height (PySide6: 86)"
         );
+        assert_eq!(
+            hud.stack.borrow().geometry().height,
+            353,
+            "cards mode stack height"
+        );
+        assert!(
+            hud.layout_toggle_btn.borrow().is_visible(),
+            "toggle button visible in cards mode"
+        );
+        assert_eq!(
+            hud.title_label
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "AI AGENT HUD (3-IN-1)"
+        );
+    }
+
+    /// G12.5.r / DV-04: Test full roundtrip switching `cards -> table -> cards`
+    /// asserts visibility, geometry preservation, toggle button, and title state without degradation.
+    #[cfg(windows)]
+    #[test]
+    fn test_cards_table_cards_roundtrip_preserves_state() {
+        let _setup = crate::ui::test_support::CardsOracleSetup::new();
+        let mut cfg = Config::default();
+        cfg.ui_mode = "cards".into();
+        cfg.layout_mode = "vertical".into();
+        cfg.appearance = "dark".into();
+        cfg.window_x = Some(0);
+        cfg.window_y = Some(0);
+        cfg.vertical_width = 280;
+        cfg.vertical_height = 463;
+        cfg.table_width = 400;
+        cfg.table_height = 500;
+        let cfg = Arc::new(Mutex::new(cfg));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let mut hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+
+        // 1. Initial cards mode
+        hud.window.root_widget().borrow().update_layout();
+        let init_cards_geom = hud.cards_container.borrow().geometry();
+        let init_toggle_visible = hud.layout_toggle_btn.borrow().is_visible();
+        assert!(init_toggle_visible);
+        assert_eq!(
+            hud.title_label
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "AI AGENT HUD (3-IN-1)"
+        );
+
+        // 2. Switch to table mode
+        hud.apply_ui_mode("table");
+        hud.window.root_widget().borrow().update_layout();
+        assert!(
+            !hud.layout_toggle_btn.borrow().is_visible(),
+            "toggle button hidden in table mode"
+        );
+        assert_eq!(
+            hud.title_label
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "AI AGENT HUD (TABLE)"
+        );
+        assert_eq!(hud.stack.borrow().geometry().height, 462);
+
+        // 3. Switch back to cards mode
+        hud.apply_ui_mode("cards");
+        hud.window.root_widget().borrow().update_layout();
+        let final_cards_geom = hud.cards_container.borrow().geometry();
+        assert!(
+            hud.layout_toggle_btn.borrow().is_visible(),
+            "toggle button restored visible in cards mode"
+        );
+        assert_eq!(
+            hud.title_label
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text(),
+            "AI AGENT HUD (3-IN-1)"
+        );
+        assert_eq!(
+            final_cards_geom, init_cards_geom,
+            "cards container geometry preserved across roundtrip"
+        );
+        assert_eq!(hud.stack.borrow().geometry().height, 353);
     }
 
     /// TI-01: a window built with injected providers fetches from exactly those providers — one

@@ -14,10 +14,10 @@ pub trait PlatformSurface: Send + Sync {
     ) -> Result<(), &'static str>;
 }
 
-pub mod macos;
-pub mod wayland;
 #[cfg(windows)]
 pub mod dcomp;
+pub mod macos;
+pub mod wayland;
 #[cfg(windows)]
 pub mod win32;
 pub mod x11;
@@ -42,8 +42,10 @@ impl WindowsSurface {
         width: u32,
         height: u32,
     ) -> Result<Self, &'static str> {
-        if let Ok(dcomp) = DCompSurface::new(hwnd, width, height) {
-            return Ok(Self::DirectComposition(dcomp));
+        if crate::window::is_dcomp_enabled() {
+            if let Ok(dcomp) = DCompSurface::new(hwnd, width, height) {
+                return Ok(Self::DirectComposition(dcomp));
+            }
         }
         let layered = Win32LayeredSurface::new(hwnd, width, height)?;
         Ok(Self::Layered(layered))

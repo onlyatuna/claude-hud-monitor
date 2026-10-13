@@ -66,7 +66,11 @@ fn test_window_system_present_dirty_self_healing_recovery() {
     // Present second frame with dynamic dirty rectangle
     let dirty = Rect::new(10, 10, 50, 40);
     let res2 = window.present_dirty(&mut pixmap, 0.9, dirty);
-    assert!(res2.is_ok(), "Second frame dirty present failed: {:?}", res2);
+    assert!(
+        res2.is_ok(),
+        "Second frame dirty present failed: {:?}",
+        res2
+    );
 
     // Resize window geometry and present updated frame
     window.set_geometry(Rect::new(100, 100, 200, 120));
@@ -105,4 +109,53 @@ fn test_get_or_create_layered_surface_error_reset_resilience() {
     let s = recovered_surf.unwrap();
     assert_eq!(s.width(), 100);
     assert_eq!(s.height(), 80);
+}
+
+#[test]
+fn test_dcomp_policy_opt_in_and_runtime_downgrade() {
+    use qtrs_platform::presenter::WindowsPresenter;
+    use qtrs_platform::{is_dcomp_enabled, set_dcomp_enabled};
+
+    // 1. By default, DComp is disabled (opt-in policy)
+    set_dcomp_enabled(None);
+    // If env var is not set, is_dcomp_enabled should be false
+    if std::env::var("QTRS_ENABLE_DCOMP").is_err() {
+        assert!(!is_dcomp_enabled(), "DComp must be disabled by default");
+    }
+
+    let mut window = NativeWindow::new(
+        "DComp Policy Test",
+        Rect::new(50, 50, 100, 80),
+        WindowFlags::FRAMELESS | WindowFlags::LAYERED,
+    )
+    .expect("native window create");
+
+    // Explicitly force disable DComp
+    set_dcomp_enabled(Some(false));
+    assert!(!is_dcomp_enabled());
+
+    let p = window.get_or_create_presenter(100, 80).expect("presenter");
+    match p {
+        WindowsPresenter::Layered(_) => {}
+        _ => panic!("Expected Win32LayeredPresenter when DComp is disabled"),
+    }
+
+    // Explicitly test downgrade flag
+    window.set_dcomp_downgraded(true);
+    assert!(window.is_dcomp_downgraded());
+
+    // Even if DComp is force-enabled, a downgraded window must still choose Layered
+    set_dcomp_enabled(Some(true));
+    assert!(is_dcomp_enabled());
+
+    // Drop current presenter and recreate to test selection logic
+    drop(window.presenter_mut().take());
+    let p_downgraded = window.get_or_create_presenter(100, 80).expect("presenter");
+    match p_downgraded {
+        WindowsPresenter::Layered(_) => {}
+        _ => panic!("Expected Win32LayeredPresenter when window is marked dcomp_downgraded"),
+    }
+
+    // Reset override
+    set_dcomp_enabled(None);
 }

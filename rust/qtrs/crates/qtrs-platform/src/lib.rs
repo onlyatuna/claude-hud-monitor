@@ -23,9 +23,10 @@ pub mod objc_runtime;
 pub mod platform_tray;
 pub mod platform_window;
 pub mod presenter;
-pub mod screen;
 pub mod resize_debug;
 pub mod resize_trace;
+pub mod screen;
+pub mod single_instance;
 pub mod surface;
 pub mod theme;
 pub mod tray;
@@ -35,7 +36,6 @@ pub mod window_cocoa;
 pub mod window_system_interface;
 pub mod window_wayland;
 pub mod window_x11;
-pub mod single_instance;
 pub use single_instance::*;
 
 #[cfg(windows)]
@@ -82,19 +82,19 @@ pub use objc_runtime::{
 };
 pub use platform_tray::{GenericTrayIcon, PlatformTrayIcon, TrayMessageIcon};
 pub use platform_window::{GenericWindow, PlatformWindow, WindowEdge, WindowEdges};
-pub use surface::PlatformSurface;
-#[cfg(windows)]
-pub use presenter::{Win32DcPresenter, Win32LayeredPresenter, WindowsPresenter};
 pub use presenter::SurfacePresenter;
 #[cfg(windows)]
-pub use surface::Win32LayeredSurface;
-pub use surface::{CocoaLayerSurface, WaylandShmSurface, X11ShmSurface};
+pub use presenter::{Win32DcPresenter, Win32LayeredPresenter, WindowsPresenter};
 #[cfg(windows)]
 pub use screen::Win32Screen;
 pub use screen::{
     clamp_window_rect_to_screens, ensure_within_screens, CocoaScreen, GenericScreen,
     PlatformScreen, X11Screen,
 };
+pub use surface::PlatformSurface;
+#[cfg(windows)]
+pub use surface::Win32LayeredSurface;
+pub use surface::{CocoaLayerSurface, WaylandShmSurface, X11ShmSurface};
 
 #[cfg(windows)]
 pub use theme::Win32Theme;
@@ -112,6 +112,8 @@ pub use window::{
     unregister_window_event_binding, CustomFramelessConfig, NativeWindow, PlatformWindowStateFlags,
     SetGeometryGuard, WindowFlags,
 };
+#[cfg(windows)]
+pub use window::{is_dcomp_enabled, set_dcomp_enabled};
 pub use window_cocoa::{qt_mac_flip_point, qt_mac_flip_rect, CocoaNativeEvent, CocoaNativeWindow};
 pub use window_system_interface::{
     ClosureWindowEventHandler, Delivery, KeyboardModifiers, MouseButton, PowerEvent, WheelDelta,

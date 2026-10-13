@@ -1,8 +1,14 @@
 #[allow(unused_imports)]
+use crate::presenter::SurfacePresenter;
+#[allow(unused_imports)]
+use crate::surface::PlatformSurface;
+#[allow(unused_imports)]
 use crate::window_system_interface::{
     Delivery, KeyboardModifiers, MouseButton, WheelDelta, WindowSystemEvent,
     WindowSystemEventHandler,
 };
+#[cfg(not(windows))]
+pub use crate::HWND;
 #[allow(unused_imports)]
 use qtrs_core::event::{Event, EventKind};
 use qtrs_core::event_loop::EventLoopHandle;
@@ -10,19 +16,13 @@ use qtrs_core::object::ObjectId;
 #[cfg(windows)]
 use qtrs_gui::geometry::primitives::Point;
 use qtrs_gui::geometry::primitives::{Rect, Size};
-#[allow(unused_imports)]
-use crate::presenter::SurfacePresenter;
-#[allow(unused_imports)]
-use crate::surface::PlatformSurface;
 use std::collections::HashMap;
 #[allow(unused_imports)]
 use std::ptr;
+use std::sync::atomic::{AtomicI8, Ordering};
 #[allow(unused_imports)]
 use std::sync::{Mutex, Once, RwLock};
-#[cfg(windows)]
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-#[cfg(not(windows))]
-pub use crate::HWND;
 #[cfg(windows)]
 use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
 #[cfg(windows)]
@@ -35,26 +35,25 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{MARGINS, WM_MOUSELEAVE};
 #[cfg(windows)]
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetCapture, GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE,
-    VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    GetCapture, GetKeyState, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE,
+    TRACKMOUSEEVENT, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 #[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetMessageTime, GetWindowRect, IsIconic, IsZoomed,
-    RegisterClassExW, SetWindowPos, ShowWindow,
-    HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
-    HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, NCCALCSIZE_PARAMS, SWP_FRAMECHANGED,
-    CS_DBLCLKS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, WM_CLOSE,
-    WM_CONTEXTMENU, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MBUTTONDBLCLK, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
-    WM_NCCALCSIZE, WM_NCHITTEST, WM_PAINT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_THEMECHANGED,
-    WNDCLASSEXW, IDC_ARROW, LoadCursorW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetForegroundWindow,
+    GetMessageTime, GetWindowRect, IsChild, IsIconic, IsZoomed, LoadCursorW, RegisterClassExW,
+    SetWindowPos, ShowWindow, CS_DBLCLKS, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
+    HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, IDC_ARROW, NCCALCSIZE_PARAMS,
+    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, WM_CLOSE, WM_CONTEXTMENU,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN,
+    WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDBLCLK,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE,
+    WM_NCHITTEST, WM_PAINT, WM_RBUTTONDBLCLK, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR,
+    WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_THEMECHANGED, WNDCLASSEXW,
     WS_CAPTION, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME, GetForegroundWindow, IsChild,
-    SIZE_MAXIMIZED, SIZE_MINIMIZED, SIZE_RESTORED,
+    WS_OVERLAPPEDWINDOW, WS_POPUP, WS_THICKFRAME,
 };
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -115,7 +114,8 @@ impl Drop for SetGeometryGuard<'_> {
     fn drop(&mut self) {
         // Critical: ONLY clear WITHIN_SET_GEOMETRY bit, never wipe out other flags set by re-entrant operations!
         let cur = self.flags.get();
-        self.flags.set(cur & !PlatformWindowStateFlags::WITHIN_SET_GEOMETRY);
+        self.flags
+            .set(cur & !PlatformWindowStateFlags::WITHIN_SET_GEOMETRY);
     }
 }
 
@@ -319,7 +319,8 @@ fn track_button_press(msg: u32) {
 #[cfg(windows)]
 fn track_button_release(msg: u32) {
     let bit = button_of_message(msg);
-    let _ = APP_MOUSE_BUTTONS.try_with(|b| b.set(qtrs_core::event::MouseButtons(b.get().0 & !bit.0)));
+    let _ =
+        APP_MOUSE_BUTTONS.try_with(|b| b.set(qtrs_core::event::MouseButtons(b.get().0 & !bit.0)));
 }
 
 /// `QWindowsPointerHandler::handleCaptureRelease` (qwindowspointerhandler.cpp:336-340): the first
@@ -352,7 +353,9 @@ fn release_capture_when_idle(hwnd: HWND) {
 #[cfg(windows)]
 fn query_mouse_buttons() -> qtrs_core::event::MouseButtons {
     use qtrs_core::event::MouseButtons;
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON};
     // SAFETY: plain Win32 queries without pointers.
     unsafe {
@@ -360,10 +363,18 @@ fn query_mouse_buttons() -> qtrs_core::event::MouseButtons {
         let down = |vk| GetAsyncKeyState(vk as i32) < 0;
         let mut result = MouseButtons::NO_BUTTON;
         if down(VK_LBUTTON) {
-            result = result.union(if swapped { MouseButtons::RIGHT } else { MouseButtons::LEFT });
+            result = result.union(if swapped {
+                MouseButtons::RIGHT
+            } else {
+                MouseButtons::LEFT
+            });
         }
         if down(VK_RBUTTON) {
-            result = result.union(if swapped { MouseButtons::LEFT } else { MouseButtons::RIGHT });
+            result = result.union(if swapped {
+                MouseButtons::LEFT
+            } else {
+                MouseButtons::RIGHT
+            });
         }
         if down(VK_MBUTTON) {
             result = result.union(MouseButtons::MIDDLE);
@@ -380,7 +391,9 @@ fn query_mouse_buttons() -> qtrs_core::event::MouseButtons {
 #[cfg(windows)]
 unsafe fn sync_mouse_buttons_after_move_loop(hwnd: HWND) {
     use qtrs_core::event::MouseButtons;
-    let app = APP_MOUSE_BUTTONS.try_with(|b| b.get()).unwrap_or(MouseButtons::NO_BUTTON);
+    let app = APP_MOUSE_BUTTONS
+        .try_with(|b| b.get())
+        .unwrap_or(MouseButtons::NO_BUTTON);
     let stale = MouseButtons(app.0 & !query_mouse_buttons().0);
     if stale.is_empty() {
         return;
@@ -444,13 +457,15 @@ pub fn send_window_system_event_immediately(hwnd: HWND, event: WindowSystemEvent
     });
 
     loop {
-        let next = NESTED_EVENTS.try_with(|q| {
-            if q.borrow().is_empty() {
-                None
-            } else {
-                Some(q.borrow_mut().remove(0))
-            }
-        }).unwrap_or(None);
+        let next = NESTED_EVENTS
+            .try_with(|q| {
+                if q.borrow().is_empty() {
+                    None
+                } else {
+                    Some(q.borrow_mut().remove(0))
+                }
+            })
+            .unwrap_or(None);
 
         match next {
             Some((h, ev)) => {
@@ -487,11 +502,7 @@ fn is_window_thread(hwnd: HWND) -> bool {
     }
 }
 
-pub fn dispatch_window_system_event(
-    delivery: Delivery,
-    hwnd: HWND,
-    event: WindowSystemEvent,
-) {
+pub fn dispatch_window_system_event(delivery: Delivery, hwnd: HWND, event: WindowSystemEvent) {
     match delivery {
         Delivery::Synchronous => {
             send_window_system_event_immediately(hwnd, event);
@@ -509,22 +520,14 @@ pub fn dispatch_window_system_event(
     }
 }
 
-pub fn handle_geometry_change(
-    delivery: Delivery,
-    hwnd: HWND,
-    geometry: Rect,
-) {
+pub fn handle_geometry_change(delivery: Delivery, hwnd: HWND, geometry: Rect) {
     let size = Size::new(geometry.width, geometry.height);
     dispatch_window_system_event(
         delivery,
         hwnd,
         WindowSystemEvent::GeometryChange { geometry },
     );
-    dispatch_window_system_event(
-        delivery,
-        hwnd,
-        WindowSystemEvent::Resize { size },
-    );
+    dispatch_window_system_event(delivery, hwnd, WindowSystemEvent::Resize { size });
 }
 
 #[cfg(windows)]
@@ -816,10 +819,12 @@ unsafe fn native_window_proc_inner(
                 (0, 0)
             };
             let logical_rect = Rect::new(x, y, logical_size.width, logical_size.height);
-            crate::resize_debug::note(|| format!(
-                "WM_SIZE phys {}x{} dpr {} -> logical {}x{} (wparam={})",
-                phys_w, phys_h, dpr, logical_size.width, logical_size.height, wparam
-            ));
+            crate::resize_debug::note(|| {
+                format!(
+                    "WM_SIZE phys {}x{} dpr {} -> logical {}x{} (wparam={})",
+                    phys_w, phys_h, dpr, logical_size.width, logical_size.height, wparam
+                )
+            });
 
             // The single canonical resize delivery: WindowSystemEvent::Resize (geometry, widget
             // Resize, callback, layout, render). No second `EventKind::Resize` is posted to the
@@ -1366,6 +1371,40 @@ pub fn set_dpi_awareness() -> bool {
 pub fn set_dpi_awareness() -> bool {
     true
 }
+#[cfg(windows)]
+static DCOMP_ENABLED_OVERRIDE: AtomicI8 = AtomicI8::new(0);
+
+/// Queries whether DirectComposition presenter is enabled via `QTRS_ENABLE_DCOMP=1`
+/// or programmatic override (`set_dcomp_enabled`).
+#[cfg(windows)]
+pub fn is_dcomp_enabled() -> bool {
+    match DCOMP_ENABLED_OVERRIDE.load(Ordering::Relaxed) {
+        1 => true,
+        -1 => false,
+        _ => {
+            static DCOMP_ENV_ONCE: Once = Once::new();
+            static DCOMP_ENV_ENABLED: AtomicI8 = AtomicI8::new(0);
+            DCOMP_ENV_ONCE.call_once(|| {
+                let enabled = std::env::var("QTRS_ENABLE_DCOMP")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false);
+                DCOMP_ENV_ENABLED.store(if enabled { 1 } else { -1 }, Ordering::Relaxed);
+            });
+            DCOMP_ENV_ENABLED.load(Ordering::Relaxed) == 1
+        }
+    }
+}
+
+/// Overrides DComp policy for testing or runtime control (Some(true) = force enable, Some(false) = force disable, None = follow env).
+#[cfg(windows)]
+pub fn set_dcomp_enabled(enabled: Option<bool>) {
+    let val = match enabled {
+        Some(true) => 1,
+        Some(false) => -1,
+        None => 0,
+    };
+    DCOMP_ENABLED_OVERRIDE.store(val, Ordering::Relaxed);
+}
 
 #[cfg(windows)]
 static REGISTER_WINDOW_CLASS_ONCE: Once = Once::new();
@@ -1414,6 +1453,7 @@ pub struct NativeWindow {
     state_flags: std::cell::Cell<PlatformWindowStateFlags>,
     ime_enabled: std::cell::Cell<bool>,
     target_pos: Option<qtrs_gui::geometry::Point>,
+    dcomp_downgraded: bool,
 }
 
 #[cfg(windows)]
@@ -1542,6 +1582,7 @@ impl NativeWindow {
             state_flags: std::cell::Cell::new(PlatformWindowStateFlags::NONE),
             ime_enabled: std::cell::Cell::new(false),
             target_pos: None,
+            dcomp_downgraded: false,
         })
     }
 
@@ -1627,12 +1668,18 @@ impl NativeWindow {
             {
                 sync_interactive_resize(self.hwnd, &mut self.presenter, &mut self.layered_surface);
                 if let Some(surface) = &mut self.layered_surface {
-                    if surface.resize(rect.width as u32, rect.height as u32).is_err() {
+                    if surface
+                        .resize(rect.width as u32, rect.height as u32)
+                        .is_err()
+                    {
                         self.layered_surface = None;
                     }
                 }
                 if let Some(presenter) = &mut self.presenter {
-                    if presenter.resize(rect.width as u32, rect.height as u32).is_err() {
+                    if presenter
+                        .resize(rect.width as u32, rect.height as u32)
+                        .is_err()
+                    {
                         self.presenter = None;
                     }
                 }
@@ -1764,7 +1811,9 @@ impl NativeWindow {
         height: u32,
     ) -> Result<&mut crate::surface::WindowsSurface, &'static str> {
         if self.layered_surface.is_none() {
-            self.layered_surface = Some(crate::surface::WindowsSurface::create(self.hwnd, width, height)?);
+            self.layered_surface = Some(crate::surface::WindowsSurface::create(
+                self.hwnd, width, height,
+            )?);
         }
         sync_interactive_resize(self.hwnd, &mut self.presenter, &mut self.layered_surface);
         let surface = self.layered_surface.as_mut().unwrap();
@@ -1786,6 +1835,14 @@ impl NativeWindow {
         self.presenter.as_mut()
     }
 
+    pub fn is_dcomp_downgraded(&self) -> bool {
+        self.dcomp_downgraded
+    }
+
+    pub fn set_dcomp_downgraded(&mut self, downgraded: bool) {
+        self.dcomp_downgraded = downgraded;
+    }
+
     pub fn get_or_create_presenter(
         &mut self,
         width: u32,
@@ -1793,8 +1850,20 @@ impl NativeWindow {
     ) -> Result<&mut crate::presenter::WindowsPresenter, &'static str> {
         if self.presenter.is_none() {
             let p = if self.flags.contains(WindowFlags::LAYERED) {
-                if let Ok(dcomp) = crate::surface::dcomp::DCompSurface::new(self.hwnd, width, height) {
-                    crate::presenter::WindowsPresenter::DirectComposition(dcomp)
+                if !self.dcomp_downgraded && is_dcomp_enabled() {
+                    if let Ok(dcomp) =
+                        crate::surface::dcomp::DCompSurface::new(self.hwnd, width, height)
+                    {
+                        crate::presenter::WindowsPresenter::DirectComposition(dcomp)
+                    } else {
+                        let layered = crate::presenter::Win32LayeredPresenter::new(
+                            self.hwnd,
+                            width,
+                            height,
+                            self.opacity,
+                        )?;
+                        crate::presenter::WindowsPresenter::Layered(layered)
+                    }
                 } else {
                     let layered = crate::presenter::Win32LayeredPresenter::new(
                         self.hwnd,
@@ -1954,7 +2023,10 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
                 p.set_opacity(opacity);
                 if let crate::presenter::WindowsPresenter::Layered(lp) = p {
                     if let Some(pos) = target_pos {
-                        lp.set_target_pos(Some(windows_sys::Win32::Foundation::POINT { x: pos.x, y: pos.y }));
+                        lp.set_target_pos(Some(windows_sys::Win32::Foundation::POINT {
+                            x: pos.x,
+                            y: pos.y,
+                        }));
                     }
                 }
                 p.present(pixmap, dirty)
@@ -1964,12 +2036,19 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
 
         if res.is_err() {
             crate::resize_debug::count(crate::resize_debug::Count::PresentError);
+            if let Some(crate::presenter::WindowsPresenter::DirectComposition(_)) = &self.presenter
+            {
+                // Runtime DComp Present failure: downgrade this window to Layered GDI permanently
+                self.dcomp_downgraded = true;
+            }
             self.presenter.take();
             let p = self.get_or_create_presenter(width, height)?;
-            p.set_opacity(opacity);
             if let crate::presenter::WindowsPresenter::Layered(lp) = p {
                 if let Some(pos) = target_pos {
-                    lp.set_target_pos(Some(windows_sys::Win32::Foundation::POINT { x: pos.x, y: pos.y }));
+                    lp.set_target_pos(Some(windows_sys::Win32::Foundation::POINT {
+                        x: pos.x,
+                        y: pos.y,
+                    }));
                 }
             }
             let full = qtrs_gui::geometry::Region::from_coords(0, 0, width as i32, height as i32);
@@ -2096,7 +2175,11 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
                         );
                     }
                     crate::drag_drop::DropEvent::Leave => {
-                        dispatch_window_system_event(Delivery::Default, hwnd, WindowSystemEvent::DragLeave);
+                        dispatch_window_system_event(
+                            Delivery::Default,
+                            hwnd,
+                            WindowSystemEvent::DragLeave,
+                        );
                     }
                     crate::drag_drop::DropEvent::Drop {
                         pos,
@@ -2196,7 +2279,11 @@ pub fn post_system_resize(_hwnd: isize, _edges: crate::platform_window::WindowEd
     false
 }
 
-pub fn calc_frameless_edge(_hwnd: isize, pos: qtrs_gui::geometry::primitives::Point, locked: bool) -> crate::platform_window::WindowEdges {
+pub fn calc_frameless_edge(
+    _hwnd: isize,
+    pos: qtrs_gui::geometry::primitives::Point,
+    locked: bool,
+) -> crate::platform_window::WindowEdges {
     if locked {
         return crate::platform_window::WindowEdges::empty();
     }

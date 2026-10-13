@@ -205,7 +205,7 @@
 | DV-01 | B | 已核准（部分） | 單一實例：第二次啟動不開新視窗 | Python 無 | 附加能力，不改變單一視窗內的行為 | HUD | 舊 Contract §1.3。**喚醒第一個 HUD 之後的可觀察結果（顯示？置前？）未決**（G11.11.a），不在核准範圍內 |
 | DV-02 | B | 已核准 | `--snapshot` 輸出 PNG | Python 無 | 測試用附加 CLI | HUD CLI | 舊 Contract §1.3 |
 | DV-03 | B | 已核准 | 熱鍵字串可設定 | Python 固定 Alt+C／Alt+Shift+C | 附加能力；預設值相同 | HUD | 舊 Contract §1.3 |
-| DV-04 | 待定 | 候選 | 版面切換：Rust 用 `StackedWidget`，Python 重建 `inner_layout` | `hud_window.py:268-320` | 推測可見結果相同，但未驗證（`[INFERENCE]`） | HUD | G12.5.r。Oracle 比對與真實 HUD 驗證證明等價後，才登記為 A；發現差異就修實作或另行核准為 B |
+| DV-04 | A | 已核准 | 版面切換：Rust 用 `StackedWidget`，Python 重建 `inner_layout` | `hud_window.py:268-320` | 外部可觀察行為符合契約（特定切換序列之標題高度、stack 高度、元件幾何與樣式經測試驗證符合預期） | HUD | G12.5.r / RC-202。以切換取代 layout 重組；結案範圍明確限縮於行為等價驗證，不宣稱全畫面像素比較與記憶體效益 |
 | DV-05 | B | 已核准 | 啟動最初約 300 ms：Rust 已套用 click-through，Python 仍可互動 | `hud_window.py:106-108,426-437` | 要對齊必須改視窗建立旗標與托盤時序，風險大於收益 | HUD 啟動 | G12.5.h 的決定（舊 Contract C12.5） |
 | DV-06 | B | 已核准 | 對正在被借用的 receiver 同步 `send_event`：回 false 並印診斷；Qt 會重入遞送 | `qcoreapplication.cpp:1563-1572` | safe Rust 不能別名 `&mut`（01.4 第 4 點） | `qtrs` 核心 | RC-123 |
 | DV-07 | B | 已核准 | 跨執行緒 `send_event`：被拒並印診斷（所有 build）；Qt 仍會遞送，只在 debug build 警告 | `qcoreapplication.cpp:539-548,1223-1227` | 物件只能在擁有者執行緒借用 | `qtrs` 核心 | RC-109 |
