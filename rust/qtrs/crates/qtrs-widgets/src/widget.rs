@@ -429,6 +429,10 @@ pub trait Widget: QObject + 'static {
     fn is_enabled(&self) -> bool;
 
     fn update(&self);
+    /// `QWidget::update(const QRect &)` (`qwidget.cpp:11340`).
+    fn update_rect(&self, rect: Rect) {
+        self.widget_base().update_rect(rect);
+    }
     fn dirty_rect(&self) -> Option<Rect>;
 
     fn clear_dirty(&self);
