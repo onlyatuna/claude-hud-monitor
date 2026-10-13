@@ -155,13 +155,18 @@ pub mod win32_screen {
             }
         }
 
+        /// `QWindowsScreen::primaryScreen` (`qwindowsscreen.cpp:355`):
+        /// finds the screen whose monitor flags contain `MONITORINFOF_PRIMARY`.
+        /// Falls back to system metrics if no monitors are enumerated.
         pub fn primary() -> Self {
-            let pt = POINT { x: 0, y: 0 };
-            let h_monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
-            if let Some(screen) = Self::from_hmonitor(h_monitor) {
-                return screen;
+            let all = Self::all_screens();
+            if let Some(p) = all.into_iter().find(|s| s.is_primary) {
+                return p;
             }
+            Self::system_fallback_primary()
+        }
 
+        fn system_fallback_primary() -> Self {
             unsafe {
                 use windows_sys::Win32::UI::WindowsAndMessaging::{
                     GetSystemMetrics, SystemParametersInfoW, SM_CXSCREEN, SM_CYSCREEN,
@@ -218,7 +223,7 @@ pub mod win32_screen {
             }
 
             if list.is_empty() {
-                list.push(Self::primary());
+                list.push(Self::system_fallback_primary());
             }
 
             list
