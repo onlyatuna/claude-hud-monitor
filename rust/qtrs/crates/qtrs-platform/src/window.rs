@@ -1666,11 +1666,21 @@ impl NativeWindow {
             };
             unsafe {
                 let ex_style = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32;
-                let new_style = if enabled {
+                let mut new_style = if enabled {
                     ex_style | WS_EX_TRANSPARENT
                 } else {
                     ex_style & !WS_EX_TRANSPARENT
                 };
+                // `qwindowswindow.cpp:498`: Qt requires `WS_EX_LAYERED` for `WindowTransparentForInput`
+                // in combination with `WS_EX_TRANSPARENT`. If the window doesn't have `LAYERED` flag,
+                // dynamically manage `WS_EX_LAYERED` so mouse events actually pass through.
+                if !self.flags.contains(WindowFlags::LAYERED) {
+                    if enabled {
+                        new_style |= WS_EX_LAYERED;
+                    } else if self.opacity >= 1.0 {
+                        new_style &= !WS_EX_LAYERED;
+                    }
+                }
                 SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, new_style as isize);
             }
             self.flags.set(WindowFlags::CLICK_THROUGH, enabled);
@@ -2412,6 +2422,9 @@ mod tests {
         let transparent = |w: &NativeWindow| unsafe {
             GetWindowLongPtrW(w.hwnd(), GWL_EXSTYLE) as u32 & WS_EX_TRANSPARENT
         };
+        let layered = |w: &NativeWindow| unsafe {
+            GetWindowLongPtrW(w.hwnd(), GWL_EXSTYLE) as u32 & WS_EX_LAYERED
+        };
 
         win.set_click_through(true);
         assert_ne!(
@@ -2419,11 +2432,21 @@ mod tests {
             0,
             "set_click_through(true) must set WS_EX_TRANSPARENT"
         );
+        assert_ne!(
+            layered(&win),
+            0,
+            "set_click_through(true) must ensure WS_EX_LAYERED for click-through (G11.6.a)"
+        );
         win.set_click_through(false);
         assert_eq!(
             transparent(&win),
             0,
             "set_click_through(false) must clear WS_EX_TRANSPARENT"
+        );
+        assert_eq!(
+            layered(&win),
+            0,
+            "set_click_through(false) must restore non-layered style when opacity == 1.0"
         );
     }
 
