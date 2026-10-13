@@ -244,13 +244,15 @@ impl Application {
     }
 
     /// `QGuiApplicationPrivate::maybeLastWindowClosed` (qguiapplication.cpp:3933-3943), run after a
-    /// visible window has closed: when no visible top-level window is left and
-    /// `quitOnLastWindowClosed` is set, the application quits. `quit` does nothing outside `exec`,
-    /// as `canQuitAutomatically` requires (qcoreapplication.cpp:2074-2089). The `lastWindowClosed`
-    /// signal is not emitted here; see G11.2.f.
+    /// visible window has closed: when no visible top-level window is left, emits `lastWindowClosed`.
+    /// If `quitOnLastWindowClosed` is set, the application quits. `quit` does nothing outside `exec`,
+    /// as `canQuitAutomatically` requires (qcoreapplication.cpp:2074-2089).
     pub(crate) fn maybe_last_window_closed() {
-        if !Self::any_window_visible() && GuiApplication::quit_on_last_window_closed() {
-            Self::quit();
+        if !Self::any_window_visible() {
+            GuiApplication::emit_last_window_closed();
+            if GuiApplication::quit_on_last_window_closed() {
+                Self::quit();
+            }
         }
     }
 
@@ -268,11 +270,22 @@ impl Application {
             .unwrap_or(None)
     }
 
-    /// Sets the active window object ID.
+    /// Sets the active window object ID and notifies `focus_window_changed`.
     pub fn set_active_window(window_id: Option<ObjectId>) {
-        let _ = ACTIVE_WINDOW_ID.try_with(|act| {
-            *act.borrow_mut() = window_id;
-        });
+        let changed = ACTIVE_WINDOW_ID
+            .try_with(|act| {
+                let mut current = act.borrow_mut();
+                if *current != window_id {
+                    *current = window_id;
+                    true
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+        if changed {
+            GuiApplication::emit_focus_window_changed(window_id);
+        }
     }
 
     // --- Focus Management ---

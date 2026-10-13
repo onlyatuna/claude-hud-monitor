@@ -100,7 +100,8 @@ static GLOBAL_DESKTOP_FILE_NAME: RwLock<Option<String>> = RwLock::new(None);
 static GLOBAL_QUIT_ON_LAST_WINDOW_CLOSED: AtomicBool = AtomicBool::new(true);
 static GLOBAL_ROUNDING_POLICY: RwLock<HighDpiScaleFactorRoundingPolicy> =
     RwLock::new(HighDpiScaleFactorRoundingPolicy::PassThrough);
-
+static LAST_WINDOW_CLOSED_SIGNAL: RwLock<Option<Signal<()>>> = RwLock::new(None);
+static FOCUS_WINDOW_CHANGED_SIGNAL: RwLock<Option<Signal<Option<ObjectId>>>> = RwLock::new(None);
 /// GUI-level application class equivalent to Qt's `QGuiApplication`.
 ///
 /// Builds upon `CoreApplication` and adds:
@@ -144,11 +145,16 @@ impl GuiApplication {
             }
         }
 
+        let last_window_closed = Signal::new();
+        *LAST_WINDOW_CLOSED_SIGNAL.write().unwrap() = Some(last_window_closed.clone());
+        let focus_window_changed = Signal::new();
+        *FOCUS_WINDOW_CHANGED_SIGNAL.write().unwrap() = Some(focus_window_changed.clone());
+
         Self {
             core_app,
             application_state_changed: Signal::new(),
-            last_window_closed: Signal::new(),
-            focus_window_changed: Signal::new(),
+            last_window_closed,
+            focus_window_changed,
         }
     }
 
@@ -335,6 +341,22 @@ impl GuiApplication {
         *GLOBAL_DESKTOP_FILE_NAME.write().unwrap() = None;
         GLOBAL_QUIT_ON_LAST_WINDOW_CLOSED.store(true, Ordering::SeqCst);
         *GLOBAL_ROUNDING_POLICY.write().unwrap() = HighDpiScaleFactorRoundingPolicy::PassThrough;
+        *LAST_WINDOW_CLOSED_SIGNAL.write().unwrap() = None;
+        *FOCUS_WINDOW_CHANGED_SIGNAL.write().unwrap() = None;
+    }
+
+    /// Emits `lastWindowClosed` if registered (`qguiapplication.cpp:3939`).
+    pub fn emit_last_window_closed() {
+        if let Some(sig) = LAST_WINDOW_CLOSED_SIGNAL.read().unwrap().as_ref() {
+            sig.emit(&());
+        }
+    }
+
+    /// Emits `focusWindowChanged` if registered (`qguiapplication.cpp:2417`).
+    pub fn emit_focus_window_changed(window_id: Option<ObjectId>) {
+        if let Some(sig) = FOCUS_WINDOW_CHANGED_SIGNAL.read().unwrap().as_ref() {
+            sig.emit(&window_id);
+        }
     }
 }
 
