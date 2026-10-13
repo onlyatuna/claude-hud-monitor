@@ -751,28 +751,11 @@ impl Widget for ScrollArea {
         self.update();
     }
 
-    fn paint_event(&mut self, painter: &mut Painter) {
-        let viewport = self.viewport_rect();
+    fn children_clip_rect(&self) -> Option<Rect> {
+        Some(self.viewport_rect())
+    }
 
-        // 1. Clip and render content widget
-        if let Some(w) = &self.widget {
-            painter.save();
-            painter.clip_to_rect(RectF::new(
-                viewport.x as f32,
-                viewport.y as f32,
-                viewport.width as f32,
-                viewport.height as f32,
-            ));
-            painter.translate(-self.scroll_x.get() as f32, -self.scroll_y.get() as f32);
-
-            let mut w_borrow = w.borrow_mut();
-            w_borrow.paint_event(painter);
-            drop(w_borrow);
-
-            painter.restore();
-        }
-
-        // 2. Render scrollbars
+    fn paint_over_children(&mut self, painter: &mut Painter) {
         if self.v_scrollbar.is_visible() {
             painter.save();
             let g = self.v_scrollbar.geometry();

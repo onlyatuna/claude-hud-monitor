@@ -473,6 +473,19 @@ pub trait Widget: QObject + 'static {
     /// The painter is pre-translated to the widget's local coordinates `(0, 0)`.
     fn paint_event(&mut self, _painter: &mut Painter) {}
 
+    /// The part of this widget (its own coordinates) inside which its children are drawn; `None`
+    /// is the whole widget. A scroll area returns its viewport: `QScrollArea::setWidget`
+    /// reparents the content to the viewport (qscrollarea.cpp:242-243), so it paints clipped to
+    /// it (`QWidgetPrivate::clipRect`, qwidget.cpp:1904-1922).
+    fn children_clip_rect(&self) -> Option<Rect> {
+        None
+    }
+
+    /// Paints after the children, on top of them. A scroll area draws its scroll bars here: they
+    /// are siblings of the viewport created after it (qabstractscrollarea.cpp:254, 258, 266), so
+    /// they stack above it.
+    fn paint_over_children(&mut self, _painter: &mut Painter) {}
+
     fn mouse_press_event(&mut self, _pos: Point, _button: u32, _modifiers: u32) {}
 
     fn mouse_release_event(&mut self, _pos: Point, _button: u32, _modifiers: u32) {}

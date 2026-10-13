@@ -1334,12 +1334,26 @@ fn render_widget_recursive(widget_ref: &WidgetRef, painter: &mut Painter, dirty_
     }
 
     let children = widget.children();
+    let children_clip = widget.children_clip_rect();
     drop(widget);
     crate::widget::adopt_children(widget_ref, &children);
 
+    if let Some(clip) = children_clip {
+        painter.save();
+        painter.clip_to_rect(RectF::new(
+            clip.x as f32,
+            clip.y as f32,
+            clip.width as f32,
+            clip.height as f32,
+        ));
+    }
     for child in children {
         render_widget_recursive(&child, painter, child_dirty);
     }
+    if children_clip.is_some() {
+        painter.restore();
+    }
+    widget_ref.borrow_mut().paint_over_children(painter);
 
     painter.restore();
 }
