@@ -256,7 +256,11 @@ pub fn apply_size_constraint<W: Widget + ?Sized>(owner: &W) {
 /// `&mut`, so the event is not delivered to it (G8.5.l residual).
 pub fn style_changed_below(children: Vec<WidgetRef>) {
     for child in children {
-        if let Ok(widget) = child.try_borrow() {
+        if let Ok(mut widget) = child.try_borrow_mut() {
+            notify_borrowed(&mut **widget, &mut Event::new(EventKind::StyleChange));
+            widget.widget_base().style_changed();
+            style_changed_below(widget.children());
+        } else if let Ok(widget) = child.try_borrow() {
             widget.widget_base().style_changed();
             style_changed_below(widget.children());
         }
