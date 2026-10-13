@@ -237,18 +237,10 @@ impl ConfigManager {
         if cfg.layout_mode != "horizontal" && cfg.layout_mode != "vertical" {
             cfg.layout_mode = default_layout_mode();
         }
-        // Multi-monitor disconnect safety check: if coordinates are out of reasonable bounds
-        // (e.g. unplugged secondary monitor leaving window at -9999 or 15000), reset to None.
-        if let Some(x) = cfg.window_x {
-            if !(-5000..=10000).contains(&x) {
-                cfg.window_x = None;
-            }
-        }
-        if let Some(y) = cfg.window_y {
-            if !(-5000..=10000).contains(&y) {
-                cfg.window_y = None;
-            }
-        }
+        // Python parity (config_manager.py:DEFAULT_CONFIG, hud_window.py:313, 403-424; G11.4.f):
+        // coordinate values are preserved as-is. Visibility validation and primary-screen
+        // fallback is performed by `restore_or_default_position`, which checks intersection
+        // with actual active screen work areas rather than an arbitrary static clamp.
         if cfg.claude_profile.trim().is_empty() {
             cfg.claude_profile = default_claude_profile();
         }
@@ -815,14 +807,25 @@ mod tests {
         assert_eq!(cfg_clamp2.opacity, 0.1);
 
         // Test multi-monitor coordinate out-of-bounds reset
+        // Python parity (hud_window.py:313, 403-424; G11.4.f): config loading preserves
+        // any coordinates. Visibility and falling back to the primary screen is handled
+        // by `restore_or_default_position`, not by wiping values on load.
         let mut cfg_coords = Config {
             window_x: Some(-99999),
             window_y: Some(50000),
             ..Default::default()
         };
         ConfigManager::sanitize(&mut cfg_coords);
-        assert_eq!(cfg_coords.window_x, None);
-        assert_eq!(cfg_coords.window_y, None);
+        assert_eq!(cfg_coords.window_x, Some(-99999));
+        assert_eq!(cfg_coords.window_y, Some(50000));
+        let mut cfg_quad_4k = Config {
+            window_x: Some(11520),
+            window_y: Some(200),
+            ..Default::default()
+        };
+        ConfigManager::sanitize(&mut cfg_quad_4k);
+        assert_eq!(cfg_quad_4k.window_x, Some(11520));
+        assert_eq!(cfg_quad_4k.window_y, Some(200));
 
         let mut cfg_valid_coords = Config {
             window_x: Some(-1920),
