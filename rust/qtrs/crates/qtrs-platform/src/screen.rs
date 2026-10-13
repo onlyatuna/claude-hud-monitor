@@ -224,14 +224,12 @@ pub mod win32_screen {
             list
         }
 
+        /// `QGuiApplication::screenAt` (qguiapplication.cpp:1147-1164): queries screens in
+        /// logical coordinate space (`sibling->geometry().contains(point)`), not native pixels.
         pub fn screen_at(pos: Point) -> Option<Self> {
-            let pt = POINT { x: pos.x, y: pos.y };
-            let h_monitor = unsafe { MonitorFromPoint(pt, 0) };
-            if !h_monitor.is_null() {
-                Self::from_hmonitor(h_monitor)
-            } else {
-                None
-            }
+            Self::all_screens()
+                .into_iter()
+                .find(|s| PlatformScreen::geometry(s).contains(pos))
         }
     }
 

@@ -47,7 +47,6 @@ fn test_platform_screen_primary_and_multi_screens() {
         .screen_at(center_pt)
         .expect("center point must hit a screen");
     assert_eq!(hit_screen.geometry(), geom);
-
     // Verify screen_changed signal connection
     let signal_received = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let flag = std::sync::Arc::clone(&signal_received);
