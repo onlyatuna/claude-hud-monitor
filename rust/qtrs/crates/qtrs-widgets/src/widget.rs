@@ -639,6 +639,10 @@ pub struct WidgetBase {
     pub always_show_tool_tips: Cell<bool>,
     /// `WA_MouseTracking`: buttonless mouse moves are delivered to this widget.
     pub mouse_tracking: Cell<bool>,
+    /// `WA_TransparentForMouseEvents` (`QWidget::testAttribute(Qt::WA_TransparentForMouseEvents)`).
+    pub transparent_for_mouse_events: Cell<bool>,
+    /// `WA_NoMousePropagation` (`QWidget::testAttribute(Qt::WA_NoMousePropagation)`).
+    pub no_mouse_propagation: Cell<bool>,
     /// `QWidget::minimumSize` / `maximumSize` (`setMinimumSize`, `setMaximumSize`, and the owner's
     /// layout through its size constraint).
     pub min_size: Cell<Size>,
@@ -674,6 +678,8 @@ impl WidgetBase {
             tool_tip_duration: Cell::new(-1),
             always_show_tool_tips: Cell::new(false),
             mouse_tracking: Cell::new(false),
+            transparent_for_mouse_events: Cell::new(false),
+            no_mouse_propagation: Cell::new(false),
             min_size: Cell::new(Size::new(0, 0)),
             max_size: Cell::new(Size::new(WIDGET_SIZE_MAX, WIDGET_SIZE_MAX)),
             explicit_min: Cell::new((false, false)),
@@ -778,6 +784,24 @@ impl WidgetBase {
 
     pub fn has_mouse_tracking(&self) -> bool {
         self.mouse_tracking.get()
+    }
+
+    /// `QWidget::setAttribute(Qt::WA_TransparentForMouseEvents)`.
+    pub fn set_transparent_for_mouse_events(&self, on: bool) {
+        self.transparent_for_mouse_events.set(on);
+    }
+
+    pub fn is_transparent_for_mouse_events(&self) -> bool {
+        self.transparent_for_mouse_events.get()
+    }
+
+    /// `QWidget::setAttribute(Qt::WA_NoMousePropagation)`.
+    pub fn set_no_mouse_propagation(&self, on: bool) {
+        self.no_mouse_propagation.set(on);
+    }
+
+    pub fn has_no_mouse_propagation(&self) -> bool {
+        self.no_mouse_propagation.get()
     }
 
     /// QSS pseudo-states of the widget's state, as `pseudoClass(QStyle::State)` derives them

@@ -471,11 +471,17 @@ pub fn hit_path(root: &WidgetRef, pos: Point) -> Vec<HitStep> {
         };
         let mut next = None;
         for child in children.into_iter().rev() {
-            let (visible, geom, child_enabled) = {
+            let (visible, geom, child_enabled, transparent) = {
                 let b = child.borrow();
-                (b.is_visible(), b.geometry(), b.is_enabled())
+                let base = b.widget_base();
+                (
+                    b.is_visible(),
+                    b.geometry(),
+                    b.is_enabled(),
+                    base.is_transparent_for_mouse_events(),
+                )
             };
-            if visible && geom.contains(pos) {
+            if visible && !transparent && geom.contains(pos) {
                 next = Some(HitStep {
                     pos: Point::new(pos.x - geom.x, pos.y - geom.y),
                     enabled: enabled && child_enabled,
@@ -555,6 +561,14 @@ fn deliver_with_propagation(path: &[HitStep], make_kind: impl Fn(Point) -> Event
         if handled && ev.is_accepted() {
             return true;
         }
+        if step
+            .widget
+            .borrow()
+            .widget_base()
+            .has_no_mouse_propagation()
+        {
+            return false;
+        }
     }
     false
 }
@@ -581,6 +595,14 @@ fn deliver_tracking_move(path: &[HitStep]) -> bool {
         let handled = step.widget.borrow_mut().event(&mut ev);
         if handled && ev.is_accepted() {
             return true;
+        }
+        if step
+            .widget
+            .borrow()
+            .widget_base()
+            .has_no_mouse_propagation()
+        {
+            return false;
         }
     }
     false
@@ -615,6 +637,14 @@ fn deliver_double_click(path: &[HitStep], button: u32) -> bool {
         });
         if step.widget.borrow_mut().event(&mut press) && press.is_accepted() {
             return true;
+        }
+        if step
+            .widget
+            .borrow()
+            .widget_base()
+            .has_no_mouse_propagation()
+        {
+            return false;
         }
     }
     false
