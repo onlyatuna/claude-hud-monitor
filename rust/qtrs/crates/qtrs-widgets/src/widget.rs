@@ -256,15 +256,46 @@ pub fn apply_size_constraint<W: Widget + ?Sized>(owner: &W) {
 /// `&mut`, so the event is not delivered to it (G8.5.l residual).
 pub fn style_changed_below(children: Vec<WidgetRef>) {
     for child in children {
-        if let Ok(mut widget) = child.try_borrow_mut() {
-            notify_borrowed(&mut **widget, &mut Event::new(EventKind::StyleChange));
-            widget.widget_base().style_changed();
-            style_changed_below(widget.children());
-        } else if let Ok(widget) = child.try_borrow() {
+        if let Ok(widget) = child.try_borrow() {
             widget.widget_base().style_changed();
             style_changed_below(widget.children());
         }
     }
+}
+
+/// Strongly typed `Qt::WidgetAttribute` matching Qt `qnamespace.h:300-439`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum WidgetAttribute {
+    Disabled = 0,
+    UnderMouse = 1,
+    MouseTracking = 2,
+    OpaquePaintEvent = 4,
+    StaticContents = 5,
+    LaidOut = 7,
+    PaintOnScreen = 8,
+    NoSystemBackground = 9,
+    UpdatesDisabled = 10,
+    Mapped = 11,
+    InputMethodEnabled = 14,
+    ForceDisabled = 32,
+    CustomWhatsThis = 47,
+    LayoutOnEntireRect = 48,
+    TransparentForMouseEvents = 51,
+    PaintUnclipped = 52,
+    NoMousePropagation = 73,
+    Hover = 74,
+    QuitOnClose = 76,
+    KeyboardFocusChange = 77,
+    AcceptDrops = 78,
+    AlwaysShowToolTips = 84,
+    StyledBackground = 93,
+    ShowWithoutActivating = 98,
+    NativeWindow = 100,
+    TranslucentBackground = 120,
+    AcceptTouchEvents = 121,
+    AlwaysStackOnTop = 128,
+    TabletTracking = 129,
 }
 
 pub trait Widget: QObject + 'static {
@@ -610,9 +641,18 @@ pub trait Widget: QObject + 'static {
     fn always_show_tool_tips(&self) -> bool {
         self.widget_base().always_show_tool_tips.get()
     }
-
     fn set_always_show_tool_tips(&self, on: bool) {
         self.widget_base().always_show_tool_tips.set(on);
+    }
+
+    /// `QWidget::testAttribute` (`qwidget.cpp:11431-11445`).
+    fn test_attribute(&self, attr: WidgetAttribute) -> bool {
+        self.widget_base().test_attribute(attr)
+    }
+
+    /// `QWidget::setAttribute` (`qwidget.cpp:11432-11480`).
+    fn set_attribute(&self, attr: WidgetAttribute, on: bool) {
+        self.widget_base().set_attribute(attr, on);
     }
 }
 
@@ -804,6 +844,42 @@ impl WidgetBase {
 
     pub fn has_no_mouse_propagation(&self) -> bool {
         self.no_mouse_propagation.get()
+    }
+
+    /// `QWidget::testAttribute`.
+    pub fn test_attribute(&self, attr: WidgetAttribute) -> bool {
+        match attr {
+            WidgetAttribute::Disabled => !self.enabled.get(),
+            WidgetAttribute::MouseTracking => self.mouse_tracking.get(),
+            WidgetAttribute::TransparentForMouseEvents => self.transparent_for_mouse_events.get(),
+            WidgetAttribute::NoMousePropagation => self.no_mouse_propagation.get(),
+            WidgetAttribute::AlwaysShowToolTips => self.always_show_tool_tips.get(),
+            _ => false,
+        }
+    }
+
+    /// `QWidget::setAttribute`.
+    pub fn set_attribute(&self, attr: WidgetAttribute, on: bool) {
+        match attr {
+            WidgetAttribute::Disabled => {
+                let mut notices = Vec::new();
+                self.force_disabled.set(on);
+                self.set_enabled_helper(!on, &mut notices);
+            }
+            WidgetAttribute::MouseTracking => {
+                self.mouse_tracking.set(on);
+            }
+            WidgetAttribute::TransparentForMouseEvents => {
+                self.transparent_for_mouse_events.set(on);
+            }
+            WidgetAttribute::NoMousePropagation => {
+                self.no_mouse_propagation.set(on);
+            }
+            WidgetAttribute::AlwaysShowToolTips => {
+                self.always_show_tool_tips.set(on);
+            }
+            _ => {}
+        }
     }
 
     /// QSS pseudo-states of the widget's state, as `pseudoClass(QStyle::State)` derives them
