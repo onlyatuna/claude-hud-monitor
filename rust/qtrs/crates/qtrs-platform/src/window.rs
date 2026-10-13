@@ -1845,6 +1845,13 @@ impl NativeWindow {
         self.dcomp_downgraded = downgraded;
     }
 
+    /// Sets the presenter directly, for tests / fault injection.
+    pub fn set_presenter_for_test(
+        &mut self,
+        presenter: Option<crate::presenter::WindowsPresenter>,
+    ) {
+        self.presenter = presenter;
+    }
     pub fn get_or_create_presenter(
         &mut self,
         width: u32,
@@ -1884,6 +1891,9 @@ impl NativeWindow {
         sync_interactive_resize(self.hwnd, &mut self.presenter, &mut self.layered_surface);
         let p = self.presenter.as_mut().unwrap();
         if let Err(e) = p.resize(width, height) {
+            if let crate::presenter::WindowsPresenter::DirectComposition(_) = p {
+                self.dcomp_downgraded = true;
+            }
             self.presenter = None;
             return Err(e);
         }

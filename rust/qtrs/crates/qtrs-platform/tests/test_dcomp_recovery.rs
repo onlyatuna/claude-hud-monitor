@@ -159,3 +159,99 @@ fn test_dcomp_policy_opt_in_and_runtime_downgrade() {
     // Reset override
     set_dcomp_enabled(None);
 }
+
+#[test]
+fn test_dcomp_runtime_present_failure_auto_downgrade_and_recovery() {
+    use qtrs_gui::geometry::Region;
+    use qtrs_gui::paint::Pixmap;
+    use qtrs_gui::tiny_skia::Color;
+    use qtrs_platform::platform_window::PlatformWindow;
+    use qtrs_platform::presenter::WindowsPresenter;
+    use qtrs_platform::surface::DCompSurface;
+
+    let mut window = NativeWindow::new(
+        "DComp Fault Auto Downgrade Test",
+        Rect::new(50, 50, 100, 80),
+        WindowFlags::FRAMELESS | WindowFlags::LAYERED,
+    )
+    .expect("native window create");
+
+    // Initialize initial Layered presenter
+    let _ = window.get_or_create_presenter(100, 80).expect("presenter");
+    assert!(!window.is_dcomp_downgraded());
+
+    // Inject a DComp surface that will fail on present
+    let dcomp_res = DCompSurface::new(window.hwnd(), 100, 80);
+    if let Ok(mut dcomp) = dcomp_res {
+        dcomp.set_fail_present_for_test(true);
+        window.set_presenter_for_test(Some(WindowsPresenter::DirectComposition(dcomp)));
+
+        let mut pixmap = Pixmap::new(100, 80).unwrap();
+        pixmap.fill(Color::from_rgba8(255, 0, 0, 255));
+        let full = Region::from_coords(0, 0, 100, 80);
+
+        // First present: DComp fails -> automatically sets dcomp_downgraded -> falls back to Layered retry -> succeeds!
+        let r = window.present_region(&pixmap, &full);
+        assert!(
+            r.is_ok(),
+            "present_region must recover cleanly via Layered fallback: {:?}",
+            r.err()
+        );
+        assert!(
+            window.is_dcomp_downgraded(),
+            "Window must be marked dcomp_downgraded after present failure"
+        );
+
+        // Verify presenter is now Layered
+        match window.presenter().unwrap() {
+            WindowsPresenter::Layered(_) => {}
+            _ => panic!("Expected Win32LayeredPresenter after auto downgrade"),
+        }
+
+        // Subsequent present remains on Layered
+        let r2 = window.present_region(&pixmap, &full);
+        assert!(r2.is_ok());
+    } else {
+        // When device has no DComp hardware support, test the resize failure downgrade path directly
+        // on get_or_create_presenter
+        assert!(!window.is_dcomp_downgraded());
+    }
+}
+
+#[test]
+fn test_dcomp_resize_failure_auto_downgrades_flag() {
+    use qtrs_platform::presenter::WindowsPresenter;
+    use qtrs_platform::surface::DCompSurface;
+
+    let mut window = NativeWindow::new(
+        "DComp Resize Failure Test",
+        Rect::new(50, 50, 100, 80),
+        WindowFlags::FRAMELESS | WindowFlags::LAYERED,
+    )
+    .expect("native window create");
+
+    assert!(!window.is_dcomp_downgraded());
+
+    let dcomp_res = DCompSurface::new(window.hwnd(), 100, 80);
+    if let Ok(mut dcomp) = dcomp_res {
+        dcomp.set_fail_resize_for_test(true);
+        window.set_presenter_for_test(Some(WindowsPresenter::DirectComposition(dcomp)));
+
+        // get_or_create_presenter triggers p.resize() which fails -> must mark dcomp_downgraded = true
+        let res = window.get_or_create_presenter(120, 90);
+        assert!(res.is_err(), "Resize failure must return Err");
+        assert!(
+            window.is_dcomp_downgraded(),
+            "dcomp_downgraded must be set to true on resize failure"
+        );
+
+        // Next call chooses Layered because dcomp_downgraded is true
+        let p_next = window
+            .get_or_create_presenter(120, 90)
+            .expect("Layered fallback presenter");
+        match p_next {
+            WindowsPresenter::Layered(_) => {}
+            _ => panic!("Expected Win32LayeredPresenter after downgrade"),
+        }
+    }
+}

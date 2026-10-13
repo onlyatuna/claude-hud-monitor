@@ -13,8 +13,8 @@ use std::ptr;
 use windows_sys::core::{GUID, HRESULT};
 use windows_sys::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
+    CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
 };
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryA};
 
@@ -118,10 +118,8 @@ type PfnD3D11CreateDevice = unsafe extern "system" fn(
     ppImmediateContext: *mut *mut c_void,
 ) -> HRESULT;
 
-type PfnCreateDXGIFactory1 = unsafe extern "system" fn(
-    riid: *const GUID,
-    ppFactory: *mut *mut c_void,
-) -> HRESULT;
+type PfnCreateDXGIFactory1 =
+    unsafe extern "system" fn(riid: *const GUID, ppFactory: *mut *mut c_void) -> HRESULT;
 
 type PfnDCompositionCreateDevice = unsafe extern "system" fn(
     dxgiDevice: *mut c_void,
@@ -186,7 +184,12 @@ unsafe fn set_clip_rect(clip_visual: *mut c_void, w: u32, h: u32) -> HRESULT {
         unsafe extern "system" fn(this: *mut c_void, rect: *const D2dRectF) -> HRESULT;
     let vtbl = *(clip_visual as *mut *mut usize);
     let f: PfnSetClipRect = std::mem::transmute(*vtbl.add(14));
-    let rect = D2dRectF { left: 0.0, top: 0.0, right: w as f32, bottom: h as f32 };
+    let rect = D2dRectF {
+        left: 0.0,
+        top: 0.0,
+        right: w as f32,
+        bottom: h as f32,
+    };
     f(clip_visual, &rect)
 }
 
@@ -225,6 +228,8 @@ pub struct DCompSurface {
     /// staged pixel is stale, so the next present covers the whole visible area.
     staged_opacity: f32,
     stats: DCompStats,
+    fail_present_for_test: bool,
+    fail_resize_for_test: bool,
 }
 
 /// Converts premultiplied RGBA pixels to the premultiplied BGRA of the staging DIB, scaling every
@@ -281,9 +286,12 @@ impl DCompSurface {
             }
 
             // 2. Resolve entry points
-            let d3d11_create_device_ptr = GetProcAddress(d3d11_mod, c"D3D11CreateDevice".as_ptr() as *const u8);
-            let create_dxgi_factory_ptr = GetProcAddress(dxgi_mod, c"CreateDXGIFactory1".as_ptr() as *const u8);
-            let dcomp_create_device_ptr = GetProcAddress(dcomp_mod, c"DCompositionCreateDevice".as_ptr() as *const u8);
+            let d3d11_create_device_ptr =
+                GetProcAddress(d3d11_mod, c"D3D11CreateDevice".as_ptr() as *const u8);
+            let create_dxgi_factory_ptr =
+                GetProcAddress(dxgi_mod, c"CreateDXGIFactory1".as_ptr() as *const u8);
+            let dcomp_create_device_ptr =
+                GetProcAddress(dcomp_mod, c"DCompositionCreateDevice".as_ptr() as *const u8);
 
             if d3d11_create_device_ptr.is_none()
                 || create_dxgi_factory_ptr.is_none()
@@ -295,9 +303,12 @@ impl DCompSurface {
                 return Err("Failed to resolve DirectComposition entry points");
             }
 
-            let d3d11_create_device: PfnD3D11CreateDevice = std::mem::transmute(d3d11_create_device_ptr);
-            let create_dxgi_factory: PfnCreateDXGIFactory1 = std::mem::transmute(create_dxgi_factory_ptr);
-            let dcomp_create_device: PfnDCompositionCreateDevice = std::mem::transmute(dcomp_create_device_ptr);
+            let d3d11_create_device: PfnD3D11CreateDevice =
+                std::mem::transmute(d3d11_create_device_ptr);
+            let create_dxgi_factory: PfnCreateDXGIFactory1 =
+                std::mem::transmute(create_dxgi_factory_ptr);
+            let dcomp_create_device: PfnDCompositionCreateDevice =
+                std::mem::transmute(dcomp_create_device_ptr);
 
             // 3. Create Direct3D11 Device
             let mut d3d_device: *mut c_void = ptr::null_mut();
@@ -358,7 +369,8 @@ impl DCompSurface {
                 pDesc: *const DXGI_SWAP_CHAIN_DESC1,
                 pRestrictToOutput: *mut c_void,
                 ppSwapChain: *mut *mut c_void,
-            ) -> HRESULT;
+            )
+                -> HRESULT;
             let create_swap_chain_fn: PfnCreateSwapChainForComposition =
                 std::mem::transmute(*fac_vtbl.add(24));
 
@@ -420,10 +432,8 @@ impl DCompSurface {
 
             // 8. Create clip visual (root) and content visual (swap chain).
             // CreateVisual is slot 7 on IDCompositionDevice
-            type PfnCreateVisual = unsafe extern "system" fn(
-                this: *mut c_void,
-                visual: *mut *mut c_void,
-            ) -> HRESULT;
+            type PfnCreateVisual =
+                unsafe extern "system" fn(this: *mut c_void, visual: *mut *mut c_void) -> HRESULT;
             let create_visual_fn: PfnCreateVisual = std::mem::transmute(*dev_vtbl.add(7));
 
             let cleanup = |extras: &[*mut c_void]| {
@@ -455,10 +465,8 @@ impl DCompSurface {
 
             // 9. Content visual shows the swap chain: SetContent is slot 15 on IDCompositionVisual
             let vis_vtbl = *(dcomp_visual as *mut *mut usize);
-            type PfnSetContent = unsafe extern "system" fn(
-                this: *mut c_void,
-                content: *mut c_void,
-            ) -> HRESULT;
+            type PfnSetContent =
+                unsafe extern "system" fn(this: *mut c_void, content: *mut c_void) -> HRESULT;
             let set_content_fn: PfnSetContent = std::mem::transmute(*vis_vtbl.add(15));
             let hr = set_content_fn(dcomp_visual, swap_chain);
             if hr < 0 {
@@ -488,10 +496,8 @@ impl DCompSurface {
 
             // 10. Set root visual: SetRoot is slot 3 on IDCompositionTarget
             let target_vtbl = *(dcomp_target as *mut *mut usize);
-            type PfnSetRoot = unsafe extern "system" fn(
-                this: *mut c_void,
-                visual: *mut c_void,
-            ) -> HRESULT;
+            type PfnSetRoot =
+                unsafe extern "system" fn(this: *mut c_void, visual: *mut c_void) -> HRESULT;
             let set_root_fn: PfnSetRoot = std::mem::transmute(*target_vtbl.add(3));
             let hr = set_root_fn(dcomp_target, dcomp_clip_visual);
             if hr < 0 {
@@ -551,6 +557,8 @@ impl DCompSurface {
                 opacity: 1.0,
                 staged_opacity: 1.0,
                 stats: DCompStats::default(),
+                fail_present_for_test: false,
+                fail_resize_for_test: false,
             })
         }
     }
@@ -587,11 +595,23 @@ impl DCompSurface {
         self.stats
     }
 
+    /// Injects a synthetic present failure for testing downgrade paths.
+    pub fn set_fail_present_for_test(&mut self, fail: bool) {
+        self.fail_present_for_test = fail;
+    }
+
+    /// Injects a synthetic resize failure for testing downgrade paths.
+    pub fn set_fail_resize_for_test(&mut self, fail: bool) {
+        self.fail_resize_for_test = fail;
+    }
     /// Changes the visible size. Inside the allocated capacity this only moves the clip:
     /// no `ResizeBuffers`, no staging reallocation. Swap chain buffers are reallocated only
     /// when the capacity is too small, or more than 2x too large (hysteresis: the new
     /// capacity has 1.5x headroom, so shrink/grow do not alternate).
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), &'static str> {
+        if self.fail_resize_for_test {
+            return Err("Injected DirectComposition resize failure");
+        }
         if width == 0 || height == 0 {
             return Err("Width and height must be greater than 0");
         }
@@ -704,9 +724,11 @@ impl DCompSurface {
         opacity: f32,
         dirty: Rect,
     ) -> Result<(), &'static str> {
+        if self.fail_present_for_test {
+            return Err("Injected DirectComposition present failure");
+        }
         let p_width = pixmap.physical_width();
         let p_height = pixmap.physical_height();
-
         if p_width != self.width || p_height != self.height {
             self.resize(p_width, p_height)?;
         }
@@ -715,7 +737,11 @@ impl DCompSurface {
         }
 
         let full_window_rect = Rect::new(0, 0, self.width as i32, self.height as i32);
-        let dirty = if self.force_full { full_window_rect } else { dirty };
+        let dirty = if self.force_full {
+            full_window_rect
+        } else {
+            dirty
+        };
         let clipped = full_window_rect.intersected(&dirty);
         if clipped.is_empty() {
             return Ok(());
@@ -734,8 +760,10 @@ impl DCompSurface {
                 let src_offset = y * src_stride + dirty_x * 4;
                 let dst_offset = y * dst_stride + dirty_x * 4;
                 let copy_bytes = dirty_w * 4;
-                let src_row = std::slice::from_raw_parts(src_data.as_ptr().add(src_offset), copy_bytes);
-                let dst_row = std::slice::from_raw_parts_mut(self.staging_bits.add(dst_offset), copy_bytes);
+                let src_row =
+                    std::slice::from_raw_parts(src_data.as_ptr().add(src_offset), copy_bytes);
+                let dst_row =
+                    std::slice::from_raw_parts_mut(self.staging_bits.add(dst_offset), copy_bytes);
 
                 convert_rgba_to_staging_bgra(src_row, dst_row, opacity);
             }
@@ -792,10 +820,8 @@ impl DCompSurface {
                 windows_sys::Win32::Graphics::Gdi::SRCCOPY,
             );
             // 5. Release DC: ReleaseDC is slot 12 on IDXGISurface1
-            type PfnReleaseDC = unsafe extern "system" fn(
-                this: *mut c_void,
-                p_dirty_rect: *const RECT,
-            ) -> HRESULT;
+            type PfnReleaseDC =
+                unsafe extern "system" fn(this: *mut c_void, p_dirty_rect: *const RECT) -> HRESULT;
             let rel_dc_fn: PfnReleaseDC = std::mem::transmute(*surf_vtbl.add(12));
             let dirty_gdi_rect = RECT {
                 left: clipped.x,
@@ -952,14 +978,22 @@ mod tests {
 
             // Test resize
             let resize_res = surface.resize(120, 90);
-            assert!(resize_res.is_ok(), "DComp resize failed: {:?}", resize_res.err());
+            assert!(
+                resize_res.is_ok(),
+                "DComp resize failed: {:?}",
+                resize_res.err()
+            );
             assert_eq!(surface.width(), 120);
             assert_eq!(surface.height(), 90);
 
             let mut pixmap2 = Pixmap::new(120, 90).unwrap();
             pixmap2.fill(Color::from_rgba8(50, 150, 250, 255));
             let res2 = surface.present_dirty(&mut pixmap2, 1.0, Rect::new(0, 0, 120, 90));
-            assert!(res2.is_ok(), "DComp resized present_dirty failed: {:?}", res2.err());
+            assert!(
+                res2.is_ok(),
+                "DComp resized present_dirty failed: {:?}",
+                res2.err()
+            );
         } else {
             eprintln!("DirectComposition not supported on this device/driver, skipping test");
         }
@@ -986,6 +1020,10 @@ mod tests {
         pixmap.fill(Color::from_rgba8(30, 60, 90, 220));
 
         let res = surface.present_dirty(&mut pixmap, 0.9, Rect::new(5, 5, 30, 25));
-        assert!(res.is_ok(), "WindowsSurface present_dirty failed: {:?}", res.err());
+        assert!(
+            res.is_ok(),
+            "WindowsSurface present_dirty failed: {:?}",
+            res.err()
+        );
     }
 }

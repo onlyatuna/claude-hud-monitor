@@ -12,11 +12,7 @@ use qtrs_gui::paint::Pixmap;
 /// Unified abstraction for presenting surface pixels to the native window system.
 pub trait SurfacePresenter: Send + Sync {
     /// Presents the specified dirty region of the surface to the native window.
-    fn present(
-        &mut self,
-        surface: &Pixmap,
-        dirty: &Region,
-    ) -> Result<(), &'static str>;
+    fn present(&mut self, surface: &Pixmap, dirty: &Region) -> Result<(), &'static str>;
 
     /// Notifies the presenter that the window backing surface size has changed.
     fn resize(&mut self, width: u32, height: u32) -> Result<(), &'static str> {
@@ -78,14 +74,8 @@ pub mod win32 {
                 bmi.bmiHeader.biCompression = BI_RGB;
 
                 let mut bits: *mut core::ffi::c_void = ptr::null_mut();
-                let hbitmap = CreateDIBSection(
-                    mem_dc,
-                    &bmi,
-                    DIB_RGB_COLORS,
-                    &mut bits,
-                    ptr::null_mut(),
-                    0,
-                );
+                let hbitmap =
+                    CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
                 if hbitmap.is_null() || bits.is_null() {
                     ReleaseDC(ptr::null_mut(), screen_dc);
                     DeleteDC(mem_dc);
@@ -204,14 +194,10 @@ pub mod win32 {
                     let y = y as usize;
                     let row_offset = y * stride + dirty_x * 4;
                     let copy_bytes = dirty_w * 4;
-                    let src_row = std::slice::from_raw_parts(
-                        src_data.as_ptr().add(row_offset),
-                        copy_bytes,
-                    );
-                    let dst_row = std::slice::from_raw_parts_mut(
-                        self.bits.add(row_offset),
-                        copy_bytes,
-                    );
+                    let src_row =
+                        std::slice::from_raw_parts(src_data.as_ptr().add(row_offset), copy_bytes);
+                    let dst_row =
+                        std::slice::from_raw_parts_mut(self.bits.add(row_offset), copy_bytes);
 
                     let (src_chunks, _) = src_row.as_chunks::<4>();
                     let (dst_chunks, _) = dst_row.as_chunks_mut::<4>();
@@ -325,6 +311,13 @@ pub mod win32 {
         pub fn as_layered_mut(&mut self) -> Option<&mut Win32LayeredPresenter> {
             match self {
                 Self::Layered(p) => Some(p),
+                _ => None,
+            }
+        }
+
+        pub fn as_dcomp_mut(&mut self) -> Option<&mut crate::surface::dcomp::DCompSurface> {
+            match self {
+                Self::DirectComposition(p) => Some(p),
                 _ => None,
             }
         }
