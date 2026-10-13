@@ -15,17 +15,58 @@ pub enum CursorShape {
     Busy,
 }
 
+/// `QWindowsCursor::size` (qwindowscursor.cpp:675-692): the cursor's size in native pixels on a
+/// screen whose device pixel ratio is `screen_dpr`, given the system cursor width
+/// (`SM_CXCURSOR`), the accessibility value `HKCU\Control Panel\Cursors\CursorBaseSize` and the
+/// device pixel ratio of the primary screen. `logicalDpi / logicalBaseDpi` is `dpr` (96 DPI base).
+pub fn windows_cursor_size(
+    system_cursor_width: i32,
+    cursor_base_size: Option<u32>,
+    screen_dpr: f64,
+    primary_dpr: f64,
+) -> i32 {
+    // `screenCursorSize` (qwindowscursor.cpp:162-179): another screen's DPI rescales the
+    // primary screen's size (`QSizeF::toSize` rounds, `qFuzzyCompare` is relative 1e-12).
+    let fuzzy_equal =
+        (screen_dpr - primary_dpr).abs() * 1e12 <= screen_dpr.abs().min(primary_dpr.abs());
+    let width = if fuzzy_equal {
+        system_cursor_width
+    } else {
+        (system_cursor_width as f64 * screen_dpr / primary_dpr).round() as i32
+    };
+    let base_size = width / 2;
+    let Some(setting) = cursor_base_size else {
+        return base_size / 2;
+    };
+    if base_size == 0 {
+        return 0;
+    }
+    // The registry value is DPI-independent; 32..256 maps to steps 0..14 of `base_size / 2` px.
+    let scaled = (setting as f64 * screen_dpr) as i32;
+    let steps = (scaled - 2 * base_size) / base_size;
+    base_size + steps * (base_size / 2)
+}
+
 pub trait PlatformCursor: Send + Sync {
     fn change_cursor(&mut self, shape: CursorShape);
+    /// `QPlatformCursor::size` (qplatformcursor.cpp:100-103): the cursor's size in native pixels
+    /// on a screen with `screen_dpr` while the primary screen has `primary_dpr`. The default is
+    /// 16x16; the Windows plugin overrides it with [`windows_cursor_size`].
+    fn size(&self, _screen_dpr: f64, _primary_dpr: f64) -> (i32, i32) {
+        (16, 16)
+    }
 }
 
 #[cfg(windows)]
 pub mod win32_cursor {
     use super::*;
+    use windows_sys::Win32::System::Registry::{
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, REG_DWORD,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        LoadCursorW, SetCursor, HCURSOR, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS, IDC_HAND,
-        IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE,
-        IDC_UPARROW, IDC_WAIT,
+        GetSystemMetrics, LoadCursorW, SetCursor, HCURSOR, IDC_APPSTARTING, IDC_ARROW, IDC_CROSS,
+        IDC_HAND, IDC_IBEAM, IDC_NO, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE,
+        IDC_SIZEWE, IDC_UPARROW, IDC_WAIT, SM_CXCURSOR,
     };
     static CURRENT_GLOBAL_SHAPE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 
@@ -113,6 +154,43 @@ pub mod win32_cursor {
         fn change_cursor(&mut self, shape: CursorShape) {
             self.current_shape = shape;
             Self::set_shape(shape);
+        }
+
+        fn size(&self, screen_dpr: f64, primary_dpr: f64) -> (i32, i32) {
+            let width = unsafe { GetSystemMetrics(SM_CXCURSOR) };
+            let s = windows_cursor_size(width, cursor_base_size(), screen_dpr, primary_dpr);
+            (s, s)
+        }
+    }
+
+    /// `HKCU\Control Panel\Cursors\CursorBaseSize` (`QWinRegistryKey::value<DWORD>`), if set.
+    fn cursor_base_size() -> Option<u32> {
+        let subkey: Vec<u16> = "Control Panel\\Cursors"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let value_name: Vec<u16> = "CursorBaseSize"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        unsafe {
+            let mut hkey: HKEY = std::ptr::null_mut();
+            if RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut hkey) != 0 {
+                return None;
+            }
+            let mut val_type: u32 = 0;
+            let mut data: u32 = 0;
+            let mut data_size: u32 = std::mem::size_of::<u32>() as u32;
+            let status = RegQueryValueExW(
+                hkey,
+                value_name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut val_type,
+                &mut data as *mut u32 as *mut u8,
+                &mut data_size,
+            );
+            RegCloseKey(hkey);
+            (status == 0 && val_type == REG_DWORD).then_some(data)
         }
     }
 }

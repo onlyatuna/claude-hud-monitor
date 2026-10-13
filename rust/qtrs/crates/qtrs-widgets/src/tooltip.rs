@@ -44,11 +44,25 @@ pub const FALL_ASLEEP_DELAY_MS: u64 = 2000;
 pub const QUICK_WAKE_UP_DELAY_MS: u64 = 20;
 /// `QTipLabel::hideTip` waits this long before hiding (qtooltip.cpp:176-180).
 pub const HIDE_DELAY_MS: u64 = 300;
-/// `QPlatformCursor::size` default (qplatformcursor.h), used for the tip's offset from the cursor.
+/// `QPlatformCursor::size` default (qplatformcursor.cpp:100-103), 16x16. The tip itself uses
+/// [`cursor_size`]; this is the Qt value the hand-derived `place_tip` tests are written against.
 pub const CURSOR_SIZE: Size = Size {
     width: 16,
     height: 16,
 };
+
+/// `QHighDpi::fromNativePixels(cursor->size(), screen)` (qtooltip.cpp:325-326): the platform
+/// cursor's native size on the screen with `screen_dpr`, in device-independent pixels (rounded).
+pub fn cursor_size(screen_dpr: f64, primary_dpr: f64) -> Size {
+    let (w, h) = qtrs_platform::integration::platform()
+        .cursor()
+        .size(screen_dpr, primary_dpr);
+    let dpr = if screen_dpr > 0.0 { screen_dpr } else { 1.0 };
+    Size::new(
+        (w as f64 / dpr).round() as i32,
+        (h as f64 / dpr).round() as i32,
+    )
+}
 
 /// `QTipLabel::restartExpireTimer` (qtooltip.cpp:117-126): how long a tip stays, in ms. `msec > 0`
 /// is the caller's duration; otherwise `10000 + 40 * max(0, length - 100)`, the length being the
@@ -99,17 +113,17 @@ pub fn place_tip(pos: Point, tip_size: Size, cursor_size: Size, screen: Rect) ->
 }
 
 /// The screen a tip for `pos` is placed on: the one containing the point, else the primary one
-/// (`QTipLabel::getTipScreen`, qtooltip.cpp:268-273).
-fn tip_screen(pos: Point) -> Rect {
-    let screens = qtrs_platform::integration::platform().screens();
+/// (`QTipLabel::getTipScreen`, qtooltip.cpp:268-273); with its device pixel ratio.
+fn tip_screen(pos: Point) -> (Rect, f64) {
+    let platform = qtrs_platform::integration::platform();
+    let screens = platform.screens();
     screens
         .iter()
-        .map(|s| s.geometry())
-        .find(|g| g.contains(pos))
+        .find(|s| s.geometry().contains(pos))
+        .map(|s| (s.geometry(), s.device_pixel_ratio() as f64))
         .unwrap_or_else(|| {
-            qtrs_platform::integration::platform()
-                .primary_screen()
-                .geometry()
+            let p = platform.primary_screen();
+            (p.geometry(), p.device_pixel_ratio() as f64)
         })
 }
 
@@ -531,7 +545,7 @@ impl ToolTip {
             tip.text = text.to_string();
             tip.widget = widget;
             tip.rect = rect;
-            let screen = tip_screen(pos);
+            let (screen, screen_dpr) = tip_screen(pos);
             let size = {
                 let mut label = tip.label.borrow_mut();
                 let label = label
@@ -553,7 +567,11 @@ impl ToolTip {
             };
             // `QTipLabel::updateSize` adds one pixel of width (qtooltip.cpp:159).
             let size = Size::new(size.width + 1, size.height);
-            let origin = place_tip(pos, size, CURSOR_SIZE, screen);
+            let primary_dpr = qtrs_platform::integration::platform()
+                .primary_screen()
+                .device_pixel_ratio() as f64;
+            let cursor = cursor_size(screen_dpr, primary_dpr);
+            let origin = place_tip(pos, size, cursor, screen);
             tip.window
                 .set_geometry(Rect::new(origin.x, origin.y, size.width, size.height));
             // `restartExpireTimer`: a new expiry cancels a pending hide.

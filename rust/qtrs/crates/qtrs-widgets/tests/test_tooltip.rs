@@ -965,18 +965,19 @@ mod real_windows {
         unsafe { GetCursorPos(&mut pt) };
         let cursor = qtrs_platform::high_dpi::from_native_point(Point::new(pt.x, pt.y), dpr);
         let tip = ToolTip::geometry().expect("visible");
-        let screen = qtrs_platform::integration::platform()
-            .primary_screen()
-            .geometry();
+        let primary = qtrs_platform::integration::platform().primary_screen();
+        let screen = primary.geometry();
+        // `QHighDpi::fromNativePixels(cursor->size(), screen)`: 16 native px at dpr 1.25 is 13.
+        let cursor_h = qtrs_widgets::tooltip::cursor_size(dpr as f64, dpr as f64).height;
         assert!(
             cursor.x + 2 + tip.width <= screen.x + screen.width
-                && cursor.y + 16 + tip.height <= screen.y + screen.height,
+                && cursor.y + cursor_h + tip.height <= screen.y + screen.height,
             "precondition: the cursor is far enough from the screen edge that the tip is not flipped"
         );
         assert_eq!(
             Point::new(tip.x, tip.y),
-            Point::new(cursor.x + 2, cursor.y + 16),
-            "the tip sits at the cursor + (2, 16)"
+            Point::new(cursor.x + 2, cursor.y + cursor_h),
+            "the tip sits at the cursor + (2, cursor height)"
         );
     }
 
