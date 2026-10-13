@@ -615,11 +615,6 @@ fn main() -> std::process::ExitCode {
     });
     poll_timer.as_mut().start();
 
-    // Initial memory trim after 2.5s (mirrors Python QTimer.singleShot(2500, trim_memory))
-    Timer::single_shot(2500, || {
-        crate::memory::trim_memory();
-    });
-
     // Run Qt event loop
     let exit_code = _app.exec();
     clock_timer.stop();

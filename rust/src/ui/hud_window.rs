@@ -184,11 +184,14 @@ pub fn tick_gap_exceeded(previous: Option<SystemTime>, now: SystemTime) -> bool 
 const HIDE_TRIM_DELAY_MS: u64 = 150;
 /// Python `_on_busy_changed(False)`: `QTimer.singleShot(1000, trim_memory)` (`:455-459`).
 const IDLE_TRIM_DELAY_MS: u64 = 1000;
-
-/// `QTimer.singleShot(delay_ms, trim_memory)`, with the trim set at scheduling time.
-fn schedule_trim(trim: &Rc<RefCell<TrimFn>>, delay_ms: u64) {
-    let trim = Arc::clone(&trim.borrow());
-    qtrs_core::timer::Timer::single_shot(delay_ms, move || trim());
+/// Python `HUDWindow.__init__`: `QTimer.singleShot(2500, trim_memory)` (`:114`).
+const INITIAL_TRIM_DELAY_MS: u64 = 2500;
+fn schedule_trim(trim: &Arc<parking_lot::Mutex<TrimFn>>, delay_ms: u64) {
+    let trim_holder = Arc::clone(trim);
+    qtrs_core::timer::Timer::single_shot(delay_ms, move || {
+        let trim = Arc::clone(&trim_holder.lock());
+        trim();
+    });
 }
 
 /// The memory trim the HUD schedules (`crate::memory::trim_memory`; tests count calls instead).
@@ -237,7 +240,7 @@ pub struct HUDWindow {
     /// Diagnostic counter of long-gap refreshes; never read by any decision.
     wake_refresh_seq: u64,
     /// What the trim timers call; shared with the window event handler.
-    trim: Rc<RefCell<TrimFn>>,
+    trim: Arc<parking_lot::Mutex<TrimFn>>,
     /// The table panel sits on an installed blur (Python `vibrant`); read by the panel painter.
     vibrant: Rc<Cell<bool>>,
     set_backdrop: BackdropFn,
@@ -519,8 +522,10 @@ impl HUDWindow {
         });
         // Python `moveEvent` / `mouseReleaseEvent` / `closeEvent` / `hideEvent`
         // (`hud_window.py:595-617`). `hide()` and the close request both reach `hideEvent`.
-        let trim: Rc<RefCell<TrimFn>> = Rc::new(RefCell::new(Arc::new(crate::memory::trim_memory)));
-        let trim_events = Rc::clone(&trim);
+        let trim: Arc<parking_lot::Mutex<TrimFn>> = Arc::new(parking_lot::Mutex::new(Arc::new(
+            crate::memory::trim_memory,
+        )));
+        let trim_events = Arc::clone(&trim);
         let cfg_events = Arc::clone(&config);
         let debouncer_events = Arc::clone(&debouncer);
         window.set_window_event_handler(move |event| match event.kind {
@@ -552,7 +557,9 @@ impl HUDWindow {
                 ctrl.launch(id, Arc::clone(provider));
             }
         }
-
+        // Release initialization cold pages after UI and DirectWrite/fonts stabilize
+        // (mirrors Python HUDWindow.__init__ QTimer.singleShot(2500, trim_memory), hud_window.py:114; G12.5.h).
+        schedule_trim(&trim, INITIAL_TRIM_DELAY_MS);
         let hud = Self {
             config,
             refresh_ctrl,
@@ -679,7 +686,7 @@ impl HUDWindow {
     /// Replaces what the trim timers call, so tests can observe the scheduling.
     #[cfg(test)]
     fn set_trim(&self, trim: TrimFn) {
-        *self.trim.borrow_mut() = trim;
+        *self.trim.lock() = trim;
     }
 
     /// Replaces what installs the backdrop, so tests can make it fail.
@@ -1543,6 +1550,24 @@ mod tests {
         assert!(log.calls().is_empty(), "trimmed with codex running");
     }
 
+    /// Python `HUDWindow.__init__` -> `QTimer.singleShot(2500, trim_memory)` (`hud_window.py:114`).
+    #[test]
+    fn construction_schedules_initial_trim_at_2500ms() {
+        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let cfg = Arc::new(Mutex::new(Config::default()));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let (providers, _fetched) = crate::providers::stub::stub_providers_with_receiver();
+        let hud = HUDWindow::with_providers(cfg, ctrl, providers).expect("with_providers");
+        let log = TrimLog::install(&hud);
+
+        // Within 1000ms, initial 2500ms trim should not have fired yet
+        log.pump_until(&mut el, 1000);
+        assert!(log.calls().is_empty(), "trimmed prematurely before 2500ms");
+
+        // After pumping past 2700ms, initial trim should have fired exactly once
+        log.pump_until(&mut el, 2700);
+        assert_one_trim_after(&log, 2500, "construction 2500ms trim");
+    }
     #[test]
     fn clock_tick_refreshes_every_provider_exactly_once_after_a_long_gap() {
         let (mut hud, fetched) = hud_with_stubs();
