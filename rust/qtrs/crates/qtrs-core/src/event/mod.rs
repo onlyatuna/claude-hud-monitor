@@ -364,6 +364,8 @@ pub enum EventKind {
     FontChange,
     /// The widget's style or style sheet changed (`QEvent::StyleChange`, qwidget.cpp:2724-2725).
     StyleChange,
+    /// The widget's tooltip changed (`QEvent::ToolTipChange`, qwidget.cpp:11798-11799).
+    ToolTipChange,
 }
 
 impl fmt::Debug for EventKind {
@@ -623,7 +625,11 @@ impl fmt::Debug for EventKind {
                 y,
                 global_x,
                 global_y,
-            } => write!(f, "ToolTip(({},{}), global ({},{}))", x, y, global_x, global_y),
+            } => write!(
+                f,
+                "ToolTip(({},{}), global ({},{}))",
+                x, y, global_x, global_y
+            ),
             EventKind::StatusTip { text } => write!(f, "StatusTip(\"{}\")", text),
             EventKind::WhatsThis { x, y, text } => {
                 write!(f, "WhatsThis(({},{}), \"{}\")", x, y, text)
@@ -702,6 +708,7 @@ impl fmt::Debug for EventKind {
             } => write!(f, "Paint(({}, {}) {}x{})", x, y, width, height),
             EventKind::FontChange => write!(f, "FontChange"),
             EventKind::StyleChange => write!(f, "StyleChange"),
+            EventKind::ToolTipChange => write!(f, "ToolTipChange"),
         }
     }
 }
@@ -760,6 +767,7 @@ impl EventKind {
             EventKind::Paint { .. } => EventType::Paint,
             EventKind::FontChange => EventType::FontChange,
             EventKind::StyleChange => EventType::StyleChange,
+            EventKind::ToolTipChange => EventType::ToolTipChange,
             EventKind::TabletPress { .. } => EventType::TabletPress,
             EventKind::TabletMove { .. } => EventType::TabletMove,
             EventKind::TabletRelease { .. } => EventType::TabletRelease,

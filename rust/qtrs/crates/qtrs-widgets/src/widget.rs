@@ -588,9 +588,11 @@ pub trait Widget: QObject + 'static {
         self.widget_base().tool_tip.borrow().clone()
     }
 
-    /// `QWidget::setToolTip`.
+    /// `QWidget::setToolTip` (`qwidget.cpp:11793-11800` sends `QEvent::ToolTipChange`).
     fn set_tool_tip(&self, text: &str) {
         *self.widget_base().tool_tip.borrow_mut() = text.to_string();
+        let mut ev = Event::new(EventKind::ToolTipChange);
+        qtrs_core::object::send_event(self.id(), &mut ev);
     }
 
     /// `QWidget::toolTipDuration`: how long the tip stays, in ms; -1 (the default) derives it from
