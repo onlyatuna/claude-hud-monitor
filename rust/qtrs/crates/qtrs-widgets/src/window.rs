@@ -4,6 +4,7 @@ use qtrs_core::event_loop::filters_consume;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::geometry::primitives::{Point, Rect, RectF, Size};
 use qtrs_gui::paint::{BackingStore, Painter};
+use qtrs_platform::size_limits::{clamp_size_limit, SizeLimits, WINDOW_SIZE_MAX};
 use qtrs_platform::{
     platform, PlatformWindow, WindowFlags, WindowSystemEvent, WindowSystemEventHandler,
 };
@@ -819,7 +820,24 @@ impl Window {
         qtrs_platform::high_dpi::to_native_global_rect(rect, origin, dpr)
     }
 
+    /// `rect` with its size brought inside the window's minimum and maximum, as
+    /// `QWidgetPrivate::setGeometry_sys` does for every programmatic geometry (qwidget.cpp:7299-7305;
+    /// minimum wins). The system's tracking limits do not do this: Windows applies them to a
+    /// `WS_POPUP` window (the HUD's) only while the user drags an edge. The position is unchanged.
+    fn bounded_rect(&self, rect: Rect) -> Rect {
+        let limits = {
+            let pw = self.platform_window.borrow();
+            SizeLimits {
+                min: pw.minimum_size(),
+                max: pw.maximum_size(),
+            }
+        };
+        let (w, h) = limits.bound_size(rect.width, rect.height);
+        Rect::new(rect.x, rect.y, w, h)
+    }
+
     pub fn set_geometry(&mut self, rect: Rect) {
+        let rect = self.bounded_rect(rect);
         let native_rect = self.native_rect_for(rect);
         let old_geom = self.geometry.get();
         let old_size = Size::new(old_geom.width, old_geom.height);
@@ -867,6 +885,7 @@ impl Window {
     }
 
     pub fn set_geometry_silent(&mut self, rect: Rect) {
+        let rect = self.bounded_rect(rect);
         let native_rect = self.native_rect_for(rect);
         self.geometry.set(rect);
         self.platform_window.borrow_mut().set_geometry(native_rect);
@@ -956,10 +975,16 @@ impl Window {
         self.platform_window.borrow().opacity()
     }
 
-    /// `QWidget::setMinimumSize` (`qwidget.cpp:4005-4016`): negative values clamp to 0, an unchanged
-    /// minimum is a no-op, and the axes that are set become explicit (`qwidget.cpp:3963-3971`).
+    /// `QWidget::setMinimumSize` (`qwidget.cpp:3942-3973`): each axis is kept in `0..=WINDOW_SIZE_MAX`
+    /// and `WINDOW_SIZE_MAX` is read as 0 (`:3947-3950`, so `set_fixed_size(WINDOW_SIZE_MAX,
+    /// WINDOW_SIZE_MAX)` unlocks a window), an unchanged minimum is a no-op, and the axes that are
+    /// set become explicit (`:3971`). Unlike `QWindow::setMinimumSize`, which resizes a window that
+    /// is outside the new bounds at once (`qwindow.cpp:649-655`), it does not (Contract, G11.3.h):
+    /// the next render of a visible window with a root layout does (`sync_top_level_minimum`).
     pub fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
-        let (min_w, min_h) = (min_w.max(0), min_h.max(0));
+        let (min_w, min_h) = clamp_size_limit(min_w, min_h);
+        let axis = |v: i32| if v == WINDOW_SIZE_MAX { 0 } else { v };
+        let (min_w, min_h) = (axis(min_w), axis(min_h));
         if (min_w, min_h) == self.minimum_size() {
             return;
         }
@@ -973,15 +998,53 @@ impl Window {
         self.platform_window.borrow().minimum_size()
     }
 
+    /// `QWidget::setMaximumSize` (`qwidget.cpp:4065-4087`) with the same contract as
+    /// [`set_minimum_size`](Self::set_minimum_size): kept in `0..=WINDOW_SIZE_MAX`, an unchanged
+    /// maximum is a no-op, `WINDOW_SIZE_MAX` on an axis is no maximum (and removes one), and the
+    /// window is not resized now.
+    pub fn set_maximum_size(&mut self, max_w: i32, max_h: i32) {
+        let (max_w, max_h) = clamp_size_limit(max_w, max_h);
+        if (max_w, max_h) == self.maximum_size() {
+            return;
+        }
+        self.platform_window
+            .borrow_mut()
+            .set_maximum_size(max_w, max_h);
+    }
+
+    pub fn maximum_size(&self) -> (i32, i32) {
+        self.platform_window.borrow().maximum_size()
+    }
+
+    /// `QWidget::setFixedSize` (`qwidget.cpp:4155-4170`): the minimum and the maximum become `w x
+    /// h`, and unless that changed nothing the window is resized to it (not when both are
+    /// `WINDOW_SIZE_MAX`, which removes the limits).
+    pub fn set_fixed_size(&mut self, w: i32, h: i32) {
+        let (w, h) = clamp_size_limit(w, h);
+        let before = (self.minimum_size(), self.maximum_size());
+        self.set_minimum_size(w, h);
+        self.set_maximum_size(w, h);
+        if before == (self.minimum_size(), self.maximum_size()) {
+            return;
+        }
+        if w != WINDOW_SIZE_MAX || h != WINDOW_SIZE_MAX {
+            let geom = self.geometry.get();
+            self.set_geometry(Rect::new(geom.x, geom.y, w, h));
+        }
+    }
+
     /// Top-level bounds from the root layout's size constraint (`qlayout.cpp:1006-1095`, applied
     /// through `setMinimumSize` / `setMaximumSize` at `:1096-1122`). With the default constraint an
     /// axis without an explicit minimum takes the root layout's minimum size and an explicit axis
-    /// keeps its value. Returns the size the window must take when it is outside the bounds
-    /// (`qwidget.cpp:4013-4016`, `:4073-4076`). The platform has no maximum size, so a maximum only
-    /// shrinks the window here.
+    /// keeps its value. The bounds go to the platform window, which hands them to the window
+    /// system; a layout without a maximum leaves the window's own maximum in place. Returns the
+    /// size the window must take when it is outside the bounds (`qwidget.cpp:4013-4016`,
+    /// `:4073-4076`); the same rule as `set_geometry` (`SizeLimits::bound_size`), so a window this
+    /// returns is not changed again by the `set_geometry` that applies it.
     fn sync_top_level_minimum(&mut self) -> Option<Size> {
         let root = std::rc::Rc::clone(&self.root_widget);
         let (cur_w, cur_h) = self.minimum_size();
+        let (cur_max_w, cur_max_h) = self.maximum_size();
         let (min, max) = {
             let root_ref = root.borrow();
             let layout = root_ref.layout_ref_mut()?;
@@ -1000,11 +1063,20 @@ impl Window {
                 .borrow_mut()
                 .set_minimum_size(target_w, target_h);
         }
-        let geom = self.geometry.get();
-        let (mut w, mut h) = (geom.width.max(target_w), geom.height.max(target_h));
-        if let Some(max) = max {
-            (w, h) = (w.min(max.width), h.min(max.height));
+        let (max_w, max_h) = max.map_or((cur_max_w, cur_max_h), |m| {
+            clamp_size_limit(m.width, m.height)
+        });
+        if (max_w, max_h) != (cur_max_w, cur_max_h) {
+            self.platform_window
+                .borrow_mut()
+                .set_maximum_size(max_w, max_h);
         }
+        let geom = self.geometry.get();
+        let (w, h) = SizeLimits {
+            min: (target_w, target_h),
+            max: (max_w, max_h),
+        }
+        .bound_size(geom.width, geom.height);
         if (w, h) == (geom.width, geom.height) {
             None
         } else {

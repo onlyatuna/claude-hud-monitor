@@ -16,6 +16,7 @@ use qtrs_gui::{round_scale_factor, GuiApplication, HighDpiScaleFactorRoundingPol
 use qtrs_platform::platform_window::PlatformWindow;
 use qtrs_platform::screen::native_cursor_to_logical;
 use qtrs_platform::screen::PlatformScreen;
+use qtrs_platform::size_limits::WINDOW_SIZE_MAX;
 use qtrs_platform::window_system_interface::WindowSystemEventHandler;
 use qtrs_platform::{
     set_platform_integration, GenericPlatformIntegration, PlatformIntegration, WindowFlags,
@@ -86,6 +87,7 @@ struct FakeWindow {
     screens: Arc<Vec<ScreenSpec>>,
     log: Arc<Mutex<Log>>,
     min: (i32, i32),
+    max: (i32, i32),
 }
 
 impl PlatformWindow for FakeWindow {
@@ -112,6 +114,12 @@ impl PlatformWindow for FakeWindow {
     }
     fn minimum_size(&self) -> (i32, i32) {
         self.min
+    }
+    fn set_maximum_size(&mut self, w: i32, h: i32) {
+        self.max = (w, h);
+    }
+    fn maximum_size(&self) -> (i32, i32) {
+        self.max
     }
     /// The ratio of the screen under the window's native centre, else the primary screen's.
     fn device_pixel_ratio(&self) -> f32 {
@@ -164,6 +172,7 @@ impl PlatformIntegration for FakePlatform {
             screens: Arc::clone(&self.screens),
             log: Arc::clone(&self.log),
             min: (0, 0),
+            max: (WINDOW_SIZE_MAX, WINDOW_SIZE_MAX),
         }))
     }
     fn create_tray_icon(

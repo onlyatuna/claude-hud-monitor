@@ -27,6 +27,7 @@ pub mod resize_debug;
 pub mod resize_trace;
 pub mod screen;
 pub mod single_instance;
+pub mod size_limits;
 pub mod surface;
 pub mod theme;
 pub mod tray;

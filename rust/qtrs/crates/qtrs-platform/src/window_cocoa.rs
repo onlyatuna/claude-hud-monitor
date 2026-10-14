@@ -95,7 +95,7 @@ pub struct CocoaNativeWindow {
     pending_events: Mutex<Vec<CocoaNativeEvent>>,
     event_handler: Option<Box<dyn WindowSystemEventHandler>>,
     opacity: f32,
-    min_size: (i32, i32),
+    size_limits: crate::size_limits::SizeLimits,
     vibrancy_view: Option<Id>,
     vibrancy_material: Option<CocoaVibrancyMaterial>,
     /// The `NSVisualEffectView` added by `set_backdrop`, removed by `set_backdrop(None)`.
@@ -200,7 +200,7 @@ impl CocoaNativeWindow {
             pending_events: Mutex::new(Vec::new()),
             event_handler: None,
             opacity: 1.0,
-            min_size: (0, 0),
+            size_limits: crate::size_limits::SizeLimits::default(),
             vibrancy_view: None,
             vibrancy_material: None,
             backdrop_view: None,
@@ -520,16 +520,37 @@ impl PlatformWindow for CocoaNativeWindow {
     fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
         // Qt: QCocoaWindow::propagateSizeHints sets window.contentMinSize, the minimum of the
         // content area (qcocoawindow.mm:1181-1185), not the frame's minSize.
-        self.min_size = (min_w.max(0), min_h.max(0));
+        self.size_limits.min = crate::size_limits::clamp_size_limit(min_w, min_h);
         ObjcMsg::send_size(
             self.ns_window,
             Sel::register("setContentMinSize:"),
-            CGSize::new(self.min_size.0 as CGFloat, self.min_size.1 as CGFloat),
+            CGSize::new(
+                self.size_limits.min.0 as CGFloat,
+                self.size_limits.min.1 as CGFloat,
+            ),
         );
     }
 
     fn minimum_size(&self) -> (i32, i32) {
-        self.min_size
+        self.size_limits.min
+    }
+
+    fn set_maximum_size(&mut self, max_w: i32, max_h: i32) {
+        // Qt: the same `propagateSizeHints` sets window.contentMaxSize to `windowMaximumSize()`
+        // as is, `QWINDOWSIZE_MAX` included for an axis without a maximum (qcocoawindow.mm:1187-1188).
+        self.size_limits.max = crate::size_limits::clamp_size_limit(max_w, max_h);
+        ObjcMsg::send_size(
+            self.ns_window,
+            Sel::register("setContentMaxSize:"),
+            CGSize::new(
+                self.size_limits.max.0 as CGFloat,
+                self.size_limits.max.1 as CGFloat,
+            ),
+        );
+    }
+
+    fn maximum_size(&self) -> (i32, i32) {
+        self.size_limits.max
     }
 
     fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {

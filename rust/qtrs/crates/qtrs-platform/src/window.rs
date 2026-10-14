@@ -127,31 +127,32 @@ static WINDOW_EVENT_BINDINGS: RwLock<Option<HashMap<isize, (EventLoopHandle, Obj
 static WINDOW_FRAMELESS_CONFIGS: RwLock<Option<HashMap<isize, CustomFramelessConfig>>> =
     RwLock::new(None);
 
-static WINDOW_MIN_SIZES: RwLock<Option<HashMap<isize, (i32, i32)>>> = RwLock::new(None);
+static WINDOW_SIZE_LIMITS: RwLock<Option<HashMap<isize, crate::size_limits::SizeLimits>>> =
+    RwLock::new(None);
 
 thread_local! {
     static WINDOW_EVENT_HANDLERS: std::cell::RefCell<HashMap<isize, Box<dyn WindowSystemEventHandler>>> =
         std::cell::RefCell::new(HashMap::new());
 }
-pub fn set_window_min_size(hwnd: HWND, min_w: i32, min_h: i32) {
-    let mut writer = WINDOW_MIN_SIZES.write().unwrap();
+pub fn set_window_size_limits(hwnd: HWND, limits: crate::size_limits::SizeLimits) {
+    let mut writer = WINDOW_SIZE_LIMITS.write().unwrap();
     if writer.is_none() {
         *writer = Some(HashMap::new());
     }
     if let Some(map) = writer.as_mut() {
-        map.insert(hwnd as isize, (min_w, min_h));
+        map.insert(hwnd as isize, limits);
     }
 }
 
-pub fn get_window_min_size(hwnd: HWND) -> Option<(i32, i32)> {
-    let reader = WINDOW_MIN_SIZES.read().unwrap();
+pub fn get_window_size_limits(hwnd: HWND) -> Option<crate::size_limits::SizeLimits> {
+    let reader = WINDOW_SIZE_LIMITS.read().unwrap();
     reader
         .as_ref()
         .and_then(|map| map.get(&(hwnd as isize)).copied())
 }
 
-pub fn remove_window_min_size(hwnd: HWND) {
-    let mut writer = WINDOW_MIN_SIZES.write().unwrap();
+pub fn remove_window_size_limits(hwnd: HWND) {
+    let mut writer = WINDOW_SIZE_LIMITS.write().unwrap();
     if let Some(map) = writer.as_mut() {
         map.remove(&(hwnd as isize));
     }
@@ -176,8 +177,8 @@ pub fn unregister_window_event_binding(hwnd: HWND) {
     if let Some(m) = cfg_map.as_mut() {
         m.remove(&(hwnd as isize));
     }
-    let mut min_map = WINDOW_MIN_SIZES.write().unwrap();
-    if let Some(m) = min_map.as_mut() {
+    let mut limits_map = WINDOW_SIZE_LIMITS.write().unwrap();
+    if let Some(m) = limits_map.as_mut() {
         m.remove(&(hwnd as isize));
     }
     let _ = WINDOW_EVENT_HANDLERS.try_with(|map| {
@@ -697,10 +698,20 @@ unsafe fn native_window_proc_inner(
                 let is_zoomed = IsZoomed(hwnd) != 0;
                 let border = if is_zoomed { 0 } else { config.resize_border };
 
-                let on_left = x >= window_rect.left && x < window_rect.left + border;
-                let on_right = x <= window_rect.right && x > window_rect.right - border;
-                let on_top = y >= window_rect.top && y < window_rect.top + border;
-                let on_bottom = y <= window_rect.bottom && y > window_rect.bottom - border;
+                // An axis whose minimum equals its maximum cannot change size, so it offers no
+                // resize zone: the cursor would promise a resize the tracking limits refuse. The
+                // tracking limits do not do this by themselves; Qt has its own rule for a window
+                // with a native frame (`QWindowsWindow::handleNonClientHitTest`,
+                // qwindowswindow.cpp:3493-3525, QTBUG-32663). This zone is qtrs' own (Qt's
+                // frameless windows resize through `startSystemResize`), so only the criterion
+                // (`SizeLimits::fixed_axes`) is Qt's.
+                let (fixed_w, fixed_h) = get_window_size_limits(hwnd)
+                    .map_or((false, false), |limits| limits.fixed_axes());
+                let on_left = !fixed_w && x >= window_rect.left && x < window_rect.left + border;
+                let on_right = !fixed_w && x <= window_rect.right && x > window_rect.right - border;
+                let on_top = !fixed_h && y >= window_rect.top && y < window_rect.top + border;
+                let on_bottom =
+                    !fixed_h && y <= window_rect.bottom && y > window_rect.bottom - border;
 
                 if on_top && on_left {
                     return HTTOPLEFT as LRESULT;
@@ -737,13 +748,24 @@ unsafe fn native_window_proc_inner(
         }
         WM_GETMINMAXINFO => {
             use windows_sys::Win32::UI::WindowsAndMessaging::MINMAXINFO;
-            if let Some((min_w, min_h)) = get_window_min_size(hwnd) {
+            if let Some(limits) = get_window_size_limits(hwnd) {
                 let mmi = &mut *(lparam as *mut MINMAXINFO);
-                if min_w > 0 {
-                    mmi.ptMinTrackSize.x = min_w;
+                // The limits are logical; the window's own ratio at this moment (after
+                // `WM_DPICHANGED` it is already the new one) makes them native, and a bound that
+                // is not set leaves the system's value in place
+                // (`QWindowsGeometryHint::applyToMinMaxInfo`, qwindowswindow.cpp:1238-1262).
+                let track = limits.native_track(get_window_dpr(hwnd));
+                if let Some(x) = track.min.0 {
+                    mmi.ptMinTrackSize.x = x;
                 }
-                if min_h > 0 {
-                    mmi.ptMinTrackSize.y = min_h;
+                if let Some(y) = track.min.1 {
+                    mmi.ptMinTrackSize.y = y;
+                }
+                if let Some(x) = track.max.0 {
+                    mmi.ptMaxTrackSize.x = x;
+                }
+                if let Some(y) = track.max.1 {
+                    mmi.ptMaxTrackSize.y = y;
                 }
                 return 0;
             }
@@ -1448,7 +1470,7 @@ pub struct NativeWindow {
     geometry: Rect,
     drop_target: *mut crate::drag_drop::win32_ole::OleDropTarget,
     opacity: f32,
-    min_size: (i32, i32),
+    size_limits: crate::size_limits::SizeLimits,
     layered_surface: Option<crate::surface::WindowsSurface>,
     presenter: Option<crate::presenter::WindowsPresenter>,
     owner_thread: std::thread::ThreadId,
@@ -1577,7 +1599,7 @@ impl NativeWindow {
             geometry: rect,
             drop_target: std::ptr::null_mut(),
             opacity: 1.0,
-            min_size: (0, 0),
+            size_limits: crate::size_limits::SizeLimits::default(),
             layered_surface,
             presenter: None,
             owner_thread: std::thread::current().id(),
@@ -1788,15 +1810,32 @@ impl NativeWindow {
         self.opacity
     }
 
+    /// `QWindow::setMinimumSize` (logical pixels). Windows learns it through `WM_GETMINMAXINFO`,
+    /// which converts it with the window's ratio at that moment (`SizeLimits::native_track`).
     pub fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
-        self.min_size = (min_w.max(0), min_h.max(0));
-        if !self.hwnd.is_null() {
-            set_window_min_size(self.hwnd, self.min_size.0, self.min_size.1);
-        }
+        self.size_limits.min = crate::size_limits::clamp_size_limit(min_w, min_h);
+        self.publish_size_limits();
     }
 
     pub fn minimum_size(&self) -> (i32, i32) {
-        self.min_size
+        self.size_limits.min
+    }
+
+    /// `QWindow::setMaximumSize`, same contract as `set_minimum_size`.
+    pub fn set_maximum_size(&mut self, max_w: i32, max_h: i32) {
+        self.size_limits.max = crate::size_limits::clamp_size_limit(max_w, max_h);
+        self.publish_size_limits();
+    }
+
+    pub fn maximum_size(&self) -> (i32, i32) {
+        self.size_limits.max
+    }
+
+    /// Makes the limits visible to the window procedure, which only has the `HWND`.
+    fn publish_size_limits(&self) {
+        if !self.hwnd.is_null() {
+            set_window_size_limits(self.hwnd, self.size_limits);
+        }
     }
 
     pub fn create_layered_surface(&self) -> Result<crate::layered::LayeredSurface, &'static str> {
@@ -1908,7 +1947,7 @@ impl NativeWindow {
             self.drop_target = std::ptr::null_mut();
         }
         if !self.hwnd.is_null() {
-            remove_window_min_size(self.hwnd);
+            remove_window_size_limits(self.hwnd);
             unsafe {
                 DestroyWindow(self.hwnd);
             }
@@ -2018,6 +2057,14 @@ impl crate::platform_window::PlatformWindow for NativeWindow {
 
     fn minimum_size(&self) -> (i32, i32) {
         self.minimum_size()
+    }
+
+    fn set_maximum_size(&mut self, max_w: i32, max_h: i32) {
+        self.set_maximum_size(max_w, max_h);
+    }
+
+    fn maximum_size(&self) -> (i32, i32) {
+        self.maximum_size()
     }
 
     fn present_region(

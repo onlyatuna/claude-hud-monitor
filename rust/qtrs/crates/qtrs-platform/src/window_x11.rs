@@ -195,7 +195,7 @@ pub struct X11NativeWindow {
     pending_events: Mutex<Vec<X11Event>>,
     event_handler: Option<Box<dyn WindowSystemEventHandler>>,
     opacity: f32,
-    min_size: (i32, i32),
+    size_limits: crate::size_limits::SizeLimits,
     #[cfg(target_os = "linux")]
     stream: Option<UnixStream>,
 }
@@ -264,7 +264,7 @@ impl X11NativeWindow {
             pending_events: Mutex::new(Vec::new()),
             event_handler: None,
             opacity: 1.0,
-            min_size: (0, 0),
+            size_limits: crate::size_limits::SizeLimits::default(),
             #[cfg(target_os = "linux")]
             stream: real_stream,
         })
@@ -517,12 +517,22 @@ impl PlatformWindow for X11NativeWindow {
         self.opacity
     }
 
+    /// Stored and reported only: this backend does not pass size hints to the window system
+    /// (`WM_NORMAL_HINTS`), so a minimum or maximum is not enforced on X11.
     fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
-        self.min_size = (min_w.max(0), min_h.max(0));
+        self.size_limits.min = crate::size_limits::clamp_size_limit(min_w, min_h);
     }
 
     fn minimum_size(&self) -> (i32, i32) {
-        self.min_size
+        self.size_limits.min
+    }
+
+    fn set_maximum_size(&mut self, max_w: i32, max_h: i32) {
+        self.size_limits.max = crate::size_limits::clamp_size_limit(max_w, max_h);
+    }
+
+    fn maximum_size(&self) -> (i32, i32) {
+        self.size_limits.max
     }
 
     fn present(&mut self, pixmap: &mut Pixmap, opacity: f32) -> Result<(), &'static str> {

@@ -56,8 +56,17 @@ pub trait PlatformWindow: 'static {
     fn set_cursor(&mut self, _shape: crate::cursor::CursorShape) {}
     fn set_opacity(&mut self, opacity: f32);
     fn opacity(&self) -> f32;
+    /// `QWindow::setMinimumSize` as `QPlatformWindow::propagateSizeHints` hands it to the window
+    /// system: logical pixels, each axis clamped to `0..=WINDOW_SIZE_MAX`; 0 on an axis is no
+    /// minimum. A backend that has a window system must pass it on and say so; one that only
+    /// stores the value (`GenericWindow`, the X11 and Wayland windows today) does not enforce it.
     fn set_minimum_size(&mut self, min_w: i32, min_h: i32);
     fn minimum_size(&self) -> (i32, i32);
+    /// `QWindow::setMaximumSize`, same contract as `set_minimum_size`; `WINDOW_SIZE_MAX` on an axis
+    /// is no maximum, which is also how a maximum is removed. Required with no default for the same
+    /// reason as `is_active`: whether the limit reaches the window system is a backend's to answer.
+    fn set_maximum_size(&mut self, max_w: i32, max_h: i32);
+    fn maximum_size(&self) -> (i32, i32);
     /// Ratio between this window's physical (native) pixels and its device-independent pixels,
     /// taken from the screen the window is on (`QPlatformWindow::devicePixelRatio`, which
     /// `QWindowPrivate::updateDevicePixelRatio` multiplies by the window's screen scale factor,
@@ -139,7 +148,7 @@ pub struct GenericWindow {
     pending_events: Mutex<Vec<crate::window_system_interface::WindowSystemEvent>>,
     last_pixmap: Mutex<Option<Pixmap>>,
     opacity: f32,
-    min_size: (i32, i32),
+    size_limits: crate::size_limits::SizeLimits,
     owner_thread: std::thread::ThreadId,
     state_flags: std::cell::Cell<crate::window::PlatformWindowStateFlags>,
 }
@@ -157,7 +166,7 @@ impl GenericWindow {
             pending_events: Mutex::new(Vec::new()),
             last_pixmap: Mutex::new(None),
             opacity: 1.0,
-            min_size: (0, 0),
+            size_limits: crate::size_limits::SizeLimits::default(),
             owner_thread: std::thread::current().id(),
             state_flags: std::cell::Cell::new(crate::window::PlatformWindowStateFlags::NONE),
         }
@@ -235,11 +244,20 @@ impl PlatformWindow for GenericWindow {
     }
 
     fn set_minimum_size(&mut self, min_w: i32, min_h: i32) {
-        self.min_size = (min_w.max(0), min_h.max(0));
+        self.size_limits.min = crate::size_limits::clamp_size_limit(min_w, min_h);
     }
 
     fn minimum_size(&self) -> (i32, i32) {
-        self.min_size
+        self.size_limits.min
+    }
+
+    /// Stored and reported only: this backend has no window system to hand the limit to.
+    fn set_maximum_size(&mut self, max_w: i32, max_h: i32) {
+        self.size_limits.max = crate::size_limits::clamp_size_limit(max_w, max_h);
+    }
+
+    fn maximum_size(&self) -> (i32, i32) {
+        self.size_limits.max
     }
 
     /// `GenericWindow` has no screen of its own: it reports the primary screen's ratio.

@@ -8,6 +8,7 @@ use qtrs_core::object::QObject;
 use qtrs_gui::geometry::primitives::{Point, Rect};
 use qtrs_gui::paint::Pixmap;
 use qtrs_platform::platform_window::PlatformWindow;
+use qtrs_platform::size_limits::WINDOW_SIZE_MAX;
 use qtrs_platform::window_system_interface::WindowSystemEventHandler;
 use qtrs_platform::{
     set_platform_integration, GenericPlatformIntegration, PlatformIntegration, WindowFlags,
@@ -30,6 +31,7 @@ struct FakeWindow {
     geometry: Rect,
     opacity: f32,
     min: (i32, i32),
+    max: (i32, i32),
     log: Arc<Mutex<Log>>,
 }
 
@@ -60,6 +62,12 @@ impl PlatformWindow for FakeWindow {
     }
     fn minimum_size(&self) -> (i32, i32) {
         self.min
+    }
+    fn set_maximum_size(&mut self, w: i32, h: i32) {
+        self.max = (w, h);
+    }
+    fn maximum_size(&self) -> (i32, i32) {
+        self.max
     }
     fn device_pixel_ratio(&self) -> f32 {
         WINDOW_SCREEN_DPR
@@ -92,6 +100,7 @@ impl PlatformIntegration for FakePlatform {
             geometry: rect,
             opacity: 1.0,
             min: (0, 0),
+            max: (WINDOW_SIZE_MAX, WINDOW_SIZE_MAX),
             log: Arc::clone(&self.log),
         }))
     }

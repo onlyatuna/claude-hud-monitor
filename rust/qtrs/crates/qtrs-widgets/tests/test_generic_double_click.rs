@@ -7,6 +7,7 @@ use qtrs_gui::application::{GuiApplication, StyleHints};
 use qtrs_gui::geometry::primitives::{Point, Rect};
 use qtrs_gui::paint::Pixmap;
 use qtrs_platform::platform_window::PlatformWindow;
+use qtrs_platform::size_limits::WINDOW_SIZE_MAX;
 use qtrs_platform::window_system_interface::{
     KeyboardModifiers, WindowSystemEvent, WindowSystemEventHandler,
 };
@@ -31,6 +32,7 @@ struct FakeWindow {
     geometry: Rect,
     opacity: f32,
     min: (i32, i32),
+    max: (i32, i32),
 }
 
 impl PlatformWindow for FakeWindow {
@@ -58,6 +60,12 @@ impl PlatformWindow for FakeWindow {
     }
     fn minimum_size(&self) -> (i32, i32) {
         self.min
+    }
+    fn set_maximum_size(&mut self, w: i32, h: i32) {
+        self.max = (w, h);
+    }
+    fn maximum_size(&self) -> (i32, i32) {
+        self.max
     }
     fn device_pixel_ratio(&self) -> f32 {
         1.0
@@ -91,6 +99,7 @@ impl PlatformIntegration for FakePlatform {
             geometry: rect,
             opacity: 1.0,
             min: (0, 0),
+            max: (WINDOW_SIZE_MAX, WINDOW_SIZE_MAX),
         }))
     }
     fn create_tray_icon(
