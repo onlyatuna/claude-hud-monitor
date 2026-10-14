@@ -228,7 +228,9 @@ pub struct DCompSurface {
     /// staged pixel is stale, so the next present covers the whole visible area.
     staged_opacity: f32,
     stats: DCompStats,
+    #[cfg(any(test, feature = "test-hooks"))]
     fail_present_for_test: bool,
+    #[cfg(any(test, feature = "test-hooks"))]
     fail_resize_for_test: bool,
 }
 
@@ -557,9 +559,45 @@ impl DCompSurface {
                 opacity: 1.0,
                 staged_opacity: 1.0,
                 stats: DCompStats::default(),
+                #[cfg(any(test, feature = "test-hooks"))]
                 fail_present_for_test: false,
+                #[cfg(any(test, feature = "test-hooks"))]
                 fail_resize_for_test: false,
             })
+        }
+    }
+    /// Creates a mock DCompSurface for deterministic unit/integration testing of
+    /// failure recovery and downgrade pathways without requiring real DXGI/DComp hardware.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn new_mock_for_test(hwnd: HWND, width: u32, height: u32) -> Self {
+        Self {
+            hwnd,
+            width,
+            height,
+            alloc_w: width,
+            alloc_h: height,
+            d3d11_mod: ptr::null_mut(),
+            dxgi_mod: ptr::null_mut(),
+            dcomp_mod: ptr::null_mut(),
+            d3d_device: ptr::null_mut(),
+            d3d_context: ptr::null_mut(),
+            dcomp_device: ptr::null_mut(),
+            dcomp_target: ptr::null_mut(),
+            dcomp_clip_visual: ptr::null_mut(),
+            dcomp_visual: ptr::null_mut(),
+            swap_chain: ptr::null_mut(),
+            staging_dc: ptr::null_mut(),
+            staging_bitmap: ptr::null_mut(),
+            staging_old_bitmap: ptr::null_mut(),
+            staging_bits: ptr::null_mut(),
+            staging_w: width,
+            staging_h: height,
+            force_full: true,
+            opacity: 1.0,
+            staged_opacity: 1.0,
+            stats: DCompStats::default(),
+            fail_present_for_test: false,
+            fail_resize_for_test: false,
         }
     }
 
@@ -594,13 +632,14 @@ impl DCompSurface {
     pub fn stats(&self) -> DCompStats {
         self.stats
     }
-
     /// Injects a synthetic present failure for testing downgrade paths.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn set_fail_present_for_test(&mut self, fail: bool) {
         self.fail_present_for_test = fail;
     }
 
     /// Injects a synthetic resize failure for testing downgrade paths.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn set_fail_resize_for_test(&mut self, fail: bool) {
         self.fail_resize_for_test = fail;
     }
@@ -609,8 +648,18 @@ impl DCompSurface {
     /// when the capacity is too small, or more than 2x too large (hysteresis: the new
     /// capacity has 1.5x headroom, so shrink/grow do not alternate).
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), &'static str> {
+        #[cfg(any(test, feature = "test-hooks"))]
         if self.fail_resize_for_test {
             return Err("Injected DirectComposition resize failure");
+        }
+        #[cfg(any(test, feature = "test-hooks"))]
+        if self.dcomp_device.is_null() {
+            if width == 0 || height == 0 {
+                return Err("Width and height must be greater than 0");
+            }
+            self.width = width;
+            self.height = height;
+            return Ok(());
         }
         if width == 0 || height == 0 {
             return Err("Width and height must be greater than 0");
@@ -724,8 +773,16 @@ impl DCompSurface {
         opacity: f32,
         dirty: Rect,
     ) -> Result<(), &'static str> {
+        #[cfg(any(test, feature = "test-hooks"))]
         if self.fail_present_for_test {
             return Err("Injected DirectComposition present failure");
+        }
+        #[cfg(any(test, feature = "test-hooks"))]
+        if self.dcomp_device.is_null() {
+            // Mock surface for unit testing: if present failure is not requested, mock success
+            self.width = pixmap.physical_width();
+            self.height = pixmap.physical_height();
+            return Ok(());
         }
         let p_width = pixmap.physical_width();
         let p_height = pixmap.physical_height();

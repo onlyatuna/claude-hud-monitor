@@ -8,6 +8,12 @@ qtrs-core = { path = "../qtrs-core" }
 qtrs-gui = { path = "../qtrs-gui" }
 bitflags = "2.4"
 tinyfiledialogs = "3.9.1"
+[features]
+default = []
+test-hooks = []
+[dev-dependencies]
+parking_lot = "0.12"
+qtrs-platform = { path = ".", features = ["test-hooks"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true }

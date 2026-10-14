@@ -298,8 +298,10 @@ name = "qtrs-platform"
 version = "0.1.0"
 dependencies = [
  "bitflags 2.13.2",
+ "parking_lot",
  "qtrs-core",
  "qtrs-gui",
+ "qtrs-platform",
  "tinyfiledialogs",
  "windows-sys",
 ]

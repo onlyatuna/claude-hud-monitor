@@ -1846,6 +1846,7 @@ impl NativeWindow {
     }
 
     /// Sets the presenter directly, for tests / fault injection.
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn set_presenter_for_test(
         &mut self,
         presenter: Option<crate::presenter::WindowsPresenter>,
