@@ -906,7 +906,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G11.5.d [P1, RAN；已修復：RC-09]** 非 `LAYERED` 視窗的 `setWindowOpacity` 無效：`dyn PlatformWindow::set_opacity`（widgets `Window::set_opacity` 走的路徑）只寫入欄位並通知 presenter；`Win32DcPresenter` 不處理 opacity；另一個 inherent `NativeWindow::set_opacity` 呼叫 `SetLayeredWindowAttributes` 卻沒設 `WS_EX_LAYERED`（對沒有該樣式的視窗會失敗），且 trait 路徑根本不會呼叫它。Qt：`setWindowLayered` 在 `opacity < 1` 時加 `WS_EX_LAYERED`，再 `SetLayeredWindowAttributes(qRound(255*level))`（`qwindowswindow.cpp:494-530`）。
   - **G11.5.e [test gap]** `Win32LayeredPresenter` 把 opacity 傳為 `UpdateLayeredWindowIndirect` 的 `SourceConstantAlpha`（與 Qt 的 `qRound(255*opacity)` 等價，讀碼確認）；沒有讀回合成結果的測試——桌面合成無法在不依賴桌面內容的前提下讀回。
   - **G11.5.f [P2, 未量測]** DComp 的 opacity 以 CPU 在 staging DIB 複製時逐像素縮放實作（`opacity < 1` 時每次呈現多一次乘法；opacity 變更時整面重傳），而非 GPU 端的 `IDCompositionEffectGroup::SetOpacity`。後者的 vtable slot 在本機無法驗證（本機沒有 DXGI factory），因此未採用。
-  - **G11.5.g [P1, RAN；已修復：RC-203]** production DComp presenter 政策：建立明確 opt-in 門檻（預設關閉，`QTRS_ENABLE_DCOMP`（值為 `1` 或 `true`）或 `set_dcomp_enabled(Some(true))` 啟用）；若 DComp 於 Present 或 Resize 執行期失敗，自動永久降級該視窗至 Win32LayeredPresenter，避免重入失敗。降級核心狀態機具備確定性 Mock CI 驗收，實機硬體驗收前維持預設關閉。
+  - **G11.5.g [P1, RAN；已修復：RC-203]** production DComp presenter 政策：建立明確 opt-in 門檻（預設關閉，`QTRS_ENABLE_DCOMP`（值為 `1` 或 `true`）或 `set_dcomp_enabled(Some(true))` 啟用）；若 DComp 於 Present 或 Resize 執行期失敗，自動永久降級該視窗至 Win32LayeredPresenter，避免重入失敗。降級核心狀態機具備確定性 Mock CI 驗收；無硬體環境之整合測試具明確 Skip 診斷。實機真實 GPU 硬體驗收前維持預設關閉。
   - **G11.5.b [P2]** 非分層視窗 `SetLayeredWindowAttributes` 失敗時靜默（不補 `WS_EX_LAYERED`）；DC presenter 忽略 opacity。
 - **Test**：既有 `test_surface_presenter_dc_and_layered_alignment` 只斷言 `is_ok()`；`GenericWindow`/`X11NativeWindow` 的 opacity 測試只斷言儲存值。必要：以每個後端用純色 pixmap 在 0.5 opacity 呈現並讀回合成 alpha；`set_opacity` 對 DComp 視窗改變呈現 alpha。
 - **HUD usage**：Python `hud_window.py:131-132,818-820`；Rust `hud_window.rs:223,782-788`、`tray_icon.rs:647-667`。
@@ -3995,7 +3995,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   2. 建立執行期故障降級機制：當 DComp 在 `present_region` 呈現或 `get_or_create_presenter` / `resize` 緩衝區重配失敗時，將該視窗標記為 `dcomp_downgraded = true`，自動且永久降級至 `Win32LayeredPresenter`（GDI），並在 present 失敗時以完整 dirty 區域重試。
   3. 隔離測試介面與確定性驗證：故障注入控制（`fail_present_for_test`、`fail_resize_for_test`、`new_mock_for_test`、`set_presenter_for_test`）以 `test-hooks` feature 及 `[dev-dependencies]` 隔離，不外洩至 production 公開 API。
   4. 測試並行隔離：以 `parking_lot::Mutex` 建立 `DCompOverrideGuard` 序列化設定全域 DComp override 的測試，防止平行執行時互相干擾。
-- **驗證**：在 `test_dcomp_recovery.rs` 完成兩層驗收架構（7/7 passed）：
-  1. 確定性 CI 降級測試：`test_dcomp_runtime_present_failure_auto_downgrade_and_recovery_deterministic`（驗證 mock 故障注入 -> 自動標記降級 -> Layered 重試成功 -> 後續維持 Layered）與 `test_dcomp_resize_failure_auto_downgrades_flag_deterministic`（驗證 mock resize 失敗 -> 自動標記降級 -> 次回選取 Layered），不依賴宿主 GPU 驅動，在任何無硬體環境均可確定性執行。
-  2. 實機硬體整合測試：`test_dcomp_real_hardware_fault_injection_or_explicit_skip`，當環境不具備 DirectComposition 硬體支援時明確輸出 `SKIPPED: Real DirectComposition hardware creation unsupported...`，避免無聲略過；若有硬體則執行完整 DXGI/D3D 故障注入驗收。
+- **驗證**：在 `test_dcomp_recovery.rs` 完成驗收架構（7/7 passed）：
+  1. 確定性 CI 降級測試：`test_dcomp_runtime_present_failure_auto_downgrade_and_recovery_deterministic`（驗證 mock 故障注入 -> 自動標記降級 -> Layered 重試成功 -> 後續維持 Layered）與 `test_dcomp_resize_failure_auto_downgrades_flag_deterministic`（驗證 mock resize 失敗 -> 自動標記降級 -> 次回選取 Layered），不依賴宿主 GPU 驅動，在任何無硬體環境均可確定性執行降級核心狀態機。
+  2. 真實 DComp 初始化＋合成 Present 故障之降級整合測試：`test_real_dcomp_initialization_with_synthetic_fault_downgrade`，驗證在真實建立 DCompSurface 物件後遇到 Present 失敗能順利完成 presenter 降級與 Layered 重試。若測試環境缺乏 DirectComposition 硬體支援（如無 GPU 的虛擬機/CI runner），該測試輸出明確的 Skip 診斷（`[DIAGNOSTIC-SKIP]`）並提前返回（注意：Cargo test runner 仍會將其回傳碼計為 passed，合約中明確標示為 Skip 診斷而非宣告 Cargo harness 已將其登記為 ignored/skipped）。本測試驗證合成錯誤之降級路徑，並未模擬真實 DXGI `DEVICE_REMOVED` 或 GPU 驅動崩潰。
   3. 政策切換測試：`test_dcomp_policy_opt_in_and_runtime_downgrade` 驗證預設關閉、opt-in 啟用控制、以及降級後即使強制啟用 DComp 亦保證選取 Layered。
+- **Residual**：真實 DirectComposition 之 GPU 呈現品質、DXGI `DEVICE_REMOVED` 硬體設備遺失與顯卡驅動故障情境，維持為 Windows 實機獨立驗收項目。

@@ -268,8 +268,16 @@ fn test_dcomp_resize_failure_auto_downgrades_flag_deterministic() {
     }
 }
 
+/// Tests presenter downgrade integration when a real DirectComposition surface object is initialized,
+/// coupled with a synthetic Present failure.
+///
+/// Note: If real DirectComposition creation fails (e.g. CI / VM without D3D11/DXGI hardware),
+/// this test emits an explicit skip diagnostic and early-returns (standard Cargo test harness
+/// records the process exit as passed; true deterministic downgrade verification is guaranteed by
+/// `test_dcomp_*_deterministic`). Furthermore, this test verifies recovery from synthetic Present error,
+/// and does NOT simulate actual DXGI `DEVICE_REMOVED` or GPU driver crash.
 #[test]
-fn test_dcomp_real_hardware_fault_injection_or_explicit_skip() {
+fn test_real_dcomp_initialization_with_synthetic_fault_downgrade() {
     use qtrs_gui::geometry::Region;
     use qtrs_gui::paint::Pixmap;
     use qtrs_gui::tiny_skia::Color;
@@ -280,7 +288,7 @@ fn test_dcomp_real_hardware_fault_injection_or_explicit_skip() {
     let (_lock, _guard) = DCompOverrideGuard::acquire(Some(true));
 
     let mut window = NativeWindow::new(
-        "DComp Real Hardware Fault Test",
+        "DComp Real Surface Synthetic Fault Test",
         Rect::new(50, 50, 100, 80),
         WindowFlags::FRAMELESS | WindowFlags::LAYERED,
     )
@@ -290,16 +298,16 @@ fn test_dcomp_real_hardware_fault_injection_or_explicit_skip() {
     let mut dcomp = match dcomp_res {
         Ok(s) => s,
         Err(e) => {
-            // Explicitly report skip reason rather than silently pretending verification passed
+            // Explicit skip diagnostic: informs runner that real hardware DComp surface could not be created
             eprintln!(
-                "SKIPPED: Real DirectComposition hardware creation unsupported in this environment ({e}). \
-                 Hardware fault integration test skipped; deterministic downgrade logic verified via test_dcomp_*_deterministic."
+                "[DIAGNOSTIC-SKIP] Real DirectComposition surface creation unsupported in this environment ({e}). \
+                 Test completed as explicit skip diagnostic; deterministic downgrade logic verified via test_dcomp_*_deterministic."
             );
             return;
         }
     };
 
-    // When hardware DComp is supported, execute real device fault injection
+    // When real DComp surface is initialized, test presenter downgrade integration upon synthetic fault
     dcomp.set_fail_present_for_test(true);
     window.set_presenter_for_test(Some(WindowsPresenter::DirectComposition(dcomp)));
 
@@ -310,16 +318,16 @@ fn test_dcomp_real_hardware_fault_injection_or_explicit_skip() {
     let r = window.present_region(&pixmap, &full);
     assert!(
         r.is_ok(),
-        "present_region must recover cleanly via Layered fallback on real device: {:?}",
+        "present_region must recover cleanly via Layered fallback after real DComp initialization: {:?}",
         r.err()
     );
     assert!(
         window.is_dcomp_downgraded(),
-        "Window must be marked dcomp_downgraded after present failure on real device"
+        "Window must be marked dcomp_downgraded after present failure"
     );
 
     match window.presenter().unwrap() {
         WindowsPresenter::Layered(_) => {}
-        _ => panic!("Expected Win32LayeredPresenter after auto downgrade on real device"),
+        _ => panic!("Expected Win32LayeredPresenter after auto downgrade"),
     }
 }
