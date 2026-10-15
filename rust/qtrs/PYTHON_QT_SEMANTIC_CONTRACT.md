@@ -4059,8 +4059,12 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - DV-08（G2.1.g，已註冊但非 `owned_children` 的 child 在 parent drop 時的處置）是否接受。決定前不得改該路徑；替代方案是拒絕把非 owned 物件設為 child（改為 D 類並可見地失敗）（`QTRS_SPEC.md` 01.6 DV-08）。
 - DV-09（G2.1.e、R-00048：以自己或後代為 parent）是否接受：`reparent_owned` 回 `Err(InvalidParent)` 且樹不變；Qt release build 照做而形成自我 parent 或環（Qt 自己標為 undefined behavior）。決定前不得改該路徑（`QTRS_SPEC.md` 01.6 DV-09）。先前的 E.3 漏列此項。
 - crate 發布與更名安排。使用者已指定未來正式名為 **qtoxide**（取代 qtrs）。使用者回報 crates.io 搜尋 `qtoxide` 為 0 個 crate（由使用者提供，我未自行驗證；只涵蓋該名稱，`qtoxide-gui`、`qtoxide-widgets`、`qtoxide-core`、`qtoxide-platform` 等子 crate 名稱、商標與授權面未查）。更名時機與範圍尚未決定；既有 RC 章節與 commit 保留 `qtrs` 作為歷史名稱。
-- 授權路線：使用者已批准 `LGPL-3.0-only`（尚未寫入任何 LICENSE 檔，也沒有推送到 `onlyatuna/qtoxide`）。未決：HUD（AGPL-3.0）與 LGPL 的相容性、把 qtrs 改授權的權利歸屬（待 git 作者統計）、是否公開歷史、NOTICE 與 LICENSE 的最終文字。這不是法律意見。
-- 建議順序：先搬（保留歷史、名稱仍為 qtrs）、後在新 repo 改名 qtoxide。使用者已讓搬遷前調查開始，順序本身尚未另行批准。
+- 授權路線：使用者已批准 `LGPL-3.0-only`（尚未寫入任何 LICENSE 檔，也沒有推送到 `onlyatuna/qtoxide`）。未決：HUD（AGPL-3.0）與 LGPL 的相容性、NOTICE 與 LICENSE 的最終文字。這不是法律意見。
+- 歷史：使用者決定 qtoxide 以乾淨起點建立（不公開歷史，不用 `filter-repo`），並決定不改寫 HUD repo 的既有歷史。
+- 順序：使用者決定匯出時直接以 qtoxide 命名（不保留歷史，所以不分兩步）。
+- 文件與工具去向：使用者決定 Contract、Spec、HUD 專屬探針與驅動腳本留在 HUD repo。RC、G、R 編號是開發期的除錯指引，qtoxide 的發布版不保留（使用者決定）。
+- 逐字重疊：使用者決定改寫或移除。已完成：crates 註解 39 段（`c17629f`）與 Contract 的 7 個 C++ 程式碼區塊及 20 處行內敘述（`ac767ab`）。保留 4 處執行期訊息字串（它們是被規格的可觀察輸出）與 3 處數字表格的誤判。重跑掃描：未解釋的 8 字以上逐字重疊為 0（掃描腳本在本機暫存目錄，未提交）。只偵測 8 字以上的逐字重疊，不偵測改寫與程式結構。
+- 14 個 LCD fixture（`qtrs-gui/tests/fixtures/lcd_segoe12`、`lcd_jhenghei12` 各 7 個 `.bin`）：由 `tools/second_layer_harness/qt_lcd_dump.py` 以 PySide6 6.11.2 在 Windows 上用 Segoe UI 與 Microsoft JhengHei UI 繪製 `Hag`、`Hag中` 得到的 48×24 RGBA 像素輸出（不含字型檔），供 `test_lcd_text_parity.rs`（`cfg(windows)`）逐像素比對；測試執行時需要這兩個字型已安裝在系統中。計畫：不進 qtoxide 的匯出，搬離 `rust/qtrs` 時移到 HUD 自己的測試目錄（待使用者確認）。
 - Chapter 03 spec 整合（在使用者確認 chapter 02 方法前不開始）。
 
 ### E.4 A 類：可見行為的持續追蹤（不是新的阻擋，只是記錄現狀）
