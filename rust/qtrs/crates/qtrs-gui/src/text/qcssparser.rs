@@ -559,7 +559,8 @@ pub fn parse_color(input: &str) -> Option<Color> {
             let a_str = parts[3].trim();
             let a = if let Ok(f) = a_str.parse::<f32>() {
                 if f <= 1.0 {
-                    (f * 255.0).round().clamp(0.0, 255.0) as u8
+                    // `int alpha = toReal() * 255.` (qcssparser.cpp:826-828): truncated, not rounded.
+                    (f * 255.0).clamp(0.0, 255.0) as u8
                 } else {
                     f.clamp(0.0, 255.0) as u8
                 }

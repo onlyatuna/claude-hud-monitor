@@ -38,7 +38,7 @@ fn test_qcss_parser_basic_selectors_and_declarations() {
     assert_eq!(r1.declarations[0].property, QCssProperty::BackgroundColor);
     assert_eq!(
         r1.declarations[0].value,
-        QCssValue::Color(Color::from_rgba8(14, 17, 23, 240))
+        QCssValue::Color(Color::from_rgba8(14, 17, 23, 239))
     );
     assert_eq!(r1.declarations[2].property, QCssProperty::BorderRadius);
     assert_eq!(r1.declarations[2].value, QCssValue::Length(9.0));
@@ -292,4 +292,25 @@ fn test_qcss_8_digit_hex_color_is_argb() {
     let color = parse_color("#11223344").expect("valid 8-digit hex color");
     let u = color.to_color_u8();
     assert_eq!((u.alpha(), u.red(), u.green(), u.blue()), (17, 34, 51, 68));
+}
+
+/// RC-209: `rgba(r, g, b, <0..1>)` truncates the alpha (`int alpha = toReal() * 255.`,
+/// qcssparser.cpp:826-828). PySide6 6.11.2 painted these over a transparent pixmap:
+/// 0.12 -> 0x1e, 0.5 -> 0x7f, 0.97 -> 0xf7, 0.07 -> 0x11, 0.1 -> 0x19, 0.35 -> 0x59.
+#[test]
+fn test_qcss_rgba_fractional_alpha_truncates_like_qt() {
+    use qtrs_gui::text::qcssparser::parse_color;
+    for (text, alpha) in [
+        ("0.12", 30),
+        ("0.5", 127),
+        ("0.97", 247),
+        ("0.07", 17),
+        ("0.1", 25),
+        ("0.35", 89),
+        ("1", 255),
+        ("0", 0),
+    ] {
+        let color = parse_color(&format!("rgba(255, 255, 255, {text})")).expect("valid rgba color");
+        assert_eq!(color.to_color_u8().alpha(), alpha, "rgba alpha {text}");
+    }
 }

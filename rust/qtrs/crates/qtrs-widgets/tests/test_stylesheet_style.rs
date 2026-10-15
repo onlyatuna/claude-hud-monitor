@@ -214,7 +214,7 @@ fn test_stylesheet_style_pseudo_states_hover() {
     assert_eq!(res_hover.color, Some(Color::from_rgba8(56, 189, 248, 255)));
     assert_eq!(
         res_hover.background_color,
-        Some(Color::from_rgba8(255, 255, 255, 31))
+        Some(Color::from_rgba8(255, 255, 255, 30))
     );
 }
 
@@ -284,8 +284,8 @@ fn test_button_hover_style_paints_stylesheet_hover_bg() {
     btn.paint_event(&mut painter);
 
     // Sample an interior pixel (e.g. at (2, 2))
-    // rgba(255, 255, 255, 0.12) -> alpha is ~31 (0.12 * 255 = 30.6)
+    // rgba(255, 255, 255, 0.12) -> alpha 30: Qt truncates 0.12 * 255 = 30.6 (RC-209).
     // NOT the hardcoded hover_bg which has alpha 255 and color (225, 235, 245)!
     let pixel = pixmap.pixel(2, 2).unwrap();
-    assert_eq!(pixel.alpha(), 31, "hover background alpha should match rgba(255, 255, 255, 0.12) ~ 31, was {}", pixel.alpha());
+    assert_eq!(pixel.alpha(), 30, "hover background alpha should match rgba(255, 255, 255, 0.12) = 30, was {}", pixel.alpha());
 }
