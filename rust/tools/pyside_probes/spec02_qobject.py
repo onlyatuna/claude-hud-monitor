@@ -775,7 +775,96 @@ def case_thread():
     t.wait()
 
 
-CASES = {"self": case_self, "desc": case_desc, "thread": case_thread}
+class _Spy(QObject):
+    """Records the ChildAdded / ChildRemoved events it receives, by child name."""
+
+    def __init__(self, name, parent=None):
+        super().__init__(parent)
+        self.setObjectName(name)
+        self.events = []
+
+    def childEvent(self, e):
+        kind = {QEvent.Type.ChildAdded: "ChildAdded", QEvent.Type.ChildRemoved: "ChildRemoved"}.get(e.type())
+        if kind and e.child() is not None:
+            self.events.append(f"{kind}:{e.child().objectName()}")
+
+
+def _names(o):
+    return [c.objectName() for c in o.children()]
+
+
+def _remote(name):
+    """A _Spy that lives in another, running QThread."""
+    t = QThread()
+    t.start()
+    w = _Spy(name)
+    w.moveToThread(t)
+    return t, w
+
+
+def case_thread_events():
+    # R-00007 / DV-10: after the refusal, what do the old parent and the would-be new parent hold?
+    p = _Spy("p")
+    c = _Spy("c", p)
+    t, w = _remote("w")
+    p.events.clear()
+    w.events.clear()
+    c.setParent(w)
+    print(
+        f"R-00007 other-thread events: c.parent() is None {c.parent() is None}; "
+        f"p.children() {_names(p)}; w.children() {_names(w)}; p events {p.events}; w events {w.events}",
+        flush=True,
+    )
+    t.quit()
+    t.wait()
+
+
+def case_thread_noparent():
+    c = _Spy("c")
+    t, w = _remote("w")
+    c.setParent(w)
+    print(
+        f"R-00007 other-thread no old parent: c.parent() is None {c.parent() is None}; w.children() {_names(w)}",
+        flush=True,
+    )
+    t.quit()
+    t.wait()
+
+
+def case_thread_ctor():
+    # The constructor path (the analogue of add_owned_child): a new object, a parent in another thread.
+    t, w = _remote("w")
+    c = _Spy("c", w)
+    print(
+        f"R-00007 other-thread constructor: c.parent() is None {c.parent() is None}; w.children() {_names(w)}",
+        flush=True,
+    )
+    t.quit()
+    t.wait()
+
+
+def case_thread_child_remote():
+    # The child lives in the other thread; the new parent is here.
+    t, w = _remote("w")
+    p = _Spy("p")
+    w.setParent(p)
+    print(
+        f"R-00007 other-thread child in other thread: w.parent() is None {w.parent() is None}; p.children() {_names(p)}",
+        flush=True,
+    )
+    t.quit()
+    t.wait()
+
+
+CASES = {
+    "self": case_self,
+    "desc": case_desc,
+    "thread": case_thread,
+    "thread_events": case_thread_events,
+    "thread_noparent": case_thread_noparent,
+    "thread_ctor": case_thread_ctor,
+    "thread_child_remote": case_thread_child_remote,
+}
 
 
 def run_r00007_cases():
@@ -788,7 +877,7 @@ def run_r00007_cases():
             for line in r.stdout.splitlines():
                 if line.startswith(("R-00007", "R-00048", "R-00064")):
                     print(line)
-            warns = [ln for ln in r.stderr.splitlines() if "QObject::setParent" in ln]
+            warns = [ln for ln in r.stderr.splitlines() if "different thread" in ln]
             for w in warns:
                 print(f"R-00007 {name} stderr: {w}")
             if r.returncode != 0:
@@ -808,7 +897,7 @@ def main():
 
         qInstallMessageHandler(handler)
         CASES[name]()
-        hits = [m for m in msgs if "setParent" in m]
+        hits = [m for m in msgs if "different thread" in m]
         print(f"R-00064: warning captured={bool(hits)} text={hits[0] if hits else ''!r} case={name}", flush=True)
         os._exit(0)
     print(f"PySide6 {PySide6.__version__}; Qt {qVersion()}")
