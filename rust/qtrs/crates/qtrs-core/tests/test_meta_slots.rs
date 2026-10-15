@@ -44,7 +44,7 @@ fn new_probe() -> SlotProbe {
 #[test]
 fn slot_invoked_by_name_runs_method() {
     // Qt: a slot declared in the class is registered in its meta object and invokable by name
-    // (moc generator.cpp:863-867 dispatches every method, including slots, through InvokeMetaMethod).
+    // (observed with PySide6, tools/pyside_probes/spec02_property_slot.py R-00033 (b), (c)).
     let mut probe = new_probe();
     let r = probe.meta_object().invoke_method(
         &mut probe,

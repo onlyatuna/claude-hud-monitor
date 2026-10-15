@@ -92,6 +92,19 @@ def probe_R00033():
     r3 = QMetaObject.invokeMethod(s, "not_a_slot", Qt.DirectConnection, Q_ARG(int, 9))
     print(f"R-00033 (c) invokeMethod by name: on_int -> {r1}, on_void -> {r2}, not_a_slot -> {r3}; hits {s.hits}")
 
+    class Sg(QObject):
+        sig = Signal(int)
+
+    g = Sg()
+    seen = []
+    g.sig.connect(seen.append)
+    r4 = QMetaObject.invokeMethod(g, "sig", Qt.DirectConnection, Q_ARG(int, 3))
+    print(f"R-00033 (d) invokeMethod on a signal by name (direct): returned {r4}; receiver got {seen}")
+    r5 = QMetaObject.invokeMethod(g, "sig", Qt.QueuedConnection, Q_ARG(int, 4))
+    before = list(seen)
+    QCoreApplication.processEvents()
+    print(f"R-00033 (e) invokeMethod on a signal by name (queued): returned {r5}; before processEvents {before}; after {seen}")
+
 
 def main():
     app = QCoreApplication([])  # noqa: F841

@@ -29,8 +29,8 @@ impl InvokeProbe {
 
 #[test]
 fn derived_signal_invoke_by_name_emits_like_emit() {
-    // Qt: a moc-generated signal body calls QMetaObject::activate (moc generator.cpp:1304-1307),
-    // so invoking a signal is the same as emitting it.
+    // Qt (observed with PySide6, tools/pyside_probes/spec02_property_slot.py R-00033 (d)): invoking a signal by name
+    // emits it to its receivers, the same as emitting it directly.
     let mut probe = InvokeProbe::new();
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let s = Arc::clone(&seen);

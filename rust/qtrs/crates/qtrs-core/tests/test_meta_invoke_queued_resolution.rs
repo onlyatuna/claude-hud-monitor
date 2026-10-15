@@ -193,8 +193,8 @@ fn queued_name_only_with_no_compatible_overload_is_method_not_found_without_post
 
 #[test]
 fn queued_signal_invoke_emits_on_owner_loop() {
-    // Qt: a signal is invoked through its moc body, which calls QMetaObject::activate
-    // (moc generator.cpp:863-867, :1304-1307); a queued invoke delivers that on the owner loop.
+    // Qt (observed with PySide6, tools/pyside_probes/spec02_property_slot.py R-00033 (e)): a queued invoke of a signal
+    // by name reaches its receivers only once the event loop runs.
     let el = EventLoop::new();
     let mut probe = QueuedSignalProbe {
         data: ObjectData::with_auto_id(),
