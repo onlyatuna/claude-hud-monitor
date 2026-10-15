@@ -197,7 +197,7 @@ pub fn open_log_dir() {
     let dir = log_dir();
     let _ = std::fs::create_dir_all(&dir);
     info!("[Logger] Opening log dir: {:?}", dir);
-    let _ = qtrs_platform::desktop_services::open_file(&dir);
+    let _ = ferrokit_platform::desktop_services::open_file(&dir);
 }
 
 #[cfg(test)]

@@ -107,13 +107,16 @@ pub fn enable_win32_dark_mode(hwnd: isize) {
 /// Sets a label's text colour the way the Python HUD does (`label.setStyleSheet("color: …;")`):
 /// a widget-local style sheet, which outranks the application's `QLabel { color }` rule.
 /// `Label::set_color` is the palette colour, which that rule overrides.
-pub(crate) fn set_label_color(w: &qtrs_widgets::WidgetRef, color: qtrs_gui::tiny_skia::Color) {
+pub(crate) fn set_label_color(
+    w: &ferrokit_widgets::WidgetRef,
+    color: ferrokit_gui::tiny_skia::Color,
+) {
     if let Some(lbl) = w
         .borrow_mut()
         .as_any_mut()
-        .downcast_mut::<qtrs_widgets::Label>()
+        .downcast_mut::<ferrokit_widgets::Label>()
     {
-        use qtrs_widgets::Widget;
+        use ferrokit_widgets::Widget;
         lbl.set_color(color);
         let c = color.to_color_u8();
         lbl.set_style_sheet(&format!(
@@ -133,8 +136,8 @@ pub(crate) fn resolve_is_dark(appearance: &str) -> bool {
         "light" => false,
         "dark" => true,
         _ => !matches!(
-            qtrs_platform::platform().theme().color_scheme(),
-            qtrs_platform::ColorScheme::Light
+            ferrokit_platform::platform().theme().color_scheme(),
+            ferrokit_platform::ColorScheme::Light
         ),
     }
 }

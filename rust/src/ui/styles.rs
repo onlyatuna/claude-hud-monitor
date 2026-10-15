@@ -1,6 +1,6 @@
 //! HUD visual styling, color themes, and metrics matching Python ui/styles.py.
 
-use qtrs_gui::tiny_skia::Color;
+use ferrokit_gui::tiny_skia::Color;
 use std::sync::LazyLock;
 
 #[derive(Debug, Clone)]

@@ -16,12 +16,12 @@
 //! and a wider one with its own area rasteriser, neither of which tiny-skia reproduces; the measured
 //! corner maxima (111 levels at DPR 1.0 in the hover state, an opaque 1px arc; 16 at DPR 1.25) are the
 //! tolerances below.
-use qtrs_core::event::{Event, EventKind};
-use qtrs_core::object::qobject::QObject;
-use qtrs_gui::geometry::primitives::Rect;
-use qtrs_gui::paint::Painter;
-use qtrs_gui::Pixmap;
-use qtrs_widgets::{Button, Widget};
+use ferrokit_core::event::{Event, EventKind};
+use ferrokit_core::object::qobject::QObject;
+use ferrokit_gui::geometry::primitives::Rect;
+use ferrokit_gui::paint::Painter;
+use ferrokit_gui::Pixmap;
+use ferrokit_widgets::{Button, Widget};
 
 use super::test_support::CardsOracleSetup;
 
@@ -51,7 +51,7 @@ fn paint(dpr: f32, hover: bool, rows: usize, cols: usize) -> Rows {
         button.event(&mut Event::new_spontaneous(EventKind::Enter { x: 5, y: 5 }));
     }
     let mut pixmap = Pixmap::with_dpr(cols as u32, rows as u32, dpr).unwrap();
-    pixmap.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
+    pixmap.fill(ferrokit_gui::tiny_skia::Color::TRANSPARENT);
     let mut painter = Painter::begin(&mut pixmap);
     button.paint_event(&mut painter);
     drop(painter);
@@ -99,7 +99,7 @@ fn check(dpr: f32, data: &str, corner_tolerance: i32) {
                     (x < corner || x + corner >= cols) && (y < corner || y + corner >= rows);
                 let limit = if in_corner { corner_tolerance } else { 2 };
                 if distance(*q, *g) > limit {
-                    failures.push(format!("({x},{y}) qt {q:08x} qtrs {g:08x} > {limit}"));
+                    failures.push(format!("({x},{y}) qt {q:08x} ferrokit {g:08x} > {limit}"));
                 }
             }
         }

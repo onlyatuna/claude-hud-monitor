@@ -55,7 +55,7 @@ pub struct RefreshController {
     pub states: HashMap<String, ProviderState>,
     result_tx: Sender<WorkerResult>,
     pub result_rx: Receiver<WorkerResult>,
-    pub updated: qtrs_core::signal::Signal<UsageMetrics>,
+    pub updated: ferrokit_core::signal::Signal<UsageMetrics>,
     notify_callback: NotifyCallback,
 }
 
@@ -67,7 +67,7 @@ impl RefreshController {
             states: HashMap::new(),
             result_tx: tx,
             result_rx: rx,
-            updated: qtrs_core::signal::Signal::new(),
+            updated: ferrokit_core::signal::Signal::new(),
             notify_callback: Arc::new(parking_lot::Mutex::new(None)),
         }
     }

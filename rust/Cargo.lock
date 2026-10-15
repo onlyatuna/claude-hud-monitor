@@ -106,12 +106,12 @@ name = "claude-hud-monitor"
 version = "0.2.0"
 dependencies = [
  "chrono",
+ "ferrokit-core",
+ "ferrokit-gui",
+ "ferrokit-platform",
+ "ferrokit-widgets",
  "log",
  "parking_lot",
- "qtrs-core",
- "qtrs-gui",
- "qtrs-platform",
- "qtrs-widgets",
  "serde",
  "serde_json",
  "ureq",
@@ -162,6 +162,66 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
 dependencies = [
  "simd-adler32",
+]
+
+[[package]]
+name = "ferrokit-core"
+version = "0.1.0"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=2a934874594acead0d84e073222353f6ed13b923#2a934874594acead0d84e073222353f6ed13b923"
+dependencies = [
+ "ferrokit-derive",
+ "libc",
+ "parking_lot",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ferrokit-derive"
+version = "0.1.0"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=2a934874594acead0d84e073222353f6ed13b923#2a934874594acead0d84e073222353f6ed13b923"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "ferrokit-gui"
+version = "0.1.0"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=2a934874594acead0d84e073222353f6ed13b923#2a934874594acead0d84e073222353f6ed13b923"
+dependencies = [
+ "ab_glyph_rasterizer",
+ "ferrokit-core",
+ "memmap2",
+ "png",
+ "rustybuzz",
+ "serde",
+ "tiny-skia",
+ "unicode-segmentation",
+ "windows",
+]
+
+[[package]]
+name = "ferrokit-platform"
+version = "0.1.0"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=2a934874594acead0d84e073222353f6ed13b923#2a934874594acead0d84e073222353f6ed13b923"
+dependencies = [
+ "bitflags 2.13.2",
+ "ferrokit-core",
+ "ferrokit-gui",
+ "tinyfiledialogs",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "ferrokit-widgets"
+version = "0.1.0"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=2a934874594acead0d84e073222353f6ed13b923#2a934874594acead0d84e073222353f6ed13b923"
+dependencies = [
+ "ferrokit-core",
+ "ferrokit-gui",
+ "ferrokit-platform",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -517,61 +577,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "qtrs-core"
-version = "0.1.0"
-dependencies = [
- "libc",
- "parking_lot",
- "qtrs-derive",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "qtrs-derive"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "qtrs-gui"
-version = "0.1.0"
-dependencies = [
- "ab_glyph_rasterizer",
- "memmap2",
- "png",
- "qtrs-core",
- "rustybuzz",
- "serde",
- "tiny-skia",
- "unicode-segmentation",
- "windows",
-]
-
-[[package]]
-name = "qtrs-platform"
-version = "0.1.0"
-dependencies = [
- "bitflags 2.13.2",
- "qtrs-core",
- "qtrs-gui",
- "tinyfiledialogs",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "qtrs-widgets"
-version = "0.1.0"
-dependencies = [
- "qtrs-core",
- "qtrs-gui",
- "qtrs-platform",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

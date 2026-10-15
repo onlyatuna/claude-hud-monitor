@@ -1,4 +1,4 @@
-//! G8.8.a / G12.5.i: the HUD's Python `setToolTip` calls, through the real qtrs tool tip protocol.
+//! G8.8.a / G12.5.i: the HUD's Python `setToolTip` calls, through the real ferrokit tool tip protocol.
 //!
 //! Python sources: `provider_card.py:125`, `usage_table.py:318,328,339,373-375`,
 //! `hud_window.py:155,160`. Hover goes through `EventTreeDispatcher` on the HUD's real widget tree
@@ -8,12 +8,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::{Local, TimeZone, Utc};
+use ferrokit_core::event::MouseButtons;
+use ferrokit_core::event_loop::EventLoop;
+use ferrokit_gui::geometry::primitives::Point;
+use ferrokit_widgets::tooltip::ToolTip;
+use ferrokit_widgets::{EventTreeDispatcher, WidgetRef};
 use parking_lot::Mutex;
-use qtrs_core::event::MouseButtons;
-use qtrs_core::event_loop::EventLoop;
-use qtrs_gui::geometry::primitives::Point;
-use qtrs_widgets::tooltip::ToolTip;
-use qtrs_widgets::{EventTreeDispatcher, WidgetRef};
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;
@@ -44,7 +44,7 @@ fn hud(ui_mode: &str) -> HUDWindow {
         .set_always_show_tool_tips(true);
     hud.window.root_widget().borrow().update_layout();
     // Parent links are made when the window paints; a hover only ever follows a paint.
-    qtrs_widgets::widget::adopt_tree(&hud.window.root_widget());
+    ferrokit_widgets::widget::adopt_tree(&hud.window.root_widget());
     hud
 }
 
@@ -355,8 +355,8 @@ fn leaving_before_the_wake_up_shows_no_tip_and_a_click_hides_it() {
     let p = centre(&dial);
     d.dispatch_event(
         &h.window.root_widget(),
-        &mut qtrs_core::event::Event::new_spontaneous(
-            qtrs_core::event::EventKind::MouseButtonPress {
+        &mut ferrokit_core::event::Event::new_spontaneous(
+            ferrokit_core::event::EventKind::MouseButtonPress {
                 x: p.x,
                 y: p.y,
                 button: 1,

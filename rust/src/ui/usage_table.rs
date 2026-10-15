@@ -12,15 +12,17 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::rc::Rc;
 
-use qtrs_core::object::{ObjectData, ObjectId, QObject};
-use qtrs_gui::geometry::primitives::{Margins, PointF, Rect, RectF};
-use qtrs_gui::paint::brush::Brush;
-use qtrs_gui::paint::painter::{create_donut_arc_path, create_pie_path, Painter, Pen, RenderHint};
-use qtrs_gui::paint::pixmap::Pixmap;
-use qtrs_gui::text::font::{Font, FontWeight};
-use qtrs_gui::text::font_metrics::FontMetrics;
-use qtrs_gui::tiny_skia::{Color, LineCap, LineJoin, PathBuilder};
-use qtrs_widgets::{
+use ferrokit_core::object::{ObjectData, ObjectId, QObject};
+use ferrokit_gui::geometry::primitives::{Margins, PointF, Rect, RectF};
+use ferrokit_gui::paint::brush::Brush;
+use ferrokit_gui::paint::painter::{
+    create_donut_arc_path, create_pie_path, Painter, Pen, RenderHint,
+};
+use ferrokit_gui::paint::pixmap::Pixmap;
+use ferrokit_gui::text::font::{Font, FontWeight};
+use ferrokit_gui::text::font_metrics::FontMetrics;
+use ferrokit_gui::tiny_skia::{Color, LineCap, LineJoin, PathBuilder};
+use ferrokit_widgets::{
     Alignment, BoxLayout, EmptyWidget, GridLayout, Label, Layout, Widget, WidgetBase, WidgetRef,
 };
 
@@ -69,9 +71,9 @@ pub struct UsageDial {
 impl UsageDial {
     pub fn new(theme: Theme) -> Self {
         let base = WidgetBase::with_geometry(Rect::new(0, 0, 84, 84));
-        base.set_size_policy(qtrs_widgets::QSizePolicy::new(
-            qtrs_widgets::Policy::Expanding,
-            qtrs_widgets::Policy::Expanding,
+        base.set_size_policy(ferrokit_widgets::QSizePolicy::new(
+            ferrokit_widgets::Policy::Expanding,
+            ferrokit_widgets::Policy::Expanding,
         ));
 
         Self {
@@ -155,7 +157,7 @@ impl QObject for UsageDial {
 }
 
 impl Widget for UsageDial {
-    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+    fn widget_base(&self) -> &ferrokit_widgets::widget::WidgetBase {
         &self.base
     }
 
@@ -168,13 +170,13 @@ impl Widget for UsageDial {
     fn set_geometry(&self, rect: Rect) {
         self.base.set_geometry(rect);
     }
-    fn size_hint(&self) -> qtrs_gui::geometry::primitives::Size {
-        qtrs_gui::geometry::primitives::Size::new(84, 84)
+    fn size_hint(&self) -> ferrokit_gui::geometry::primitives::Size {
+        ferrokit_gui::geometry::primitives::Size::new(84, 84)
     }
-    fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
+    fn minimum_size(&self) -> ferrokit_gui::geometry::primitives::Size {
         // Python `setMinimumSize(84, 84)`: a floor only. The Expanding policy still lets the grid
         // row and column stretch the dial past it; only a maximum size would cap it.
-        qtrs_gui::geometry::primitives::Size::new(84, 84)
+        ferrokit_gui::geometry::primitives::Size::new(84, 84)
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -201,10 +203,10 @@ impl Widget for UsageDial {
         None
     }
     fn set_layout(&mut self, _layout: Box<dyn Layout>) {}
-    fn parent_widget(&self) -> Option<qtrs_widgets::WidgetWeak> {
+    fn parent_widget(&self) -> Option<ferrokit_widgets::WidgetWeak> {
         self.base.parent_widget()
     }
-    fn set_parent_widget(&self, parent: Option<qtrs_widgets::WidgetWeak>) {
+    fn set_parent_widget(&self, parent: Option<ferrokit_widgets::WidgetWeak>) {
         self.base.set_parent_widget(parent);
     }
     fn window_id(&self) -> Option<ObjectId> {
@@ -332,7 +334,7 @@ impl Widget for UsageDial {
         //    builds it as a `QPainterPath` (unhinted outlines at the layout's glyph positions),
         //    strokes the path with the halo and fills it with the text colour.
         let app_font = |px: i32| {
-            Font::new(qtrs_widgets::APP_DEFAULT_FAMILY, px as f32).with_weight(FontWeight::Bold)
+            Font::new(ferrokit_widgets::APP_DEFAULT_FAMILY, px as f32).with_weight(FontWeight::Bold)
         };
         let has_pct = self.inner_text.ends_with('%');
         let num = self.inner_text.replace('%', "");
@@ -428,9 +430,9 @@ pub struct ProviderIconWidget {
 impl ProviderIconWidget {
     pub fn new(provider_id: &str, color: Color, size: f32) -> Self {
         let base = WidgetBase::with_geometry(Rect::new(0, 0, size as i32, size as i32));
-        base.set_size_policy(qtrs_widgets::QSizePolicy::new(
-            qtrs_widgets::Policy::Fixed,
-            qtrs_widgets::Policy::Fixed,
+        base.set_size_policy(ferrokit_widgets::QSizePolicy::new(
+            ferrokit_widgets::Policy::Fixed,
+            ferrokit_widgets::Policy::Fixed,
         ));
         Self {
             base,
@@ -508,7 +510,7 @@ impl QObject for ProviderIconWidget {
 }
 
 impl Widget for ProviderIconWidget {
-    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+    fn widget_base(&self) -> &ferrokit_widgets::widget::WidgetBase {
         &self.base
     }
 
@@ -521,11 +523,11 @@ impl Widget for ProviderIconWidget {
     fn set_geometry(&self, rect: Rect) {
         self.base.set_geometry(rect);
     }
-    fn size_hint(&self) -> qtrs_gui::geometry::primitives::Size {
-        qtrs_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
+    fn size_hint(&self) -> ferrokit_gui::geometry::primitives::Size {
+        ferrokit_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
     }
-    fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
-        qtrs_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
+    fn minimum_size(&self) -> ferrokit_gui::geometry::primitives::Size {
+        ferrokit_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -552,10 +554,10 @@ impl Widget for ProviderIconWidget {
         None
     }
     fn set_layout(&mut self, _layout: Box<dyn Layout>) {}
-    fn parent_widget(&self) -> Option<qtrs_widgets::WidgetWeak> {
+    fn parent_widget(&self) -> Option<ferrokit_widgets::WidgetWeak> {
         self.base.parent_widget()
     }
-    fn set_parent_widget(&self, parent: Option<qtrs_widgets::WidgetWeak>) {
+    fn set_parent_widget(&self, parent: Option<ferrokit_widgets::WidgetWeak>) {
         self.base.set_parent_widget(parent);
     }
     fn window_id(&self) -> Option<ObjectId> {
@@ -613,9 +615,9 @@ pub struct GlyphWidget {
 impl GlyphWidget {
     pub fn new(kind: &str, color: Color, theme: Theme, size: f32) -> Self {
         let base = WidgetBase::with_geometry(Rect::new(0, 0, size as i32, size as i32));
-        base.set_size_policy(qtrs_widgets::QSizePolicy::new(
-            qtrs_widgets::Policy::Fixed,
-            qtrs_widgets::Policy::Fixed,
+        base.set_size_policy(ferrokit_widgets::QSizePolicy::new(
+            ferrokit_widgets::Policy::Fixed,
+            ferrokit_widgets::Policy::Fixed,
         ));
         Self {
             base,
@@ -643,7 +645,7 @@ impl QObject for GlyphWidget {
 }
 
 impl Widget for GlyphWidget {
-    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+    fn widget_base(&self) -> &ferrokit_widgets::widget::WidgetBase {
         &self.base
     }
 
@@ -656,11 +658,11 @@ impl Widget for GlyphWidget {
     fn set_geometry(&self, rect: Rect) {
         self.base.set_geometry(rect);
     }
-    fn size_hint(&self) -> qtrs_gui::geometry::primitives::Size {
-        qtrs_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
+    fn size_hint(&self) -> ferrokit_gui::geometry::primitives::Size {
+        ferrokit_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
     }
-    fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
-        qtrs_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
+    fn minimum_size(&self) -> ferrokit_gui::geometry::primitives::Size {
+        ferrokit_gui::geometry::primitives::Size::new(self.size as i32, self.size as i32)
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -687,10 +689,10 @@ impl Widget for GlyphWidget {
         None
     }
     fn set_layout(&mut self, _layout: Box<dyn Layout>) {}
-    fn parent_widget(&self) -> Option<qtrs_widgets::WidgetWeak> {
+    fn parent_widget(&self) -> Option<ferrokit_widgets::WidgetWeak> {
         self.base.parent_widget()
     }
-    fn set_parent_widget(&self, parent: Option<qtrs_widgets::WidgetWeak>) {
+    fn set_parent_widget(&self, parent: Option<ferrokit_widgets::WidgetWeak>) {
         self.base.set_parent_widget(parent);
     }
     fn window_id(&self) -> Option<ObjectId> {
@@ -715,7 +717,10 @@ impl Widget for GlyphWidget {
             "pie" => {
                 painter.set_pen(None);
                 // `QColor(*theme["disc"]).darker(110)`, usage_table.py:88
-                painter.set_brush(Brush::Color(qtrs_gui::color::darker(self.theme.disc, 110)));
+                painter.set_brush(Brush::Color(ferrokit_gui::color::darker(
+                    self.theme.disc,
+                    110,
+                )));
                 painter.draw_ellipse(r);
                 painter.set_brush(Brush::Color(self.color));
                 painter.draw_pie(r, 90.0, -250.0);
@@ -772,9 +777,9 @@ pub struct SeparatorWidget {
 impl SeparatorWidget {
     pub fn new(color: Color) -> Self {
         let base = WidgetBase::with_geometry(Rect::new(0, 0, 10, 1));
-        base.set_size_policy(qtrs_widgets::QSizePolicy::new(
-            qtrs_widgets::Policy::Expanding,
-            qtrs_widgets::Policy::Fixed,
+        base.set_size_policy(ferrokit_widgets::QSizePolicy::new(
+            ferrokit_widgets::Policy::Expanding,
+            ferrokit_widgets::Policy::Fixed,
         ));
         Self { base, color }
     }
@@ -795,7 +800,7 @@ impl QObject for SeparatorWidget {
 }
 
 impl Widget for SeparatorWidget {
-    fn widget_base(&self) -> &qtrs_widgets::widget::WidgetBase {
+    fn widget_base(&self) -> &ferrokit_widgets::widget::WidgetBase {
         &self.base
     }
 
@@ -808,11 +813,11 @@ impl Widget for SeparatorWidget {
     fn set_geometry(&self, rect: Rect) {
         self.base.set_geometry(rect);
     }
-    fn size_hint(&self) -> qtrs_gui::geometry::primitives::Size {
-        qtrs_gui::geometry::primitives::Size::new(10, 1)
+    fn size_hint(&self) -> ferrokit_gui::geometry::primitives::Size {
+        ferrokit_gui::geometry::primitives::Size::new(10, 1)
     }
-    fn minimum_size(&self) -> qtrs_gui::geometry::primitives::Size {
-        qtrs_gui::geometry::primitives::Size::new(10, 1)
+    fn minimum_size(&self) -> ferrokit_gui::geometry::primitives::Size {
+        ferrokit_gui::geometry::primitives::Size::new(10, 1)
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -839,10 +844,10 @@ impl Widget for SeparatorWidget {
         None
     }
     fn set_layout(&mut self, _layout: Box<dyn Layout>) {}
-    fn parent_widget(&self) -> Option<qtrs_widgets::WidgetWeak> {
+    fn parent_widget(&self) -> Option<ferrokit_widgets::WidgetWeak> {
         self.base.parent_widget()
     }
-    fn set_parent_widget(&self, parent: Option<qtrs_widgets::WidgetWeak>) {
+    fn set_parent_widget(&self, parent: Option<ferrokit_widgets::WidgetWeak>) {
         self.base.set_parent_widget(parent);
     }
     fn window_id(&self) -> Option<ObjectId> {
@@ -1321,7 +1326,7 @@ impl UsageTable {
         container
             .borrow_mut()
             .set_style_sheet(crate::ui::styles::get_table_stylesheet(theme.is_dark));
-        qtrs_widgets::widget::adopt_tree(&container);
+        ferrokit_widgets::widget::adopt_tree(&container);
 
         Self {
             container,
@@ -1621,7 +1626,7 @@ mod tests {
     /// process-wide slot would change every measurement.
     #[cfg_attr(not(windows), allow(dead_code))] // the PySide6 oracle tests are Windows-only
     fn table_mode_table() -> UsageTable {
-        qtrs_widgets::application::Application::set_style_sheet(
+        ferrokit_widgets::application::Application::set_style_sheet(
             crate::ui::styles::get_hud_stylesheet(true),
         );
         UsageTable::new(Theme::dark(), "scale")
@@ -1672,11 +1677,11 @@ mod tests {
         let dial = UsageDial::new(Theme::dark());
         assert_eq!(
             dial.minimum_size(),
-            qtrs_gui::geometry::primitives::Size::new(84, 84)
+            ferrokit_gui::geometry::primitives::Size::new(84, 84)
         );
         assert_eq!(
             dial.size_hint(),
-            qtrs_gui::geometry::primitives::Size::new(84, 84)
+            ferrokit_gui::geometry::primitives::Size::new(84, 84)
         );
     }
 
@@ -1729,7 +1734,7 @@ mod tests {
         let col = table.columns.get("claude").unwrap();
         let reset = col.m1_reset.borrow();
         let label = reset.as_any().downcast_ref::<Label>().unwrap();
-        assert_eq!(label.font().family, qtrs_widgets::APP_DEFAULT_FAMILY);
+        assert_eq!(label.font().family, ferrokit_widgets::APP_DEFAULT_FAMILY);
         // `QLabel#Cell { font-size: 14px; padding: 0px 2px; }` -> an 18px line box.
         assert_eq!(reset.size_hint().height, 18);
     }
@@ -1775,7 +1780,7 @@ mod tests {
 
     impl Drop for DevicePixelRatioGuard {
         fn drop(&mut self) {
-            qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.0);
+            ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.0);
         }
     }
 
@@ -1792,7 +1797,7 @@ mod tests {
     #[test]
     fn test_columns_follow_widest_cell_hint() {
         let _guard = DevicePixelRatioGuard;
-        qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
+        ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.25);
         let table = table_mode_table();
         let cells = [
             ("claude", "95 %  ▲1"),
@@ -1808,8 +1813,8 @@ mod tests {
         container
             .borrow_mut()
             .set_geometry(Rect::new(0, 0, 426, 312));
-        qtrs_widgets::LayoutScheduler::invalidate(&container);
-        qtrs_widgets::LayoutScheduler::activate_pending();
+        ferrokit_widgets::LayoutScheduler::invalidate(&container);
+        ferrokit_widgets::LayoutScheduler::activate_pending();
 
         let measured = cells.map(|(pid, _)| {
             let c = table.columns.get(pid).unwrap();

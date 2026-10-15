@@ -17,14 +17,14 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use config::{Config, ConfigManager};
+use ferrokit_core::timer::Timer;
+use ferrokit_gui::geometry::primitives::Point;
+use ferrokit_platform::platform_tray::TrayMessageIcon;
+use ferrokit_platform::tray_icon::TrayActivation;
+use ferrokit_widgets::application::Application;
 use hotkey::{click_through_startup_allowed, HotkeyManager};
 use log::info;
 use parking_lot::Mutex;
-use qtrs_core::timer::Timer;
-use qtrs_gui::geometry::primitives::Point;
-use qtrs_platform::platform_tray::TrayMessageIcon;
-use qtrs_platform::tray_icon::TrayActivation;
-use qtrs_widgets::application::Application;
 use refresh_controller::RefreshController;
 use ui::hud_window::HUDWindow;
 use ui::tray_icon::HUDTrayIcon;
@@ -38,19 +38,21 @@ thread_local! {
 }
 
 fn run_on_main_thread<F: FnOnce(&Rc<RefCell<HUDWindow>>) + Send + 'static>(
-    main_thread_id: qtrs_core::object::ThreadId,
+    main_thread_id: ferrokit_core::object::ThreadId,
     f: F,
 ) {
-    qtrs_core::event_loop::post_event_to_thread(
+    ferrokit_core::event_loop::post_event_to_thread(
         main_thread_id,
-        qtrs_core::object::ObjectId(0),
-        qtrs_core::event::Event::new(qtrs_core::event::EventKind::MetaCall(Box::new(move |_| {
-            MAIN_HUD.with(|cell| {
-                if let Some(hud) = cell.borrow().as_ref() {
-                    f(hud);
-                }
-            });
-        }))),
+        ferrokit_core::object::ObjectId(0),
+        ferrokit_core::event::Event::new(ferrokit_core::event::EventKind::MetaCall(Box::new(
+            move |_| {
+                MAIN_HUD.with(|cell| {
+                    if let Some(hud) = cell.borrow().as_ref() {
+                        f(hud);
+                    }
+                });
+            },
+        ))),
     );
 }
 
@@ -58,16 +60,16 @@ fn run_on_main_thread<F: FnOnce(&Rc<RefCell<HUDWindow>>) + Send + 'static>(
 struct WakeFilter;
 
 #[cfg(target_os = "windows")]
-impl qtrs_core::event::NativeEventFilter for WakeFilter {
+impl ferrokit_core::event::NativeEventFilter for WakeFilter {
     fn native_event_filter(
         &mut self,
         _event_type: &str,
-        msg: &qtrs_core::event::NativeMessage,
+        msg: &ferrokit_core::event::NativeMessage,
         _result: &mut isize,
     ) -> bool {
         let wake_msg = WAKE_MSG.load(Ordering::Relaxed);
         if wake_msg != 0 {
-            if let qtrs_core::event::NativeMessage::Windows(wmsg) = msg {
+            if let ferrokit_core::event::NativeMessage::Windows(wmsg) = msg {
                 if wmsg.message == wake_msg {
                     MAIN_HUD.with(|cell| {
                         if let Some(hud) = cell.borrow().as_ref() {
@@ -85,7 +87,7 @@ impl qtrs_core::event::NativeEventFilter for WakeFilter {
 /// `main.py:48` `app.setQuitOnLastWindowClosed(False)`: the HUD hides to the tray on close, so
 /// closing its window must not quit. Only the tray and context-menu exit paths call `exit`.
 fn configure_application_policy() {
-    qtrs_gui::application::GuiApplication::set_quit_on_last_window_closed(false);
+    ferrokit_gui::application::GuiApplication::set_quit_on_last_window_closed(false);
 }
 
 /// Offline `--smoke-test` (`python/core/smoke_check.py`). The config save/reload round trip runs
@@ -119,7 +121,7 @@ fn run_smoke_test(isolation: &config::SmokeIsolation) -> std::process::ExitCode 
     hud.apply_ui_mode("cards");
     hud.set_theme(true);
     hud.update_clock();
-    let _ = qtrs_core::application::CoreApplication::process_events(false);
+    let _ = ferrokit_core::application::CoreApplication::process_events(false);
     info!("=== Smoke-test passed successfully! ===");
     std::process::ExitCode::SUCCESS
 }
@@ -227,7 +229,7 @@ fn main() -> std::process::ExitCode {
         // 1. Table mode snapshot
         hud.apply_ui_mode("table");
         hud.update_clock();
-        let _ = qtrs_core::application::CoreApplication::process_events(false);
+        let _ = ferrokit_core::application::CoreApplication::process_events(false);
         let table_path = out_dir.join("hud_table_mode.png");
         hud.window
             .save_png(&table_path)
@@ -237,7 +239,7 @@ fn main() -> std::process::ExitCode {
         // 2. Cards mode horizontal snapshot
         hud.apply_cards_layout_mode("horizontal");
         hud.update_clock();
-        let _ = qtrs_core::application::CoreApplication::process_events(false);
+        let _ = ferrokit_core::application::CoreApplication::process_events(false);
         let cards_h_path = out_dir.join("hud_cards_horizontal.png");
         hud.window
             .save_png(&cards_h_path)
@@ -250,22 +252,22 @@ fn main() -> std::process::ExitCode {
         // 3. Cards mode vertical snapshot
         hud.apply_cards_layout_mode("vertical");
         hud.update_clock();
-        let _ = qtrs_core::application::CoreApplication::process_events(false);
+        let _ = ferrokit_core::application::CoreApplication::process_events(false);
         let cards_v_path = out_dir.join("hud_cards_vertical.png");
         hud.window
             .save_png(&cards_v_path)
             .expect("failed to save cards v png");
         info!("Saved cards vertical snapshot: {}", cards_v_path.display());
         // 4. Context Menu snapshot
-        use qtrs_gui::paint::{Painter, Pixmap};
-        use qtrs_gui::tiny_skia::Color;
-        use qtrs_widgets::Widget;
+        use ferrokit_gui::paint::{Painter, Pixmap};
+        use ferrokit_gui::tiny_skia::Color;
+        use ferrokit_widgets::Widget;
         let cfg = config.lock();
         let mut context_menu =
             ui::tray_icon::build_hud_context_menu(&cfg, &hud.window.root_widget());
         context_menu.set_visible(true);
         let menu_size = context_menu.size_hint();
-        context_menu.set_geometry(qtrs_gui::geometry::primitives::Rect::new(
+        context_menu.set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
             0,
             0,
             menu_size.width,
@@ -288,7 +290,7 @@ fn main() -> std::process::ExitCode {
     }
 
     // Single instance protection and IPC wake-up broadcast across all platforms
-    use qtrs_platform::{SingleInstance, SingleInstanceCommand, SingleInstanceResult};
+    use ferrokit_platform::{SingleInstance, SingleInstanceCommand, SingleInstanceResult};
 
     let single_instance = SingleInstance::acquire(
         "ClaudeHUDMonitorSingleInstance",
@@ -344,9 +346,9 @@ fn main() -> std::process::ExitCode {
     configure_application_policy();
 
     #[cfg(target_os = "windows")]
-    qtrs_core::application::CoreApplication::install_native_event_filter(Box::new(WakeFilter));
+    ferrokit_core::application::CoreApplication::install_native_event_filter(Box::new(WakeFilter));
 
-    let main_thread_id = qtrs_core::object::ThreadId::current();
+    let main_thread_id = ferrokit_core::object::ThreadId::current();
 
     // Create HUD window
     let hud_res = HUDWindow::new(Arc::clone(&config), Arc::clone(&refresh_ctrl));
@@ -394,10 +396,10 @@ fn main() -> std::process::ExitCode {
         .layout_toggle_btn
         .borrow_mut()
         .as_any_mut()
-        .downcast_mut::<qtrs_widgets::button::Button>()
+        .downcast_mut::<ferrokit_widgets::button::Button>()
     {
         btn.clicked.connect(move |()| {
-            qtrs_widgets::command::WidgetCommandQueue::post_task(move || {
+            ferrokit_widgets::command::WidgetCommandQueue::post_task(move || {
                 MAIN_HUD.with(|h_cell| {
                     if let Some(hud) = h_cell.borrow().as_ref() {
                         hud.borrow_mut().toggle_cards_layout();
@@ -416,7 +418,10 @@ fn main() -> std::process::ExitCode {
     fn show_hud_popup_menu(
         global_pos: Point,
         config: &Arc<Mutex<Config>>,
-        build_menu: fn(&Config, &qtrs_widgets::widget::WidgetRef) -> qtrs_widgets::menu::Menu,
+        build_menu: fn(
+            &Config,
+            &ferrokit_widgets::widget::WidgetRef,
+        ) -> ferrokit_widgets::menu::Menu,
     ) {
         let cfg = config.lock().clone();
         let Some(root) = MAIN_HUD.with(|h_cell| {
@@ -573,7 +578,7 @@ fn main() -> std::process::ExitCode {
     // Follow the operating system's light/dark setting while `appearance` is "auto".
     // `WM_SETTINGCHANGE` refreshes the platform theme inside the window procedure, so the
     // change is queued to the UI event loop instead of re-entering the HUD from there.
-    qtrs_platform::platform()
+    ferrokit_platform::platform()
         .theme()
         .theme_changed()
         .connect(move |_| {
@@ -653,7 +658,7 @@ unsafe fn windows_set_appid(wide: &[u16]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::configure_application_policy;
-    use qtrs_gui::application::GuiApplication;
+    use ferrokit_gui::application::GuiApplication;
 
     /// `main.py:48` `app.setQuitOnLastWindowClosed(False)`: closing the HUD window hides it to the
     /// tray, and only the tray/menu `Application::exit` paths quit.

@@ -2,10 +2,10 @@
 //! of Label/Button/Frame/ProgressBar under `rust/tools/qss_box_audit/cases.json`, the same cases
 //! `py_box.py` runs under PySide6. `#[ignore]`: audit tool. Run with
 //! `BOX_OUT=<file> cargo test -j 1 qss_box_audit -- --ignored --nocapture`.
-use qtrs_widgets::frame::Frame;
-use qtrs_widgets::progress_bar::ProgressBar;
-use qtrs_widgets::widget::WidgetRef;
-use qtrs_widgets::{Button, Label, Widget};
+use ferrokit_widgets::frame::Frame;
+use ferrokit_widgets::progress_bar::ProgressBar;
+use ferrokit_widgets::widget::WidgetRef;
+use ferrokit_widgets::{Button, Label, Widget};
 use serde_json::{json, Map, Value};
 
 fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
@@ -20,7 +20,7 @@ pub(crate) fn dump(cases: &Value) -> Value {
             .to_string()
             .into_boxed_str(),
     );
-    qtrs_widgets::application::Application::set_style_sheet(sheet);
+    ferrokit_widgets::application::Application::set_style_sheet(sheet);
     let mut out = Map::new();
     for c in cases["cases"].as_array().unwrap() {
         let (name, typ, text) = (
@@ -41,7 +41,7 @@ pub(crate) fn dump(cases: &Value) -> Value {
             "QProgressBar" => {
                 let mut p = ProgressBar::new();
                 if vertical {
-                    p.set_orientation(qtrs_widgets::scroll::Orientation::Vertical);
+                    p.set_orientation(ferrokit_widgets::scroll::Orientation::Vertical);
                 }
                 make_widget(p)
             }
@@ -49,7 +49,7 @@ pub(crate) fn dump(cases: &Value) -> Value {
         };
         w.borrow_mut().set_object_name(name);
         let b = w.borrow();
-        let sz = |s: qtrs_gui::geometry::primitives::Size| json!([s.width, s.height]);
+        let sz = |s: ferrokit_gui::geometry::primitives::Size| json!([s.width, s.height]);
         out.insert(
             name.into(),
             json!({"min": sz(b.minimum_size()), "max": sz(b.maximum_size()), "hint": sz(b.size_hint()),
@@ -67,7 +67,7 @@ fn dump_qss_box() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1.25);
-    qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
+    ferrokit_gui::text::font_database::set_application_device_pixel_ratio(dpr);
     let cases: Value = serde_json::from_str(include_str!("../../tools/qss_box_audit/cases.json"))
         .expect("cases.json");
     let mut v = dump(&cases);

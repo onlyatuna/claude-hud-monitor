@@ -10,16 +10,16 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::Local;
-use parking_lot::Mutex;
-use qtrs_core::event::EventKind;
-use qtrs_core::QObject;
-use qtrs_gui::geometry::primitives::{Margins, Rect, RectF};
-use qtrs_gui::paint::{Brush, Pen, RenderHint};
-use qtrs_platform::backdrop::BackdropType;
-use qtrs_platform::WindowFlags;
-use qtrs_widgets::{
+use ferrokit_core::event::EventKind;
+use ferrokit_core::QObject;
+use ferrokit_gui::geometry::primitives::{Margins, Rect, RectF};
+use ferrokit_gui::paint::{Brush, Pen, RenderHint};
+use ferrokit_platform::backdrop::BackdropType;
+use ferrokit_platform::WindowFlags;
+use ferrokit_widgets::{
     BoxLayout, Button, EmptyWidget, Label, Layout, StackedWidget, Widget, WidgetRef, Window,
 };
+use parking_lot::Mutex;
 
 use super::provider_card::ProviderCardWidget;
 use super::styles::{get_theme, Theme};
@@ -72,7 +72,7 @@ fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
 
 /// Header status dot (Python `_on_busy_changed`): `#38bdf8` while fetching, `#f59e0b` while a
 /// provider reports an error, `#10b981` otherwise.
-fn status_dot_color(busy: bool, any_error: bool) -> qtrs_gui::tiny_skia::Color {
+fn status_dot_color(busy: bool, any_error: bool) -> ferrokit_gui::tiny_skia::Color {
     let (r, g, b) = if busy {
         (56, 189, 248)
     } else if any_error {
@@ -80,7 +80,7 @@ fn status_dot_color(busy: bool, any_error: bool) -> qtrs_gui::tiny_skia::Color {
     } else {
         (16, 185, 129)
     };
-    qtrs_gui::tiny_skia::Color::from_rgba8(r, g, b, 255)
+    ferrokit_gui::tiny_skia::Color::from_rgba8(r, g, b, 255)
 }
 
 /// The window style sheet of a UI mode (Python `_apply_theme`). Table mode's sheet names no
@@ -95,7 +95,7 @@ fn style_sheet_for(ui_mode: &str, dark: bool) -> &'static str {
 }
 
 /// Python `status_dot.setStyleSheet(f"color: {color}; font-size: 11px;")`.
-fn set_status_dot_color(dot: &WidgetRef, color: qtrs_gui::tiny_skia::Color) {
+fn set_status_dot_color(dot: &WidgetRef, color: ferrokit_gui::tiny_skia::Color) {
     let c = color.to_color_u8();
     let mut dot = dot.borrow_mut();
     if let Some(lbl) = dot.as_any_mut().downcast_mut::<Label>() {
@@ -118,7 +118,11 @@ fn panel_look(
     cards_mode: bool,
     vibrant: bool,
     theme: &Theme,
-) -> (qtrs_gui::tiny_skia::Color, qtrs_gui::tiny_skia::Color, f32) {
+) -> (
+    ferrokit_gui::tiny_skia::Color,
+    ferrokit_gui::tiny_skia::Color,
+    f32,
+) {
     if !cards_mode {
         let bg = if vibrant {
             theme.panel_bg_vibrant
@@ -128,10 +132,10 @@ fn panel_look(
         return (bg, theme.panel_border, 12.0);
     }
     let themed = (theme.panel_bg, theme.panel_border, 10.0);
-    let Some(sheet) = qtrs_widgets::application::Application::style_sheet() else {
+    let Some(sheet) = ferrokit_widgets::application::Application::style_sheet() else {
         return themed;
     };
-    let ctx = qtrs_widgets::style::stylesheet::WidgetStyleContext {
+    let ctx = ferrokit_widgets::style::stylesheet::WidgetStyleContext {
         type_name: "QWidget",
         object_name: "CentralWidget",
         pseudo_states: &[],
@@ -188,7 +192,7 @@ const IDLE_TRIM_DELAY_MS: u64 = 1000;
 const INITIAL_TRIM_DELAY_MS: u64 = 2500;
 fn schedule_trim(trim: &Arc<parking_lot::Mutex<TrimFn>>, delay_ms: u64) {
     let trim_holder = Arc::clone(trim);
-    qtrs_core::timer::Timer::single_shot(delay_ms, move || {
+    ferrokit_core::timer::Timer::single_shot(delay_ms, move || {
         let trim = Arc::clone(&trim_holder.lock());
         trim();
     });
@@ -373,7 +377,7 @@ impl HUDWindow {
         )));
         let sheet = style_sheet_for(&ui_mode, dark);
         window.set_style_sheet(sheet);
-        qtrs_widgets::application::Application::set_style_sheet(sheet);
+        ferrokit_widgets::application::Application::set_style_sheet(sheet);
 
         let theme = get_theme(dark);
 
@@ -464,40 +468,40 @@ impl HUDWindow {
         let cfg_move = Arc::clone(&config);
         window.set_mouse_move_handler(move |pos| {
             let locked = cfg_move.lock().locked;
-            let edges = qtrs_platform::window::calc_frameless_edge(hwnd, pos, locked);
+            let edges = ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked);
             let shape = if edges.is_empty() {
-                qtrs_platform::cursor::CursorShape::Arrow
-            } else if edges == qtrs_platform::platform_window::WindowEdges::LEFT
-                || edges == qtrs_platform::platform_window::WindowEdges::RIGHT
+                ferrokit_platform::cursor::CursorShape::Arrow
+            } else if edges == ferrokit_platform::platform_window::WindowEdges::LEFT
+                || edges == ferrokit_platform::platform_window::WindowEdges::RIGHT
             {
-                qtrs_platform::cursor::CursorShape::SizeHor
-            } else if edges == qtrs_platform::platform_window::WindowEdges::TOP
-                || edges == qtrs_platform::platform_window::WindowEdges::BOTTOM
+                ferrokit_platform::cursor::CursorShape::SizeHor
+            } else if edges == ferrokit_platform::platform_window::WindowEdges::TOP
+                || edges == ferrokit_platform::platform_window::WindowEdges::BOTTOM
             {
-                qtrs_platform::cursor::CursorShape::SizeVer
-            } else if edges == qtrs_platform::platform_window::WindowEdges::TOP_LEFT
-                || edges == qtrs_platform::platform_window::WindowEdges::BOTTOM_RIGHT
+                ferrokit_platform::cursor::CursorShape::SizeVer
+            } else if edges == ferrokit_platform::platform_window::WindowEdges::TOP_LEFT
+                || edges == ferrokit_platform::platform_window::WindowEdges::BOTTOM_RIGHT
             {
-                qtrs_platform::cursor::CursorShape::SizeFDiag
+                ferrokit_platform::cursor::CursorShape::SizeFDiag
             } else {
-                qtrs_platform::cursor::CursorShape::SizeBDiag
+                ferrokit_platform::cursor::CursorShape::SizeBDiag
             };
             #[cfg(windows)]
-            qtrs_platform::cursor::win32_cursor::Win32Cursor::set_shape(shape);
+            ferrokit_platform::cursor::win32_cursor::Win32Cursor::set_shape(shape);
             #[cfg(not(windows))]
             let _ = shape;
         });
 
         let cfg_press = Arc::clone(&config);
         window.set_mouse_press_handler(move |pos, button| {
-            if button == qtrs_platform::MouseButton::Left {
+            if button == ferrokit_platform::MouseButton::Left {
                 let locked = cfg_press.lock().locked;
-                let edges = qtrs_platform::window::calc_frameless_edge(hwnd, pos, locked);
+                let edges = ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked);
                 if !edges.is_empty() {
-                    qtrs_platform::window::post_system_resize(hwnd, edges);
+                    ferrokit_platform::window::post_system_resize(hwnd, edges);
                     return true;
                 } else if !locked {
-                    qtrs_platform::window::post_system_move(hwnd);
+                    ferrokit_platform::window::post_system_move(hwnd);
                     return true;
                 }
             }
@@ -594,13 +598,13 @@ impl HUDWindow {
     /// item behaves like that page: the cards container is `Preferred` (extra height goes to the
     /// header, `hud_window.py:141-145,308`), while the table's grid makes its item expand and take
     /// all the extra height (measured: 462 px of a 500 px window). The stack stands in for both.
-    fn stack_policy(table: bool) -> qtrs_widgets::QSizePolicy {
+    fn stack_policy(table: bool) -> ferrokit_widgets::QSizePolicy {
         let p = if table {
-            qtrs_widgets::Policy::Expanding
+            ferrokit_widgets::Policy::Expanding
         } else {
-            qtrs_widgets::Policy::Preferred
+            ferrokit_widgets::Policy::Preferred
         };
-        qtrs_widgets::QSizePolicy::new(p, p)
+        ferrokit_widgets::QSizePolicy::new(p, p)
     }
 
     fn apply_cards_layout_inner(
@@ -630,14 +634,14 @@ impl HUDWindow {
             if let Some(card) = cards.get(*pid) {
                 if idx > 0 {
                     if is_horizontal {
-                        let mut div = qtrs_widgets::frame::Frame::new();
+                        let mut div = ferrokit_widgets::frame::Frame::new();
                         div.set_object_name("Divider");
-                        div.set_frame_shape(qtrs_widgets::frame::FrameShape::VLine);
+                        div.set_frame_shape(ferrokit_widgets::frame::FrameShape::VLine);
                         layout.add_widget(make_widget(div));
                     } else {
-                        let mut h_div = qtrs_widgets::frame::Frame::new();
+                        let mut h_div = ferrokit_widgets::frame::Frame::new();
                         h_div.set_object_name("HorizontalDivider");
-                        h_div.set_frame_shape(qtrs_widgets::frame::FrameShape::HLine);
+                        h_div.set_frame_shape(ferrokit_widgets::frame::FrameShape::HLine);
                         layout.add_widget(make_widget(h_div));
                     }
                 }
@@ -792,7 +796,7 @@ impl HUDWindow {
         // to it now (RC-10) and a stale window sheet would win over the application's.
         let sheet = style_sheet_for(mode, self.is_dark);
         self.window.set_style_sheet(sheet);
-        qtrs_widgets::application::Application::set_style_sheet(sheet);
+        ferrokit_widgets::application::Application::set_style_sheet(sheet);
         let (w, h) = if mode == "table" {
             if let Some(s) = self
                 .stack
@@ -909,7 +913,7 @@ impl HUDWindow {
         self.refresh_backdrop(&ui_mode);
         let sheet = style_sheet_for(&ui_mode, dark);
         self.window.set_style_sheet(sheet);
-        qtrs_widgets::application::Application::set_style_sheet(sheet);
+        ferrokit_widgets::application::Application::set_style_sheet(sheet);
 
         for card in self.cards.values_mut() {
             card.set_appearance(dark);
@@ -1063,7 +1067,7 @@ impl HUDWindow {
 
         // `_reset_geometry` moves to the spot near the top right of the primary screen's work area
         // without clamping it.
-        let screen = qtrs_platform::platform().primary_screen();
+        let screen = ferrokit_platform::platform().primary_screen();
         let (nx, ny) = super::placement::reset_position(w, screen.available_geometry());
 
         self.window.set_geometry(Rect::new(nx, ny, w, h));
@@ -1181,11 +1185,13 @@ mod tests {
             .iter()
             .map(|id| (id.to_string(), ProviderCardWidget::new(id)))
             .collect();
-        let container = make_widget(qtrs_widgets::EmptyWidget::new());
+        let container = make_widget(ferrokit_widgets::EmptyWidget::new());
         HUDWindow::apply_cards_layout_inner(&container, &cards, "horizontal");
         container
             .borrow_mut()
-            .set_geometry(qtrs_gui::geometry::primitives::Rect::new(12, 32, 666, 103));
+            .set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
+                12, 32, 666, 103,
+            ));
         container.borrow().update_layout();
 
         let widths: Vec<i32> = ["claude", "agy", "codex"]
@@ -1531,7 +1537,7 @@ mod tests {
         }
 
         /// Runs the event loop until `ms` after `install`.
-        fn pump_until(&self, el: &mut qtrs_core::event_loop::EventLoop, ms: u64) {
+        fn pump_until(&self, el: &mut ferrokit_core::event_loop::EventLoop, ms: u64) {
             while self.1.elapsed() < Duration::from_millis(ms) {
                 el.process_events(false);
                 std::thread::sleep(Duration::from_millis(2));
@@ -1562,7 +1568,7 @@ mod tests {
     /// Python `hideEvent` -> `QTimer.singleShot(150, trim_memory)` (`hud_window.py:615-617`).
     #[test]
     fn hide_trims_150ms_later_not_during_the_hide() {
-        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let mut el = ferrokit_core::event_loop::EventLoop::new();
         let (mut hud, _rx) = hud_with_stubs();
         hud.show();
         let log = TrimLog::install(&hud);
@@ -1581,7 +1587,7 @@ mod tests {
             fn SendMessageW(hwnd: *mut core::ffi::c_void, msg: u32, w: usize, l: isize) -> isize;
         }
         const WM_CLOSE: u32 = 0x0010;
-        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let mut el = ferrokit_core::event_loop::EventLoop::new();
         let (mut hud, _rx) = hud_with_stubs();
         hud.show();
         let log = TrimLog::install(&hud);
@@ -1596,7 +1602,7 @@ mod tests {
     /// `hud_window.py:455-459`). Here through the worker notify path.
     #[test]
     fn last_provider_finishing_trims_a_second_later() {
-        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let mut el = ferrokit_core::event_loop::EventLoop::new();
         let (mut hud, rx) = hud_with_stubs();
         finish_fetch(&hud, &rx, "claude");
         let log = TrimLog::install(&hud);
@@ -1610,7 +1616,7 @@ mod tests {
     /// after `poll` must not swallow the idle completion.
     #[test]
     fn idle_completion_survives_a_due_provider_launched_in_the_same_poll() {
-        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let mut el = ferrokit_core::event_loop::EventLoop::new();
         let (mut hud, rx) = hud_with_stubs();
         finish_fetch(&hud, &rx, "claude");
         hud.refresh_ctrl.lock().states.get_mut("codex").unwrap().due =
@@ -1630,7 +1636,7 @@ mod tests {
     /// Python emits `busy_changed(True)` while another provider still runs: no trim.
     #[test]
     fn completion_while_another_provider_runs_does_not_trim() {
-        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let mut el = ferrokit_core::event_loop::EventLoop::new();
         let (mut hud, rx) = hud_with_stubs();
         finish_fetch(&hud, &rx, "claude");
         hud.refresh_ctrl
@@ -1648,7 +1654,7 @@ mod tests {
     /// Python `HUDWindow.__init__` -> `QTimer.singleShot(2500, trim_memory)` (`hud_window.py:114`).
     #[test]
     fn construction_schedules_initial_trim_at_2500ms() {
-        let mut el = qtrs_core::event_loop::EventLoop::new();
+        let mut el = ferrokit_core::event_loop::EventLoop::new();
         let cfg = Arc::new(Mutex::new(Config::default()));
         let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
         let (providers, _fetched) = crate::providers::stub::stub_providers_with_receiver();
@@ -1791,8 +1797,8 @@ mod tests {
     /// mode would keep styling the labels.
     #[test]
     fn test_switching_ui_mode_restyles_labels_from_the_new_sheet() {
-        use qtrs_widgets::style::stylesheet::{QStyleSheetStyle, WidgetStyleContext};
-        use qtrs_widgets::Label;
+        use ferrokit_widgets::style::stylesheet::{QStyleSheetStyle, WidgetStyleContext};
+        use ferrokit_widgets::Label;
 
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
@@ -1856,9 +1862,9 @@ mod tests {
 
     /// Alpha of the panel at its centre, as the window's root paints it.
     fn panel_alpha(hud: &HUDWindow) -> u8 {
-        let mut pixmap = qtrs_gui::paint::pixmap::Pixmap::new(40, 40).unwrap();
+        let mut pixmap = ferrokit_gui::paint::pixmap::Pixmap::new(40, 40).unwrap();
         {
-            let mut painter = qtrs_gui::paint::Painter::begin(&mut pixmap);
+            let mut painter = ferrokit_gui::paint::Painter::begin(&mut pixmap);
             hud.window
                 .root_widget()
                 .borrow_mut()
@@ -1867,7 +1873,7 @@ mod tests {
         pixmap.pixel(20, 20).unwrap().alpha()
     }
 
-    fn alpha(c: qtrs_gui::tiny_skia::Color) -> u8 {
+    fn alpha(c: ferrokit_gui::tiny_skia::Color) -> u8 {
         c.to_color_u8().alpha()
     }
 
@@ -1896,9 +1902,9 @@ mod tests {
             });
         }
         let root = hud.window.root_widget();
-        let origin = qtrs_gui::geometry::primitives::Point::new(0, 0);
+        let origin = ferrokit_gui::geometry::primitives::Point::new(0, 0);
         // Settle: drop everything the data pass marked.
-        let _ = qtrs_widgets::window::collect_dirty_region(&root, origin);
+        let _ = ferrokit_widgets::window::collect_dirty_region(&root, origin);
         let direct_before = hud.window.render_stats().direct_render_count;
         hud.update_clock();
         assert_eq!(
@@ -1906,7 +1912,7 @@ mod tests {
             direct_before,
             "a clock tick must reach the window through widget update, not render_and_present"
         );
-        let dirty = qtrs_widgets::window::collect_dirty_region(&root, origin);
+        let dirty = ferrokit_widgets::window::collect_dirty_region(&root, origin);
         assert_eq!(dirty, None, "an idle countdown pass marked a repaint");
     }
 
@@ -1931,9 +1937,9 @@ mod tests {
         }
         let root = hud.window.root_widget();
         // Settle: drop everything the data pass marked.
-        let _ = qtrs_widgets::window::collect_dirty_region(
+        let _ = ferrokit_widgets::window::collect_dirty_region(
             &root,
-            qtrs_gui::geometry::primitives::Point::new(0, 0),
+            ferrokit_gui::geometry::primitives::Point::new(0, 0),
         );
         let direct_before = hud.window.render_stats().direct_render_count;
 

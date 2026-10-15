@@ -1,11 +1,11 @@
 //! G9.7.b, sub-scope 2: the HUD header row when its optional items are shown and hidden.
 //!
 //! The expected rectangles are PySide6 6.11.2 measurements (Windows, DirectWrite) from
-//! `rust/qtrs/tools/pyside_probes/header_row_visibility.py`: the header of `hud_window.py:278-288`
+//! `rust/tools/pyside_probes/header_row_visibility.py`: the header of `hud_window.py:278-288`
 //! with the real cards style sheet, 256 wide and 86 high (the vertical HUD's content width and its
 //! header height at 463), at DPR 1.25 and 1.0. The ghost label is fixed at 18x18 on both sides: its
-//! own size hint differs (Qt 17x16 / 21x20, qtrs 18x18 / 18x17: the label has no `font-size`, so the
-//! default font size decides, and qtrs fixes it at 13px), a separate root cause that this file does
+//! own size hint differs (Qt 17x16 / 21x20, ferrokit 18x18 / 18x17: the label has no `font-size`, so the
+//! default font size decides, and ferrokit fixes it at 13px), a separate root cause that this file does
 //! not test. Each step shows or hides one item with the call the
 //! HUD itself makes (`set_visible`, `hud_window.rs:741,809,830`) and lays the window out again.
 //! Rectangles are relative to the header row; a hidden item is `None`. The header's height is not what
@@ -16,9 +16,9 @@
 use super::hud_window::HUDWindow;
 use crate::config::Config;
 use crate::refresh_controller::RefreshController;
+use ferrokit_gui::geometry::primitives::Size;
+use ferrokit_widgets::WidgetRef;
 use parking_lot::Mutex;
-use qtrs_gui::geometry::primitives::Size;
-use qtrs_widgets::WidgetRef;
 use std::sync::Arc;
 
 type Geom = Option<(i32, i32, i32, i32)>;
@@ -72,7 +72,7 @@ fn rect(w: &WidgetRef, with_y: bool) -> Geom {
 fn row(hud: &HUDWindow, with_y: bool) -> Row {
     // The `LayoutRequest` that `setVisible` posts is delivered by the event loop before a paint; the
     // window is not shown here, so deliver it the way the paint does (`do_render_and_present`).
-    qtrs_widgets::WidgetCommandQueue::flush_layouts();
+    ferrokit_widgets::WidgetCommandQueue::flush_layouts();
     hud.window.root_widget().borrow().update_layout();
     [
         rect(&hud.status_dot, with_y),

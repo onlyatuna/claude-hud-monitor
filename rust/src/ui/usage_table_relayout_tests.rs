@@ -1,7 +1,7 @@
 //! G9.7.b, sub-scope 4: a `UsageTable` under dynamic relayout (badge, pill and offline/stale changes).
 //!
 //! The expected rectangles are PySide6 6.11.2 measurements (Windows, DirectWrite) from
-//! `rust/qtrs/tools/pyside_probes/usage_table_relayout.py`: the real Python table (scheme "scale",
+//! `rust/tools/pyside_probes/usage_table_relayout.py`: the real Python table (scheme "scale",
 //! dark theme) with the table-mode application sheet, 426 x 312, at DPR 1.25 and 1.0. Each step feeds
 //! the table the `UsageMetrics` the HUD feeds it and lays it out again. Per column (claude, codex,
 //! agy) the rectangles are: header, m1_reset, m1_countdown, dial, m2_val, m2_reset, m2_countdown
@@ -12,9 +12,9 @@ use super::usage_table::{ProviderColumn, UsageTable};
 use crate::providers::base::UsageMetrics;
 use crate::ui::styles::Theme;
 use chrono::{TimeZone, Utc};
-use qtrs_gui::geometry::primitives::Rect;
-use qtrs_platform::WindowFlags;
-use qtrs_widgets::{WidgetRef, Window};
+use ferrokit_gui::geometry::primitives::Rect;
+use ferrokit_platform::WindowFlags;
+use ferrokit_widgets::{WidgetRef, Window};
 
 type Geom = Option<(i32, i32, i32, i32)>;
 
@@ -39,7 +39,7 @@ const fn g(x: i32, y: i32, w: i32, h: i32) -> Geom {
     Some((x, y, w, h))
 }
 
-/// The widget's rectangle in `ancestor`'s coordinates: qtrs parents the children of a nested layout
+/// The widget's rectangle in `ancestor`'s coordinates: ferrokit parents the children of a nested layout
 /// to that layout's holder widget, so the holders' offsets are added; Qt parents them to the owner.
 fn rect(w: &WidgetRef, ancestor: &WidgetRef) -> Geom {
     if !w.borrow().is_visible() {
@@ -82,8 +82,8 @@ struct Setup;
 
 impl Setup {
     fn new(dpr: f32) -> Self {
-        qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
-        qtrs_widgets::application::Application::set_style_sheet(
+        ferrokit_gui::text::font_database::set_application_device_pixel_ratio(dpr);
+        ferrokit_widgets::application::Application::set_style_sheet(
             crate::ui::styles::get_hud_stylesheet(true),
         );
         Self
@@ -92,8 +92,8 @@ impl Setup {
 
 impl Drop for Setup {
     fn drop(&mut self) {
-        qtrs_widgets::application::Application::set_style_sheet("");
-        qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.0);
+        ferrokit_widgets::application::Application::set_style_sheet("");
+        ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.0);
     }
 }
 
@@ -133,7 +133,7 @@ fn run(dpr: f32, expected: [Step; 6], steps: Steps) {
 
     let mut seen: Vec<Step> = Vec::new();
     let mut show = |table: &UsageTable, step: &'static str| {
-        qtrs_widgets::WidgetCommandQueue::flush_layouts();
+        ferrokit_widgets::WidgetCommandQueue::flush_layouts();
         window.root_widget().borrow().update_layout();
         let root = table.widget();
         let hint = root.borrow().size_hint();
@@ -218,13 +218,15 @@ fn run(dpr: f32, expected: [Step; 6], steps: Steps) {
             continue;
         }
         if hint != want_hint {
-            diffs.push(format!("{name}.hint: qtrs {hint:?} PySide6 {want_hint:?}"));
+            diffs.push(format!(
+                "{name}.hint: ferrokit {hint:?} PySide6 {want_hint:?}"
+            ));
         }
         for (c, pid) in COLUMNS.iter().enumerate() {
             for i in 0..10 {
                 if got[c][i] != want[c][i] {
                     diffs.push(format!(
-                        "{name}.{pid}.{}: qtrs {:?} PySide6 {:?}",
+                        "{name}.{pid}.{}: ferrokit {:?} PySide6 {:?}",
                         NAMES[i], got[c][i], want[c][i]
                     ));
                 }

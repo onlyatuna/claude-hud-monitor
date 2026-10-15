@@ -4,13 +4,13 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 
 use crate::autostart::{is_autostart_enabled, set_autostart};
-use qtrs_core::variant::Variant;
-use qtrs_gui::paint::pixmap::Pixmap;
-use qtrs_gui::tiny_skia::Color;
-use qtrs_platform::platform_tray::TrayMessageIcon;
-use qtrs_platform::tray_icon::TrayIcon;
-use qtrs_widgets::action::Action;
-use qtrs_widgets::menu::{Menu, MenuRef};
+use ferrokit_core::variant::Variant;
+use ferrokit_gui::paint::pixmap::Pixmap;
+use ferrokit_gui::tiny_skia::Color;
+use ferrokit_platform::platform_tray::TrayMessageIcon;
+use ferrokit_platform::tray_icon::TrayIcon;
+use ferrokit_widgets::action::Action;
+use ferrokit_widgets::menu::{Menu, MenuRef};
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;
@@ -74,7 +74,7 @@ const APPEARANCE_CHOICES: [(&str, u32, &str); 3] = [
 pub fn create_default_tray_pixmap() -> Pixmap {
     const ICON_PNG_BYTES: &[u8] = include_bytes!("../../assets/app_icon.png");
     // `Pixmap::from_image` premultiplies alpha, as the pixmap format requires.
-    if let Some(pm) = qtrs_gui::image::io::ImageReader::read_from_memory(ICON_PNG_BYTES)
+    if let Some(pm) = ferrokit_gui::image::io::ImageReader::read_from_memory(ICON_PNG_BYTES)
         .ok()
         .and_then(|img| Pixmap::from_image(&img))
     {
@@ -87,12 +87,12 @@ pub fn create_default_tray_pixmap() -> Pixmap {
 
 /// The `QMenu` rules of the Python HUD's active style sheet: the static cards sheet in cards
 /// mode, the theme sheet (`get_hud_stylesheet`) in table mode.
-fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
-    use qtrs_gui::text::font::Font;
+fn hud_menu_style(cfg: &Config) -> ferrokit_widgets::menu::MenuStyle {
+    use ferrokit_gui::text::font::Font;
     let dark = crate::ui::resolve_is_dark(&cfg.appearance);
     let table = cfg.ui_mode == "table";
     // The menu's own font is the system menu font at 9pt (12px); it sizes the rows.
-    let family = qtrs_platform::platform()
+    let family = ferrokit_platform::platform()
         .theme()
         .menu_font_family()
         .unwrap_or_else(|| "Segoe UI".to_string());
@@ -117,7 +117,7 @@ fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
                 rgba(40, 40, 50, 87),
             )
         };
-        qtrs_widgets::menu::MenuStyle {
+        ferrokit_widgets::menu::MenuStyle {
             font: Font::new(family, 12.0),
             row_font,
             background,
@@ -152,7 +152,7 @@ fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
                 rgba(15, 23, 42, 31),
             )
         };
-        qtrs_widgets::menu::MenuStyle {
+        ferrokit_widgets::menu::MenuStyle {
             font: Font::new(family, 11.0),
             row_font,
             background,
@@ -171,17 +171,17 @@ fn hud_menu_style(cfg: &Config) -> qtrs_widgets::menu::MenuStyle {
 }
 
 #[cfg(test)]
-fn test_hud_root() -> qtrs_widgets::widget::WidgetRef {
+fn test_hud_root() -> ferrokit_widgets::widget::WidgetRef {
     std::rc::Rc::new(std::cell::RefCell::new(Box::new(
-        qtrs_widgets::widget::EmptyWidget::new(),
+        ferrokit_widgets::widget::EmptyWidget::new(),
     )))
 }
 
-pub fn build_hud_context_menu(cfg: &Config, root: &qtrs_widgets::widget::WidgetRef) -> Menu {
+pub fn build_hud_context_menu(cfg: &Config, root: &ferrokit_widgets::widget::WidgetRef) -> Menu {
     let mut menu = Menu::new("");
     menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
     menu.set_style(hud_menu_style(cfg));
-    qtrs_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
+    ferrokit_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
 
     // Refresh
     add_item(
@@ -314,11 +314,11 @@ pub fn build_hud_context_menu(cfg: &Config, root: &qtrs_widgets::widget::WidgetR
 /// Python `HUDTrayIcon` right-click menu (`tray_icon.py:43-122`). The tray and the HUD body
 /// are different menus: this one never contains the body-only account, lock, opacity,
 /// interval, reset or hide items.
-pub fn build_hud_tray_menu(cfg: &Config, root: &qtrs_widgets::widget::WidgetRef) -> Menu {
+pub fn build_hud_tray_menu(cfg: &Config, root: &ferrokit_widgets::widget::WidgetRef) -> Menu {
     let mut menu = Menu::new("");
     menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
     menu.set_style(hud_menu_style(cfg));
-    qtrs_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
+    ferrokit_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
 
     add_item(
         &mut menu,
@@ -773,7 +773,7 @@ mod tests {
 
     impl Drop for DevicePixelRatioGuard {
         fn drop(&mut self) {
-            qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.0);
+            ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.0);
         }
     }
 
@@ -783,14 +783,14 @@ mod tests {
     /// px) rounds every glyph differently and the letter spacing jumps.
     #[test]
     fn test_menu_text_does_not_depend_on_window_offset() {
-        use qtrs_gui::paint::{Painter, Pixmap};
-        use qtrs_widgets::Widget;
+        use ferrokit_gui::paint::{Painter, Pixmap};
+        use ferrokit_widgets::Widget;
         let _guard = DevicePixelRatioGuard;
-        qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
+        ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.25);
         let mut menu = build_hud_context_menu(&Config::default(), &test_hud_root());
         menu.set_visible(true);
         let size = menu.size_hint();
-        menu.set_geometry(qtrs_gui::geometry::primitives::Rect::new(
+        menu.set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
             0,
             0,
             size.width,
@@ -803,7 +803,7 @@ mod tests {
         );
         let mut render = |offset: i32| {
             let mut pm = Pixmap::with_dpr(w + 16, h, 1.25).unwrap();
-            pm.fill(qtrs_gui::tiny_skia::Color::TRANSPARENT);
+            pm.fill(ferrokit_gui::tiny_skia::Color::TRANSPARENT);
             {
                 let mut p = Painter::begin(&mut pm);
                 p.translate_device(offset, 0);
@@ -960,8 +960,8 @@ mod tests {
 #[cfg(test)]
 mod menu_parity_tests {
     use super::*;
-    use qtrs_widgets::action::ActionRef;
-    use qtrs_widgets::menu::Menu;
+    use ferrokit_widgets::action::ActionRef;
+    use ferrokit_widgets::menu::Menu;
 
     /// Visible labels of the submenu whose parent text contains `title_part`
     /// (Qt skips hidden actions in the popup, `qmenu.cpp:374, 397`).

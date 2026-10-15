@@ -7,18 +7,18 @@
 //! the order of Enter/Leave along the ancestor chain, nor that the common ancestor receives neither
 //! event: no other HUD widget records Enter/Leave, so those are not observable here. They stay
 //! covered by the generic-tree test `enter_leave_ancestor_chain_minus_common_ancestor`
-//! (`qtrs-widgets/tests/test_event_propagation.rs`).
+//! (`ferrokit-widgets/tests/test_event_propagation.rs`).
 //!
 //! The moves go through `EventTreeDispatcher::dispatch_mouse_move` on the real root with the
 //! parent links `adopt_tree` makes (the HUD's are made at its first paint). Programmatic dispatch:
 //! no real mouse, no native input.
 use std::sync::Arc;
 
+use ferrokit_core::event::MouseButtons;
+use ferrokit_core::event_loop::EventLoop;
+use ferrokit_gui::geometry::primitives::Point;
+use ferrokit_widgets::{hit_test, Button, ButtonState, EventTreeDispatcher, WidgetRef};
 use parking_lot::Mutex;
-use qtrs_core::event::MouseButtons;
-use qtrs_core::event_loop::EventLoop;
-use qtrs_gui::geometry::primitives::Point;
-use qtrs_widgets::{hit_test, Button, ButtonState, EventTreeDispatcher, WidgetRef};
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;
@@ -41,7 +41,7 @@ fn hud() -> HUDWindow {
         HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
     hud.window.root_widget().borrow().update_layout();
     // Parent links are made when the window paints; a hover only ever follows a paint.
-    qtrs_widgets::widget::adopt_tree(&hud.window.root_widget());
+    ferrokit_widgets::widget::adopt_tree(&hud.window.root_widget());
     hud
 }
 

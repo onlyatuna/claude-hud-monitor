@@ -4,10 +4,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use chrono::Local;
-use qtrs_gui::geometry::primitives::Margins;
-use qtrs_gui::text::font::{Font, FontWeight};
-use qtrs_gui::tiny_skia::Color;
-use qtrs_widgets::{BoxLayout, EmptyWidget, Label, Layout, ProgressBar, Widget, WidgetRef};
+use ferrokit_gui::geometry::primitives::Margins;
+use ferrokit_gui::text::font::{Font, FontWeight};
+use ferrokit_gui::tiny_skia::Color;
+use ferrokit_widgets::{BoxLayout, EmptyWidget, Label, Layout, ProgressBar, Widget, WidgetRef};
 
 use crate::providers::base::{format_countdown, UsageMetrics};
 
@@ -200,9 +200,9 @@ impl ProviderCardWidget {
         // `self.title.setSizePolicy(Minimum, Preferred)` (`provider_card.py:39`)
         title
             .borrow_mut()
-            .set_size_policy(qtrs_widgets::QSizePolicy::new(
-                qtrs_widgets::Policy::Minimum,
-                qtrs_widgets::Policy::Preferred,
+            .set_size_policy(ferrokit_widgets::QSizePolicy::new(
+                ferrokit_widgets::Policy::Minimum,
+                ferrokit_widgets::Policy::Preferred,
             ));
         set_title_style(&title, theme_color);
         set_label_color(&dot, theme_color);
@@ -695,7 +695,9 @@ mod tests {
 
         // 1. Horizontal mode
         hud.window
-            .set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 690, 152));
+            .set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
+                0, 0, 690, 152,
+            ));
         hud.apply_cards_layout_mode("horizontal");
         let stack_geom = hud.stack.borrow().geometry();
         assert!(
@@ -750,7 +752,9 @@ mod tests {
 
         // 3. Table mode
         hud.window
-            .set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 450, 350));
+            .set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
+                0, 0, 450, 350,
+            ));
         hud.apply_ui_mode("table");
         let dial_claude = hud.table.columns["claude"].dial.borrow().geometry();
         let dial_codex = hud.table.columns["codex"].dial.borrow().geometry();
@@ -906,7 +910,7 @@ mod tests {
 
     #[test]
     fn test_inspect_card_layout_with_data() {
-        let el = qtrs_core::event_loop::EventLoop::new();
+        let el = ferrokit_core::event_loop::EventLoop::new();
         let config =
             std::sync::Arc::new(parking_lot::Mutex::new(crate::config::ConfigManager::load()));
         let refresh_ctrl = std::sync::Arc::new(parking_lot::Mutex::new(
@@ -919,7 +923,9 @@ mod tests {
         )
         .unwrap();
         hud.window
-            .set_geometry(qtrs_gui::geometry::primitives::Rect::new(0, 0, 883, 574));
+            .set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
+                0, 0, 883, 574,
+            ));
         hud.apply_cards_layout_mode("vertical");
 
         let claude_data = crate::providers::base::UsageMetrics {

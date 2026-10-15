@@ -8,10 +8,10 @@
 // Every rectangle in the Python code is a `QRect` from `QScreen.availableGeometry()` (the work
 // area: without the taskbar). `QRect::right()`/`bottom()` are the last pixel *inside*
 // (`x + width - 1`), and `QRect::center()` is `(x1 + x2) / 2` on those inclusive corners
-// (qrect.h:199-203,253-257). qtrs `Rect::right()`/`bottom()` are `x + width`, and
+// (qrect.h:199-203,253-257). ferrokit `Rect::right()`/`bottom()` are `x + width`, and
 // `Rect::center()` is `x + width / 2`, so none of those are used here (Contract G11.4.e).
 
-use qtrs_gui::geometry::primitives::Rect;
+use ferrokit_gui::geometry::primitives::Rect;
 
 /// `QRect::right()`.
 fn qt_right(r: Rect) -> i64 {
@@ -136,7 +136,7 @@ pub struct Screens {
 
 impl Screens {
     pub fn current() -> Self {
-        let platform = qtrs_platform::platform();
+        let platform = ferrokit_platform::platform();
         let screens = platform.screens();
         Self {
             available: screens.iter().map(|s| s.available_geometry()).collect(),
@@ -146,7 +146,7 @@ impl Screens {
     }
 
     /// Stand-in for `QWidget.screen()`: the work area of the screen the window overlaps most.
-    /// Qt asks the platform for the window's monitor (`MonitorFromWindow`); qtrs has no
+    /// Qt asks the platform for the window's monitor (`MonitorFromWindow`); ferrokit has no
     /// `Window::screen()` yet (Contract G11.4.b), so this approximates it from the geometry.
     pub fn window_screen(&self, geometry: Rect) -> Option<Rect> {
         let mut best: Option<(i64, usize)> = None;

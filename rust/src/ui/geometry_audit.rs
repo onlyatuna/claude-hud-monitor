@@ -4,15 +4,15 @@
 //! `GEOM_OUT=<dir> cargo test -j 1 geometry_audit -- --ignored --nocapture`.
 use std::sync::Arc;
 
+use ferrokit_widgets::widget::WidgetRef;
+use ferrokit_widgets::{Label, Policy, Widget};
 use parking_lot::Mutex;
-use qtrs_widgets::widget::WidgetRef;
-use qtrs_widgets::{Label, Policy, Widget};
 use serde_json::{json, Value};
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;
 use crate::refresh_controller::RefreshController;
-use qtrs_gui::text::{FontMetrics, FontWeight};
+use ferrokit_gui::text::{FontMetrics, FontWeight};
 
 fn policy(p: Policy) -> i32 {
     match p {
@@ -125,14 +125,16 @@ fn apply_variant(hud: &mut HUDWindow, variant: u32, horizontal: bool) {
     if variant == 3 || variant == 4 || variant == 7 {
         let sheet = super::styles::get_cards_stylesheet(true).replace("max-height: 15px;", "");
         hud.window.set_style_sheet(&sheet);
-        qtrs_widgets::application::Application::set_style_sheet(Box::leak(sheet.into_boxed_str()));
+        ferrokit_widgets::application::Application::set_style_sheet(Box::leak(
+            sheet.into_boxed_str(),
+        ));
     }
     if variant >= 5 {
         apply_python_structure(hud, horizontal);
     }
     if variant == 6 || variant == 7 {
         // Python's cards container and (absent) stack carry the default Preferred policy
-        let p = qtrs_widgets::QSizePolicy::new(Policy::Preferred, Policy::Preferred);
+        let p = ferrokit_widgets::QSizePolicy::new(Policy::Preferred, Policy::Preferred);
         hud.cards_container.borrow().set_size_policy(p);
         hud.stack.borrow().set_size_policy(p);
     }
@@ -143,14 +145,16 @@ fn apply_variant(hud: &mut HUDWindow, variant: u32, horizontal: bool) {
 /// `_apply_cards_layout`): the header takes no fixed policy, the body has no stretch, the
 /// horizontal body has spacing 8 and the vertical one has no card stretch.
 fn apply_python_structure(hud: &mut HUDWindow, horizontal: bool) {
-    use qtrs_widgets::{BoxLayout, Layout, QSizePolicy};
+    use ferrokit_widgets::{BoxLayout, Layout, QSizePolicy};
     let root = hud.window.root_widget();
     let kids = root.borrow().children();
     kids[0]
         .borrow()
         .set_size_policy(QSizePolicy::new(Policy::Preferred, Policy::Preferred));
     let mut l = BoxLayout::vertical();
-    l.set_margins(qtrs_gui::geometry::primitives::Margins::new(12, 8, 12, 10));
+    l.set_margins(ferrokit_gui::geometry::primitives::Margins::new(
+        12, 8, 12, 10,
+    ));
     l.set_spacing(6);
     l.add_widget(kids[0].clone());
     l.add_widget(hud.stack.clone());
@@ -164,12 +168,12 @@ fn apply_python_structure(hud: &mut HUDWindow, horizontal: bool) {
         .map(|l| l.widgets())
         .unwrap_or_default();
     let mut nl = BoxLayout::new(if horizontal {
-        qtrs_widgets::layout::Direction::LeftToRight
+        ferrokit_widgets::layout::Direction::LeftToRight
     } else {
-        qtrs_widgets::layout::Direction::TopToBottom
+        ferrokit_widgets::layout::Direction::TopToBottom
     });
     nl.set_spacing(if horizontal { 8 } else { 6 });
-    nl.set_margins(qtrs_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
+    nl.set_margins(ferrokit_gui::geometry::primitives::Margins::new(0, 0, 0, 0));
     for w in items {
         let is_card = hud
             .cards
@@ -188,7 +192,7 @@ fn apply_python_structure(hud: &mut HUDWindow, horizontal: bool) {
 fn dump(mode: &str, w: i32, h: i32, variant: u32) -> Value {
     // `Application::new` does this from the primary screen (1.25 on this machine, as in the Python
     // oracle); without it the GDI text engine would be modelled instead of DirectWrite.
-    qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
+    ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.25);
     let mut cfg = Config::default();
     cfg.ui_mode = "cards".into();
     cfg.layout_mode = mode.into();
@@ -264,8 +268,8 @@ fn dump(mode: &str, w: i32, h: i32, variant: u32) -> Value {
 #[test]
 #[ignore]
 fn probe_badge_font() {
-    qtrs_gui::text::font_database::set_application_device_pixel_ratio(1.25);
-    use qtrs_gui::text::Font;
+    ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.25);
+    use ferrokit_gui::text::Font;
     for (fam, px, w) in [
         ("Consolas", 9.0, FontWeight::Normal),
         ("Consolas", 9.0, FontWeight::Bold),

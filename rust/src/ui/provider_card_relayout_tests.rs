@@ -1,7 +1,7 @@
 //! G9.7.b, sub-scope 3: a `ProviderCardWidget` under dynamic relayout (badge show/hide, text changes).
 //!
 //! The expected rectangles are PySide6 6.11.2 measurements (Windows, DirectWrite) from
-//! `rust/qtrs/tools/pyside_probes/provider_card_relayout.py`: the real Python card with the real cards
+//! `rust/tools/pyside_probes/provider_card_relayout.py`: the real Python card with the real cards
 //! style sheet, 256 wide and 140 high (180 wide in the narrow step), at DPR 1.25 and 1.0. Each
 //! step feeds the card the `UsageMetrics` the HUD feeds it and lays it out again. Rectangles are
 //! relative to the card; a hidden child is `None`. `metric*_subtext` exists only in Python and is
@@ -10,9 +10,9 @@
 use super::provider_card::ProviderCardWidget;
 use crate::providers::base::UsageMetrics;
 use chrono::{TimeZone, Utc};
-use qtrs_gui::geometry::primitives::Rect;
-use qtrs_platform::WindowFlags;
-use qtrs_widgets::{WidgetRef, Window};
+use ferrokit_gui::geometry::primitives::Rect;
+use ferrokit_platform::WindowFlags;
+use ferrokit_widgets::{WidgetRef, Window};
 
 type Geom = Option<(i32, i32, i32, i32)>;
 
@@ -28,7 +28,7 @@ const fn g(x: i32, y: i32, w: i32, h: i32) -> Geom {
     Some((x, y, w, h))
 }
 
-/// The child's rectangle in the card's coordinates. qtrs parents the children of a nested layout to
+/// The child's rectangle in the card's coordinates. ferrokit parents the children of a nested layout to
 /// that layout's holder widget, so the offsets of the holders up to the card are added; Qt parents
 /// them to the card.
 fn rect(w: &WidgetRef, card: &WidgetRef) -> Geom {
@@ -95,7 +95,7 @@ fn run(dpr: f32, expected: [(&str, i32, (i32, i32), Row); 8]) {
     let mut seen: Vec<(&str, i32, (i32, i32), Row)> = Vec::new();
     let mut show = |card: &ProviderCardWidget, step: &'static str, width: i32| {
         window.set_geometry(Rect::new(0, 0, width, 140));
-        qtrs_widgets::WidgetCommandQueue::flush_layouts();
+        ferrokit_widgets::WidgetCommandQueue::flush_layouts();
         window.root_widget().borrow().update_layout();
         let hint = card.widget().borrow().size_hint();
         seen.push((step, width, (hint.width, hint.height), row(card)));
@@ -173,13 +173,13 @@ fn run(dpr: f32, expected: [(&str, i32, (i32, i32), Row); 8]) {
         assert_eq!(width, want_width);
         if got_hint != want_hint {
             diffs.push(format!(
-                "{name}.hint: qtrs {got_hint:?} PySide6 {want_hint:?}"
+                "{name}.hint: ferrokit {got_hint:?} PySide6 {want_hint:?}"
             ));
         }
         for i in 0..12 {
             if got[i] != want[i] {
                 diffs.push(format!(
-                    "{name}.{}: qtrs {:?} PySide6 {:?}",
+                    "{name}.{}: ferrokit {:?} PySide6 {:?}",
                     NAMES[i], got[i], want[i]
                 ));
             }

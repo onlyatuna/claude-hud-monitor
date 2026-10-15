@@ -10,11 +10,12 @@ name = "ClaudeHUD"
 path = "src/main.rs"
 
 [dependencies]
-# Qt Rust Engine Core
-qtrs-core = { path = "qtrs/crates/qtrs-core" }
-qtrs-gui = { path = "qtrs/crates/qtrs-gui" }
-qtrs-platform = { path = "qtrs/crates/qtrs-platform" }
-qtrs-widgets = { path = "qtrs/crates/qtrs-widgets" }
+# UI library, a Rust implementation of a subset of Qt: https://github.com/onlyatuna/ferrokit
+# Pinned to a commit. CI's `diagnostics` job checks out the same commit; change both together.
+ferrokit-core = { git = "https://github.com/onlyatuna/ferrokit", rev = "2a934874594acead0d84e073222353f6ed13b923" }
+ferrokit-gui = { git = "https://github.com/onlyatuna/ferrokit", rev = "2a934874594acead0d84e073222353f6ed13b923" }
+ferrokit-platform = { git = "https://github.com/onlyatuna/ferrokit", rev = "2a934874594acead0d84e073222353f6ed13b923" }
+ferrokit-widgets = { git = "https://github.com/onlyatuna/ferrokit", rev = "2a934874594acead0d84e073222353f6ed13b923" }
 parking_lot = "0.12"
 
 # HTTP (synchronous TLS client; providers already run on worker threads)
@@ -71,11 +72,11 @@ opt-level = 3
 opt-level = 3
 [profile.release.package.ttf-parser]
 opt-level = 3
-[profile.release.package.qtrs-gui]
+[profile.release.package.ferrokit-gui]
 opt-level = 3
-[profile.release.package.qtrs-widgets]
+[profile.release.package.ferrokit-widgets]
 opt-level = 3
-[profile.release.package.qtrs-platform]
+[profile.release.package.ferrokit-platform]
 opt-level = 3
 
 [profile.dev]
