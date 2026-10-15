@@ -5,7 +5,8 @@ use qtrs_core::event_loop::notify_borrowed;
 use qtrs_core::object::{ObjectData, ObjectId, QObject};
 use qtrs_gui::application::LayoutDirection;
 use qtrs_gui::geometry::primitives::{PointF, Rect, RectF, Size};
-use qtrs_gui::paint::{Painter, Pen, RenderHint};
+use qtrs_gui::paint::qss_box::{draw_qss_box, QssBorder};
+use qtrs_gui::paint::{Painter, Pen};
 use qtrs_gui::text::{Font, FontMetrics, TextDocument};
 use qtrs_gui::tiny_skia::Color;
 use qtrs_gui::Alignment;
@@ -465,23 +466,15 @@ impl Widget for Label {
 
         let bg = style.background_color.or(self.background_color);
         let border_r = style.border_radius.unwrap_or(0.0);
-        let border_pen = if let Some(bw) = style.border_width {
-            if bw > 0.0 && style.border_style.as_deref() != Some("none") {
-                Some(Pen::new(style.border_color.unwrap_or(Color::TRANSPARENT), bw))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let border = style
+            .border_width
+            .filter(|bw| *bw > 0.0 && style.border_style.as_deref() != Some("none"))
+            .map(|width| QssBorder {
+                width,
+                color: style.border_color.unwrap_or(Color::TRANSPARENT),
+            });
 
-        if bg.is_some() || border_pen.is_some() {
-            if let Some(c) = bg {
-                painter.set_brush(qtrs_gui::paint::Brush::Color(c));
-            } else {
-                painter.set_brush(qtrs_gui::paint::Brush::Color(Color::TRANSPARENT));
-            }
-            painter.set_pen(border_pen);
+        if bg.is_some() || border.is_some() {
             // Qt paints the rule's background and border over the whole widget rect; `max-height`
             // already limited the geometry (as a box size), it is not a paint height.
             let rect_f = qtrs_gui::geometry::primitives::RectF::new(
@@ -490,13 +483,7 @@ impl Widget for Label {
                 geom.width as f32,
                 geom.height as f32,
             );
-            // QSS rule background/border (`qstylesheetstyle.cpp:1282-1285, 1360-1363`) is anti-aliased.
-            painter.set_render_hint(RenderHint::Antialiasing, true);
-            if border_r > 0.0 {
-                painter.draw_rounded_rect(rect_f, border_r, border_r);
-            } else {
-                painter.draw_rect(rect_f);
-            }
+            draw_qss_box(painter, rect_f, bg, border, border_r);
         }
 
         if self.text.is_empty() {

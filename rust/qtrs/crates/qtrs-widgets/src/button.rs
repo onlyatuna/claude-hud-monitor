@@ -552,6 +552,9 @@ impl Widget for Button {
                 text_color,
                 border_color,
                 border_radius,
+                border_width: style
+                    .border_width
+                    .filter(|w| *w > 0.0 && style.border_style.as_deref() != Some("none")),
             },
         );
     }

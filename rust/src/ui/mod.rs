@@ -1,5 +1,7 @@
 // src/ui/mod.rs — Qt HUD UI module
 
+#[cfg(all(test, windows))]
+mod button_hover_tests;
 #[cfg(test)]
 mod geometry_audit;
 #[cfg(all(test, windows))]

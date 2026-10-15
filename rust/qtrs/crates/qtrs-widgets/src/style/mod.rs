@@ -7,6 +7,7 @@ pub mod stylesheet;
 pub use stylesheet::*;
 
 use qtrs_gui::geometry::primitives::{RectF, Size};
+use qtrs_gui::paint::qss_box::{draw_qss_box, QssBorder};
 use qtrs_gui::paint::{Brush, Painter, Pen, RenderHint};
 use qtrs_gui::text::Font;
 use qtrs_gui::tiny_skia::Color;
@@ -63,6 +64,10 @@ pub struct ButtonStyleOption<'a> {
     pub text_color: Color,
     pub border_color: Color,
     pub border_radius: f32,
+    /// Width of the border a style sheet gives the button (`border: Npx solid ...`). `Some` draws the
+    /// box like `QStyleSheetStyle` (`QRenderRule::drawBackground` + `drawBorder`); `None` is the
+    /// style's own frame.
+    pub border_width: Option<f32>,
 }
 
 /// Widget-specific rendering policy.
@@ -105,11 +110,24 @@ impl Style for DefaultStyle {
             background = Color::from_rgba8(232, 232, 232, 255);
         }
 
-        // Button frame and focus ring are anti-aliased (`qfusionstyle.cpp:679-754`).
-        painter.set_render_hint(RenderHint::Antialiasing, true);
-        painter.set_brush(Brush::Color(background));
-        painter.set_pen(Pen::new(option.border_color, 1.0));
-        painter.draw_rounded_rect(option.rect, option.border_radius, option.border_radius);
+        if let Some(width) = option.border_width {
+            draw_qss_box(
+                painter,
+                option.rect,
+                Some(background),
+                Some(QssBorder {
+                    width,
+                    color: option.border_color,
+                }),
+                option.border_radius,
+            );
+        } else {
+            // Button frame and focus ring are anti-aliased (`qfusionstyle.cpp:679-754`).
+            painter.set_render_hint(RenderHint::Antialiasing, true);
+            painter.set_brush(Brush::Color(background));
+            painter.set_pen(Pen::new(option.border_color, 1.0));
+            painter.draw_rounded_rect(option.rect, option.border_radius, option.border_radius);
+        }
 
         if option.focused {
             let focus_rect = option.rect.adjusted(2.0, 2.0, -2.0, -2.0);

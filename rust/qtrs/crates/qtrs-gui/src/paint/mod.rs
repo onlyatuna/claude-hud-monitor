@@ -10,6 +10,7 @@ pub mod painter;
 pub mod palette;
 pub mod path;
 pub mod pixmap;
+pub mod qss_box;
 mod solid_fill;
 mod text_blend;
 
