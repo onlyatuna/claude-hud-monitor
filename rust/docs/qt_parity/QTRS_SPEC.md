@@ -1,4 +1,4 @@
-# Rust / Qt 相容層規格書（qtrs）— v0.2.3
+# Rust / Qt 相容層規格書（qtrs）— v0.2.4
 
 > **位置與命名**：`qtrs` 現在是獨立的函式庫 ferrokit；路徑、識別字與環境變數的對照見 `PYTHON_QT_SEMANTIC_CONTRACT.md` 開頭的「搬遷說明」。
 
@@ -15,6 +15,7 @@
 | 版本 | 變更 |
 |---|---|
 | v0.2 | 大綱 00–12；00、01、02、03、10、11 骨架 |
+| v0.2.4 | 使用者於 2026-10-15 核准 DV-08（選項 (a) 保留差異，並加上使用規則）與 DV-09：兩者由「候選」改為「已核准」，R-00008、R-00048 的定義狀態由「未決」改為「已確認」。同日以一次性測試重現兩處實作缺口（兩條的實作狀態都改為「不符」）：parent 銷毀後非 owned child 的 `parent()` 沒有清掉；`set_parent` 非 owned 路徑不檢查自己與後代為 parent。 |
 | v0.2.3 | 治理矛盾修正：R-00001 只約束 API 返回後的狀態，回呼期間的中間狀態另立 R-00049／R-00050（PySide 實測：`ChildRemoved` 期間 child 的 parent 仍是舊 parent）；新增欄位「差異（DV）與 Qt 對照」，已核准差異的要求以有效契約判定（11.2）；R-00008 由 D 改為 B 類候選差異 DV-08（Core 要求不得標 D）；拆開複合要求（R-00002、R-00013、R-00020、R-00022、R-00025、R-00027、R-00030、R-00040 → 新增 R-00049–R-00061）；新增欄位「驗收方式與依賴」；11.7 加「可開始實作」的就緒條件；修正 v0.2.2 紀錄的節號（五問在 11.6）。同版第二輪（m2 稽核 `local/spec02_audit.md`）：再拆出 R-00062–R-00073（API 路徑、診斷輸出、widget 層、receiver 端連線、Windows 計時器、class info）；新增候選差異 DV-09（R-00048）；G2.7.b 由 D 改標 DV-07；修正 R-00066 的 `qwidget.cpp` 行號（舊引用 :941 錯誤，實際為 1557-1561、1581）；PYSIDE-RUN 補上 OS 與 dpr；原本只有 QT-SRC 的 8 條補上 PySide 實測 |
 | v0.2.2 | 01.2 定義行為基線（PySide6 6.11.2 實測）與版本衝突處置；要求必須原子化（11.1），03.12 拆成五節；DV-01／DV-04 改為依實際狀態登記（01.6 加狀態欄）；缺陷必須列出受影響的 R 與嚴重度理由（01.5）；RC 可關閉多個 G，但每個 G 各自要有證據（11.3）；00.6 拆開 qtrs 系統匣與 HUD 熱鍵；區分「要求定義已確認」「實作已符合」「整體驗收通過」（10.2、11.2）；11.6 缺陷（G）固定欄位五問 |
 | v0.2.1 | 新增 00.6 支援範圍；01 依據綁定環境、衝突須最小重現、未決不得改實作；嚴重度限定在支援範圍內；01.6 成為唯一的刻意差異登記表，並分成兩類；E1–E5 改為證據**類型**，驗收矩陣寫明組合；整體驗收以要求集合定義；要求 ID 改為不含章節的 `R-#####`；08／09／12 的分工 |
@@ -211,11 +212,16 @@
 | DV-05 | B | 已核准 | 啟動最初約 300 ms：Rust 已套用 click-through，Python 仍可互動 | `hud_window.py:106-108,426-437` | 要對齊必須改視窗建立旗標與托盤時序，風險大於收益 | HUD 啟動 | G12.5.h 的決定（舊 Contract C12.5） |
 | DV-06 | B | 已核准 | 對正在被借用的 receiver 同步 `send_event`：回 false 並印診斷；Qt 會重入遞送 | `qcoreapplication.cpp:1563-1572` | safe Rust 不能別名 `&mut`（01.4 第 4 點） | `qtrs` 核心 | RC-123 |
 | DV-07 | B | 已核准 | 跨執行緒 `send_event`：被拒並印診斷（所有 build）；Qt 仍會遞送，只在 debug build 警告 | `qcoreapplication.cpp:539-548,1223-1227` | 物件只能在擁有者執行緒借用 | `qtrs` 核心 | RC-109 |
-| DV-08 | B | 候選 | parent 銷毀時，非 owned 的 child 不被銷毀，變成沒有 parent；Qt 刪除所有 children | `qobject.cpp:1177-1186` | parent 只擁有 `owned_children` 的 `Box`；其他 child 的記憶體由別人擁有，parent 無權釋放 | `qtrs` 核心（R-00008、G2.1.g） | 待核准。替代方案：拒絕把非 owned 物件設為 child（改為 D 類並可見地失敗）。決定前不得改這條路徑 |
-| DV-09 | B | 候選 | 以自己或後代為 parent：`reparent_owned` 回 `Err(InvalidParent)`，樹不變；Qt release build 照做，形成自我 parent 或環 | `qobject.cpp:2290-2303` | 環狀物件樹在 Rust 會造成無限遞迴與 double free；Qt 自己也標為 undefined behavior | `qtrs` 核心（R-00048、G2.1.e） | 待核准。決定前不得改這條路徑 |
+| DV-08 | B | 已核准 | parent 銷毀時，非 owned 的 child 不被銷毀，變成沒有 parent；Qt 刪除所有 children | `qobject.cpp:1177-1186` | parent 只擁有 `owned_children` 的 `Box`；其他 child 的記憶體由別人擁有，parent 無權釋放 | `qtrs` 核心（R-00008、G2.1.g） | 使用者 2026-10-15 選擇保留此差異（不採替代方案「拒絕把非 owned 物件設為 child」），並要求附上使用規則（見下）。實作尚未達到有效契約，見 R-00008 |
+| DV-09 | B | 已核准 | 以自己或後代為 parent：`reparent_owned` 回 `Err(InvalidParent)`，樹不變；Qt release build 照做，形成自我 parent 或環 | `qobject.cpp:2290-2303` | 環狀物件樹在 Rust 會造成無限遞迴與 double free；Qt 自己也標為 undefined behavior | `qtrs` 核心（R-00048、G2.1.e） | 使用者 2026-10-15 核准。實作只涵蓋 `reparent_owned`，見 R-00048 |
 
 - 舊 Contract §1.3 與 C12.5 的「處置」欄自 v0.2.1 起只保留指向本表的指標，不再另存內容。
 - C12.5 的 G 編號仍是缺陷清單，不是登記表。
+
+**DV-08 使用規則**（核准時要求寫成明文）：
+- 沒有登記在 parent 的 `owned_children` 的 child（用 `set_parent` 掛上去的物件），生命週期由它的持有者負責：持有它的 `Box`（或其他擁有者）的程式碼必須自己保證它活到不再需要為止，並在不需要時自己釋放它。
+- parent 被銷毀時，這類 child 不會被銷毀或釋放，只被解除登記並變成沒有 parent。不能依賴 Qt 的「parent 銷毀時 child 一併銷毀」。
+- 需要「parent 擁有 child」時，用 `add_owned_child`（或用 `reparent_owned` 移交），讓 parent 持有 `Box`。
 
 ---
 
@@ -224,7 +230,7 @@
 > 來源：舊 Contract C2.1–C2.7、C3.5（DeferredDelete）、C6.6。遷移後舊段落改為指標。
 > 定義狀態依 11.2；`[QT-DOC]` 一律為「依據不足」。`PYSIDE-RUN` 的腳本為 `rust/qtrs/tools/pyside_probes/spec02_qobject.py`（Windows，offscreen；每個函式印出一個 R-ID 的結果）。實作狀態沿用舊 Contract 的證據；標「舊 Contract 判定」者沒有重做修改前 FAIL。
 > 02.9（widget tree 與 QObject tree 的關係）在舊 Contract 沒有對應的要求，本次不新增。
-> v4（spec v0.2.3）：拆開複合要求，新增 R-00049–R-00073（R-00052 未配置，不再使用）；R-00048 改依候選差異 DV-09；R-00008 改依候選差異 DV-08；R-00037–R-00039 以 DV-06／DV-07 的有效契約描述。
+> v4（spec v0.2.3）：拆開複合要求，新增 R-00049–R-00073（R-00052 未配置，不再使用）；R-00048 改依候選差異 DV-09；R-00008 改依候選差異 DV-08（兩者於 v0.2.4 核准）；R-00037–R-00039 以 DV-06／DV-07 的有效契約描述。
 
 | ID | 節 | 範圍 | 觸發 → 結果（→ 順序） | 依據 | 差異（DV）與 Qt 對照 | 舊 C | G | RC | 定義狀態 | 驗收方式與依賴 | 實作狀態與證據 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -241,9 +247,9 @@
 | R-00063 | 02.1 | Core | parent 正在 callback 中（被借用）時銷毀 child → children 的移除與 `ChildRemoved` 延後到借用結束，不遺失 | DV-06（01.6）的替代語意；`[QT-SRC qobject.cpp:2322-2326]`（對照：Qt 同步移除並送事件） | DV-06；Qt 對照：同步移除並送 `ChildRemoved` | C2.1 | G2.1.d | RC-123 | 已確認 | E2；依 DV-06 的有效契約判定 | 已符合：`qobject.rs::test_child_removed_on_drop_while_parent_borrowed_is_deferred_not_lost`（RC-123，停用防護時 FAIL left 0 right 1） |
 | R-00007 | 02.1 | Core | 以其他執行緒的物件為 parent → child 仍從舊 parent 移除，結果沒有 parent | `[QT-SRC qobject.cpp:2309-2328, 2341-2345]`；`[PYSIDE-RUN 6.11.2 offscreen Win11-26200 dpr=1.0 tools/pyside_probes/spec02_qobject.py R-00007 other-thread]` | — | C2.1 | G2.1.e | RC-01 | 已確認 | E2＋E3（期望值取自 `spec02_qobject.py`） | 不符：`set_parent` 沒有執行緒檢查（G2.1.e） |
 | R-00064 | 02.1 | Core | 以其他執行緒的物件為 parent → 印出警告「QObject::setParent: Cannot set parent, new parent is in a different thread」 | `[QT-SRC qobject.cpp:2341-2344]`；`[PYSIDE-RUN 6.11.2 offscreen Win11-26200 dpr=1.0 tools/pyside_probes/spec02_qobject.py R-00064]` | — | C2.1 | G2.1.e | — | 已確認 | E2（擷取診斷輸出）＋E3 | 不符：`set_parent` 沒有執行緒檢查 |
-| R-00008 | 02.1 | Core | parent 銷毀時，已登記為它的 child、但不是它擁有（非 owned）的物件 → 不被銷毀，變成沒有 parent（`parent()` 為無） | DV-08（候選，01.6）；Qt 對照依據 `[QT-SRC qobject.cpp:1177-1186]` | DV-08（候選）；Qt 對照：parent 銷毀時刪除**所有** children | C2.1 | G2.1.g | — | 未決 | 定義決定前不驗收 | 待驗證：`unregister_qobject` 只清 registry 的 parent（`qobject.rs:351-355`），child 自己的 `ObjectData.parent` 是否同步未驗證（`[INFERENCE]`）。DV-08 核准前，不得改這條路徑的實作 |
+| R-00008 | 02.1 | Core | parent 銷毀時，已登記為它的 child、但不是它擁有（非 owned）的物件 → 不被銷毀，變成沒有 parent（`parent()` 為無）；這類物件的生命週期由它的持有者負責（DV-08 使用規則，01.6） | DV-08（已核准，01.6）；Qt 對照依據 `[QT-SRC qobject.cpp:1177-1186]` | DV-08（已核准）；Qt 對照：parent 銷毀時刪除**所有** children | C2.1 | G2.1.g | — | 已確認 | E2（修改前 FAIL 的永久測試）；Qt 在此與有效契約不同（DV-08），不做 E3 期望值 | 不符：2026-10-15 以一次性測試重現（ferrokit `2a93487`）：parent 被 drop 並 unregister 之後，非 owned child 的 `ObjectData.parent` 仍是已死 parent 的 id，`parent()` 回 `Some(舊 id)`，不是「無」。成因 `[INFERENCE]`：`unregister_qobject` 只清 registry 的 parent，child 自己的欄位沒有同步。DV-08 已核准，這是待修的缺陷（G2.1.g） |
 | R-00042 | 02.1 | Core | 以目前的 parent 再次 `set_parent` → 不做任何事，不送事件 | `[QT-SRC qobject.cpp:2306-2307]`；`[PYSIDE-RUN 6.11.2 offscreen Win11-26200 dpr=1.0 tools/pyside_probes/spec02_qobject.py (d)]` | — | C2.1 | — | — | 已確認 | E2＋E3（期望值取自 `spec02_qobject.py`） | 待驗證 |
-| R-00048 | 02.1 | Core | 以自己或自己的後代為 parent → `qtrs` 回 `Err(InvalidParent)`，物件樹不變 | DV-09（候選，01.6）；`[QT-SRC qobject.cpp:2290-2303]`（對照）；`[PYSIDE-RUN 6.11.2 offscreen Win11-26200 dpr=1.0 tools/pyside_probes/spec02_qobject.py R-00048]` | DV-09（候選）；Qt 對照：release build 照做 | C2.1 | G2.1.e | RC-01 | 未決 | 定義決定前不驗收 | 待驗證：`reparent_owned` 已拒絕（`qobject.rs:822-837`）；DV-09 核准前不得改實作 |
+| R-00048 | 02.1 | Core | 以自己或自己的後代為 parent → `qtrs` 回 `Err(InvalidParent)`，物件樹不變 | DV-09（已核准，01.6）；`[QT-SRC qobject.cpp:2290-2303]`（對照）；`[PYSIDE-RUN 6.11.2 offscreen Win11-26200 dpr=1.0 tools/pyside_probes/spec02_qobject.py R-00048]` | DV-09（已核准）；Qt 對照：release build 照做 | C2.1 | G2.1.e | RC-01 | 已確認 | E2（`reparent_owned` 與 `set_parent` 兩條路徑各一個修改前 FAIL 的測試） | 不符：`reparent_owned` 已拒絕（自己與後代，`qobject.rs:829` 起）；`set_parent`（非 owned 路徑，`qobject.rs:767-820`）沒有檢查：2026-10-15 以一次性測試重現（ferrokit `2a93487`），以自己為 parent 回 `Ok` 且 `parent` 變成自己的 id，以後代為 parent 也回 `Ok`（形成環）。DV-09 已核准，這是待修的缺陷（G2.1.e） |
 | R-00009 | 02.2 | Core | `delete_later` → 物件在控制權回到擁有它的事件迴圈時才銷毀；在此之前仍存活 | `[QT-SRC qobject.cpp:2519-2564]`；`[PYSIDE-RUN 6.11.2 offscreen Win11-26200 dpr=1.0 tools/pyside_probes/spec02_qobject.py R-00009]` | — | C2.2、C3.5 | G2.2.a、G3.5.c | RC-92 | 已確認 | E2＋E3（期望值取自 `spec02_qobject.py`） | 已符合：`test_delete_later`、`test_a_deferred_delete_from_the_outer_loop_waits_out_a_nested_pump`（RC-92 改寫後的測試） |
 | R-00065 | 02.2 | Core | widget 的 `delete_later` → widget 在 DeferredDelete 送達時才從 widget tree 移除；在此之前仍在樹中、仍可收事件 | `[QT-SRC qobject.cpp:2519-2564]`（QWidget 沿用 QObject 的 deleteLater） | — | C2.2 | G2.2.d | RC-92 | 已確認 | E2；依賴 R-00009 | 已符合：`test_reentrancy_and_deferred.rs::test_self_deletion_during_event_dispatch`（RC-92 修改前 FAIL `:82:5 left 0 right 1`） |
 | R-00010 | 02.2 | Core | 同一 handler 內 `delete_later` 後呼叫 `process_events` → 不銷毀（scope level） | `[QT-SRC qobject.cpp:2519-2564; qcoreapplication.cpp:1870-1904]`；`[PYSIDE-RUN 6.11.2 offscreen Win11-26200 dpr=1.0 tools/pyside_probes/spec02_qobject.py R-00010]` | — | C3.5 | G3.5.a | RC-93 | 已確認 | E2＋E3（期望值取自 `spec02_qobject.py`）；依賴 R-00009 | 已符合：`loop.rs::test_delete_later_inside_handler_scope_survives_nested_pump`、`test_nested_pump_inside_a_handler_keeps_its_delete_later_target_alive`（RC-93） |

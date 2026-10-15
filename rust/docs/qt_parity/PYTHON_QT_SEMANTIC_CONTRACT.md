@@ -124,9 +124,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G2.1.b [P1, RAN；已修復：RC-81]** （修復前）`add_owned_child` 不送 `ChildAdded`（Qt 在建構時帶 parent 就會送）。
   - **G2.1.c [P2, READ]** `ChildAdded/Removed` 經 `dispatch_to_object`／`event()` 直送，不經 `notify_helper`；object filter 與 application filter 看不到。
   - **G2.1.d [P1, RAN；已修復：RC-123]** （修復前）parent 正被借用（dispatch 中）時 `with_object_mut` 回 `None`：`ObjectData::drop` 的解除連結與 `set_parent` 的 child-list 更新被**靜默略過**，留下 stale children id，事件遺失。
-  - **G2.1.e [P2, READ]** 無自我 parent／環／跨執行緒檢查。
+  - **G2.1.e [P2, READ]** 無自我 parent／環／跨執行緒檢查。DV-09 已於 2026-10-15 核准（`QTRS_SPEC.md` 01.6）；同日以一次性測試重現：`set_parent`（非 owned 路徑）接受自己與後代為 parent（回 `Ok`），只有 `reparent_owned` 拒絕；仍開放（R-00048）。
   - **G2.1.f [P2, READ]** `set_parent` 跨 registry 鎖與物件借用，非原子；`QT_CPP_MAPPING.md` 寫「atomically」不實。
-  - **G2.1.g [P2, READ；DV-08 候選]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。原分類 D 與 Core 範圍衝突（spec v0.2.3）：改為 `QTRS_SPEC.md` 01.6 的 B 類候選差異 DV-08，核准前視同缺陷（R-00008）。
+  - **G2.1.g [P2, READ；DV-08 已核准]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。原分類 D 與 Core 範圍衝突（spec v0.2.3）：改為 `QTRS_SPEC.md` 01.6 的 B 類候選差異 DV-08，核准前視同缺陷（R-00008）。使用者於 2026-10-15 核准 DV-08（選項 (a) 保留差異，並附使用規則）；同日以一次性測試重現：parent 被 drop 後，非 owned child 的 `parent()` 仍回已死 parent 的 id，不是「無」，仍開放。
   - **G2.1.h [P2, READ]** 改變 parent 時，`ChildRemoved` 回呼看到的樹狀態與 Qt 不同：Qt 在送 `ChildRemoved` 時 child 的 parent 仍是舊 parent、新 parent 的 children 尚不含它（`qobject.cpp:2322-2337`，PySide 6.11.2 實測）；`reparent_owned` 在全部更新完才送事件（`qobject.rs:894-899`），`set_parent` 先更新 registry 的 parent（`qobject.rs:756-758`）。見 R-00049。
 - **HUD usage**：Python `QTimer(self)`（`refresh_controller.py:35,39`）、`UsageTable(parent=self)` + `old_table.deleteLater()`（`hud_window.py:262-266`）、`widget.setParent(None)` + `deleteLater()`（`:187-189`）。Rust：`rust/src` 不用 core `set_parent`/`add_owned_child`（grep 為空）；走 `qtrs-widgets` 自己的 `set_parent_widget`。
 
@@ -1249,9 +1249,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.1.b | P1, RAN；已修復：RC-81 | `add_owned_child` 不送 `ChildAdded` |
 | G2.1.c | P2, READ | `ChildAdded/Removed` 經 `dispatch_to_object`／`event()` 直送，不經 `notify_helper` |
 | G2.1.d | P1, RAN；已修復：RC-123 | parent 正被借用 |
-| G2.1.e | P2, READ | 無自我 parent／環／跨執行緒檢查 |
+| G2.1.e | P2, READ | 無自我 parent／環／跨執行緒檢查（DV-09 已核准；`set_parent` 仍接受自己與後代為 parent，R-00048） |
 | G2.1.f | P2, READ | `set_parent` 跨 registry 鎖與物件借用，非原子 |
-| G2.1.g | P2, READ；DV-08 候選 | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
+| G2.1.g | P2, READ；DV-08 已核准（2026-10-15），實作未達有效契約（R-00008） | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
 | G2.1.h | P2, READ | `ChildRemoved` 回呼期間的樹狀態與 Qt 不同（R-00049） |
 | G2.2.a | P1, RAN；已修復：RC-92 | `delete_later` 不會自我 post、不會 drop |
 | G2.2.b | P1, RAN；已修復：RC-88 | 不清除 posted events |
@@ -4034,14 +4034,15 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ---
 
-## 附錄 E：Windows HUD 發布阻擋分類與實機驗收清單（提案，待使用者確認）
+## 附錄 E：Windows HUD 發布阻擋分類與實機驗收清單（E.1 已於 2026-10-15 經使用者批准；E.2 全部未執行）
 
-用途：把「Windows x64 HUD 能不能交付」與「qtrs 還差多少 Qt 語意」分開。本附錄只整理 Contract 與各 RC 已有的記錄，沒有新增 gap；分類規則是提案，尚未經使用者決定。平台決策（使用者）：Rust／qtrs 正式支援 Windows x86_64，macOS／Linux 是實驗性、只編譯的產物。
+用途：把「Windows x64 HUD 能不能交付」與「qtrs 還差多少 Qt 語意」分開。本附錄只整理 Contract 與各 RC 已有的記錄，沒有新增 gap；分類規則已於 2026-10-15 經使用者批准。平台決策（使用者）：Rust／qtrs 正式支援 Windows x86_64，macOS／Linux 是實驗性、只編譯的產物。
 
-### E.1 分類規則（提案，待使用者批准；批准前不是正式發布政策）
+### E.1 分類規則（使用者於 2026-10-15 批准，是正式發布政策）
 - **A 類（可能阻擋 Windows 發布）**：會改變 Windows 上 HUD 可見行為，或需要實機證據才能下結論的項目。
 - **B 類（追蹤，不阻擋）**：Qt 子集的語意差異。依 Contract 記錄，HUD 沒有呼叫者或差異不可見。
 - **C 類（跨平台實驗路徑）**：macOS／Linux。不阻擋 Windows 發布，但不得宣稱跨平台完成。
+- **批准的內容**：Windows 發布需要 E.2 五項都已執行並通過（或由使用者明確豁免），且 E.3 的待決事項都已決定；B、C 類不擋。哪些 A 類項目真的擋，要等 E.2 執行後才確定。G12.6.a（HUD 版面測試只在 Windows 執行）歸 C 類。
 
 ### E.2 A 類：需要實機或人工的驗收項目（候選阻擋項目，不是已證實的阻擋項目）
 這些項目在單螢幕開發機上無法完成。**每一項的狀態都是「未執行」**；下表只記錄來源、環境需求、做法與判定標準。逐步操作與記錄表見 `rust/WINDOWS_HUD_ACCEPTANCE.md`（HUD 側的檔案）。
@@ -4061,8 +4062,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **註（GDI layered 的 Expose 列）**：目前預設路徑就是 Layered，所以「被遮蓋後重繪」那一列走的是預設路徑，不需要另外強制。
 
 ### E.3 A 類：待使用者決定
-- DV-08（G2.1.g，已註冊但非 `owned_children` 的 child 在 parent drop 時的處置）是否接受。決定前不得改該路徑；替代方案是拒絕把非 owned 物件設為 child（改為 D 類並可見地失敗）（`QTRS_SPEC.md` 01.6 DV-08）。
-- DV-09（G2.1.e、R-00048：以自己或後代為 parent）是否接受：`reparent_owned` 回 `Err(InvalidParent)` 且樹不變；Qt release build 照做而形成自我 parent 或環（Qt 自己標為 undefined behavior）。決定前不得改該路徑（`QTRS_SPEC.md` 01.6 DV-09）。先前的 E.3 漏列此項。
+- DV-08（G2.1.g）已決定（2026-10-15）：選 (a) 保留差異，並把使用規則寫進 `QTRS_SPEC.md` 01.6（非 owned child 的持有者負責它的生命週期）。同日以一次性測試重現：parent 被 drop 後，非 owned child 的 `parent()` 仍回已死 parent 的 id，與有效契約（「無」）不符，是待修的缺陷（R-00008）。
+- DV-09（G2.1.e、R-00048）已決定（2026-10-15）：核准。同日以一次性測試重現：只有 `reparent_owned` 拒絕自己與後代為 parent，`set_parent`（非 owned 路徑）仍回 `Ok`，自己為 parent 會變成自我 parent，後代為 parent 會形成環，是待修的缺陷。
 - crate 發布與更名安排。使用者先指定 `qtoxide`，後因名稱含 Qt（Qt 商標指引對 Qt 字樣的使用有限制，https://www.qt.io/trademark）改定為不含 Qt 的 **ferrokit**（取代 qtrs；以下各條的 ferrokit 即先前的 qtoxide）。README 的描述寫「a Rust implementation of a subset of Qt®」，使用者判斷這屬於事實陳述的合理使用（指引第 1 節）；這不是法律意見。名稱查詢（我用 crates.io API 與 GitHub 搜尋執行，只代表查詢當下）：`ferrokit` 與 `ferrokit-core`、`-gui`、`-platform`、`-widgets`、`-derive` 在 crates.io 都查無此 crate；GitHub 有 2 個名稱含 ferrokit 的不相關 repo；商標面未查。尚未做：GitHub 上先前建立的空 repo 仍叫 `onlyatuna/qtoxide`，推送前要改名。發布到 crates.io 不可逆，需使用者明確指示；HUD 已改用 ferrokit（見下方「HUD 切換」一條）；既有 RC 章節與 commit 保留 `qtrs` 作為歷史名稱。
 - 授權路線：使用者已批准 `LGPL-3.0-only`（LICENSE 與 NOTICE 已寫入本機的匯出目錄，尚未推送到 GitHub）。未決：HUD（AGPL-3.0）與 LGPL 的相容性、NOTICE 與 LICENSE 的最終文字。這不是法律意見。
 - 歷史：使用者決定 ferrokit 以乾淨起點建立（不公開歷史，不用 `filter-repo`），並決定不改寫 HUD repo 的既有歷史。
@@ -4075,7 +4076,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - 版權行與來源：使用者決定 NOTICE 用 `Copyright (C) 2026 The ferrokit contributors`（名稱部分隨專案改名），README 不提及 HUD 專案（它與 ferrokit 做的東西無關）。核對：上游沒有 `rust/qtrs`（`git log upstream/main -- rust/qtrs` 為 0 個 commit）；此 fork 最後併入上游的 PR 是 2026-09-22，第一個 qtrs commit 是 2026-10-02。
 - 發布前的授權檢查（外部 review 之後）：ferrokit 每個 `.rs` 第一行加 `// SPDX-License-Identifier: LGPL-3.0-only`（只寫授權識別，不寫版權行，因為許多檔案源自 Qt，版權人不同）；NOTICE 補上 Robert Penner 緩動曲線的 BSD-3-Clause 出處（Qt 的 `src/3rdparty/easing/easing.cpp`），更正 fixture 路徑並補上 `layout_qt_oracle_known.txt`；`LICENSES/BSD-3-Clause.txt` 的版權佔位字換成實際版權行。程式與文件引用的 qtbase 檔名共 115 個，在本機 qtbase 6.11.3 找得到 112 個（依檔名比對）：107 個是 Qt 的多重授權（含 LGPL-3.0-only），4 個是 BSD-3-Clause（NOTICE 已列）；找不到的 3 個（`a.h`、`b.h`、`self.c`）與沒有 SPDX 行的測試資料 `t.c` 是誤抓。測試會把輸出圖寫到各 crate 目錄下的 `target/`，所以 `.gitignore` 改為忽略所有層級的 `target/`。
 - HUD 切換到 ferrokit（`7ba9ea7`、`2bbae44` 與其後的清理 commit）：`rust/Cargo.toml` 以 git 依賴引用 `onlyatuna/ferrokit` 的 `2a93487`，`rust/qtrs/` 已從 repo 移除。Contract、規格、探針、驅動腳本與 HUD 專屬測試搬到 `rust/docs/qt_parity/`、`rust/tools/`、`rust/tests/`（13 個測試：LCD 4、標題列 2、標籤度量 2、標籤邊框 2、cards 樣式表剖析 1、切換按鈕 2；標籤邊框測試限定 Windows，因為它的 Qt 量測在 Windows 取得）。`rust/qtrs/` 內被丟棄的未提交修改共 10 個 `qtrs-platform` 檔案，逐一比對確認與 `rustfmt` 輸出一致（只有排版，沒有內容修改）；5 個未追蹤的 `spec03_*.py` 探針跟著搬到 `rust/tools/pyside_probes/`，仍未提交；本機專用、被忽略的 `QT_CPP_MAPPING.md` 搬到 repo 之外。CI：移除 `test-qtrs` job（ferrokit repo 有自己的 CI）；`diagnostics` job 另外 checkout 同一個 ferrokit revision 來跑 `font_probe`，這個 job 只在手動觸發時執行；推送後手動觸發的 run 38720861907 中，三個 OS 的 job 都成功（含 ferrokit checkout、`font_probe`、平台字型比對與 HUD 共享函式庫檢查）。驗證（Windows 本機，`cargo test -j 1 --all-targets -- --skip real_windows`）：164 passed、0 failed、5 ignored（原本 151 passed、5 ignored，加上搬來的 13 個測試）；`cargo fmt --check` 通過；`cargo clippy -j 1 -- -D warnings` 通過；`cargo build --release -j 1` 成功（沒有啟動 HUD）。推送 `7d02b96` 到 `develop` 後的 CI（run 38720832084）：Rust Test（windows、macos、ubuntu）與 Python Test 都成功。CI 通過不是實機驗證，HUD 驗收清單仍全部未執行。
-- Chapter 03 spec 整合（在使用者確認 chapter 02 方法前不開始）。
+- Chapter 03 spec 整合：尚未開始（要等使用者確認 chapter 02 方法）。草稿 5 份（events、loop、signals、threads、timers）依使用者決定放在 repo 之外的本機資料夾，不進 repo；對應的 5 支探針 `rust/tools/pyside_probes/spec03_*.py` 仍是未追蹤檔案。
 
 ### E.4 A 類：可見行為的持續追蹤（不是新的阻擋，只是記錄現狀）
 - G9.7.b（部分修復）：QSS 圓角的角落弧線在量測容差內，不是逐像素一致（Qt 的 cosmetic stroker）。
@@ -4083,7 +4084,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### E.5 B、C 類
 - B 類：附錄 A 其餘開放的 P2、D、test gap，G9.4.a 的剩餘限制（HUD 不使用的帶 parent `Popup`／`Tool`／`Window` 與非 96 DPI），G7.9.a 限定情境以外的啟動交錯。
-- C 類：G11.13.r、G11.9.b、G7.6.j、G7.6.k 以及其他 Cocoa／X11／Wayland 項目。
+- C 類：G11.13.r、G11.9.b、G7.6.j、G7.6.k、G12.6.a（HUD 版面測試只在 Windows 執行，Linux／macOS 的 CI 不驗證 HUD 版面）以及其他 Cocoa／X11／Wayland 項目。
 
 ### E.6 這份清單不代表什麼
 - 沒有任何 E.2 項目已經實機驗證；CI 通過不代替實機驗收。
