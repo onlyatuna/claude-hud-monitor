@@ -1,8 +1,8 @@
 # Claude HUD Monitor — Rust Port
 
-A complete Rust rewrite of the [Python original](../python), using the in-repo [qtrs](qtrs/) toolkit (Qt/PySide6-semantics crates) for the GUI.
+A complete Rust rewrite of the [Python original](../python), using the [ferrokit](https://github.com/onlyatuna/ferrokit) toolkit (a Rust implementation of a subset of Qt®, pinned as a git dependency) for the GUI.
 
-Parity status document: [`qtrs/PYTHON_QT_SEMANTIC_CONTRACT.md`](qtrs/PYTHON_QT_SEMANTIC_CONTRACT.md).
+Parity status document: [`docs/qt_parity/PYTHON_QT_SEMANTIC_CONTRACT.md`](docs/qt_parity/PYTHON_QT_SEMANTIC_CONTRACT.md).
 
 ## Architecture
 
@@ -31,13 +31,14 @@ ui/
   tray_icon.rs           — system tray icon
   placement.rs           — window placement
 bin/inspect_hwnd.rs      — auxiliary binary (HWND inspection)
-qtrs/                    — in-repo Qt-semantics GUI toolkit
-  crates/                — qtrs-core, qtrs-gui, qtrs-widgets, qtrs-platform, qtrs-derive
+docs/qt_parity/         — Qt parity contract and specs
+tests/                  — HUD-specific comparison tests against PySide6 and their recorded data
+tools/                  — PySide6 probes, measurement and audit scripts
 ```
 
 ## Features
 
-| Feature | Python (PySide6) | Rust (qtrs) |
+| Feature | Python (PySide6) | Rust (ferrokit) |
 |---------|-----------------|-------------|
 | Claude Code usage | ✅ | ✅ |
 | Antigravity usage | ✅ | ✅ |
@@ -60,7 +61,7 @@ qtrs/                    — in-repo Qt-semantics GUI toolkit
 - Rust 1.75+ (`rustup install stable`)
 - Windows: Visual Studio Build Tools (MSVC target)
 - macOS: Xcode Command Line Tools
-- Linux: X11/GL dev packages for the qtrs platform layer, as installed in `.github/workflows/release.yml`: `libxkbcommon-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libgl1-mesa-dev libgles2-mesa-dev pkg-config`
+- Linux: X11/GL dev packages for the ferrokit platform layer, as installed in `.github/workflows/release.yml`: `libxkbcommon-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libgl1-mesa-dev libgles2-mesa-dev pkg-config`
 
 ### Dev build
 
@@ -104,7 +105,7 @@ Default values match the Python original exactly.
 - **No Python/Qt runtime required** — single native executable (~5–15 MB release)
 - **Lower memory** — ~30–50 MB vs ~100–200 MB for PySide6
 - **Faster startup** — instant vs 1–3s for Python
-- **qtrs widget model** — Qt-semantics widget tree and signals (see the parity contract) rather than egui immediate mode
+- **ferrokit widget model** — Qt-semantics widget tree and signals (see the parity contract) rather than egui immediate mode
 - **Blocking HTTP** — `ureq` + `std::thread`, no Tokio (matches Python threading model)
 
 ## Known Limitations

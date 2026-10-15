@@ -1,4 +1,4 @@
-"""Compares results/py_<mode>.json (PySide6) with results/rs<variant>_<mode>.json (qtrs HUD).
+"""Compares results/py_<mode>.json (PySide6) with results/rs<variant>_<mode>.json (ferrokit HUD).
 
 Variants (rust/src/ui/geometry_audit.rs, applied from outside through public widget APIs only):
   0 as is | 1 + Python's widget-local `font-size: 14px` on the metric values | 2 + card root spacing 5

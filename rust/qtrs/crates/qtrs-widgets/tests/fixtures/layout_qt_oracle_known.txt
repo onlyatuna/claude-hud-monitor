@@ -1,2 +1,0 @@
-# Known mismatches: layout_qt_oracle.rs replays these and reports them without failing.
-# Recorded by tools/second_layer_harness/qt_layout_compare.py --record (PySide6 6.11.2, Qt 6.11.2).

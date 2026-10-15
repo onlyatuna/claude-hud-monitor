@@ -85,6 +85,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # The library revision that rust/Cargo.toml pins; change both together.
+      - name: Check out ferrokit
+        uses: actions/checkout@v7
+        with:
+          repository: onlyatuna/ferrokit
+          ref: 2a934874594acead0d84e073222353f6ed13b923
+          path: ferrokit
+
       # The runner image's stable Rust (rustup, with clippy and rustfmt); installing the newest
       # stable on every run took about 23 s on Windows.
       - name: Rust version
@@ -93,7 +101,7 @@ jobs:
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "rust -> target, rust/qtrs -> target"
+          workspaces: "rust -> target, ferrokit -> target"
 
       - name: Install Linux deps
         if: runner.os == 'Linux'
@@ -106,9 +114,9 @@ jobs:
 
       - name: Fonts (requested vs installed)
         shell: bash
-        working-directory: rust/qtrs
+        working-directory: ferrokit
         run: |
-          cargo run -q -p qtrs-gui --example font_probe | tee "$RUNNER_TEMP/font-probe.txt"
+          cargo run -q -p ferrokit-gui --example font_probe | tee "$RUNNER_TEMP/font-probe.txt"
           {
             echo "### Fonts on ${{ matrix.os }}"
             echo '```'
@@ -116,7 +124,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Platform font database vs qtrs scan (Linux fontconfig, macOS CoreText)
+      - name: Platform font database vs ferrokit scan (Linux fontconfig, macOS CoreText)
         if: runner.os != 'Windows'
         shell: bash
         run: |
@@ -198,82 +206,3 @@ jobs:
       - name: Format (rustfmt)
         working-directory: rust
         run: cargo fmt --check
-
-  # The qtrs workspace gate on every Rust change. Normal test threading on purpose, to surface
-  # parallel-isolation failures.
-  test-qtrs:
-    name: qtrs Workspace Test (${{ matrix.os }})
-    needs: changes
-    if: ${{ needs.changes.outputs.rust == 'true' || github.event_name == 'workflow_dispatch' }}
-    # Some tests are known to hang when run serially; cap a stuck run instead of the 6 h default.
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest, ubuntu-22.04]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Rust version
-        run: rustc -V && cargo -V
-
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "rust/qtrs -> target"
-
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libxkbcommon-dev libx11-dev libxrandr-dev \
-            libxcursor-dev libxi-dev libxinerama-dev \
-            libgl1-mesa-dev libgles2-mesa-dev pkg-config
-          # The font tests resolve Arial and a CJK fallback, as the HUD does on Windows.
-          echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" \
-            | sudo debconf-set-selections
-          sudo apt-get install -y ttf-mscorefonts-installer fonts-noto-cjk
-          fc-list | grep -iE "arial|noto sans cjk" | head -n 5
-
-      # Lists every target that does not compile on this platform; `cargo test` stops at the first.
-      - name: Compile every qtrs target (cargo check --keep-going)
-        working-directory: rust/qtrs
-        run: cargo check --workspace --all-targets --keep-going
-        continue-on-error: true
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-
-      # One binary at a time with a time limit each, so one hang does not hide the rest.
-      - name: Run qtrs test binaries (per-binary timeout)
-        working-directory: rust/qtrs
-        # 120 s: about 5x the slowest normal target observed (test_tooltip, 23.1 s on Windows).
-        # Builds use every runner core; the targets still run one at a time.
-        run: python tools/run_test_binaries.py --timeout 120 --jobs 4
-
-      # libtest runs tests on worker threads; this runs GuiApplication/CoreApplication on the OS
-      # main thread, one child process per check with its own time limit.
-      - name: macOS main-thread entry (application dispatcher and event loop)
-        if: ${{ runner.os == 'macOS' && !cancelled() }}
-        working-directory: rust/qtrs
-        run: cargo run -q -p qtrs-gui --example main_thread_entry
-
-      # qtrs-platform AppKit checks (windows, status items, menus, screens, cursor, theme) on the
-      # OS main thread, one child process per check, reporting ok/FAILED/ENV/CRASH per check.
-      # Known open (rust/qtrs/PYTHON_QT_SEMANTIC_CONTRACT.md C11.13): status_item_message (ENV: no
-      # app bundle). Any other check not ok, or a listed one passing, fails the step.
-      - name: macOS main-thread AppKit checks (qtrs-platform)
-        if: ${{ runner.os == 'macOS' && !cancelled() }}
-        working-directory: rust/qtrs
-        run: >-
-          cargo run -q -p qtrs-platform --example appkit_main_thread --
-          --known-open=status_item_message
-
-      - name: Run qtrs doc tests
-        if: ${{ !cancelled() }}
-        working-directory: rust/qtrs
-        run: cargo test --workspace --doc

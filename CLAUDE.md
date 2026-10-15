@@ -1,7 +1,9 @@
-# Autonomous Development Workflow — qtrs
+# Autonomous Development Workflow — ferrokit (formerly qtrs)
 
-Goal: the Rust `qtrs` HUD (`rust/qtrs`) matches the Python/PySide6 semantics. The authoritative
-progress record is `rust/qtrs/PYTHON_QT_SEMANTIC_CONTRACT.md` (the Contract).
+Goal: the Rust HUD and its UI library ferrokit (formerly `qtrs`; https://github.com/onlyatuna/ferrokit,
+pinned as a git dependency in `rust/Cargo.toml`) match the Python/PySide6 semantics. The authoritative
+progress record is `rust/docs/qt_parity/PYTHON_QT_SEMANTIC_CONTRACT.md` (the Contract), which stays in
+this repository.
 
 ## 1. Standing authorization
 
@@ -9,7 +11,7 @@ The user has authorized the following. Do not ask before each one:
 
 - After finishing an RC: run the required verification and create its own commit.
 - After it passes acceptance: `git push origin main:develop`.
-- After pushing: check the push CI. When needed, trigger the qtrs diagnostics workflow manually.
+- After pushing: check the push CI. When needed, trigger the diagnostics workflow manually.
 - Analyse CI failures, rerun the right tests, compare against the baseline, and classify each problem.
 - Update the Contract, its evidence and its Residuals. Then continue with the next scheduled RC.
 - Delegate read-only root-cause audits to Haiku M2 and check its conclusions yourself.
@@ -20,7 +22,7 @@ Reporting progress does not end the work.
 
 ## 2. Fixed procedure for every RC
 
-1. Read the Contract, the qtrs source involved, the Python implementation and the Qt source.
+1. Read the Contract, the ferrokit source involved (in the ferrokit repository), the Python implementation and the Qt source.
 2. Confirm the root cause. Never write an inference as a verified fact.
 3. Design a regression test that catches the real root cause. Where it applies, keep the
    before-fix FAIL evidence.
@@ -48,7 +50,7 @@ Never output only a plan or suggested commands for steps the available tools can
 - If the branches have diverged unexpectedly, a commit's origin is unclear, or the working tree
   holds someone else's changes: protect the current state and work out a safe way forward first.
   Never push blindly.
-- Never `git add` `rust/qtrs/tools/second_layer_harness/results.txt` or `results_qtrs.txt`.
+- Never `git add` `rust/tools/second_layer_harness/results.txt` or `results_qtrs.txt`.
 
 ## 4. Handling CI failures
 
@@ -107,14 +109,16 @@ still open. Never present a plan as completed work.
 
 ## Project reference
 
-- Full local verification (from the repo root):
-  `cd rust/qtrs && cargo test -j 1 --workspace --no-fail-fast -- --test-threads=1`, then from
-  `rust/`: `cargo test -j 1 -- --test-threads=1`, `cargo clippy -j 1 -- -D warnings`,
-  `cargo fmt --check`.
+- Full local verification: in the ferrokit checkout
+  `cargo test -j 1 --workspace --no-fail-fast -- --test-threads=1`, then from `rust/` in this repository:
+  `cargo test -j 1 -- --test-threads=1`, `cargo clippy -j 1 -- -D warnings`, `cargo fmt --check`.
+- A ferrokit change reaches the HUD only through the pinned `rev` in `rust/Cargo.toml`: push ferrokit,
+  then change that `rev` and the `ref` of the ferrokit checkout in the `diagnostics` job of
+  `.github/workflows/ci.yml` together.
 - Formatting: run `rustfmt --check --edition 2021` on touched files only and compare against
-  `git show HEAD:<path> | rustfmt --check --edition 2021`. Never mass-format `rust/qtrs`.
-- Native macOS evidence comes from `examples/appkit_main_thread.rs` in the qtrs macOS CI job
-  (`qtrs Workspace Test (macos-latest)`).
+  `git show HEAD:<path> | rustfmt --check --edition 2021`. Never mass-format ferrokit.
+- Native macOS evidence comes from `examples/appkit_main_thread.rs` in the macOS CI job of the
+  ferrokit repository (`Workspace Test (macos-latest)`).
 - CI trial: push to `ci/qtrs-tests`, then run
   `gh workflow run ci.yml -R onlyatuna/claude-hud-monitor --ref ci/qtrs-tests`.
 - Diagnostics after a develop push:

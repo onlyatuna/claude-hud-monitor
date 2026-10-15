@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""CI diagnostic: what the platform's own font database knows vs. what qtrs scans.
+"""CI diagnostic: what the platform's own font database knows vs. what ferrokit scans.
 
 Qt does not scan directories. It asks the platform (qtbase/src/gui/text):
   * Linux : fontconfig  (unix/qfontconfigdatabase.cpp: FcFontList / FcFontSort / FcConfigSubstitute)
   * macOS : CoreText    (coretext/qcoretextfontdatabase.mm: font manager + cascade lists)
-qtrs scans /usr/share/fonts and /System/Library/Fonts only. This script prints, for every
+ferrokit scans /usr/share/fonts and /System/Library/Fonts only. This script prints, for every
 family that `font_probe` reported as NOT INSTALLED, whether the platform database has it, and
-which directories hold fonts that qtrs never looks at. It prints only; it never fails the build.
+which directories hold fonts that ferrokit never looks at. It prints only; it never fails the build.
 
 usage: ci_platform_fonts.py <font-probe-output.txt>
 """
@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 
-QTRS_ROOTS = ("/usr/share/fonts", "/System/Library/Fonts")
+FERROKIT_ROOTS = ("/usr/share/fonts", "/System/Library/Fonts")
 
 
 def missing_families(probe_path):
@@ -31,17 +31,17 @@ def missing_families(probe_path):
     return names
 
 
-def scanned_by_qtrs(path):
-    return any(path == r or path.startswith(r + "/") for r in QTRS_ROOTS)
+def scanned_by_ferrokit(path):
+    return any(path == r or path.startswith(r + "/") for r in FERROKIT_ROOTS)
 
 
 def dir_histogram(paths):
     counts = collections.Counter(os.path.dirname(p) for p in paths)
-    print("directories holding fonts (qtrs scans: *):")
+    print("directories holding fonts (ferrokit scans: *):")
     for d, n in sorted(counts.items()):
-        print("%s %s: %d" % ("*" if scanned_by_qtrs(d) else " ", d, n))
-    outside = sum(n for d, n in counts.items() if not scanned_by_qtrs(d))
-    print("font files outside the directories qtrs scans: %d of %d" % (outside, sum(counts.values())))
+        print("%s %s: %d" % ("*" if scanned_by_ferrokit(d) else " ", d, n))
+    outside = sum(n for d, n in counts.items() if not scanned_by_ferrokit(d))
+    print("font files outside the directories ferrokit scans: %d of %d" % (outside, sum(counts.values())))
 
 
 def macos(missing):
@@ -65,7 +65,7 @@ def macos(missing):
     for name in missing:
         hit = sorted(families.get(name.lower(), ()))
         if hit:
-            tag = "" if scanned_by_qtrs(os.path.dirname(hit[0])) else "  (outside qtrs scan dirs)"
+            tag = "" if scanned_by_ferrokit(os.path.dirname(hit[0])) else "  (outside ferrokit scan dirs)"
             print("CoreText HAS    %-24s %s%s" % (name, hit[0], tag))
         else:
             print("CoreText LACKS  %-24s" % name)
@@ -101,7 +101,7 @@ def main():
         elif system == "Linux":
             linux(missing)
         else:
-            print("(Windows: qtrs scans %WINDIR%\\Fonts like Qt's GDI/FT database; nothing to compare)")
+            print("(Windows: ferrokit scans %WINDIR%\\Fonts like Qt's GDI/FT database; nothing to compare)")
     except Exception as e:  # diagnostics only
         print("diagnostic failed: %r" % (e,))
     return 0

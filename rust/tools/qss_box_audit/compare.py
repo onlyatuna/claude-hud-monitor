@@ -1,9 +1,9 @@
-"""Compares results/py_box[_dpr1].json (PySide6) with results/rs_box[_dpr1].json (qtrs). Usage: python compare.py"""
+"""Compares results/py_box[_dpr1].json (PySide6) with results/rs_box[_dpr1].json (ferrokit). Usage: python compare.py"""
 import json, os
 D = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'results')
 for suffix in ('', '_dpr1'):
     py = json.load(open(os.path.join(D, f'py_box{suffix}.json'))); rs = json.load(open(os.path.join(D, f'rs_box{suffix}.json')))
-    print(f"\n## DPR {py['meta']['dpr']}   (differences only; P = PySide6, R = qtrs)")
+    print(f"\n## DPR {py['meta']['dpr']}   (differences only; P = PySide6, R = ferrokit)")
     n = {'min': 0, 'max': 0, 'hint': 0, 'minHint': 0}
     for k in py:
         if k == 'meta': continue

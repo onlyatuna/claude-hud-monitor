@@ -13,7 +13,7 @@
 | :--- | :--- | :--- |
 | **執行檔名** | `ClaudeHUD.exe` (Windows) / `ClaudeHUD` (macOS, Linux) | `ClaudeHUD.exe` (Windows) / `ClaudeHUD.app` (macOS) |
 | **語言與版本** | Rust (2021 edition) | Python 3.12 |
-| **GUI 框架** | qtrs（倉庫內建 Qt／PySide6 語意 GUI 工具組；Windows 後端為 Win32，另有 Cocoa、X11、Wayland 後端原始碼） | PySide6 (Qt 6.7+) |
+| **GUI 框架** | ferrokit（獨立的 Rust UI 函式庫，Qt 語意的子集實作，以 git 依賴引用：https://github.com/onlyatuna/ferrokit ；Windows 後端為 Win32，另有 Cocoa、X11、Wayland 後端原始碼） | PySide6 (Qt 6.7+) |
 | **HTTP 客戶端** | ureq 2.12 (TLS) | urllib.request (標準函式庫) |
 | **行程與記憶體機制** | 原生編譯二進制，無額外 Runtime 依賴 | 內建 gc.collect() 與 Win32 EmptyWorkingSet 工作集釋放機制 |
 | **打包方式** | `cargo build --release` (opt-level="z"、strip、panic="abort"；lto=false、codegen-units=16；渲染相關 crate 以 opt-level=3 覆寫) | PyInstaller 6.x (自訂 spec 排除未使用的 Qt 模組與語系) |
@@ -38,8 +38,9 @@ claude-hud-monitor/
 │   └── requirements.txt
 ├── rust/                      # Rust 實作原始碼與測試
 │   ├── src/                   # 狀態機、HTTP 客戶端、平台系統匣與視窗
-│   ├── qtrs/                   # 倉庫內建 Qt 語意 GUI 工具組 (qtrs-core／gui／widgets／platform 等 crates)
-│   │   └── PYTHON_QT_SEMANTIC_CONTRACT.md  # Python Qt 語意對照與缺口狀態文件
+│   ├── docs/qt_parity/         # Python Qt 語意對照（Contract）與缺口狀態、規格文件
+│   ├── tests/                  # 與 PySide6 對照的 HUD 專屬測試及其預錄資料
+│   ├── tools/                  # PySide6 探針、量測與稽核腳本
 │   ├── assets/                # 專案圖示與資源
 │   ├── Cargo.toml             # 二進制名稱定義為 ClaudeHUD
 │   └── build.rs               # Windows 資源表與 DPI 設定

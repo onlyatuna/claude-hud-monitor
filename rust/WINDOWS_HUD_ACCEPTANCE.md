@@ -1,13 +1,13 @@
 # Windows HUD 實機驗收清單
 
-**狀態：全部「未執行」。** 這份清單只定義步驟與判定標準，不含任何已執行的結果。它對應 `rust/qtrs/PYTHON_QT_SEMANTIC_CONTRACT.md` 附錄 E.2 的 5 項（候選阻擋項目；A/B/C 分類尚未經使用者批准）。CI 通過、純函式測試與程式化訊息測試都不能代替這裡的任何一項。
+**狀態：全部「未執行」。** 這份清單只定義步驟與判定標準，不含任何已執行的結果。它對應 `rust/docs/qt_parity/PYTHON_QT_SEMANTIC_CONTRACT.md` 附錄 E.2 的 5 項（候選阻擋項目；A/B/C 分類尚未經使用者批准）。CI 通過、純函式測試與程式化訊息測試都不能代替這裡的任何一項。
 
-這份清單屬於 HUD 的發布驗收，不屬於 qtrs／ferrokit 函式庫；之後拆 repo 時留在 HUD repo。`QTRS_*` 環境變數會在改名時一併更名，改名後以新名稱為準。
+這份清單屬於 HUD 的發布驗收，不屬於 ferrokit 函式庫，留在 HUD repo。環境變數已更名：舊的 `QTRS_*` 現在是 `FERROKIT_*`，本文件使用新名稱。
 
 ## 使用規則
 1. 判定只有三種：通過、不通過、未執行。由執行者填寫；沒有實際執行就維持「未執行」。
 2. 標示「Contract 沒有預期值」的步驟只記錄觀察，不判定通過。
-3. 不通過時附證據：截圖、`qtrs_resize_debug.log`、`config.json` 的相關欄位。
+3. 不通過時附證據：截圖、`ferrokit_resize_debug.log`、`config.json` 的相關欄位。
 4. 標示 `[INFERENCE]` 的預期是推論，不是 Contract 的結論。實測與推論不符時，先記錄，再回頭檢查推論。
 5. 結果交回後，Contract 附錄 E.2 的「狀態」欄才會改，並且只照實填寫。
 
@@ -21,12 +21,12 @@
 | 尺寸（邏輯 px，`config.rs:67-77`） | 最小值：橫向 540×125、直向 250×320、表格 380×280。HUD 沒有設最大尺寸（RC-205 記載 `set_maximum_size` 沒有 HUD 呼叫者） |
 | 拖曳與縮放區 | 左鍵按在視窗內側距邊 8 邏輯 px 內是縮放（`calc_frameless_edge`，`M = 8`），其餘沒有被 widget 處理的左鍵按下是移動（`hud_window.rs:491-505`）。`locked = true` 時兩者都停用 |
 | Python 對照 | 需要對照時，依 README 啟動 Python 版，在同一螢幕、同一位置操作 |
-| DComp | 預設不啟用。`echo $env:QTRS_ENABLE_DCOMP` 應為空 |
+| DComp | 預設不啟用。`echo $env:FERROKIT_ENABLE_DCOMP` 應為空 |
 
 ## 項目 1：互動式視窗尺寸限制、視窗拖曳與多縮放
 - **來源**：Contract RC-204～207 的 Residual。RC-204 實測 `WS_POPUP`（HUD 的 `LAYERED` 彈出視窗）的程式化 `SetWindowPos` 不受追蹤上下限限制，所以下限只在互動式縮放時由系統套用；CI 的比例是 1.0。
 - **環境**：滑鼠。1a～1c 一台可切換縮放的螢幕；1d 兩台不同縮放的螢幕。
-- **量測方法**：以 `QTRS_RESIZE_DEBUG=1` 啟動（PowerShell：`$env:QTRS_RESIZE_DEBUG="1"; .\ClaudeHUD.exe`）。每次拖曳結束時印出一份報告到 stderr，並附加到 `%TEMP%\qtrs_resize_debug.log`（`resize_debug.rs` 檔頭）。取最後一筆 `ULW ... hwnd AxB->CxD` 的 `CxD`，單位是實體像素。**不要用 `config.json` 判定下限**：`apply_size` 會把儲存值夾到最小值以上（`hud_window.rs:39-42`），看不出限制是否生效。
+- **量測方法**：以 `FERROKIT_RESIZE_DEBUG=1` 啟動（PowerShell：`$env:FERROKIT_RESIZE_DEBUG="1"; .\ClaudeHUD.exe`）。每次拖曳結束時印出一份報告到 stderr，並附加到 `%TEMP%\ferrokit_resize_debug.log`（`resize_debug.rs` 檔頭）。取最後一筆 `ULW ... hwnd AxB->CxD` 的 `CxD`，單位是實體像素。**不要用 `config.json` 判定下限**：`apply_size` 會把儲存值夾到最小值以上（`hud_window.rs:39-42`），看不出限制是否生效。
 
 **1a 縮小下限**（每種縮放 × 每種模式）
 
@@ -102,17 +102,17 @@
 | 4d. 停用或拔掉副螢幕後再啟動 | 儲存位置在所有螢幕之外時，結果以 Python 版在相同條件下的結果為準；記錄兩者差異 | |
 
 ## 項目 5：DirectComposition 真實裝置與 DXGI 裝置遺失（條件式）
-- **來源**：Contract RC-203 Residual。DComp 預設不啟用（`QTRS_ENABLE_DCOMP` 為 `1` 或 `true` 才啟用，`qtrs-platform/src/window.rs:1404`）。**只有在決定預設啟用 DComp 時才需要執行**；否則填「不適用」。
+- **來源**：Contract RC-203 Residual。DComp 預設不啟用（`FERROKIT_ENABLE_DCOMP` 為 `1` 或 `true` 才啟用，`ferrokit-platform/src/window.rs:1402`（ferrokit repo，2a93487））。**只有在決定預設啟用 DComp 時才需要執行**；否則填「不適用」。
 - **環境**：有 DirectComposition 能力的 GPU；記錄 GPU 與驅動版本。
 - 已有的自動化證據只涵蓋合成故障的降級，沒有模擬真實的 DXGI `DEVICE_REMOVED` 或驅動崩潰（RC-203 驗證段）。
 
 | 步驟 | 預期 | 判定 |
 |---|---|---|
-| 1. `$env:QTRS_ENABLE_DCOMP="1"` 啟動 HUD | 透明背景、不透明度、文字、拖曳與縮放與預設路徑一致；Contract 沒有逐像素預期，只記錄差異 | |
+| 1. `$env:FERROKIT_ENABLE_DCOMP="1"` 啟動 HUD | 透明背景、不透明度、文字、拖曳與縮放與預設路徑一致；Contract 沒有逐像素預期，只記錄差異 | |
 | 2. HUD 執行中按 Win+Ctrl+Shift+B（重啟顯示驅動）`[INFERENCE]`：這是一般 Windows 做法，未在本專案驗證 | 不當機、不凍結；HUD 繼續顯示（RC-203 設計：失敗時降級為 Layered 並以完整 dirty 區域重試） | |
-| 3. 繼續操作 HUD | 仍可拖曳與縮放；降級後即使仍設定 `QTRS_ENABLE_DCOMP=1` 也維持 Layered（`dcomp_downgraded`） | |
+| 3. 繼續操作 HUD | 仍可拖曳與縮放；降級後即使仍設定 `FERROKIT_ENABLE_DCOMP=1` 也維持 Layered（`dcomp_downgraded`） | |
 
-目前沒有已知的日誌訊息可辨識使用中的 presenter（我只在 `qtrs-platform/src/window.rs` 看到 `dcomp_downgraded` 旗標，沒有查 `dcomp.rs` 的輸出），所以判定靠行為：持續可見、可互動。
+目前沒有已知的日誌訊息可辨識使用中的 presenter（我只在 `ferrokit-platform/src/window.rs`（ferrokit repo） 看到 `dcomp_downgraded` 旗標，沒有查 `dcomp.rs` 的輸出），所以判定靠行為：持續可見、可互動。
 
 ## 結果記錄
 | 項目 | 日期 | 執行者 | 受測 commit | 環境（螢幕與縮放、GPU 與驅動、Windows 版本） | 判定 | 證據路徑 |
