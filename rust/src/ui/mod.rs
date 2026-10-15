@@ -20,6 +20,8 @@ pub(crate) mod test_support;
 mod tool_tip_tests;
 pub mod tray_icon;
 pub mod usage_table;
+#[cfg(all(test, windows))]
+mod usage_table_relayout_tests;
 
 #[cfg(target_os = "windows")]
 pub fn enable_win32_dark_mode(hwnd: isize) {
