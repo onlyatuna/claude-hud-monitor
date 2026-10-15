@@ -8,6 +8,8 @@ mod geometry_audit;
 mod geometry_persist_tests;
 #[cfg(all(test, windows))]
 mod header_row_tests;
+#[cfg(all(test, windows))]
+mod hover_state_tests;
 pub mod hud_window;
 pub mod placement;
 pub mod provider_card;
