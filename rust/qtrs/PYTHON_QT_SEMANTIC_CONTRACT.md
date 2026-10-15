@@ -2889,7 +2889,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - qtrs workspace（略過 `real_windows`）102 個 test binary 全 ok；HUD 122 passed、5 ignored；clippy `-D warnings`、`cargo fmt --check` 通過。`--snapshot` 實跑：表格、卡片橫／直、右鍵選單四張 PNG 內容完整。
   - `cargo check --target x86_64-unknown-linux-gnu／aarch64-apple-darwin` 對 qtrs-widgets 在本機無法完成（`tinyfiledialogs` 需 C 編譯器）；非 Windows 以 CI 為準。
 - **Residual**：
-  - Expose：生產環境沒有呼叫 `bind_event_loop`，`WM_PAINT` 不會變成 `Expose`；預設的 DirectComposition presenter 保留內容，GDI layered 退路被遮蓋後可能要等下一次變更才重繪（未驗證）。
+  - Expose：生產環境沒有呼叫 `bind_event_loop`，`WM_PAINT` 不會變成 `Expose`；預設的 DirectComposition presenter 保留內容，GDI layered 退路被遮蓋後可能要等下一次變更才重繪（未驗證）。（更正：RC-203 之後預設是 Layered，不是 DirectComposition，上一句「預設的 DirectComposition presenter」已不成立；未驗證的風險落在目前的預設路徑，見附錄 E.2 與 `rust/WINDOWS_HUD_ACCEPTANCE.md` 項目 3。）
   - `Menu::update` 仍 post 到自身 id（popup 由 `present_custom_at` 繪製，不經 dirty 追蹤）。
   - 跨執行緒 `update()` 仍退回 post `UpdateRequest`（既有行為）：`Widget::update_rect` 在本執行緒找不到視窗的 render state 時（`schedule_widget_update` 回 `false`）才走此路徑；RC-170 起目的地改為接收者所屬執行緒（`query_object_thread`），但仍是 post，不是直接進入視窗的 render state。`test_widget_update_cross_thread.rs` 只驗證事件送達所屬執行緒的 event loop，沒有驗證之後的重繪結果。
   - DpiChanged 仍直接 `do_render_and_present`。
