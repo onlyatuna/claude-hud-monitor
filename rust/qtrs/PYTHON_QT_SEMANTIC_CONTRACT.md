@@ -2891,7 +2891,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：
   - Expose：生產環境沒有呼叫 `bind_event_loop`，`WM_PAINT` 不會變成 `Expose`；預設的 DirectComposition presenter 保留內容，GDI layered 退路被遮蓋後可能要等下一次變更才重繪（未驗證）。
   - `Menu::update` 仍 post 到自身 id（popup 由 `present_custom_at` 繪製，不經 dirty 追蹤）。
-  - 跨執行緒 `update()` 仍退回 post `UpdateRequest`（既有行為）。
+  - 跨執行緒 `update()` 仍退回 post `UpdateRequest`（既有行為）：`Widget::update_rect` 在本執行緒找不到視窗的 render state 時（`schedule_widget_update` 回 `false`）才走此路徑；RC-170 起目的地改為接收者所屬執行緒（`query_object_thread`），但仍是 post，不是直接進入視窗的 render state。`test_widget_update_cross_thread.rs` 只驗證事件送達所屬執行緒的 event loop，沒有驗證之後的重繪結果。
   - DpiChanged 仍直接 `do_render_and_present`。
 
 #### RC-87 計時器 tick 經過 filter 與 `event()`（G3.4.c、G5.2.a）
@@ -3593,7 +3593,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/widget.rs` 與 `rust/qtrs/crates/qtrs-widgets/src/menu.rs`，目標執行緒改由 `query_object_thread(target).unwrap_or(self.object_data.thread_id)` 解析，並在 `qtrs-derive/src/lib.rs` 修正 2 處 clippy 警告確保零警告。
 - **驗證**：新增測試 `crates/qtrs-widgets/tests/test_widget_update_cross_thread.rs`（2 項測試，包含已註冊 widget 及未註冊於 global registry 之 widget，驗證由 worker thread 呼叫 `update()` 時，事件確實送達所屬 GUI 執行緒之 event loop）。未修正前 FAIL：`Unregistered widget update() from worker thread must post to widget's thread affinity`。修正後 PASS。qtrs-widgets 418 項全過；HUD 135 項全過；`cargo clippy -j 1 -- -D warnings` 0 warning；`rustfmt` 格式檢查通過；`--snapshot` 版面 0 px 差異。
 - **HUD 影響**：無負面影響。HUD 若由背景任務觸發 widget 更新能更安全送達主執行緒。
-- **Residual**：無。
+- **Residual**：僅指「`update()` 的 `UpdateRequest` 送達接收者所屬執行緒」這一項無殘留。`test_widget_update_cross_thread.rs` 只驗證 event filter 收到 `UpdateRequest`；跨執行緒 `update()` 之後是否造成正確重繪沒有驗證（見 RC-86 Residual）。
 
 #### RC-171 find_child 採兩階段搜尋：先比對直接 children 再遞迴子樹（G2.3.b，R-00018）
 - **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:2242-2256]` `qt_qFindChild_helper`：
