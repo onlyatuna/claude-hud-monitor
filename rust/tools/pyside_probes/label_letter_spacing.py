@@ -4,7 +4,7 @@
 `qfont.cpp`, `qfixed_p.h`), added to every glyph advance (`QTextEngine::shapeText`), so the width of a
 long text differs by a pixel from one that adds 0.4 exactly. Prints `text width height` of
 `QLabel.sizeHint()` for the card-title style at the style sheet of
-`rust/qtrs/crates/qtrs-widgets/tests/test_label_letter_spacing_hint.rs`.
+`crates/ferrokit-widgets/tests/test_label_letter_spacing_hint.rs` in the ferrokit repository.
 
 Run (Windows; PySide6 6.11.2): DPR 1.25 -> QT_SCREEN_SCALE_FACTORS=1.25; DPR 1.0 -> QT_ENABLE_HIGHDPI_SCALING=0
   python label_letter_spacing.py

@@ -2,12 +2,12 @@
 Usage: python hud_paint_steady.py [seconds=20]   (HUD_EXE overrides the exe)
 """
 import subprocess, time, os, re, sys, statistics as st
-exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "target", "release", "ClaudeHUD.exe"))
+exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "target", "release", "ClaudeHUD.exe"))
 tr = os.path.join(os.environ["TEMP"], "paint_steady.log")
 if os.path.exists(tr):
     os.remove(tr)
 secs = float(sys.argv[1]) if len(sys.argv) > 1 else 20
-p = subprocess.Popen([exe], env=dict(os.environ, QTRS_STARTUP_TRACE=tr))
+p = subprocess.Popen([exe], env=dict(os.environ, FERROKIT_STARTUP_TRACE=tr))
 time.sleep(secs)
 p.kill()
 frames = []

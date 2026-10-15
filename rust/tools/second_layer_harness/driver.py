@@ -1,6 +1,6 @@
 """Automated drag + screen-capture detector for the 'second layer' ghost.
 
-python driver.py <qt|w32:X> [scenario ...]
+python driver.py <qt|w32:X|ferrokit[:debug|release]> [scenario ...]
 Drags the real window corner with SendInput-equivalent mouse_event (enters the real
 Windows modal sizing loop) while a thread grabs the composed desktop. A frame is
 'ghost' when, with the HWND rect unchanged across the grab, magenta window pixels lie
@@ -15,6 +15,8 @@ from PIL import ImageGrab
 u32 = ctypes.windll.user32
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 HERE = os.path.dirname(os.path.abspath(__file__))
+# A ferrokit checkout (default: a sibling of this repository) built with `cargo build --examples`.
+FERROKIT = os.environ.get("FERROKIT_DIR") or os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "ferrokit"))
 GHOST_PX = 1500
 RAD = int(os.environ.get('RAD', '24'))
 INSET = int(os.environ.get('INSET', '14'))
@@ -53,9 +55,9 @@ def seq(name, corner):
 
 
 def run(target, scenario, corner):
-    if target.startswith("qtrs"):
+    if target.startswith("ferrokit"):
         prof = target.split(":")[1] if ":" in target else "debug"
-        cmd = [os.path.join(HERE, "..", "..", "target", prof, "examples", "second_layer_probe.exe")]
+        cmd = [os.path.join(FERROKIT, "target", prof, "examples", "second_layer_probe.exe")]
     else:
         cmd = [sys.executable, os.path.join(HERE, "qt_layered.py" if target == "qt" else "w32_layered.py")] \
             + ([] if target == "qt" else [target.split(":")[1]])

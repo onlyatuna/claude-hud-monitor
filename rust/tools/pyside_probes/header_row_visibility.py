@@ -27,7 +27,7 @@ Run (Windows; PySide6 6.11.2): DPR 1.25 -> QT_SCREEN_SCALE_FACTORS=1.25; DPR 1.0
 import sys
 from pathlib import Path
 
-PY_ROOT = str(Path(__file__).resolve().parents[4] / "python")
+PY_ROOT = str(Path(__file__).resolve().parents[3] / "python")
 sys.path.insert(0, PY_ROOT)
 
 from PySide6.QtCore import QRect
@@ -56,7 +56,7 @@ def main():
     title.setObjectName("HeaderTitle")
     ghost = QLabel("\U0001F47B", owner)
     # The ghost label has no font-size in the sheet, so its hint comes from the default font size:
-    # Qt's own hint is 17x16 at DPR 1.25 and 21x20 at 1.0 (Segoe UI 9pt), qtrs's is 18x18 and 18x17
+    # Qt's own hint is 17x16 at DPR 1.25 and 21x20 at 1.0 (Segoe UI 9pt), ferrokit's is 18x18 and 18x17
     # (a fixed 13px default). That font difference is a separate root cause (see the Contract's
     # G9.7.b note); the ghost is fixed at 18x18 here, on both sides, to compare the layout alone.
     ghost.setFixedSize(18, 18)

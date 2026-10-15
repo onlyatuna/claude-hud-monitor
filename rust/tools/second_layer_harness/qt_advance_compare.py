@@ -4,11 +4,12 @@ Qt side: QFontMetricsF.horizontalAdvance at the requested device pixel ratio.
 Rust side: examples/advance_dump (FontMetrics::horizontal_advance_exact).
 
 Usage: python qt_advance_compare.py [dpr ...]      dpr 1 runs Qt with high-DPI scaling disabled.
-Env: ADVANCE_DUMP overrides the advance_dump binary.
+Env: ADVANCE_DUMP overrides the advance_dump binary; FERROKIT_DIR is the ferrokit checkout it is built in
+(default: a sibling of this repository, built with `cargo build --release --examples`).
 """
 import json, os, subprocess, sys
 
-root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+root = os.environ.get("FERROKIT_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "ferrokit"))
 exe = os.environ.get("ADVANCE_DUMP") or os.path.join(root, "target", "release", "examples", "advance_dump.exe")
 
 FAMILIES = [("Microsoft JhengHei UI", [400, 600]), ("Segoe UI", [int(w) for w in os.environ.get("SEGOE_WEIGHTS", "400").split(",")]), ("Microsoft JhengHei", [400])]

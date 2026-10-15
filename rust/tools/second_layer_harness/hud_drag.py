@@ -1,13 +1,13 @@
-"""Drives the real HUD: drags its bottom-right then top-left corner, QTRS_RESIZE_DEBUG logs the result."""
+"""Drives the real HUD: drags its bottom-right then top-left corner, FERROKIT_RESIZE_DEBUG logs the result."""
 import subprocess, time, ctypes, os, sys
 from ctypes import wintypes as W
 u = ctypes.windll.user32
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
 u.FindWindowW.restype = W.HWND
-exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "target", "release", "ClaudeHUD.exe"))
+exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "target", "release", "ClaudeHUD.exe"))
 log = sys.argv[1]
 if os.path.exists(log): os.remove(log)
-env = dict(os.environ, QTRS_RESIZE_DEBUG=log)
+env = dict(os.environ, FERROKIT_RESIZE_DEBUG=log)
 p = subprocess.Popen([exe], env=env)
 h = 0
 for _ in range(100):

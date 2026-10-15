@@ -1,15 +1,15 @@
-//! LCD (ClearType) text against PySide6 6.11.2 on Windows (`tools/second_layer_harness/qt_lcd_dump.py`):
+//! LCD (ClearType) text against PySide6 6.11.2 on Windows (`rust/tools/second_layer_harness/qt_lcd_dump.py`):
 //! the same text drawn by Qt onto several destinations, compared pixel by pixel.
 //!
 //! The fixtures are 48x24 RGBA dumps of `QPainter.drawText(2, 17, text)` with a 12 px font,
 //! text colour (226, 232, 240) over (22, 25, 32), at ClearType gamma 1.2 and RGB sub-pixel order.
 #![cfg(windows)]
 
-use qtrs_gui::geometry::primitives::PointF;
-use qtrs_gui::paint::{Painter, Pen, Pixmap};
-use qtrs_gui::text::font::Font;
-use qtrs_gui::text::smoothing::TextSmoothing;
-use qtrs_gui::tiny_skia::Color;
+use ferrokit_gui::geometry::primitives::PointF;
+use ferrokit_gui::paint::{Painter, Pen, Pixmap};
+use ferrokit_gui::text::font::Font;
+use ferrokit_gui::text::smoothing::TextSmoothing;
+use ferrokit_gui::tiny_skia::Color;
 
 const W: u32 = 48;
 const H: u32 = 24;
@@ -17,7 +17,10 @@ const BASE_X: f32 = 2.0;
 const BASE_Y: f32 = 17.0;
 
 fn fixture(dir: &str, case: &str) -> Vec<u8> {
-    let path = format!("{}/tests/fixtures/{dir}/{case}.bin", env!("CARGO_MANIFEST_DIR"));
+    let path = format!(
+        "{}/tests/fixtures/{dir}/{case}.bin",
+        env!("CARGO_MANIFEST_DIR")
+    );
     std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
 }
 
@@ -72,12 +75,25 @@ const LCD: TextSmoothing = TextSmoothing {
 const BG: fn() -> Color = || Color::from_rgba8(22, 25, 32, 255);
 const FG: fn() -> Color = || Color::from_rgba8(226, 232, 240, 255);
 
-fn check(dir: &str, family: &str, text: &str, case: &str, bg: Color, fg: Color, smoothing: TextSmoothing, mean: f64, max: i32) {
+fn check(
+    dir: &str,
+    family: &str,
+    text: &str,
+    case: &str,
+    bg: Color,
+    fg: Color,
+    smoothing: TextSmoothing,
+    mean: f64,
+    max: i32,
+) {
     let want = premultiply(&fixture(dir, case));
     let got = render(family, text, bg, fg, smoothing);
     let (m, x) = diff(&got, &want);
     println!("{dir}/{case}: mean {m:.3} max {x}");
-    assert!(m <= mean && x <= max, "{dir}/{case}: mean {m:.3} (<= {mean}) max {x} (<= {max})");
+    assert!(
+        m <= mean && x <= max,
+        "{dir}/{case}: mean {m:.3} (<= {mean}) max {x} (<= {max})"
+    );
 }
 
 #[test]
@@ -87,25 +103,78 @@ fn lcd_text_on_opaque_destination_matches_qt() {
         ("lcd_jhenghei12", "Microsoft JhengHei UI", "Hag中"),
     ] {
         check(dir, family, text, "rgb32_opaque", BG(), FG(), LCD, 0.1, 2);
-        check(dir, family, text, "argb_pre_opaque", BG(), FG(), LCD, 0.1, 2);
+        check(
+            dir,
+            family,
+            text,
+            "argb_pre_opaque",
+            BG(),
+            FG(),
+            LCD,
+            0.1,
+            2,
+        );
     }
 }
 
 #[test]
 fn lcd_text_on_translucent_destination_is_grey_like_qt() {
-    for (dir, family, text) in [("lcd_segoe12", "Segoe UI", "Hag"), ("lcd_jhenghei12", "Microsoft JhengHei UI", "Hag中")] {
-        check(dir, family, text, "argb_pre_clear", Color::TRANSPARENT, FG(), LCD, 0.3, 3);
-        check(dir, family, text, "argb_pre_half", Color::from_rgba8(22, 25, 32, 128), FG(), LCD, 0.3, 3);
+    for (dir, family, text) in [
+        ("lcd_segoe12", "Segoe UI", "Hag"),
+        ("lcd_jhenghei12", "Microsoft JhengHei UI", "Hag中"),
+    ] {
+        check(
+            dir,
+            family,
+            text,
+            "argb_pre_clear",
+            Color::TRANSPARENT,
+            FG(),
+            LCD,
+            0.3,
+            3,
+        );
+        check(
+            dir,
+            family,
+            text,
+            "argb_pre_half",
+            Color::from_rgba8(22, 25, 32, 128),
+            FG(),
+            LCD,
+            0.3,
+            3,
+        );
     }
 }
 
 #[test]
 fn lcd_text_with_translucent_colour_matches_qt() {
-    check("lcd_segoe12", "Segoe UI", "Hag", "rgb32_textalpha", BG(), Color::from_rgba8(226, 232, 240, 128), LCD, 1.5, 8);
+    check(
+        "lcd_segoe12",
+        "Segoe UI",
+        "Hag",
+        "rgb32_textalpha",
+        BG(),
+        Color::from_rgba8(226, 232, 240, 128),
+        LCD,
+        1.5,
+        8,
+    );
 }
 
 #[test]
 fn grey_text_without_cleartype_matches_qt_a8_path() {
     // `QImage::Format_ARGB32` is not a LCD destination in Qt, so the glyph cache is `A8`.
-    check("lcd_segoe12", "Segoe UI", "Hag", "argb_straight", BG(), FG(), TextSmoothing::OFF, 0.3, 3);
+    check(
+        "lcd_segoe12",
+        "Segoe UI",
+        "Hag",
+        "argb_straight",
+        BG(),
+        FG(),
+        TextSmoothing::OFF,
+        0.3,
+        3,
+    );
 }

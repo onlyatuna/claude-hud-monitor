@@ -1,5 +1,5 @@
 """Commit charge of a HUD process tree: idle, and after opening its context menu (right-click on its window).
-Usage: python py_mem.py <cwd> <command...>   e.g.  python py_mem.py ../../python python main.py
+Usage: python py_mem.py <cwd> <command...>   e.g.  python py_mem.py ../../../python python main.py
 """
 import subprocess, time, ctypes, sys
 from ctypes import wintypes as W

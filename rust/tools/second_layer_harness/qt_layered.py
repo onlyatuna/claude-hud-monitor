@@ -1,4 +1,4 @@
-"""Minimal frameless translucent QWidget (no qtrs). Corner press -> startSystemResize."""
+"""Minimal frameless translucent QWidget (no ferrokit). Corner press -> startSystemResize."""
 import sys
 from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QPainter, QColor, QPainterPath

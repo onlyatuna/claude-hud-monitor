@@ -19,7 +19,7 @@ Usage (DPR 1.0 and 1.25):
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "python"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "python"))
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage

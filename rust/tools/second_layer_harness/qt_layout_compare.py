@@ -7,11 +7,12 @@ item's rectangle must be identical.
 
     python qt_layout_compare.py [cases] [seed]
 
-Run from `rust/qtrs`; builds the probe once with `cargo build -j 1`.
+Builds the probe once with `cargo build -j 1` in the ferrokit checkout (`FERROKIT_DIR`, default: a sibling
+of this repository).
 
     python qt_layout_compare.py --record PATH [cases] [seed]
 
-Writes the oracle fixture replayed in-process by `crates/qtrs-widgets/tests/layout_qt_oracle.rs`:
+Writes the oracle fixture replayed in-process by `crates/ferrokit-widgets/tests/layout_qt_oracle.rs` in the ferrokit repository:
 the hand-written HUD and Qt cases (`hand_cases()`) followed by `cases` seeded rich cases (default 300,
 seed 20260502), then the extension cases (`ext_cases()`: unset margins and spacing, window or child
 owner, container offset, QStackedLayout; seed EXT_SEED). Each record is `probe_line(case)` TAB the
@@ -493,7 +494,7 @@ def record(path, cases, seed):
     ext = ext_cases()
     batch = hand + rich + ext
     header = [
-        "# Qt layout oracle for crates/qtrs-widgets/tests/layout_qt_oracle.rs.",
+        "# Qt layout oracle for crates/ferrokit-widgets/tests/layout_qt_oracle.rs.",
         "# Recorded by tools/second_layer_harness/qt_layout_compare.py --record (PySide6 {}, Qt {}).".format(
             pyside_version(), qt_version()),
         "# Hand-written cases: {}; rich seeded cases: {} (seed {}).".format(len(hand), cases, seed),
@@ -541,9 +542,10 @@ def main():
     parent.resize(800, 700)
     parent.show()
 
-    subprocess.run(["cargo", "build", "-j", "1", "-p", "qtrs-widgets", "--example", "layout_probe"],
-                   check=True)
-    exe = os.path.join("target", "debug", "examples", "layout_probe.exe")
+    ferrokit = os.environ.get("FERROKIT_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "ferrokit"))
+    subprocess.run(["cargo", "build", "-j", "1", "-p", "ferrokit-widgets", "--example", "layout_probe"],
+                   check=True, cwd=ferrokit)
+    exe = os.path.join(ferrokit, "target", "debug", "examples", "layout_probe.exe")
     batch = [make_case(rng) for _ in range(cases)]
     out = subprocess.run([exe], input="\n".join(probe_line(c) for c in batch) + "\n", text=True,
                          capture_output=True, check=True).stdout.strip().split("\n")

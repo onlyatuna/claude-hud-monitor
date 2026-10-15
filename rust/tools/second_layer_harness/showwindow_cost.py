@@ -1,4 +1,4 @@
-"""Times ShowWindow(SW_SHOW) + the WM_ACTIVATE it triggers for a bare Win32 window (no qtrs code)."""
+"""Times ShowWindow(SW_SHOW) + the WM_ACTIVATE it triggers for a bare Win32 window (no ferrokit code)."""
 import ctypes, time, sys
 from ctypes import wintypes as W
 u = ctypes.windll.user32; k = ctypes.windll.kernel32

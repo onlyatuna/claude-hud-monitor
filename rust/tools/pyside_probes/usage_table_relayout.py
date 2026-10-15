@@ -26,7 +26,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-PY_ROOT = str(Path(__file__).resolve().parents[4] / "python")
+PY_ROOT = str(Path(__file__).resolve().parents[3] / "python")
 sys.path.insert(0, PY_ROOT)
 
 from PySide6.QtCore import Qt

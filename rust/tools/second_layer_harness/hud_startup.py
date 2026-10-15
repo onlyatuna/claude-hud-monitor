@@ -1,11 +1,11 @@
-"""Launches the real HUD with QTRS_STARTUP_TRACE and reports launch -> window-visible times."""
+"""Launches the real HUD with FERROKIT_STARTUP_TRACE and reports launch -> window-visible times."""
 import subprocess, time, ctypes, os, sys
 from ctypes import wintypes as W
 u = ctypes.windll.user32
 u.FindWindowW.restype = W.HWND
-exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "target", "release", "ClaudeHUD.exe"))
+exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "target", "release", "ClaudeHUD.exe"))
 trace = sys.argv[1]
-env = dict(os.environ, QTRS_STARTUP_TRACE=trace)
+env = dict(os.environ, FERROKIT_STARTUP_TRACE=trace)
 launch = time.time()
 p = subprocess.Popen([exe], env=env)
 seen = None

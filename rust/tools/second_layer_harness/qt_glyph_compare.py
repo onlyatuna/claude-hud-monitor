@@ -20,7 +20,8 @@ CHARS = os.environ.get("GLYPH_CHARS", "CHUDMonitr5h42%7d18:$.,0123456789gyQ@&AIl
 
 app = QGuiApplication(sys.argv[:1])
 print(f"Qt devicePixelRatio={app.devicePixelRatio()}  (requested {dpr})")
-root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# FERROKIT_DIR: the ferrokit checkout holding examples/glyph_dump (default: a sibling of this repository).
+root = os.environ.get("FERROKIT_DIR") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "ferrokit"))
 exe = os.environ.get("GLYPH_DUMP") or os.path.join(root, "target", "release", "examples", "glyph_dump.exe")
 
 W, H = 96, 96

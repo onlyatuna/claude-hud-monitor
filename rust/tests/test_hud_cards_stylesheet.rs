@@ -1,0 +1,135 @@
+//! The HUD's full cards style sheet (`python/ui/styles.py`) parsed by the QSS parser.
+
+use ferrokit_gui::text::qcssparser::*;
+
+#[test]
+fn test_parse_full_python_cards_stylesheet() {
+    let qss = r#"
+    QWidget#CentralWidget {
+        background-color: rgba(14, 17, 23, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 9px;
+    }
+    
+    QLabel {
+        color: #e2e8f0;
+        font-family: 'Segoe UI', 'SF Pro Display', 'Microsoft JhengHei', sans-serif;
+    }
+    
+    QLabel#HeaderTitle {
+        font-size: 10.5px;
+        font-weight: 800;
+        letter-spacing: 1.0px;
+        color: #94a3b8;
+    }
+    
+    QLabel#HeaderStatus {
+        font-size: 9.5px;
+        color: #64748b;
+        font-family: 'Consolas', monospace;
+    }
+    
+    QLabel#MetricTitle {
+        font-size: 10px;
+        font-weight: 700;
+        color: #94a3b8;
+        letter-spacing: 0.6px;
+    }
+    
+    QLabel#MetricValue {
+        font-size: 16px;
+        font-weight: 800;
+        font-family: 'Consolas', 'Courier New', monospace;
+    }
+    
+    QLabel#SubDetail {
+        font-size: 9.5px;
+        color: #64748b;
+    }
+    
+    QProgressBar {
+        background-color: rgba(255, 255, 255, 0.08);
+        border: none;
+        border-radius: 3px;
+        text-align: right;
+        min-height: 5px;
+        max-height: 5px;
+    }
+    
+    QProgressBar::chunk {
+        border-radius: 3px;
+    }
+    
+    QLabel#Badge {
+        background-color: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 3px;
+        padding: 1px 4px;
+        font-size: 9px;
+        color: #cbd5e1;
+        font-family: 'Consolas', monospace;
+    }
+    
+    QPushButton#LayoutToggleBtn {
+        background-color: transparent;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 4px;
+        color: #94a3b8;
+        font-size: 11px;
+        padding: 1px 4px;
+        min-width: 18px;
+        max-height: 18px;
+    }
+    
+    QPushButton#LayoutToggleBtn:hover {
+        background-color: rgba(255, 255, 255, 0.12);
+        color: #38bdf8;
+        border-color: #38bdf8;
+    }
+    
+    QFrame#Divider {
+        border: none;
+        background-color: rgba(255, 255, 255, 0.12);
+        max-width: 1px;
+        min-width: 1px;
+    }
+    
+    QFrame#HorizontalDivider {
+        background-color: rgba(255, 255, 255, 0.08);
+        border: none;
+        min-height: 1px;
+        max-height: 1px;
+    }
+
+    QMenu {
+        background-color: #161920;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 6px;
+        padding: 4px 0px;
+    }
+    
+    QMenu::item {
+        color: #e2e8f0;
+        padding: 6px 24px 6px 20px;
+        font-size: 11px;
+    }
+    
+    QMenu::item:selected {
+        background-color: #272f3d;
+        color: #38bdf8;
+    }
+    
+    QMenu::separator {
+        height: 1px;
+        background-color: rgba(255, 255, 255, 0.12);
+        margin: 4px 8px;
+    }
+    "#;
+
+    let sheet = QCssStyleSheet::parse(qss);
+    assert_eq!(
+        sheet.rules.len(),
+        18,
+        "All 18 rules in get_cards_stylesheet must be parsed successfully"
+    );
+}

@@ -11,10 +11,10 @@ from PIL import ImageGrab
 u = ctypes.windll.user32
 u.FindWindowW.restype = W.HWND
 ctypes.windll.shcore.SetProcessDpiAwareness(2)
-exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "target", "release", "ClaudeHUD.exe"))
+exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "target", "release", "ClaudeHUD.exe"))
 trace = sys.argv[1]
 shots = sys.argv[2] if len(sys.argv) > 2 else None
-env = dict(os.environ, QTRS_STARTUP_TRACE=trace)
+env = dict(os.environ, FERROKIT_STARTUP_TRACE=trace)
 p = subprocess.Popen([exe], env=env)
 
 h = 0

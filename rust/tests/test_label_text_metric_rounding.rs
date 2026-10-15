@@ -5,8 +5,8 @@
 //! (Qt 6, Windows, DirectWrite) of the same sheet at DPR 1.25 (`QT_SCREEN_SCALE_FACTORS=1.25`) and
 //! DPR 1.0 (`QT_ENABLE_HIGHDPI_SCALING=0`): the text widths are 59/144/88 and 58/142/80.
 #![cfg(windows)]
-use qtrs_core::object::QObject;
-use qtrs_widgets::{Label, Widget};
+use ferrokit_core::object::QObject;
+use ferrokit_widgets::{Label, Widget};
 
 const SHEET: &str = "\
 QLabel { color: #e2e8f0; font-family: 'Segoe UI', 'SF Pro Display', 'Microsoft JhengHei', sans-serif; }
@@ -15,7 +15,7 @@ QLabel#MetricTitle { font-size: 10px; font-weight: 700; color: #94a3b8; letter-s
 QLabel#HeaderStatus { font-size: 9.5px; color: #64748b; font-family: 'Consolas', monospace; }";
 
 fn hint_width(object_name: &str, text: &str, dpr: f32) -> i32 {
-    qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
+    ferrokit_gui::text::font_database::set_application_device_pixel_ratio(dpr);
     let mut l = Label::new(text);
     l.set_object_name(object_name);
     l.set_style_sheet(SHEET);

@@ -5,6 +5,11 @@
 - 基準：PySide6 / Qt **6.11.2**，Windows。Qt 原始碼在 repo 根目錄 `qtbase/`（與 `rust/` 同層的 `qtbase/src/...`）。
 - 稽核對象：commit `701d36b`（`rust/qtrs` 五個 crate + `rust/src` 應用層）。檔案行號會漂移；以符號名稱為準，行號僅作定位。
 - 本文件 **只定義行為**，不規定實作。`qtrs` 的實作方式可以和 Qt 完全不同，但 §2–§11 每一項的「qtrs required」在可觀察層面必須成立。
+- **搬遷說明（目前狀態）**：`qtrs` 已匯出成獨立的函式庫 ferrokit（https://github.com/onlyatuna/ferrokit），本 repo 不再含 `rust/qtrs/`，HUD 以 git 依賴使用它。讀本文件時：
+  - 文中的 `qtrs-core`、`qtrs-gui`、`qtrs-platform`、`qtrs-widgets`、`qtrs-derive` 與 `crates/qtrs-*/…` 路徑，對應 ferrokit repo 的 `ferrokit-*` 與 `crates/ferrokit-*/…`；程式碼識別字 `qtrs_*` 對應 `ferrokit_*`；環境變數 `QTRS_*` 現在是 `FERROKIT_*`。
+  - 證據中的行號指匯出前 `rust/qtrs/` 的檔案，現在不再對應。匯出時 RC、G、R 編號與 `[QT-SRC]` 註記已從 ferrokit 的註解移除，所以這些編號的證據只在本文件裡。
+  - 文中的 `tools/pyside_probes/…`、`tools/second_layer_harness/…` 現在在 `rust/tools/` 之下；本文件與規格在 `rust/docs/qt_parity/`。
+  - 與 HUD 本身相關的 13 個測試（LCD 像素比對、HUD 樣式表、標籤標頭列、標籤邊框）搬到 `rust/tests/`，其餘 qtrs 測試在 ferrokit repo。
 
 ---
 

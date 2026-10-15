@@ -16,7 +16,7 @@ def mem(p):
     ctypes.windll.psapi.GetProcessMemoryInfo(h, ctypes.byref(m), m.cb)
     k.CloseHandle(h)
     return m.WorkingSetSize / 1048576, m.PagefileUsage / 1048576  # working set, private commit
-exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "target", "release", "ClaudeHUD.exe"))
+exe = os.environ.get("HUD_EXE") or os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "target", "release", "ClaudeHUD.exe"))
 p = subprocess.Popen([exe])
 t0 = time.time(); h = 0
 while time.time() - t0 < 30:

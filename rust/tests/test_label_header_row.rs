@@ -3,16 +3,16 @@
 //! The configuration is the HUD header row reduced to its two text-driven labels
 //! (`hud_window.py:280-288`): a horizontal layout (margins 0, spacing 6) of `QLabel#HeaderTitle`,
 //! a stretch and `QLabel#HeaderStatus`, under the HUD's QLabel style sheet. The expected numbers are
-//! PySide6 6.11.2 measurements on Windows (DirectWrite) from `tools/pyside_probes/label_header_row.py`
+//! PySide6 6.11.2 measurements on Windows (DirectWrite) from `rust/tools/pyside_probes/label_header_row.py`
 //! at DPR 1.25 (`QT_SCREEN_SCALE_FACTORS=1.25`) and DPR 1.0 (`QT_ENABLE_HIGHDPI_SCALING=0`).
 //!
 //! Text widths of these labels are also pinned by `test_label_text_metric_rounding.rs`; this file adds
 //! what that one does not: the height, the minimum size hint, and the rectangles the layout gives the
 //! labels when it is exactly as wide as its hint, wider, and narrower than its minimum.
 #![cfg(windows)]
-use qtrs_core::object::QObject;
-use qtrs_gui::geometry::primitives::{Margins, Rect, Size};
-use qtrs_widgets::{BoxLayout, Label, Layout, Widget, WidgetRef};
+use ferrokit_core::object::QObject;
+use ferrokit_gui::geometry::primitives::{Margins, Rect, Size};
+use ferrokit_widgets::{BoxLayout, Label, Layout, Widget, WidgetRef};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -76,7 +76,7 @@ struct Expected {
 
 fn check(dpr: f32, want: &Expected) {
     let _guard = DPR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    qtrs_gui::text::font_database::set_application_device_pixel_ratio(dpr);
+    ferrokit_gui::text::font_database::set_application_device_pixel_ratio(dpr);
     let mut r = row();
 
     {
