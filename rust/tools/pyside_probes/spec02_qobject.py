@@ -734,6 +734,119 @@ def probe_R00071():
           f"receiver valid {valid(r)}; sender valid {valid(e)}")
 
 
+# ---- R-00074 / R-00075: tree changes made from inside a running callback
+
+class _Host74(QObject):
+    """Runs `todo` from its own event() and records ChildAdded/ChildRemoved with children() as the handler sees it."""
+
+    def __init__(self):
+        super().__init__()
+        self.log = []
+        self.todo = None
+
+    def event(self, e):
+        t = e.type()
+        if t == QEvent.Type.User:
+            self.todo()
+        elif t in (QEvent.Type.ChildAdded, QEvent.Type.ChildRemoved):
+            self.log.append((t.name, e.child().objectName(), "children() in handler", _names(self)))
+        return super().event(e)
+
+
+def probe_R00074():
+    p, c = _Host74(), QObject()
+    c.setObjectName("c")
+
+    def run(todo):
+        p.log.clear()
+        p.todo = todo
+        QCoreApplication.sendEvent(p, QEvent(QEvent.Type.User))
+        return list(p.log), _names(p)
+
+    def add():
+        c.setParent(p)
+        p.log.append(("right after setParent", _names(p)))
+
+    def detach():
+        c.setParent(None)
+        p.log.append(("right after detach", _names(p)))
+
+    log, after = run(add)
+    print(f"R-00074 add inside the parent's own event(): {log}; children() after {after}")
+    log, after = run(detach)
+    print(f"R-00074 detach inside the parent's own event(): {log}; children() after {after}")
+    c2 = QObject(p)
+    c2.setObjectName("c2")
+
+    def delete_child():
+        shiboken6.delete(c2)
+        p.log.append(("right after delete", _names(p)))
+
+    log, after = run(delete_child)
+    print(f"R-00074 delete a child inside the parent's own event(): {log}; children() after {after}")
+
+
+class _Child75(QObject):
+    sig = Signal()
+
+    def __init__(self, parent, log):
+        super().__init__(parent)
+        self.log = log
+        self.hook = None
+
+    def event(self, e):
+        if e.type() == QEvent.Type.User and self.hook:
+            self.hook()
+            try:
+                return super().event(e)
+            except RuntimeError as ex:
+                self.log.append(("super().event() afterwards raises", str(ex)))
+                return True
+        return super().event(e)
+
+
+def probe_R00075():
+    log = []
+    par = QObject()
+    ch = _Child75(par, log)
+    par.destroyed.connect(lambda *_: log.append("parent destroyed"))
+    ch.destroyed.connect(lambda *_: log.append("child destroyed"))
+
+    def hook():
+        log.append(("before delete", "child valid", valid(ch)))
+        shiboken6.delete(par)
+        log.append(("right after delete(parent)", "child valid", valid(ch)))
+
+    ch.hook = hook
+    QCoreApplication.sendEvent(ch, QEvent(QEvent.Type.User))
+    print(f"R-00075 parent deleted inside its child's own event(): {log}")
+    log2 = []
+    par2 = QObject()
+    ch2 = _Child75(par2, log2)
+
+    def slot1():
+        log2.append("slot1 start")
+        shiboken6.delete(par2)
+        log2.append(("slot1 end", "sender valid", valid(ch2)))
+
+    ch2.sig.connect(slot1)
+    ch2.sig.connect(lambda: log2.append("slot2 called"))
+    ch2.sig.emit()
+    print(f"R-00075 parent deleted inside the first of two slots of its child's signal: {log2}")
+    log3 = []
+    par3 = QObject()
+    ch3 = _Child75(par3, log3)
+
+    def slot3():
+        par3.deleteLater()
+        QCoreApplication.sendPostedEvents(None, DEFERRED)
+        log3.append(("after deleteLater + DeferredDelete processed", "child valid", valid(ch3)))
+
+    ch3.sig.connect(slot3)
+    ch3.sig.emit()
+    print(f"R-00075 parent deleteLater processed inside its child's slot: {log3}")
+
+
 PROBES = [
     probe_R00001_49_50, probe_R00057, probe_R00003, probe_R00005, probe_R00012, probe_R00014, probe_R00015, probe_R00016,
     probe_R00017, probe_R00018, probe_R00019, probe_R00020, probe_R00021, probe_R00022,
@@ -741,7 +854,7 @@ PROBES = [
     probe_R00030, probe_R00032, probe_R00034, probe_R00035, probe_R00036, probe_a_b_c_d_e_f,
     probe_R00002, probe_R00004, probe_R00009, probe_R00010, probe_R00013, probe_R00040, probe_R00041,
     probe_R00043, probe_R00051, probe_R00053, probe_R00059, probe_R00060, probe_R00066, probe_R00067,
-    probe_R00071, probe_R00011,
+    probe_R00071, probe_R00011, probe_R00074, probe_R00075,
 ]
 
 
