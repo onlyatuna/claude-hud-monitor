@@ -85,7 +85,7 @@ impl PainterPath {
         self.move_to(p.x, p.y);
     }
 
-    /// Adds a straight line from the current position to `(x, y)`.
+    /// Appends a line segment that ends at `(x, y)`.
     pub fn line_to(&mut self, x: f32, y: f32) {
         let pt = PointF::new(x, y);
         self.current_pos = pt;

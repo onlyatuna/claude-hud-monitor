@@ -26,7 +26,7 @@ pub enum ColorRole {
     WindowText,
     /// Background color for text edit controls, list views, etc.
     Base,
-    /// Alternating background color in views with alternating row colors.
+    /// Background of every second row in views that stripe their rows.
     AlternateBase,
     /// Background for tooltips.
     ToolTipBase,

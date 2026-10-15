@@ -51,7 +51,7 @@ pub struct JsonParseError {
 }
 
 impl JsonParseError {
-    /// Returns a human-readable description of the error.
+    /// A readable message saying where parsing failed and why.
     pub fn error_string(&self) -> String {
         format!(
             "JSON parse error at line {}, col {}: {}",

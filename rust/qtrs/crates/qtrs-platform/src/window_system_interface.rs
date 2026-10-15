@@ -9,7 +9,7 @@ pub enum Delivery {
     Default,
     /// Dispatches immediately to the handler.
     Synchronous,
-    /// Posts the event to the window system event queue and wakes the GUI dispatcher.
+    /// Queues the event and wakes the GUI dispatcher to process it later.
     Asynchronous,
 }
 

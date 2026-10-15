@@ -107,12 +107,12 @@ impl StringList {
             .any(|item| item.to_lowercase() == target_lower)
     }
 
-    /// Returns the index of the first occurrence of `s`, matching `QStringList::indexOf`.
+    /// Position of the first item equal to `s`, like `QStringList::indexOf`.
     pub fn index_of(&self, s: &str) -> Option<usize> {
         self.0.iter().position(|item| item == s)
     }
 
-    /// Returns the index of the last occurrence of `s`, matching `QStringList::lastIndexOf`.
+    /// Position of the last item equal to `s`, like `QStringList::lastIndexOf`.
     pub fn last_index_of(&self, s: &str) -> Option<usize> {
         self.0.iter().rposition(|item| item == s)
     }

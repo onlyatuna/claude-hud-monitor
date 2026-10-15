@@ -44,12 +44,12 @@ impl BitArray {
         Self { len: size, blocks }
     }
 
-    /// Returns the number of bits in the bit array, matching `QBitArray::size`.
+    /// Number of bits held; the same as [`size`](Self::size).
     pub fn len(&self) -> usize {
         self.len
     }
 
-    /// Returns the number of bits in the bit array, matching `QBitArray::size`.
+    /// Number of bits held (`QBitArray::size`).
     pub fn size(&self) -> usize {
         self.len
     }

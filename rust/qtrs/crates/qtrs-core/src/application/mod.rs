@@ -241,7 +241,7 @@ impl CoreApplication {
         &self.about_to_quit
     }
 
-    /// Enters the main event loop and waits until `exit()` or `quit()` is called.
+    /// Runs the main event loop until `exit()` or `quit()` stops it.
     /// Returns the exit code passed to `exit()`.
     pub fn exec(&mut self) -> i32 {
         // qcoreapplication.cpp:1467-1470: a new exec starts with in_exec set and aboutToQuit
@@ -271,7 +271,7 @@ impl CoreApplication {
         current_event_loop().map(|l| l.dispatcher().class_name())
     }
 
-    /// Tells the application to exit with a return code (`QCoreApplication::exit`).
+    /// Stops the event loop and makes `exec()` return `return_code` (`QCoreApplication::exit`).
     pub fn exit(return_code: i32) {
         // qcoreapplication.cpp:1532-1535: aboutToQuit is emitted from exit() itself.
         emit_about_to_quit_once();

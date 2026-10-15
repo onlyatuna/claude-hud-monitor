@@ -31,13 +31,13 @@ impl JsonArray {
         }
     }
 
-    /// Returns the number of elements in the array (`QJsonArray::size` / `count`).
+    /// How many elements the array holds (`QJsonArray::size` / `count`).
     #[inline]
     pub fn len(&self) -> usize {
         self.list.len()
     }
 
-    /// Returns the number of elements in the array (`QJsonArray::count`).
+    /// How many elements the array holds (`QJsonArray::count`).
     #[inline]
     pub fn count(&self) -> usize {
         self.list.len()
@@ -85,7 +85,7 @@ impl JsonArray {
         }
     }
 
-    /// Returns a reference to the element at `index`, or `None` if out of bounds.
+    /// Borrows the element at `index`; `None` when `index` is out of range.
     #[inline]
     pub fn get(&self, index: usize) -> Option<&JsonValue> {
         self.list.get(index)
@@ -97,7 +97,7 @@ impl JsonArray {
         self.list.get_mut(index)
     }
 
-    /// Returns a reference to the element at `index`, or `&JsonValue::Null` (`QJsonArray::at`).
+    /// Borrows the element at `index`, or `&JsonValue::Null` when out of range (`QJsonArray::at`).
     #[inline]
     pub fn at(&self, index: usize) -> &JsonValue {
         self.list.get(index).unwrap_or(&NULL_VALUE)

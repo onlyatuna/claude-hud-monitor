@@ -210,10 +210,7 @@ impl Transform2D {
 
 /// Full 3x3 projective transformation matrix (`QTransform` equivalent).
 ///
-/// Matrix layout:
-/// | m11  m12  m13 |
-/// | m21  m22  m23 |
-/// | m31  m32  m33 |
+/// Elements are named `m<row><column>`, from `m11` to `m33`.
 ///
 /// Supports affine operations (scaling, translation, rotation, shear)
 /// as well as true perspective/projective transformations (`m13`, `m23`, `m33`).

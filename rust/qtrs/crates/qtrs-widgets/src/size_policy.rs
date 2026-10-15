@@ -10,11 +10,11 @@ pub enum Policy {
     /// The sizeHint is preferred. Can grow or shrink.
     #[default]
     Preferred,
-    /// The sizeHint is a sensible size, but the widget can expand and should get as much space as possible.
+    /// The sizeHint is a reasonable size, but the widget benefits from more room and should be given as much as is available.
     Expanding,
     /// The sizeHint is minimal, but the widget makes good use of extra space and expands as much as possible.
     MinimumExpanding,
-    /// The sizeHint is ignored. The widget will get as much space as possible.
+    /// The sizeHint is disregarded; the widget takes as much space as it can get.
     Ignored,
 }
 

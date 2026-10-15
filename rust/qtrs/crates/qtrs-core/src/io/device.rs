@@ -135,12 +135,12 @@ pub trait IODevice {
         !self.open_mode().is_not_open()
     }
 
-    /// Returns `true` if data can be read from the device.
+    /// Whether the open mode allows reading.
     fn is_readable(&self) -> bool {
         self.open_mode().is_readable()
     }
 
-    /// Returns `true` if data can be written to the device.
+    /// Whether the open mode allows writing.
     fn is_writable(&self) -> bool {
         self.open_mode().is_writable()
     }
@@ -161,7 +161,7 @@ pub trait IODevice {
     /// Seeks to the given byte position in random-access devices.
     fn seek(&mut self, pos: u64) -> io::Result<()>;
 
-    /// Returns `true` if the current position is at the end of the device.
+    /// Whether the read position has reached the end, or the device is not open.
     fn at_end(&self) -> bool {
         !self.is_open() || (self.pos() >= self.size())
     }
@@ -244,7 +244,7 @@ pub trait IODevice {
     /// Closes the device.
     fn close(&mut self);
 
-    /// Returns a human-readable description of the last error, if any.
+    /// Text describing the most recent error, if there was one.
     fn error_string(&self) -> Option<String> {
         None
     }

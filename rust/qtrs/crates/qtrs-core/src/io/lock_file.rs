@@ -46,7 +46,7 @@ impl LockFile {
         self.is_locked
     }
 
-    /// Sets the maximum age after which a lock file is considered stale (default: 30s).
+    /// Sets how old a lock file may get before it counts as stale (default: 30s).
     pub fn set_stale_lock_time(&mut self, time: Duration) {
         self.stale_lock_time = time;
     }

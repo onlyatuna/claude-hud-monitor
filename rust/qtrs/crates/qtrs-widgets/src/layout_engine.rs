@@ -150,7 +150,7 @@ pub fn q_geom_calc(chain: &mut [LayoutStruct], start: usize, count: usize, pos: 
     let mut extraspace = 0i32;
 
     if space < c_min + sum_spacing {
-        // Less space than minimumSize; take from the biggest first.
+        // Not even the minimum sizes fit: shave space off the largest items first.
         let min_size = c_min + sum_spacing;
 
         // Shrink the spacers proportionally.
@@ -178,9 +178,9 @@ pub fn q_geom_calc(chain: &mut [LayoutStruct], start: usize, count: usize, pos: 
         let deficit = space_used - space_left;
 
         let items = count as i32 - idx;
-        // If we truncate all items to `current`, we would get `deficit` too many pixels, so
-        // deficit/items is removed from each item bigger than maxval; `rest` is the accumulated
-        // error of the integer arithmetic.
+        // Capping every item at `current` would still use `deficit` pixels too many, so that excess
+        // is spread over the items: each cap drops by deficit/items, and `rest` accumulates the
+        // remainder of the integer division.
         let deficit_per_item = deficit / items;
         let remainder = deficit % items;
         let maxval = current - deficit_per_item;
@@ -197,8 +197,7 @@ pub fn q_geom_calc(chain: &mut [LayoutStruct], start: usize, count: usize, pos: 
             data.done = true;
         }
     } else if space < c_hint + sum_spacing {
-        // Less space than smartSizeHint(), but more than minimumSize: take space equally from
-        // each.
+        // Between the minimum and the smart size hint: every item gives up an equal share.
         let mut n = count as i32;
         let mut space_left = space - sum_spacing;
         let mut overdraft = c_hint - space_left;
@@ -242,7 +241,8 @@ pub fn q_geom_calc(chain: &mut [LayoutStruct], start: usize, count: usize, pos: 
         // Extra space.
         let mut n = count as i32;
         let mut space_left = space - sum_spacing;
-        // First give to the fixed ones, and handle non-expansiveness.
+        // Settle the items that cannot or should not grow: those capped at their size hint, and
+        // empty ones without stretch.
         for data in &mut chain[start..start + count] {
             if !data.done
                 && (data.maximum_size <= data.smart_size_hint()
@@ -260,9 +260,10 @@ pub fn q_geom_calc(chain: &mut [LayoutStruct], start: usize, count: usize, pos: 
         }
         extraspace = space_left;
 
-        // Do a trial distribution and calculate how much it is off. If there are more deficit
-        // pixels than surplus pixels, give the minimum size items what they need, and repeat.
-        // Otherwise give to the maximum size items, and repeat.
+        // Try a proportional split and measure the error: `deficit` is how far items fall short of
+        // their size hint, `surplus` how far they overshoot their maximum. The larger error is
+        // corrected (both when equal) and the split is retried for the remaining items until the
+        // two balance.
         let mut surplus;
         let mut deficit;
         loop {
@@ -293,7 +294,7 @@ pub fn q_geom_calc(chain: &mut [LayoutStruct], start: usize, count: usize, pos: 
                 }
             }
             if deficit > 0 && surplus <= deficit {
-                // Give to the ones that have too little.
+                // Items that came out below their size hint are pinned at the hint.
                 for data in &mut chain[start..start + count] {
                     if !data.done && data.size < data.smart_size_hint() {
                         data.size = data.smart_size_hint();
@@ -308,7 +309,7 @@ pub fn q_geom_calc(chain: &mut [LayoutStruct], start: usize, count: usize, pos: 
                 }
             }
             if surplus > 0 && surplus >= deficit {
-                // Take from the ones that have too much.
+                // Items that came out above their maximum are pinned at the maximum.
                 for data in &mut chain[start..start + count] {
                     if !data.done && data.size > data.maximum_size {
                         data.size = data.maximum_size;
@@ -331,8 +332,8 @@ pub fn q_geom_calc(chain: &mut [LayoutStruct], start: usize, count: usize, pos: 
         }
     }
 
-    // As a last resort, distribute the unwanted space equally among the spacers (counting the
-    // start and end of the chain).
+    // Last resort: spread the leftover space evenly over the spacers, including the two at the
+    // ends of the chain.
     let extra = extraspace / (spacer_count + 2);
     let mut p = pos + extra;
     for data in &mut chain[start..start + count] {

@@ -27,13 +27,13 @@ impl JsonObject {
         }
     }
 
-    /// Returns the number of key-value pairs in the object (`QJsonObject::size` / `count`).
+    /// How many key/value pairs the object holds (`QJsonObject::size` / `count`).
     #[inline]
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Returns the number of key-value pairs in the object (`QJsonObject::count`).
+    /// How many key/value pairs the object holds (`QJsonObject::count`).
     #[inline]
     pub fn count(&self) -> usize {
         self.map.len()

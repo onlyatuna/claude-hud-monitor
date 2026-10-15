@@ -173,7 +173,7 @@ impl GuiApplication {
         self.core_app.exec()
     }
 
-    /// Tells the application to exit with a return code.
+    /// Stops the event loop and makes `exec()` return `return_code`.
     pub fn exit(return_code: i32) {
         CoreApplication::exit(return_code);
     }

@@ -14,7 +14,7 @@ use crate::signal::Signal;
 /// Thread priority levels, modeled after Qt's `QThread::Priority`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThreadPriority {
-    /// Scheduled only when no other threads are running.
+    /// Gets CPU time only while no other thread is ready to run.
     Idle,
     /// Lowest scheduling priority.
     Lowest,
