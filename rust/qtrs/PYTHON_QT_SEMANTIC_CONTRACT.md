@@ -544,7 +544,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **qtrs required（等價條件）**：Rust 的做法與 Python 在可觀察層面等價，**僅當**：(a) 主 loop 已註冊（否則 post 被丟，G7.2.a）；(b) MetaCall 在 UI 執行緒執行（經 `THREAD_EVENT_HANDLES[main]`）；(c) 每個結果恰好被處理一次（Rust 同時有 100 ms 輪詢與 immediate callback，必須冪等）。
 - **Current implementation**：provider worker（`thread::Builder`，`refresh_controller.rs:132-197`）→ `mpsc` → UI 執行緒 100 ms `poll_timer`（`main.rs:554-573`）**加上** worker 呼叫 `notify_callback` 立刻 post MetaCall（`main.rs:525-537`）。熱鍵：Win32 訊息迴圈執行緒設 `AtomicBool` 並 notify（`hotkey.rs:263-279`）→ post MetaCall（`main.rs:471-483`）。單一實例 IPC 執行緒只設 `WAKE_REQUESTED`（`main.rs:279-284`），由 1 s 計時器消費（`:546`）。
 - **Known gap**
-  - **G7.9.a [P2, READ；P0 主張已被讀碼推翻，待驗證]** 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於 provider worker（`hud_window.rs:408`）與熱鍵執行緒（`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`，早於註冊）只寫 atomic。**這不證明所有 interleaving 皆安全**（未執行）；它只是 G3.2.b 的假設性表現，G3.2.b 修復後自然消除。**不是 `D`。**
+  - **G7.9.a [P2, READ；P0 主張已被讀碼推翻；部分驗證：限定情境]** 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於 provider worker（`hud_window.rs:408`）與熱鍵執行緒（`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`，早於註冊）只寫 atomic。**這不證明所有 interleaving 皆安全**（未執行）；它只是 G3.2.b 的假設性表現，G3.2.b 修復後自然消除。**不是 `D`。**
   - **G7.9.b [P1, RAN；已修復：RC-128]** （修復前）發佈設定 `panic = "abort"`（`rust/Cargo.toml`）：任何 worker panic 會終止整個行程；Python 有 `threading.excepthook`／`sys.excepthook`（`core/logger.py:64,73`），行為不同。
 - **Test**：必要：`worker_post_before_main_loop_registered_is_not_lost`（App 層，模擬啟動順序）。
 - **HUD usage**：見上。
@@ -1214,7 +1214,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.8.o | P2, RAN；已修復：RC-19 follow-up | **qtrs** | `ProgressBar::minimum_size`／`maximum_size` 在垂直方向把 min／max 轉置（`progress_bar.rs`，`Orientation::Vertical => Size::new(h, w)`）；QSS 的 `min-width` 是實體寬度，Qt 不轉置。PySide6 垂直 bar（`min-width: 5px; max-width: 5px`）→ min [5,0]、max [5,∞]；qtrs [0,5]、[∞,5]。RC-19 的測試沒有涵蓋垂直方向，這是它的缺口 |
 | G12.8.p | P2, RAN；已修復：RC-22 | **qtrs** | QSS `width`／`height`（內容尺寸，`contentsSize`）被解析成 `min_* = max_* = 值`（`style/stylesheet.rs`），Qt 兩者是不同東西：`width`／`height` 只影響 `sizeFromContents`（`rule.size()`），不設 `minimumSize`／`maximumSize`。PySide6 `QProgressBar { width:120px; height:9px }` → min [0,0]、max [∞,∞]、hint 120×9；qtrs min／max 都是 120×9。**已修復：RC-22**。`[QT-SRC qstylesheetstyle.cpp:2595-2612]` `setGeometry` 只對有 `min-*`／`max-*` 宣告的軸設 `minimumSize`／`maximumSize`，值為 `boxSize(max(width, min-width))`／`boxSize(min(width, max-width))`；`[QT-SRC :561-574]` `adjustSize`、`[:5487-5489]` `CT_ProgressBar` 有 contents size 時為 `rule.size(sz)`。修復：`style/stylesheet.rs` 不再把 `width`／`height` 寫成 min＝max；`min_box_size`／`max_box_size` 依上式；新增 `ResolvedStyle::adjust_size`；`ProgressBar::size_hint` 改走它並在有 `width`／`height` 時取該值；`Button::size_hint` 以 `width`／`height` 取代文字尺寸。測試 `test_progress_bar_size_hint.rs` 新增 2 項（P8／P9 及 `width` 與 `min-width`／`max-width` 並用，PySide6 oracle，DPR 1.25／1.0 相同），修復前皆 FAIL（例：P8 min／max 為 [120,9] 對 [0,0]／[∞,∞]），修復後 PASS。未涵蓋：`Label`／`Frame` 的 `width`／`height` 無 PySide6 oracle（`QLabel::sizeHint` 不經 `sizeFromContents`，本來不受 `width` 影響）；`Button` 的 `width`／`height` 只做 `adjustSize` 的內容尺寸替換，沒有新的 PySide6 oracle。 |
 | G12.8.q | P2, RAN；已修復：RC-161 | 應用 | （修復前）啟動時沒有套用模式的最小尺寸。RC-161 於 `HUDWindow::with_providers` 建構時立即呼叫 `window.set_minimum_size` |
-| G12.8.r | P2, RAN | **qtrs** | 含字型沒有的字元的 label，高度少 1 px：Qt 的行高取該行各個 text item 所用字型引擎（含 fallback）的最大 ascent＋descent（`[QT-SRC gui/text/qtextengine.cpp:1479-1480]` `si.ascent = qMax(actualFontEngine->ascent(), si.ascent)`，descent 同），所以 `⏱ STALE`（`⏱` 由 fallback 字型提供）的 `QLabel.sizeHint` 高 14，同字型的 `STALE` 為 13（PySide6 6.11.2，HUD 表格的 `HeaderBadge` 樣式，DPR 1.0 與 1.25 皆如此；`QFontMetrics.height()` 為 13）。qtrs 的 `Label::text_size`（`label.rs:239`）對未換行純文字用 `FontMetrics::layout_height(font)`，只看主字型，與文字內容無關，所以 `⏱ STALE` 為 13。HUD 影響：只有表格模式 `stale` 狀態的 badge（`usage_table.py:336`）；該列高度 Qt 32、qtrs 31，整欄下方各列少 1 px。HUD 其他字串（`▲`、`·`、`●`）在 `test_columns_follow_widest_cell_hint` 等既有測試中與 PySide6 相符，沒有發現同樣的差。**未處理**：修復要讓文字版面把實際使用的 fallback 引擎的 ascent／descent 納入行高，並要同時處理繪製基線，範圍比 label 大。測試：`usage_table_relayout_tests.rs` 的 `stale_badge_height_matches_pyside6_*`（修復前 `#[ignore]` 且執行時失敗：`stale.agy.badge qtrs (…,13) PySide6 (…,14)`；RC-211 後通過）。**已修復：RC-211**（單行未換行 `Label` 的 `sizeHint` 與繪製；多行與換行文字、`Button`、`ProgressBar` 仍用主字型行高） |
+| G12.8.r | P2, RAN；已修復：RC-211 | **qtrs** | 含字型沒有的字元的 label，高度少 1 px：Qt 的行高取該行各個 text item 所用字型引擎（含 fallback）的最大 ascent＋descent（`[QT-SRC gui/text/qtextengine.cpp:1479-1480]` `si.ascent = qMax(actualFontEngine->ascent(), si.ascent)`，descent 同），所以 `⏱ STALE`（`⏱` 由 fallback 字型提供）的 `QLabel.sizeHint` 高 14，同字型的 `STALE` 為 13（PySide6 6.11.2，HUD 表格的 `HeaderBadge` 樣式，DPR 1.0 與 1.25 皆如此；`QFontMetrics.height()` 為 13）。qtrs 的 `Label::text_size`（`label.rs:239`）對未換行純文字用 `FontMetrics::layout_height(font)`，只看主字型，與文字內容無關，所以 `⏱ STALE` 為 13。HUD 影響：只有表格模式 `stale` 狀態的 badge（`usage_table.py:336`）；該列高度 Qt 32、qtrs 31，整欄下方各列少 1 px。HUD 其他字串（`▲`、`·`、`●`）在 `test_columns_follow_widest_cell_hint` 等既有測試中與 PySide6 相符，沒有發現同樣的差。**未處理**：修復要讓文字版面把實際使用的 fallback 引擎的 ascent／descent 納入行高，並要同時處理繪製基線，範圍比 label 大。測試：`usage_table_relayout_tests.rs` 的 `stale_badge_height_matches_pyside6_*`（修復前 `#[ignore]` 且執行時失敗：`stale.agy.badge qtrs (…,13) PySide6 (…,14)`；RC-211 後通過）。**已修復：RC-211**（單行未換行 `Label` 的 `sizeHint` 與繪製；多行與換行文字、`Button`、`ProgressBar` 仍用主字型行高） |
 
 - **修復歸屬**：a–f 屬 HUD（`rust/src`）；g–j 是 qtrs 層，各自是獨立 root cause，不併入 RC-14／15／16，也不得用 HUD 端的數值補償（Contract 規則 7）。
 - **本節不代表任何項目已修復。**
@@ -1390,7 +1390,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G7.6.m | P2, READ | 沒有 modal session |
 | G7.7.a | P2, READ | 靜默 no-op 取代警告 |
 | G7.7.b | P2, READ | 無擁有者檢查 |
-| G7.9.a | P2, READ；P0 主張已被讀碼推翻，待驗證 | 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new` |
+| G7.9.a | P2, READ；P0 主張已被讀碼推翻；部分驗證：限定情境 | 啟動競態：worker／熱鍵執行緒是否可能在主 loop 註冊前就 post？讀碼：`Application::new` |
 | G7.9.b | P1, RAN；已修復：RC-128 | 發佈設定 `panic = "abort"` |
 | G8.1.a | P1, READ；已修復：RC-26 | **show／hide 不自動重排**。**已修復：RC-26** |
 | G8.1.b | P2, READ；已修復：RC-178 | 隱藏 item 於 isEmpty() 時保留既有 geometry |
@@ -1688,7 +1688,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - 六份稽核由子代理唯讀完成；§3–§5 與 §8–§9 的 Qt 行為引用了 repo 內的 `qtbase/` 原始碼，其他章節多為 `[QT-DOC]`。行號會漂移。
 - 本文件沒有對 PySide6 做新的行為實測，**除了**第 C9.7 的 layout harness；所有其他「Qt behavior」都是引用，不是本次量測。
 - macOS／Linux 後端完全未驗證。
-- 最需要先實測的項目：`G10.7.a`（非主螢幕 DPR，需異 DPI 雙螢幕）。`G4.3.a` 已由 RC-68 以 widget 測試實測（HUD 真機仍未測）。`G11.5.a`：本機實測選到 Layered，DComp 路徑沒有被執行（見 G11.5.c），DComp 的 opacity 仍待實機驗證。`G7.9.a` 已由讀碼降為 P2，仍待驗證。
+- 最需要先實測的項目：`G10.7.a`（非主螢幕 DPR，需異 DPI 雙螢幕）。`G4.3.a` 已由 RC-68 以 widget 測試實測（HUD 真機仍未測）。`G11.5.a`：本機實測選到 Layered，DComp 路徑沒有被執行（見 G11.5.c），DComp 的 opacity 仍待實機驗證。`G7.9.a` 已由讀碼降為 P2；限定情境（loop 尚未建立時的跨執行緒 post）有測試證據，其餘啟動交錯仍未驗證。
 
 ---
 
@@ -2650,7 +2650,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 | Gap | 處置 | 理由 |
 |---|---|---|
-| G7.9.a | 降為 **P2，待驗證**（非 `D`） | 讀碼推翻 P0 主張：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於第一個 worker／熱鍵執行緒（`hud_window.rs:408`、`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`）在註冊前啟動，但只寫 atomic。**不等於所有 interleaving 皆安全**；它是 RC-04 的一個假設性表現，RC-04 修復後自然消除。**驗證**：`qtrs-core/tests/test_post_before_loop.rs` 6 項（本機實跑全過）涵蓋「接收執行緒的 loop 尚未建立時從另一個執行緒 post／queued 信號／零延遲 single-shot」：事件被緩衝、loop 建立後依優先序與 FIFO 遞送，不遺失；因此啟動競態的後果（事件遺失）已被測試排除，這項不再需要修復，狀態降為「已驗證」 |
+| G7.9.a | 降為 **P2，部分驗證**（非 `D`） | 讀碼推翻 P0 主張：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於第一個 worker／熱鍵執行緒（`hud_window.rs:408`、`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`）在註冊前啟動，但只寫 atomic。**不等於所有 interleaving 皆安全**；它是 RC-04 的一個假設性表現，RC-04 修復後自然消除。**驗證（限定情境）**：`qtrs-core/tests/test_post_before_loop.rs` 6 項（本機與 CI 通過）只涵蓋「接收執行緒的 loop 尚未建立時，從另一個執行緒 post／queued 信號／零延遲 single-shot」：事件被緩衝、loop 建立後依優先序與 FIFO 遞送，不遺失。**未涵蓋、仍未驗證**：HUD 實際啟動順序（`main.rs` 的 IPC、worker、熱鍵執行緒與 `Application::new` 的交錯）、loop 退出／重建時的 post、多個接收執行緒同時啟動，以及 post 以外的啟動期共享狀態。因此這不是「所有啟動競態已排除」，只是這一類後果（事件遺失）在上述情境有測試證據；狀態維持 P2，標為「部分驗證」 |
 | G9.6.a | 降為 **P1**（非 `D`）；已修復：RC-24 | Python HUD 不使用 `QStackedLayout`（重建 layout）；Qt 的 `sizeHint`／`minimumSize` 取**所有頁面**的最大值 `[QT-SRC qstackedlayout.cpp:417-448]`，qtrs 只看當前頁（`stacked.rs:123-147`）。與 Qt 不同是事實，但目前 HUD 不依賴；**P0 階段不修**，待 qtrs 的 API 範圍擴大再處理。**已修復：RC-24** |
 | G12.5.d 的 timer 部分（已結案：沿用既有 `ResizeDebouncer`，未新增 timer） | 見 RC-17 | 不得為了 parity 而新增 timer／debounce，除非先證明它不是在補 qtrs 缺陷 |
 
