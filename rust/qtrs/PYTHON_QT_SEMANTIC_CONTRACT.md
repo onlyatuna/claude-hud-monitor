@@ -1214,7 +1214,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G12.8.o | P2, RAN；已修復：RC-19 follow-up | **qtrs** | `ProgressBar::minimum_size`／`maximum_size` 在垂直方向把 min／max 轉置（`progress_bar.rs`，`Orientation::Vertical => Size::new(h, w)`）；QSS 的 `min-width` 是實體寬度，Qt 不轉置。PySide6 垂直 bar（`min-width: 5px; max-width: 5px`）→ min [5,0]、max [5,∞]；qtrs [0,5]、[∞,5]。RC-19 的測試沒有涵蓋垂直方向，這是它的缺口 |
 | G12.8.p | P2, RAN；已修復：RC-22 | **qtrs** | QSS `width`／`height`（內容尺寸，`contentsSize`）被解析成 `min_* = max_* = 值`（`style/stylesheet.rs`），Qt 兩者是不同東西：`width`／`height` 只影響 `sizeFromContents`（`rule.size()`），不設 `minimumSize`／`maximumSize`。PySide6 `QProgressBar { width:120px; height:9px }` → min [0,0]、max [∞,∞]、hint 120×9；qtrs min／max 都是 120×9。**已修復：RC-22**。`[QT-SRC qstylesheetstyle.cpp:2595-2612]` `setGeometry` 只對有 `min-*`／`max-*` 宣告的軸設 `minimumSize`／`maximumSize`，值為 `boxSize(max(width, min-width))`／`boxSize(min(width, max-width))`；`[QT-SRC :561-574]` `adjustSize`、`[:5487-5489]` `CT_ProgressBar` 有 contents size 時為 `rule.size(sz)`。修復：`style/stylesheet.rs` 不再把 `width`／`height` 寫成 min＝max；`min_box_size`／`max_box_size` 依上式；新增 `ResolvedStyle::adjust_size`；`ProgressBar::size_hint` 改走它並在有 `width`／`height` 時取該值；`Button::size_hint` 以 `width`／`height` 取代文字尺寸。測試 `test_progress_bar_size_hint.rs` 新增 2 項（P8／P9 及 `width` 與 `min-width`／`max-width` 並用，PySide6 oracle，DPR 1.25／1.0 相同），修復前皆 FAIL（例：P8 min／max 為 [120,9] 對 [0,0]／[∞,∞]），修復後 PASS。未涵蓋：`Label`／`Frame` 的 `width`／`height` 無 PySide6 oracle（`QLabel::sizeHint` 不經 `sizeFromContents`，本來不受 `width` 影響）；`Button` 的 `width`／`height` 只做 `adjustSize` 的內容尺寸替換，沒有新的 PySide6 oracle。 |
 | G12.8.q | P2, RAN；已修復：RC-161 | 應用 | （修復前）啟動時沒有套用模式的最小尺寸。RC-161 於 `HUDWindow::with_providers` 建構時立即呼叫 `window.set_minimum_size` |
-| G12.8.r | P2, RAN；已修復：RC-211 | **qtrs** | 含字型沒有的字元的 label，高度少 1 px：Qt 的行高取該行各個 text item 所用字型引擎（含 fallback）的最大 ascent＋descent（`[QT-SRC gui/text/qtextengine.cpp:1479-1480]` `si.ascent = qMax(actualFontEngine->ascent(), si.ascent)`，descent 同），所以 `⏱ STALE`（`⏱` 由 fallback 字型提供）的 `QLabel.sizeHint` 高 14，同字型的 `STALE` 為 13（PySide6 6.11.2，HUD 表格的 `HeaderBadge` 樣式，DPR 1.0 與 1.25 皆如此；`QFontMetrics.height()` 為 13）。qtrs 的 `Label::text_size`（`label.rs:239`）對未換行純文字用 `FontMetrics::layout_height(font)`，只看主字型，與文字內容無關，所以 `⏱ STALE` 為 13。HUD 影響：只有表格模式 `stale` 狀態的 badge（`usage_table.py:336`）；該列高度 Qt 32、qtrs 31，整欄下方各列少 1 px。HUD 其他字串（`▲`、`·`、`●`）在 `test_columns_follow_widest_cell_hint` 等既有測試中與 PySide6 相符，沒有發現同樣的差。**未處理**：修復要讓文字版面把實際使用的 fallback 引擎的 ascent／descent 納入行高，並要同時處理繪製基線，範圍比 label 大。測試：`usage_table_relayout_tests.rs` 的 `stale_badge_height_matches_pyside6_*`（修復前 `#[ignore]` 且執行時失敗：`stale.agy.badge qtrs (…,13) PySide6 (…,14)`；RC-211 後通過）。**已修復：RC-211**（單行未換行 `Label` 的 `sizeHint` 與繪製；多行與換行文字、`Button`、`ProgressBar` 仍用主字型行高） |
+| G12.8.r | P2, RAN；已修復：RC-211 | **qtrs** | 含字型沒有的字元的 label，高度少 1 px：Qt 的行高取該行各個 text item 所用字型引擎（含 fallback）的最大 ascent＋descent（`[QT-SRC gui/text/qtextengine.cpp:1479-1480]` 項目的 ascent 取自身與實際字型引擎 ascent 中較大者，descent 同），所以 `⏱ STALE`（`⏱` 由 fallback 字型提供）的 `QLabel.sizeHint` 高 14，同字型的 `STALE` 為 13（PySide6 6.11.2，HUD 表格的 `HeaderBadge` 樣式，DPR 1.0 與 1.25 皆如此；`QFontMetrics.height()` 為 13）。qtrs 的 `Label::text_size`（`label.rs:239`）對未換行純文字用 `FontMetrics::layout_height(font)`，只看主字型，與文字內容無關，所以 `⏱ STALE` 為 13。HUD 影響：只有表格模式 `stale` 狀態的 badge（`usage_table.py:336`）；該列高度 Qt 32、qtrs 31，整欄下方各列少 1 px。HUD 其他字串（`▲`、`·`、`●`）在 `test_columns_follow_widest_cell_hint` 等既有測試中與 PySide6 相符，沒有發現同樣的差。**未處理**：修復要讓文字版面把實際使用的 fallback 引擎的 ascent／descent 納入行高，並要同時處理繪製基線，範圍比 label 大。測試：`usage_table_relayout_tests.rs` 的 `stale_badge_height_matches_pyside6_*`（修復前 `#[ignore]` 且執行時失敗：`stale.agy.badge qtrs (…,13) PySide6 (…,14)`；RC-211 後通過）。**已修復：RC-211**（單行未換行 `Label` 的 `sizeHint` 與繪製；多行與換行文字、`Button`、`ProgressBar` 仍用主字型行高） |
 
 - **修復歸屬**：a–f 屬 HUD（`rust/src`）；g–j 是 qtrs 層，各自是獨立 root cause，不併入 RC-14／15／16，也不得用 HUD 端的數值補償（Contract 規則 7）。
 - **本節不代表任何項目已修復。**
@@ -1770,7 +1770,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-05 Widget 失效協定：樣式／字型／尺寸策略變更不更新也不重排
 - **Contract gaps**：G8.5.c、G8.3.b（P0, READ）。同類 P1/P2：`Widget` trait 預設 `set_size_policy`、`set_style_sheet`、`set_property` 為靜默 no-op（`widget.rs:74,205,211`；`Label`、`ScrollBar`、`ScrollArea` 未轉發 `set_size_policy`）。
-- **Qt behavior** `[QT-SRC qwidget.cpp:9502-9510]`：`FontChange`／`StyleChange` 的處理做 `update(); updateGeometry(); layout->invalidate();`。`updateGeometry` `[QT-SRC qwidget.cpp:10571-10587]`：頂層視窗不做事，否則使 parent layout 失效，或對可見的 parent post `LayoutRequest`。`setStyleSheet` 經 `repolish` `[QT-SRC qwidget.cpp:2594-2632; qstylesheetstyle.cpp:2978-2998]` 觸發 `StyleChange`。
+- **Qt behavior** `[QT-SRC qwidget.cpp:9502-9510]`：`FontChange`／`StyleChange` 的處理做 重繪、通知幾何改變並使 layout 失效。`updateGeometry` `[QT-SRC qwidget.cpp:10571-10587]`：頂層視窗不做事，否則使 parent layout 失效，或對可見的 parent post `LayoutRequest`。`setStyleSheet` 經 `repolish` `[QT-SRC qwidget.cpp:2594-2632; qstylesheetstyle.cpp:2978-2998]` 觸發 `StyleChange`。
 - **qtrs root**：`qtrs-widgets/src/widget.rs:366-375` `WidgetBase::set_style_sheet` 只寫 `dirty`，不 post `UpdateRequest`、不要求 layout；`label.rs` 未覆寫 `set_size_policy`。
 - **Evidence**：`READ`。
 - **Required observable**：不呼叫任何手動 `update_layout()`／`render_and_present()`，在樣式字級改變、size policy 改變後，經過一次事件 pump，layout 與繪製的結果與 Qt 一致。
@@ -1885,7 +1885,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Qt behavior**：
   - `QWidget::setStyleSheet` 只作用於該 widget 與其子樹，並對該 widget 及**所有後代**送 `StyleChange`（`QStyleSheetStyle::repolish(w)` → `updateObjects`）`[QT-SRC qwidget.cpp:2594-2631, qstylesheetstyle.cpp:2780-2800, 2978-2987]`。頂層視窗就是一個 `QWidget`，`HUDWindow.setStyleSheet` 只影響該視窗（`hud_window.py:246,250`）。
   - `QApplication::setStyleSheet` 才是應用範圍：`repolish(qApp)` 對所有已 polish 的 widget 送 `StyleChange`（`qapplication.cpp:885-900`、`qstylesheetstyle.cpp:2989-2998`）。
-  - `StyleChange`／`FontChange` = `update(); updateGeometry(); layout->invalidate()`（`qwidget.cpp:9502-9510`）。
+  - `StyleChange`／`FontChange` = 重繪、通知幾何改變並使 layout 失效（`qwidget.cpp:9502-9510`）。
   - 串接：`weight = specificity + (origin+depth)*0x10000000000`，depth 壓過 specificity：app < 祖先 < 自己（`qcssparser.cpp:2215`）。qtrs 的 `resolve_chain` 排序 `(depth, score)`，一致。
   - `styleRules` 沿 `QObject::parent()` 收集每層的 `styleSheet`，所以 `QMenu(parent)` 取得 parent 的 sheet（`qstylesheetstyle.cpp:1496-1506, 1654-1675`；Python `hud_window.py:678`、`tray_icon.py:55`）。
 - **Root cause**：樣式「來源」改變時沒有通知受影響的 widget。(a) `Application::set_style_sheet` 只寫全域，不通知任何 widget；(b) `WidgetBase::set_style_sheet` 只通知自己，不通知子樹；(c) 沒有 parent 的 root 的 layout 在 `style_changed` 後只被標 dirty，沒有人排程（G8.5.i(2)）；(d) `Window::set_style_sheet` 轉呼叫 `Application::set_style_sheet`，範圍錯為整個應用。
@@ -1950,7 +1950,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-21 文字寬度 1 px 差（`font-family` 清單）
 - **Contract gaps**：G12.8.j。
-- **Qt behavior** `[QT-SRC qcssparser.cpp:1252-1272]`：`font-family` 是以逗號分隔的清單，`setFontFamilyFromValues` 呼叫 `QFont::setFamilies`；字型庫取第一個已安裝的家族。`QLabel` 寬度 `[QT-SRC qlabel.cpp:594-609; qfontmetrics.cpp:735-749]`：`fm.boundingRect(0,0,w,2000,flags,text)` → `rb.toAlignedRect()`，即寬度向上取整；與 qtrs 的 `ceil` 一致。
+- **Qt behavior** `[QT-SRC qcssparser.cpp:1252-1272]`：`font-family` 是以逗號分隔的清單，`setFontFamilyFromValues` 呼叫 `QFont::setFamilies`；字型庫取第一個已安裝的家族。`QLabel` 寬度 `[QT-SRC qlabel.cpp:594-609; qfontmetrics.cpp:735-749]`：對寬 `w`、高 2000 的矩形（帶 flags 與文字）取 `boundingRect` → `rb.toAlignedRect()`，即寬度向上取整；與 qtrs 的 `ceil` 一致。
 - **qtrs root**：`qtrs-gui` 的 `parse_value` 把整串 `'Segoe UI', 'SF Pro Display', …` 當作一個名稱，`ResolvedStyle::font_family` 因此是不存在的家族，退回別的字型；寬度 59.589（`WEEKLY 7D`）而非 58.88。
 - **Evidence**：`RAN`（修復前 `[60,145,88]`／`[59,143,83]`，PySide6 為 `[59,144,88]`／`[58,142,80]`）。`[DIFF]` 修復後相等。
 - **Status**：**已修復**。`QCssValue::FontFamilies`、`ResolvedStyle::font_families`＋`font_family()`（第一個已安裝，否則第一個）；`Label`／`Button`／`ProgressBar` 的 `styled_font` 改用 `font_family()`。測試 `test_label_text_metric_rounding.rs`（2 項，修復前皆 FAIL）。**未涵蓋**：`sans-serif`／`monospace` 等泛用名稱不做替代（不是已安裝家族，會被略過）；家族比對為大小寫不敏感的完整名稱；字型之後才註冊時，解析在每次取 font 時重做，所以會反映。
@@ -1999,7 +1999,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-30 `addStretch(0)` 被強制成 1
 - **Contract gaps**：G9.1.a。
-- **Qt behavior** `[QT-SRC qboxlayout.cpp:18-19, 36-42, 301, 316, 872-879, 981-983; qlayoutengine.cpp:60, 72-73, 229-235]`：`addStretch(s)` → `insertStretch(-1, s)`，以 `QBoxLayoutItem(spacer, s)` 原值保存；`setupGeom` 的 `stretch = box->stretch ? box->stretch : hStretch()`，spacer 沒有 widget，不回退到 policy，仍為 0；spacer 是 Expanding，故 `expansive`。`qGeomCalc`：`sumStretch > 0` 時按 stretch 分配（stretch 0 得 0）；否則由 expansive 項平分。
+- **Qt behavior** `[QT-SRC qboxlayout.cpp:18-19, 36-42, 301, 316, 872-879, 981-983; qlayoutengine.cpp:60, 72-73, 229-235]`：`addStretch(s)` → `insertStretch(-1, s)`，以 `QBoxLayoutItem(spacer, s)` 原值保存；`setupGeom` 的 item 自己的 stretch 非 0 就用它，否則用 `hStretch()`，spacer 沒有 widget，不回退到 policy，仍為 0；spacer 是 Expanding，故 `expansive`。`qGeomCalc`：`sumStretch > 0` 時按 stretch 分配（stretch 0 得 0）；否則由 expansive 項平分。
 - **qtrs root**：`layout.rs` 的 `Layout::add_stretch` 預設實作與 `BoxLayout::add_stretch` 都寫 `stretch.max(1)`（`93ec2c0` 引入、`eec7ead` 沿用，無說明）。排版引擎本身（`setup_geom`、`q_geom_calc`）已與 Qt 相同。
 - **Evidence**：`RAN`（Windows）。PySide6 6.11.2 oracle：300×20 `QHBoxLayout`、margins 0、spacing 6、item `sizeHint` 50×20／`minimumSizeHint` 0×0。before-FAIL 3 項，結果恰為 stretch 1 的 Qt 結果：`[stretch0, w(stretch1)]` 得 150/150（Qt 0/300）；`[stretch0, w, stretch2]` 得 83/50/167（Qt 0/50/250）；`[Expanding w, stretch0]` 得 50/250（Qt 150/150）。對照組 `[stretch0, w, stretch0]`（125/50/125）修改前後皆通過。分析由 2 個只讀 agent（Claude Haiku 5.5）平行完成。
 - **Status**：**已修復**。只改 `layout.rs` 兩行，新增 `test_box_layout_add_stretch_zero.rs`（4 項）。HUD 不受影響：所有呼叫端都明確傳 `add_stretch(1)`（`hud_window.rs`、`provider_card.rs`、`usage_table.rs`），Python 對應的是 `addStretch()`（= 0）；改成 0 屬 HUD 搬運清理，未做（在無 stretch>0 兄弟項時結果相同，見上）。**僅 Windows 驗證。**
@@ -2263,7 +2263,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 #### RC-61 Cocoa dispatcher 不在 AppKit 的事件佇列與主 run loop 上等待與派送
 
 - **Contract gaps**：G7.6.h（已修復）；另新增同一根因的喚醒症狀 G7.6.i（已修復），以及不同 root cause、不屬本 RC 的 G7.6.j、G7.6.k、G7.6.l、G7.6.m、G11.13.r（未修）。總數 361 → 367，已修復 82 → 84。
-- **Qt behavior** `[QT-SRC qcocoaeventdispatcher.mm:273-285,378-466,479-492,525-531,537-575,786-801,877-916; qcocoahelpers.h:89-92]`：`processEvents` 不在 exec 時，先以 `ensureNSAppInitialized`（`[NSApp run]` 加一次性的停止回呼）完成 launch；再以 `nextEventMatchingMask:NSEventMaskAny untilDate:nil inMode:NSDefaultRunLoopMode dequeue:YES` 取出每個佇列中的 NSEvent，`filterNativeEvent("NSEvent", …)` 沒有攔下的送 `[NSApp sendEvent:]`；沒有送出任何事件且可等待時，以 `untilDate:distantFuture` 等待（主 run loop 在等待期間執行），把收到的事件放回佇列前端，再派送一次。`wakeUp` 對加在 common modes 的 run loop source 呼叫 `CFRunLoopSourceSignal` 與 `CFRunLoopWakeUp`；source 回呼在可等待時 post 一個 `ApplicationDefined` 事件（subtype `QtCocoaEventSubTypeWakeup` = `SHRT_MAX`）結束等待；`wakeUp` 沒有去重閘門。
+- **Qt behavior** `[QT-SRC qcocoaeventdispatcher.mm:273-285,378-466,479-492,525-531,537-575,786-801,877-916; qcocoahelpers.h:89-92]`：`processEvents` 不在 exec 時，先以 `ensureNSAppInitialized`（`[NSApp run]` 加一次性的停止回呼）完成 launch；再以 `nextEventMatchingMask:` 取出任何事件（不等待、預設 run loop 模式、取出後移除） 取出每個佇列中的 NSEvent，`filterNativeEvent("NSEvent", …)` 沒有攔下的送 `[NSApp sendEvent:]`；沒有送出任何事件且可等待時，以 `untilDate:distantFuture` 等待（主 run loop 在等待期間執行），把收到的事件放回佇列前端，再派送一次。`wakeUp` 對加在 common modes 的 run loop source 呼叫 `CFRunLoopSourceSignal` 與 `CFRunLoopWakeUp`；source 回呼在可等待時 post 一個 `ApplicationDefined` 事件（subtype `QtCocoaEventSubTypeWakeup` = `SHRT_MAX`）結束等待；`wakeUp` 沒有去重閘門。
 - **qtrs root**：`CocoaEventDispatcher` 是純 Rust 模擬。`process_events` 以 Condvar `wait_timeout` 等待，主 run loop 從不執行；它只處理 `post_appkit_event` 餵入的 Rust 列舉佇列，不從 AppKit 取 NSEvent，也不呼叫 `sendEvent:`。喚醒是 `AtomicBool` 閘門加 Condvar；閘門在 `process_events` 開頭才重置，而 posted events 在那之前已被取走，兩者之間 post 的事件不觸發喚醒（G7.6.i）。
 - **Evidence**：`RAN`（GitHub Actions macos-latest，`crates/qtrs-gui/examples/main_thread_entry.rs` 新增 4 項主執行緒檢查）。
   - 修改前 run 38024591421（job 114132646817，只加檢查）：
@@ -2763,7 +2763,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 #### RC-78 事件過濾鏈以即時索引走訪
 
 - **Contract gaps**：G3.4.a。
-- **Qt 行為**：`sendThroughApplicationEventFilters`／`sendThroughObjectEventFilters` 以 `for (i = 0; i < list.size(); ++i) { obj = list.at(i); if (!obj) continue; … }` 走訪**即時**清單（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1237-1247,1255-1265]`）；`removeEventFilter` 把位置設成 null（`[QT-SRC corelib/kernel/qobject.cpp:2442-2446]`），`installEventFilter` 先清掉 null 與重複再 prepend（`:2420-2422`）。所以前面的 filter 移除後面的 filter 時，後者本次不會被呼叫；遞送中安裝的新 filter 本次不被呼叫，正在跑的 filter 因位移被再呼叫一次，下一個事件新 filter 最先。
+- **Qt 行為**：`sendThroughApplicationEventFilters`／`sendThroughObjectEventFilters` 以 依索引走訪 filter 清單，並略過已變成空的項目 走訪**即時**清單（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1237-1247,1255-1265]`）；`removeEventFilter` 把位置設成 null（`[QT-SRC corelib/kernel/qobject.cpp:2442-2446]`），`installEventFilter` 先清掉 null 與重複再 prepend（`:2420-2422`）。所以前面的 filter 移除後面的 filter 時，後者本次不會被呼叫；遞送中安裝的新 filter 本次不被呼叫，正在跑的 filter 因位移被再呼叫一次，下一個事件新 filter 最先。
 - **修改前**：`notify_helper`（`qtrs-core/src/event_loop/loop.rs`）先取 app 與 object filter 鏈的 `snapshot()` 再走訪，被前面 filter 移除的 filter 仍被呼叫。
 - **修正**：`EventFilterChain::slot_at(index)`；`notify_helper` 以 `consumed_by_filter_chain` 每步讀一個即時位置，callback 執行時不持有鏈的 `RefCell` 或物件借用。回傳值語意不變（G3.4.f 另立）。刪除 `event_filter.rs::tests::test_tombstone_safe_removal_during_iteration`：它自己手寫迴圈走 `snapshot()`，沒有呼叫產品程式碼（§0 規則 4），由下列 4 項取代。
 - **Evidence**：`RAN`（本機 Windows）。`loop.rs::tests`：
@@ -2776,7 +2776,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 - **Contract gaps**：G4.1.a、G4.1.b、G4.1.d。
 - **Qt 行為**：
-  - `QEventLoop::exec` 進入時 `d->exit.storeRelease(false)`（`[QT-SRC corelib/kernel/qeventloop.cpp:157-158]`），所以 `exec()` 之前的 `exit()` 不會結束它，第二次 `exec()` 是全新的 loop；app 執行緒上進入 loop 時 `removePostedEvents(app, QEvent::Quit)`（`:192-195`）。
+  - `QEventLoop::exec` 進入時 以 release 語意把 exit 旗標清成 false（`[QT-SRC corelib/kernel/qeventloop.cpp:157-158]`），所以 `exec()` 之前的 `exit()` 不會結束它，第二次 `exec()` 是全新的 loop；app 執行緒上進入 loop 時 `removePostedEvents(app, QEvent::Quit)`（`:192-195`）。
   - `QCoreApplication::exec` 設 `in_exec = true`、`aboutToQuitEmitted = false`（`[QT-SRC corelib/kernel/qcoreapplication.cpp:1467-1468]`）；`exit()` 本身在未發過時發 `aboutToQuit`（`:1532-1535`），不檢查 `in_exec`。
   - `quit()` 在 `!in_exec` 時直接返回（`:2143-2144`）。
 - **修改前**：`EventLoop::exec` 刻意保留 `exec` 前的 `exit_requested`（註解「Do not overwrite」），返回後也不重置，所以先 `exit()` 的 `exec()` 立刻返回、第二次 `exec()` 以舊 code 返回；`aboutToQuit` 在 `CoreApplication::exec` 返回後才發；`quit()` 在 exec 外也會 post `Quit`，使下一次 `exec` 結束。`test_application_layers.rs::test_core_application_exec_quit_and_about_to_quit` 釘住「先 exit 後 exec 立刻返回」（§0 規則 4）。
@@ -3008,7 +3008,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **驗證**：`unbound_signal_inside_bound_slot_has_no_sender`，修正前 FAIL `test_signal_owner_binding.rs:129 left [Some(ObjectId(5))] right [None]`。
 
 #### RC-100 `#[property(notify = ...)]` 在值改變時發射（G2.6.c）
-- **Qt 依據**：`[QT-SRC tools/moc/generator.cpp:1209-1226]` `[限制：此行為是 moc 為 MEMBER+NOTIFY 產生的碼，PySide6 無法觀察；tools/pyside_probes/spec02_property_slot.py R-00031 實測 PySide Property 不會自動發射 notify，內建 objectName 同值不發射只是手寫 setter 的旁證；來源仍僅為 GPL-only 的 generator.cpp]` `MEMBER` + `NOTIFY` 屬性的 moc 寫入碼：`if (QtMocHelpers::setProperty(member, v)) Q_EMIT _t->notify(member);`——只在值改變時發射，payload 為新值（型別相同時）；發射照常受 `blockSignals` 控制。
+- **Qt 依據**：`[QT-SRC tools/moc/generator.cpp:1209-1226]` `[限制：此行為是 moc 為 MEMBER+NOTIFY 產生的碼，PySide6 無法觀察；tools/pyside_probes/spec02_property_slot.py R-00031 實測 PySide Property 不會自動發射 notify，內建 objectName 同值不發射只是手寫 setter 的旁證；來源仍僅為 GPL-only 的 generator.cpp]` `MEMBER` + `NOTIFY` 屬性的 moc 寫入碼：只有 setter 確實改變了值時才發射 notify 信號——只在值改變時發射，payload 為新值（型別相同時）；發射照常受 `blockSignals` 控制。
 - **根因**：derive 寫死 `notify_signal = None`，setter 從不發射。
 - **修正**：`qtrs-derive` 解析 `notify`，檢查它指向 payload 型別相同的 `#[signal]` 欄位；寫入且值改變、owner 未封鎖時發射。未知的 `#[property(...)]` 選項改為編譯錯誤；`readonly` + `notify` 暫不允許（Qt 允許 READ+NOTIFY 無 WRITE，記為限制）。
 - **驗證**：`derived_property_write_emits_notify_once_per_change` 修正前 FAIL `test_signal_owner_binding.rs:162 'notify not emitted on change' left [] right [5]`；`derived_property_notify_honours_block_signals` `:187 left 0 right 1`。
@@ -3431,7 +3431,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：無。
 
 #### RC-159 WidgetBase::set_geometry 依 min/max 夾取大小（G8.3.c）
-- **Qt 依據**：`[QT-SRC qwidget.cpp:7286, 7300-7305]` `QWidget::setGeometry` 在直接設定或經由 `setGeometry_sys` 時，寬度與高度皆被限制於 `[min, max]` 範圍內（`w = qMin(w, extra->maxw); h = qMin(h, extra->maxh); w = qMax(w, extra->minw); h = qMax(h, extra->minh);`，若 min > max 則 min 優先勝出）。
+- **Qt 依據**：`[QT-SRC qwidget.cpp:7286, 7300-7305]` `QWidget::setGeometry` 在直接設定或經由 `setGeometry_sys` 時，寬度與高度皆被限制於 `[min, max]` 範圍內（先把寬高各自夾到最大值，再各自提高到最小值，若 min > max 則 min 優先勝出）。
 - **根因**：`WidgetBase::set_geometry` 與 `EmptyWidget::set_geometry` 過去直接存入傳入之 rect，未依 `min_size` 與 `max_size` 限制寬高；只有版面佈局的 `item_set_geometry` 有夾取。
 - **修正**：`WidgetBase::set_geometry` 與 `EmptyWidget::set_geometry` 依 Qt 的 `qMin(max).max(min)` 邏輯夾取 rect 之寬高後再存入並發送失效與重繪。
 - **驗證**：新增測試 `test_set_geometry_clamps_to_explicit_minimum_and_maximum_size`。修改前 FAIL：`crates\qtrs-widgets\tests\test_explicit_size_and_hfw.rs:201:5 assertion left == right failed`（left: `(10, 10, 20, 20)`，right: `(10, 10, 50, 50)`）。修改後通過。`qtrs-widgets` 408 項測試全過；HUD 135 passed；clippy 0 warning；`cargo fmt --check` 通過。`--snapshot` 比對無版面位移。
@@ -3463,7 +3463,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：無。
 
 #### RC-163 Button::minimum_size_hint 等於 size_hint（G12.8.m）
-- **Qt 依據**：`[QT-SRC qpushbutton.cpp:398-401]`：`QSize QPushButton::minimumSizeHint() const { return sizeHint(); }`。PySide6 `QPushButton('Test').minimumSizeHint() == QPushButton('Test').sizeHint()`。
+- **Qt 依據**：`[QT-SRC qpushbutton.cpp:398-401]`：`QPushButton::minimumSizeHint()` 直接回傳 `sizeHint()`。PySide6 `QPushButton('Test').minimumSizeHint() == QPushButton('Test').sizeHint()`。
 - **根因**：qtrs `Button` 未實作 `minimum_size_hint()`，繼承自 `Widget` 預設回傳 `self.minimum_size()`（$0 \times 0$ 或 QSS 的 min-box），導致在版面計算（如 `qSmartMinSize`）時無法反映按鈕內容的最小提示尺寸。
 - **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/button.rs` 為 `Button` 實作 `fn minimum_size_hint(&self) -> Size { self.size_hint() }`。
 - **驗證**：新增測試 `test_button_minimum_size_hint.rs`。修改前 FAIL：`crates\qtrs-widgets\tests\test_button_minimum_size_hint.rs:14:5 assertion left == right failed: Button::minimum_size_hint must equal size_hint (qpushbutton.cpp:398-401 / G12.8.m) left: Size { width: 0, height: 0 } right: Size { width: 47, height: 31 }`。修改後 PASS。qtrs-widgets 409 項測試全過；HUD 135 項全過；clippy 0 warning；`cargo fmt --check` 通過；`--snapshot` 比對版面 0 px 差異。
@@ -3495,18 +3495,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-166 Widget trait 與無 layout 的 EmptyWidget 預設 size_hint 與 minimum_size_hint 符合 Qt 規範（G8.3.d）
 - **Qt 依據**：`[QT-SRC qwidget.cpp:8880-8893, 8906-8919]`：
-  ```cpp
-  QSize QWidget::sizeHint() const {
-      Q_D(const QWidget);
-      if (d->layout) return d->layout->totalSizeHint();
-      return QSize(-1, -1);
-  }
-  QSize QWidget::minimumSizeHint() const {
-      Q_D(const QWidget);
-      if (d->layout) return d->layout->totalMinimumSize();
-      return QSize(-1, -1);
-  }
-  ```
+  Qt 的 `QWidget::sizeHint()` 在有 layout 時回傳 layout 的 `totalSizeHint()`，沒有 layout 時回傳 `QSize(-1, -1)`；`minimumSizeHint()` 同理，有 layout 時回傳 `totalMinimumSize()`，否則 `QSize(-1, -1)`。
   PySide6 實測：`QWidget().sizeHint() == QSize(-1, -1)`、`QWidget().minimumSizeHint() == QSize(-1, -1)`。
 - **根因**：qtrs `Widget` trait 預設 `size_hint` 硬編碼為 `Size::new(100, 30)`，`minimum_size_hint` 預設回傳 `self.minimum_size()`；且 `EmptyWidget` 在無 layout 時回傳其目前幾何尺寸（100×30）與 `Size::new(0, 0)`。這導致自訂 widget 或空容器在未設 layout 時獲得假的有效尺寸提示。
 - **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/widget.rs`：
@@ -3520,18 +3509,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-167 StackedLayout::set_spacing 與 spacing 符合 Qt 規範（G9.6.b）
 - **Qt 依據**：`[QT-SRC qlayout.cpp:246-262]`：
-  ```cpp
-  int QLayout::spacing() const {
-      Q_D(const QLayout);
-      if (d->insideSpacing >= 0) return d->insideSpacing;
-      return qSmartSpacing(this, QStyle::PM_LayoutHorizontalSpacing);
-  }
-  void QLayout::setSpacing(int spacing) {
-      Q_D(QLayout);
-      d->insideSpacing = spacing;
-      invalidate();
-  }
-  ```
+  `QLayout::spacing()`：儲存的 inside spacing 不小於 0 就回傳它，否則回傳 style 決定的智慧間距（`qSmartSpacing`，水平方向的 `PM_LayoutHorizontalSpacing`）；`QLayout::setSpacing(spacing)` 只儲存該值並呼叫 `invalidate()`。
   `QStackedLayout` 繼承 `QLayout`。PySide6 實測：無 parent 的 `QStackedLayout` 初始 `spacing()` 為 -1；呼叫 `setSpacing(10)` 後 `spacing()` 回傳 10。
 - **根因**：qtrs `StackedLayout` 雖然實作了 `Layout` trait，但其 `set_spacing(&mut self, _spacing: i32)` 為空實作（no-op），且 `spacing(&self) -> i32` 恆回傳 0，未記錄使用者設定的 spacing 數值。
 - **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/stacked.rs` 的 `StackedLayout` 結構體新增 `spacing: i32` 欄位（初始值 -1），新增 inherent 與 trait 的 `set_spacing(&mut self, spacing: i32)`（儲存 spacing 並標記 dirty）及 `spacing(&self) -> i32`（回傳儲存值）。
@@ -3541,16 +3519,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-168 事件過濾器攔截消費事件時 send_event／notify_helper 回傳 true 符合 Qt 規範（G3.4.f）
 - **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:1285-1295]`：
-  ```cpp
-  if (sendThroughApplicationEventFilters(receiver, event)) {
-      filtered = true;
-      return filtered;
-  }
-  if (sendThroughObjectEventFilters(receiver, event)) {
-      filtered = true;
-      return filtered;
-  }
-  ```
+  Qt 先讓事件經過 application 的 event filter，其中一個消費事件就把 `filtered` 設為 true 並立刻回傳；再對接收者自己的 event filter 做同樣處理。
   PySide6 實測：安裝 `eventFilter` 並回傳 `True` 消費事件時，`QCoreApplication.sendEvent(receiver, event)` 回傳 `True`。
 - **根因**：qtrs `qtrs-core/src/event_loop/loop.rs` 的 `notify_helper` 中，在 `if app_filters_consumed(receiver, event)` 與 `if object_filters_consumed(receiver, event)` 時皆回傳 `false`。舊有單元測試 `test_notify_helper_pipeline_and_safe_removal` 誤將 `false` 釘住，與 Qt `sendEvent` 語意相悖。
 - **修正**：在 `rust/qtrs/crates/qtrs-core/src/event_loop/loop.rs`：
@@ -3562,19 +3531,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-169 install_event_filter 允許自身與直接環符合 Qt 規範（G3.4.e，並補齊 G7.5.d 測試）
 - **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:2407-2423]` `QObject::installEventFilter`：
-  ```cpp
-  void QObject::installEventFilter(QObject *obj) {
-      if (!obj) return;
-      if (d->threadData.loadRelaxed() != obj->d_func()->threadData.loadRelaxed()) {
-          qWarning("QObject::installEventFilter(): Cannot filter events for objects in a different thread.");
-          return;
-      }
-      d->ensureExtraData();
-      auto isNullOrEquals = [](auto obj) { return [obj](const auto &p) { return !p || p == obj; }; };
-      d->extraData->eventFilters.removeIf(isNullOrEquals(obj));
-      d->extraData->eventFilters.prepend(obj);
-  }
-  ```
+  `QObject::installEventFilter(obj)`：`obj` 為空時直接返回；兩個物件的執行緒資料不同時，印出警告「QObject::installEventFilter(): Cannot filter events for objects in a different thread.」並返回；否則先移除清單中等於 `obj` 的項目（含空項目），再把 `obj` 放到清單最前面。
   Qt 原始碼無任何自身過濾（`obj == this`）或互設過濾器直接環之檢查，僅校驗跨執行緒親和性。
   PySide6 實測：`o.installEventFilter(o)` 及相互安裝皆成功執行。
 - **根因**：qtrs `qobject.rs:688-705` 人工加上了 `if target.id == filter { return false; }` 與 `if is_watched { return false; }`，人為限制了 Qt 允許之行為。舊有測試 `test_qobject_safety_and_qt6_features.rs` 誤將此拒絕釘住。
@@ -3585,9 +3542,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-170 Widget::update() 以接收者 thread affinity 為目的地 post UpdateRequest（G7.2.e）
 - **Qt 依據**：`[QT-SRC widgets/kernel/qwidget.cpp:11367-11420]` `QWidget::update`：
-  ```cpp
-  QCoreApplication::postEvent(this, new QEvent(QEvent::UpdateRequest));
-  ```
+  `QWidget::update` 以 `QCoreApplication::postEvent(this, ...)` 把 `QEvent::UpdateRequest` post 給自己。
   在 Qt 中，`QCoreApplication::postEvent` 恆將事件 post 進接收者所屬之執行緒佇列（`receiver->d_func()->threadData`），而非呼叫端執行緒。
 - **根因**：qtrs `qtrs-widgets/src/widget.rs` 與 `menu.rs` 在呼叫 `post_event_to_thread` 時，硬編碼使用 `ThreadId::current()` 作為目標執行緒；當非 GUI 的 worker thread 呼叫 `widget.update()` 時，事件會被 post 進 worker thread 的佇列（甚至滯留在 pending buffer），導致所屬 GUI 執行緒永不處理該更新請求。
 - **修正**：在 `rust/qtrs/crates/qtrs-widgets/src/widget.rs` 與 `rust/qtrs/crates/qtrs-widgets/src/menu.rs`，目標執行緒改由 `query_object_thread(target).unwrap_or(self.object_data.thread_id)` 解析，並在 `qtrs-derive/src/lib.rs` 修正 2 處 clippy 警告確保零警告。
@@ -3597,23 +3552,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-171 find_child 採兩階段搜尋：先比對直接 children 再遞迴子樹（G2.3.b，R-00018）
 - **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:2242-2256]` `qt_qFindChild_helper`：
-  ```cpp
-  QObject *qt_qFindChild_helper(const QObject *parent, QAnyStringView name, const QMetaObject &mo, Qt::FindChildOptions options)
-  {
-      Q_ASSERT(parent);
-      for (QObject *obj : parent->children()) {
-          if (mo.cast(obj) && (name.isNull() || matches_objectName_non_null(obj, name)))
-             return obj;
-      }
-      if (options & Qt::FindChildrenRecursively) {
-          for (QObject *child : parent->children()) {
-              if (QObject *obj = qt_qFindChild_helper(child, name, mo, options))
-                  return obj;
-          }
-      }
-      return nullptr;
-  }
-  ```
+  `qt_qFindChild_helper(parent, name, mo, options)`：先掃過 `parent` 的全部直接 children，第一個型別符合（`mo.cast`）且名稱符合（名稱為空則不比對名稱）者即回傳；沒有直接符合者時，若 `options` 含 `FindChildrenRecursively`，才依序對每個 child 遞迴同樣的搜尋並回傳第一個結果；都沒有就回傳空指標。
   Qt 的 `findChild` 在遞迴搜尋時，每個節點都會**優先掃過同層全部直接 children**；只有在沒有任何直接 child 符合時，才依序遞迴深入各 child。
 - **根因**：qtrs `qobject.rs` 的 `find_child_any`、`find_child_id`、`find_child_any_mut` 實作為單一迴圈：每檢查一個 child 若不符合即立刻呼叫 `child.find_child_any(...)` 進入子樹深處。若第一個 child 的孫代有符合名稱者，就會搶先被回傳，導致同層第二個直接符合的 child 被略過。
 - **修正**：在 `rust/qtrs/crates/qtrs-core/src/object/qobject.rs` 中，將 `find_child_any`、`find_child_id` 與 `find_child_any_mut` 全數改為符合 Qt `qt_qFindChild_helper` 之兩階段搜尋。
@@ -3623,12 +3562,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 #### RC-172 set_object_name 於名稱變更時發射 object_name_changed（G2.3.d，R-00016）
 - **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:1363-1373]` `QObject::setObjectName`：
-  ```cpp
-  if (d->extraData->objectName.valueBypassingBindings() != name) {
-      d->extraData->objectName.setValueBypassingBindings(name.toString());
-      d->extraData->objectName.notify(); // also emits a signal
-  }
-  ```
+  `QObject::setObjectName` 只在新名稱與目前名稱不同時才更新名稱，並通知 binding（`notify()`，同時發射 `objectNameChanged`）。
   在 Qt 中，當呼叫 `setObjectName` 且新名稱與既有名稱不同時，發射 `objectNameChanged(const QString &)` 信號；若新名稱與舊名稱相同則不發射信號（`spec02_qobject.py R-00016` 實測：連續設定 `a, a, '', ''` 僅發射 `['a', '']` 兩次）。
 - **根因**：qtrs `ObjectData` 與 `QObject` 只有 `object_name: Option<String>` 欄位與 getter/setter，完全缺乏 `object_name_changed` 信號機制。
 - **修正**：在 `rust/qtrs/crates/qtrs-core/src/signal/signal.rs` 增加 `Signal::with_owner_parts`；在 `ObjectData` 增加 owner-bound 之 `object_name_changed: Signal<String>`；於 `set_object_name` 比較 `prev != name`，不同時賦值並 `self.object_name_changed.emit(&name)`；在 `QObject` trait 暴露 `fn object_name_changed(&self) -> &Signal<String>`。
@@ -3698,7 +3632,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：無。
 
 #### RC-176 CoreApplication 單一實例檢查與 panic 語意（G4.1.f）
-- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:801]`（`QCoreApplicationPrivate::init`）：`Q_ASSERT_X(!QCoreApplication::self, "QCoreApplication", "there should be only one application object");`。
+- **Qt 依據**：`[QT-SRC corelib/kernel/qcoreapplication.cpp:801]`（`QCoreApplicationPrivate::init`）：`Q_ASSERT_X` 斷言尚無應用程式物件，訊息為「there should be only one application object」。
 - **根因**：`CoreApplication::with_dispatcher_kind` 雖然將 `APP_INSTANCE_EXISTS` 設為 `true`，但未在建立前檢查此旗標，若已有實例存在不會觸發 panic，與說明文件及 Qt 行為不符（G4.1.f）。
 - **修正**：
   - `crates/qtrs-core/src/application/mod.rs`：在 `CoreApplication::with_dispatcher_kind` 開頭加入 `assert!(!APP_INSTANCE_EXISTS.swap(true, Ordering::SeqCst), "QCoreApplication: there should be only one application object");`。
@@ -3730,7 +3664,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：無。
 
 #### RC-178 隱藏非保留尺寸項目保留既有矩形，不強制歸零（G8.1.b）
-- **Qt 依據**：`[QT-SRC widgets/kernel/qlayoutitem.cpp:408-411]`（`QWidgetItem::setGeometry`）：`if (isEmpty()) return;`。
+- **Qt 依據**：`[QT-SRC widgets/kernel/qlayoutitem.cpp:408-411]`（`QWidgetItem::setGeometry`）：對空的 item 提早返回。
 - **根因**：`layout_engine::item_set_geometry_with` 在 `item_is_empty(widget)` 時，原先呼叫 `widget.set_geometry(Rect::new(0, 0, 0, 0))`，導致非保留尺寸之隱藏 widget 矩形被歸零，而非像 Qt 一樣保持原位置（G8.1.b）。
 - **修正**：
   - `crates/qtrs-widgets/src/layout_engine.rs`：在 `item_set_geometry_with` 開頭依 Qt 規範直接 `if item_is_empty(widget) { return; }`，移除歸零呼叫。
@@ -3762,7 +3696,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：無。
 
 #### RC-180 跨執行緒轉移事件依優先序插入目標佇列（G7.5.c）
-- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:1805-1815]`（`setThreadData_helper`）：`targetData->postEventList.addEvent(pe);`；`[QT-SRC corelib/thread/qthread.cpp:23-39]`（`QPostEventList::addEvent`）：轉移事件依優先序（priority）插入目標執行緒佇列，且不進行壓縮（not compressed）。
+- **Qt 依據**：`[QT-SRC corelib/kernel/qobject.cpp:1805-1815]`（`setThreadData_helper`）：把事件加入目標執行緒資料的 posted event 清單；`[QT-SRC corelib/thread/qthread.cpp:23-39]`（`QPostEventList::addEvent`）：轉移事件依優先序（priority）插入目標執行緒佇列，且不進行壓縮（not compressed）。
 - **根因**：舊契約記載 G7.5.c「轉移的事件繞過壓縮／優先序」，但在 RC-107 時 `move_receivers_to_thread` 已實作 `insert_posted`（依 priority 插入，保留優先順序），且依 Qt 規範刻意不壓縮；先前缺乏針對轉移事件優先序排列的直接測試驗證（G7.5.c）。
 - **修正**：
   - `crates/qtrs-core/tests/test_move_to_thread_state.rs`：新增單元測試 `transferred_events_preserve_priority_ordering`，驗證來源執行緒不同優先序事件在 `move_to_thread` 後於目標執行緒依優先序依序送達。
@@ -3923,7 +3857,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：無。
 
 #### RC-192 Win32Screen::primary 改以 MONITORINFOF_PRIMARY 尋找主螢幕（G11.4.d）
-- **Qt 依據**：`[QT-SRC plugins/platforms/windows/qwindowsscreen.cpp:355]` `if (info.dwFlags & MONITORINFOF_PRIMARY) data->flags |= QWindowsScreenData::PrimaryScreen;`，Qt 列舉螢幕並以 Windows API 的 `MONITORINFOF_PRIMARY` 標誌識別主螢幕，而非硬編碼假定 (0, 0) 點一定由主螢幕涵蓋。
+- **Qt 依據**：`[QT-SRC plugins/platforms/windows/qwindowsscreen.cpp:355]` 當 `MONITORINFO.dwFlags` 含 `MONITORINFOF_PRIMARY` 時，把該螢幕標為主螢幕（`QWindowsScreenData::PrimaryScreen`），Qt 列舉螢幕並以 Windows API 的 `MONITORINFOF_PRIMARY` 標誌識別主螢幕，而非硬編碼假定 (0, 0) 點一定由主螢幕涵蓋。
 - **根因**：`rust/qtrs/crates/qtrs-platform/src/screen.rs:158-164` 舊實作寫死 `MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTONEAREST)` 來獲取主螢幕。雖然大部分單螢幕或標準佈局的主螢幕左上角為 (0, 0)，但在特定虛擬桌面配置或次螢幕置於左側/上方時，以此方式查詢不符合 Qt 依據旗標判定主螢幕的規範。
 - **修正**：`Win32Screen::primary()` 改為先呼叫 `Self::all_screens()` 並檢索 `s.is_primary` 為 true 的螢幕；僅在系統未能枚舉任何螢幕時回退至 `system_fallback_primary()`。
 - **驗證**：單元測試 `test_platform_screen_primary_and_multi_screens` 驗證 `primary()` 與 `all_screens()[0]`（排序置頂之主螢幕）一致且具備 `is_primary: true`。
@@ -3947,7 +3881,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：無。
 
 #### RC-195 支援 GuiApplication::last_window_closed 與 focus_window_changed 信號發射（G11.2.f）
-- **Qt 依據**：`[QT-SRC gui/kernel/qguiapplication.cpp:3933-3943, 2415-2420]`：`maybeLastWindowClosed` 當最後一個頂層視窗關閉時觸發 `emit q_func()->lastWindowClosed()`；焦點頂層視窗切換時發射 `emit q_func()->focusWindowChanged(focusWindow)`。
+- **Qt 依據**：`[QT-SRC gui/kernel/qguiapplication.cpp:3933-3943, 2415-2420]`：`maybeLastWindowClosed` 當最後一個頂層視窗關閉時觸發 發射 `lastWindowClosed`；焦點頂層視窗切換時發射 發射 `focusWindowChanged`（帶目前的 focus window）。
 - **根因**：`qtrs-gui` 定義了 `last_window_closed` 與 `focus_window_changed` 信號，但未在視窗關閉及作用中視窗（active window）變更時觸發發射，致使外界訂閱者無法收到通知（G11.2.f）。
 - **修正**：在 `GuiApplication` 提供全域轉發入口 `emit_last_window_closed` 與 `emit_focus_window_changed`。在 `qtrs-widgets` 之 `Application::maybe_last_window_closed` 於所有視窗不可見時發射 `last_window_closed`；在 `Application::set_active_window` 變更時發射 `focus_window_changed`。
 - **驗證**：新增單元測試 `crates/qtrs-widgets/tests/test_last_window_closed_signal.rs`，驗證視窗關閉時觸發 `last_window_closed`，以及 `set_active_window` 變更時觸發 `focus_window_changed`。after PASS 2/2。
@@ -4053,7 +3987,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **CI 證據（跨平台，非實機驗收）**：GitHub Actions run 38536044263（https://github.com/onlyatuna/claude-hud-monitor/actions/runs/38536044263），commit `d60e395d7fe8983cbcabf1c1f51cf0215a0684b4`，結論 success。`Rust Test` 與 `qtrs Workspace Test` 在 windows-latest、macos-latest、ubuntu-22.04 六個 job 全部 success（`Python Test`、`Missing dependencies` 被跳過）。這證明 Linux／macOS 的編譯與 workspace 測試通過、Windows 自動化測試通過；**不證明**滑鼠拖曳、混合 DPI 螢幕切換或真實 GPU 行為，上列 Residual 的實機項目仍未完成。 CI 測的仍是 `WM_NCHITTEST` 回傳值，不是實際滑鼠拖曳。
 
 #### RC-207 `Window::set_geometry`／`set_geometry_silent` 把要求的尺寸夾進 min／max（G11.3.i）
-- **Qt 依據**：`[QT-SRC widgets/kernel/qwidget.cpp:7299-7305]` `QWidgetPrivate::setGeometry_sys`：`w = qMin(w, maxw); h = qMin(h, maxh); w = qMax(w, minw); h = qMax(h, minh)`，位置不變。
+- **Qt 依據**：`[QT-SRC widgets/kernel/qwidget.cpp:7299-7305]` `QWidgetPrivate::setGeometry_sys`：先把寬高各自夾到最大值，再各自提高到最小值，位置不變。
 - **順序的確認（與送審時的建議不同）**：`QWindowPrivate::setMinOrMaxSize`（`qwindow.cpp:653`）是 `expandedTo(min).boundedTo(max)`（最大值勝過最小值），但 widget 視窗不經過它：`setConstraints_sys`（`qwidget.cpp:3975-3995`）直接把 widget 的限制複製給 `QWindow`，程式化幾何走 `setGeometry_sys`，所以 **widget 層是最小值勝過最大值**。這也與 `SizeLimits::native_track` 一致（原生最大值抬到原生最小值，`qwindowswindow.cpp:1223-1224`）。採用 `setGeometry_sys` 的順序；若用 `QWindow` 的順序，`sync_top_level_minimum` 與 `set_geometry` 在 max < min 時會互相推回而反覆變動。
 - **根因**：`Window::set_geometry`／`set_geometry_silent` 把邏輯 rect 換成原生 rect 後直接 `SetWindowPos`，沒有任何夾值；Windows 對 `WS_POPUP` 不套用追蹤限制，所以 HUD 的程式化幾何完全不受保護。
 - **修正**：`SizeLimits::bound_size`（逐軸：先最大、後最小；最小為 0 的軸不動，所以預設限制不改變任何尺寸，包括非正值）；`Window::bounded_rect` 只改寬高、不改位置，在 DPI／螢幕換算**之前**套用（`native_rect_for` 以夾過的 rect 換算）；`set_geometry` 與 `set_geometry_silent` 都先呼叫它。`sync_top_level_minimum` 改用同一個 `bound_size`，所以它回傳的尺寸再經 `set_geometry` 不會被改動，沒有遞迴或反覆變動。`set_fixed_size`／`set_minimum_size`／`set_maximum_size` 不呼叫 `set_geometry`（只有 `set_fixed_size` 在最後 resize），`set_geometry` 不寫限制，兩者之間沒有重入。`set_geometry_silent` 仍不派 Resize、不呼叫 resize callback。OS 驅動的 `WM_SIZE` 路徑不夾（互動式 sizing 由追蹤限制負責）。
@@ -4071,7 +4005,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：只驗證 `letter-spacing: 0.4px`（HUD 用到的值，另有 1.0px 的 `HeaderTitle`，其值為整數 px 不受截斷影響）；Qt 對 `letterSpacingIsAbsolute` 還依 `font.d->dpi / qt_defaultDpiY()` 縮放（`qtextengine.cpp:1447-1448`），在這兩個 DPR 的 Windows 設定下為 1，不同系統 DPI 下是否一致未驗證。無 CI 證據（尚未 push）。
 
 #### RC-209 `rgba(r, g, b, <0..1>)` 的 alpha 依 Qt 截斷（G9.7.b 子範圍 5）
-- **Qt 依據**：`[QT-SRC gui/text/qcssparser.cpp:824-830]` `int alpha = 255; … if (alphaValue <= 1) alpha = colorDigits.at(6).variant.toReal() * 255.;`，賦值給 `int`，向零截斷。PySide6 6.11.2 把 `rgba(255,255,255,a)` 畫在透明 pixmap 上（不含視窗底色）：0.12→0x1e（30）、0.5→0x7f（127）、0.97→0xf7（247）、0.07→0x11（17）、0.1→0x19（25）、0.35→0x59（89）。
+- **Qt 依據**：`[QT-SRC gui/text/qcssparser.cpp:824-830]` alpha 預設為 255；alpha 數值不大於 1 時，取該數值乘以 255，賦值給 `int`，向零截斷。PySide6 6.11.2 把 `rgba(255,255,255,a)` 畫在透明 pixmap 上（不含視窗底色）：0.12→0x1e（30）、0.5→0x7f（127）、0.97→0xf7（247）、0.07→0x11（17）、0.1→0x19（25）、0.35→0x59（89）。
 - **根因**：`qtrs-gui/src/text/qcssparser.rs` 的 `parse_color` rgba 分支 `(f * 255.0).round()`，四捨五入，多 1（0.12→31、0.94→240）。發現方式：G9.7.b 子範圍 5 的 `LayoutToggleBtn` hover oracle（`tools/pyside_probes/button_hover.py`，offscreen、真實 `:hover`）內部背景像素 alpha Qt 0x1e、qtrs 0x1f。影響全部 QSS／`parse_color` 的小數 alpha（HUD 的 `rgba(…, 0.94)`、`0.14`、`0.12` 等）。
 - **修正**：去掉 `.round()`，保留 `clamp(0, 255)` 與 `as u8`（截斷）。整數 alpha（`> 1`）與 `1`／`0` 不變。
 - **驗證**：新增 `qtrs-gui/tests/test_qcssparser.rs::test_qcss_rgba_fractional_alpha_truncates_like_qt`（八組 alpha，值來自上述 PySide6 量測）。**修復前 FAIL**（還原 `.round()` 後實跑）：該測試、`test_qcss_parser_basic_selectors_and_declarations`（`rgba(14,17,23,0.94)` 期望 240，Qt 為 239）、`test_stylesheet_style_pseudo_states_hover`、`test_button_hover_style_paints_stylesheet_hover_bg`（alpha 31）。後兩項與前一項原本斷言的是 qtrs 的取整結果（31／240，註解寫「約 31」），不是 Qt 值，已改為 30／239。
@@ -4087,7 +4021,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **Residual**：(1) **圓角弧線不是逐像素相同**。Qt 對寬度乘縮放不超過 1 個裝置像素的筆（DPR 1.0 的 1px 邊框）走 `QCosmeticStroker`（細線點陣化器，`qpaintengine_raster.cpp:656-659`），較寬的筆走自己的面積點陣化器，tiny-skia 兩者都不重現。實測角落最大差：Label 測試 DPR 1.0 為 126 級（不透明 1px 弧）、DPR 1.25 為 21 級；`LayoutToggleBtn` 在 DPR 1.0 hover 為 111 級、DPR 1.25 為 16 級，normal 為 15 與 4。測試容差即為這些實測值，不是 0。(2) 只涵蓋均勻寬度、實色、同色四邊、單一圓形半徑；不同寬度／顏色、橢圓半徑、`dotted`／`dashed`／`double`／`groove`／`inset` 沒有實作也沒有量測。(3) `Frame`（走 `QFrame` 框線）與 `ProgressBar` groove（`border_pen`）沒有改，也沒有量測。(4) `border: none` 加背景的 `Button` 仍走原本 Fusion 式路徑（HUD 沒有）。(5) 量測在 offscreen 平台，不是 Windows 原生平台；邊框幾何與字型無關，但 Windows 平台沒有量過。(6) `Label` 的 `QLabel#Badge` 以外的 HUD QSS 邊框（外框 9px、選單 6／8px、tray）若走 `Frame` 或自繪路徑，沒有在這次涵蓋。
 
 #### RC-211 單行 `Label` 的行高納入 fallback 字型引擎的 ascent／descent（G12.8.r）
-- **Qt 依據**：`[QT-SRC gui/text/qtextengine.cpp:1479-1480]` `si.ascent = qMax(actualFontEngine->ascent(), si.ascent)`，descent 同；一行的高度取該行各 text item 所用引擎（含 fallback）的最大 ascent 加最大 descent。`[PYSIDE-RUN 6.11.2 Windows Win11-26200 tools/pyside_probes/usage_table_relayout.py]` HUD 表格的 `⏱ STALE` badge（Microsoft JhengHei UI 10px）高 14，同字型的 `STALE` 為 13，DPR 1.0 與 1.25 皆如此。
+- **Qt 依據**：`[QT-SRC gui/text/qtextengine.cpp:1479-1480]` 項目的 ascent 取自身與實際字型引擎 ascent 中較大者，descent 同；一行的高度取該行各 text item 所用引擎（含 fallback）的最大 ascent 加最大 descent。`[PYSIDE-RUN 6.11.2 Windows Win11-26200 tools/pyside_probes/usage_table_relayout.py]` HUD 表格的 `⏱ STALE` badge（Microsoft JhengHei UI 10px）高 14，同字型的 `STALE` 為 13，DPR 1.0 與 1.25 皆如此。
 - **根因**：`Label::text_size` 與單行繪製只用主字型的 `FontMetrics::layout_height`／`metrics.height`，與文字內容無關。
 - **修正**：`FontMetrics::fallback_line_metrics(font, text)`（`qtrs-gui/src/text/font_metrics.rs`）以 `resolve_font_engines_for_text_global` 與 `GlyphLayout::partition_into_runs` 找出文字實際用到的引擎，取各引擎 `vertical_metrics` 的最大 ascent 與最大 descent（DirectWrite 引擎截斷為 26.6，GDI 引擎〔DPR 1〕為整數像素，與 `layout_height` 同規則）；沒有用到 fallback 引擎時回 `None`，行為不變。`Label::text_size`（未換行純文字）取各行最大高度；單行繪製的基線與垂直置中用同一組值。`layout_height_for_text` 為其 `ascent + descent`。
 - **驗證**：HUD `usage_table_relayout_tests.rs` 的 `stale_badge_height_matches_pyside6_at_dpr_1_0`／`_1_25`（原 `#[ignore]` 的已知差異；修復前 DPR 1.0 失敗，`stale.agy.badge qtrs (…,13) PySide6 (…,14)`，修復後兩項通過，取消 `#[ignore]`）。引擎資料：fallback 引擎（索引 2）ascent 10.791／descent 2.510（主字型 10.156／2.544）；DPR 1.0 整數化後 11＋3＝14，DPR 1.25 截斷 26.6 後 10.781＋2.531＝13.31，ceil 14。全套（本機 Windows，`-j 1`、`--skip real_windows`）：HUD 150 passed、0 failed、5 ignored；`rust/qtrs` workspace 1106 passed、0 failed、4 ignored；HUD `cargo fmt --check`、`clippy -D warnings` 通過。
