@@ -2650,7 +2650,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 | Gap | 處置 | 理由 |
 |---|---|---|
-| G7.9.a | 降為 **P2，待驗證**（非 `D`） | 讀碼推翻 P0 主張：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於第一個 worker／熱鍵執行緒（`hud_window.rs:408`、`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`）在註冊前啟動，但只寫 atomic。**不等於所有 interleaving 皆安全**；它是 RC-04 的一個假設性表現，RC-04 修復後自然消除 |
+| G7.9.a | 降為 **P2，待驗證**（非 `D`） | 讀碼推翻 P0 主張：`Application::new`（`main.rs:319`）在 `application/mod.rs:120` 註冊 loop，早於第一個 worker／熱鍵執行緒（`hud_window.rs:408`、`main.rs:466`）；單一實例 IPC 執行緒（`main.rs:269`）在註冊前啟動，但只寫 atomic。**不等於所有 interleaving 皆安全**；它是 RC-04 的一個假設性表現，RC-04 修復後自然消除。**驗證**：`qtrs-core/tests/test_post_before_loop.rs` 6 項（本機實跑全過）涵蓋「接收執行緒的 loop 尚未建立時從另一個執行緒 post／queued 信號／零延遲 single-shot」：事件被緩衝、loop 建立後依優先序與 FIFO 遞送，不遺失；因此啟動競態的後果（事件遺失）已被測試排除，這項不再需要修復，狀態降為「已驗證」 |
 | G9.6.a | 降為 **P1**（非 `D`）；已修復：RC-24 | Python HUD 不使用 `QStackedLayout`（重建 layout）；Qt 的 `sizeHint`／`minimumSize` 取**所有頁面**的最大值 `[QT-SRC qstackedlayout.cpp:417-448]`，qtrs 只看當前頁（`stacked.rs:123-147`）。與 Qt 不同是事實，但目前 HUD 不依賴；**P0 階段不修**，待 qtrs 的 API 範圍擴大再處理。**已修復：RC-24** |
 | G12.5.d 的 timer 部分（已結案：沿用既有 `ResizeDebouncer`，未新增 timer） | 見 RC-17 | 不得為了 parity 而新增 timer／debounce，除非先證明它不是在補 qtrs 缺陷 |
 
