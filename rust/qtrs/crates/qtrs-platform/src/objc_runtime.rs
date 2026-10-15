@@ -505,7 +505,7 @@ impl MockObjcRuntime {
         }
 
         if class_name == "QNSView" {
-            // Align with Qt QNSView (qnsview_drawing.mm:67-70): isFlipped { return YES; }
+            // Align with Qt QNSView (qnsview_drawing.mm:67-70): the view reports itself as flipped.
             obj.is_flipped = true;
         }
 

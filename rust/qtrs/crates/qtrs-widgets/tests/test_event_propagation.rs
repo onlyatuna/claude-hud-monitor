@@ -633,7 +633,7 @@ mod window_level {
     }
 
     /// A child under a window that is not shown gets no Show/Hide when toggled
-    /// (`qwidget.cpp:8439`: `isWindow() || parentWidget()->isVisible()`).
+    /// (`qwidget.cpp:8439`: only for a window, or a child whose parent is visible).
     #[test]
     fn child_set_visible_under_hidden_window_sends_nothing() {
         let log: Log = Default::default();

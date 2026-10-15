@@ -1,8 +1,8 @@
 //! G8.3.d: Default size_hint and minimum_size_hint of EmptyWidget and Widget trait.
 //!
 //! Qt reference:
-//! - `QWidget::sizeHint()` (`qwidget.cpp:8880-8893`): returns `d->layout->totalSizeHint()` if layout, else `QSize(-1, -1)`.
-//! - `QWidget::minimumSizeHint()` (`qwidget.cpp:8906-8919`): returns `d->layout->totalMinimumSize()` if layout, else `QSize(-1, -1)`.
+//! - `QWidget::sizeHint()` (`qwidget.cpp:8880-8893`): returns the layout's total size hint if there is a layout, else `QSize(-1, -1)`.
+//! - `QWidget::minimumSizeHint()` (`qwidget.cpp:8906-8919`): returns the layout's total minimum size if there is a layout, else `QSize(-1, -1)`.
 
 use qtrs_gui::geometry::primitives::Size;
 use qtrs_widgets::widget::{EmptyWidget, Widget};

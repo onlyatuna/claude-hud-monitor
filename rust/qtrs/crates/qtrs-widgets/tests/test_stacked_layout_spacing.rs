@@ -1,8 +1,8 @@
 //! G9.6.b: StackedLayout set_spacing and spacing.
 //!
 //! Qt reference:
-//! - `QLayout::setSpacing(int spacing)` (`qlayout.cpp:257-262`): stores `d->insideSpacing = spacing; invalidate();`.
-//! - `QLayout::spacing()` (`qlayout.cpp:246-255`): returns `d->insideSpacing` if `>= 0`, else smart spacing (-1 when parentless).
+//! - `QLayout::setSpacing(int spacing)` (`qlayout.cpp:257-262`): stores the value as the inside spacing and invalidates the layout.
+//! - `QLayout::spacing()` (`qlayout.cpp:246-255`): returns the stored inside spacing if it is `>= 0`, else smart spacing (-1 when parentless).
 
 use qtrs_widgets::layout::Layout;
 use qtrs_widgets::stacked::StackedLayout;

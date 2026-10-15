@@ -611,8 +611,8 @@ pub trait Widget: QObject + 'static {
         self.widget_base().set_property(name, value);
     }
 
-    /// `style()->unpolish(w); style()->polish(w)`: re-evaluates the style sheet, which Qt
-    /// reports as a `StyleChange` (`update(); updateGeometry(); layout->invalidate()`).
+    /// Unpolish then polish through the widget's style: re-evaluates the style sheet, which Qt
+    /// reports as a `StyleChange` (repaint, geometry update, layout invalidation).
     fn repolish(&self) {
         self.widget_base().style_changed();
         filters_consume(self.object_data(), &mut Event::new(EventKind::StyleChange));
@@ -752,8 +752,7 @@ impl WidgetBase {
         let min = self.min_size.get();
         let max = self.max_size.get();
         // `QWidgetPrivate::setGeometry_sys` (qwidget.cpp:7301-7304):
-        // w = qMin(w, extra->maxw); h = qMin(h, extra->maxh);
-        // w = qMax(w, extra->minw); h = qMax(h, extra->minh);
+        // Width and height are first capped at the maximum, then raised to the minimum.
         // Minimum wins if min > max.
         let width = rect.width.min(max.width).max(min.width);
         let height = rect.height.min(max.height).max(min.height);
@@ -1056,7 +1055,7 @@ impl WidgetBase {
     }
 
     /// What `QWidget::event` does for `StyleChange` / `FontChange` (qwidget.cpp:9502-9510):
-    /// `update(); updateGeometry(); layout->invalidate();`.
+    /// Repaint, geometry update and layout invalidation.
     pub fn style_changed(&self) {
         self.update_geometry();
         if let Ok(mut layout) = self.layout.try_borrow_mut() {
@@ -1350,7 +1349,7 @@ impl Widget for EmptyWidget {
         if size_changed {
             self.resize_event(new_size, old_size);
             // A layout-owning child re-lays out its children when its size changes, as Qt's
-            // QLayout::widgetEvent does on Resize: `if (d->activated) doResize()` (qlayout.cpp:528-530).
+            // QLayout::widgetEvent does on Resize, when the layout is already activated (qlayout.cpp:528-530).
             // A parentless widget is a window root, which Window lays out itself (window.rs:859-860);
             // fitting it here as well ran that pass twice (test_layout_metric_caching aligned container).
             let has_parent = self.base.parent.borrow().is_some();

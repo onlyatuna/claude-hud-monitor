@@ -254,7 +254,7 @@ fn hidden_non_retained_item_preserves_geometry() {
         Alignment::NONE,
         qtrs_widgets::layout_engine::ItemLimits::of(&**b.borrow(), Alignment::NONE),
     );
-    // Qt QWidgetItem::setGeometry: if (isEmpty()) return; (qlayoutitem.cpp:410 / G8.1.b)
+    // Qt `QWidgetItem::setGeometry` returns early for an empty item (qlayoutitem.cpp:410 / G8.1.b).
     assert_eq!(
         rect_of(&b),
         (64, 35, 50, 30),

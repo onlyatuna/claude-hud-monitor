@@ -3,7 +3,7 @@
 //! Qt rasterises a path into coverage spans and blends each span with
 //! `blend_color_argb` (qdrawhelper.cpp:4027-4062), which for SourceOver calls
 //! `comp_func_solid_SourceOver` (qcompositionfunctions.cpp:697-711):
-//! `c = BYTE_MUL(color, coverage); dest = c + BYTE_MUL(dest, 255 - alpha(c))`, or a plain fill
+//! source scaled by the coverage, plus the destination scaled by the inverse of that alpha, or a plain fill
 //! where the colour is opaque and the coverage full. tiny-skia's coverage is used as is; only
 //! the compositing is Qt's. The premultiplied RGBA layout does not matter to the arithmetic:
 //! every channel is treated alike.
@@ -58,8 +58,8 @@ fn blend_full_span(dest: &mut [u8], color: u32) {
     }
 }
 
-/// `comp_func_solid_SourceOver` over one row: `c = BYTE_MUL(color, coverage);
-/// dest = c + BYTE_MUL(dest, 255 - alpha(c))`. Coverage 0 is no span; runs of full coverage go
+/// `comp_func_solid_SourceOver` over one row: the source scaled by the coverage, plus the
+/// destination scaled by the inverse of that alpha. Coverage 0 is no span; runs of full coverage go
 /// to [`blend_full_span`], like the long spans Qt's rasteriser produces for a shape's inside.
 #[inline]
 fn blend_row(dest: &mut [u8], coverage: &[u8], color: u32) {

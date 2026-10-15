@@ -53,7 +53,7 @@ pub trait EventDispatcher: Send + Sync {
     fn register_socket_notifier(&self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
     fn unregister_socket_notifier(&self, _notifier: &Arc<crate::event_loop::SocketNotifier>) {}
     /// The concrete dispatcher's type name, like Qt's
-    /// `QAbstractEventDispatcher::instance()->metaObject()->className()`.
+    /// the class name of the thread's `QAbstractEventDispatcher` instance.
     fn class_name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }

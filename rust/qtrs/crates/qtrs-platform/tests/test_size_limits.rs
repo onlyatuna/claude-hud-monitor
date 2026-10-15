@@ -70,7 +70,7 @@ fn a_ratio_that_is_not_positive_leaves_the_value_alone() {
 
 #[test]
 fn an_axis_without_a_minimum_is_not_reported() {
-    // `None` keeps the system's value in `MINMAXINFO` (`if (minimumSize->width() > 0)`).
+    // `None` keeps the system's value in `MINMAXINFO` (Qt only overrides an axis whose minimum is positive).
     assert_eq!(min_only((300, 0)).native_track(1.25).min, (Some(375), NONE));
     assert_eq!(min_only((0, 200)).native_track(1.5).min, (NONE, Some(300)));
     assert_eq!(min_only((0, 0)).native_track(2.0).min, (NONE, NONE));

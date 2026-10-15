@@ -38,7 +38,7 @@ pub fn clear_application_event_filters() {
     });
 }
 
-/// Qt's `for (i = 0; i < list.size(); ++i) { obj = list.at(i); if (!obj) continue; ... }`
+/// Qt walks the filter list by index and skips entries that have become null
 /// (`sendThroughApplicationEventFilters` qcoreapplication.cpp:1237-1247,
 /// `sendThroughObjectEventFilters` :1255-1265). `slot_at` is called once per step, so the chain is
 /// read live: a filter tombstoned by an earlier callback is skipped, and one installed during dispatch

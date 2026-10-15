@@ -5,7 +5,7 @@
 //! descendant (`updateObjects`, qstylesheetstyle.cpp:2780). A top-level window is a `QWidget`, so
 //! `HUDWindow.setStyleSheet` reaches only that window. `QApplication::setStyleSheet`
 //! (qapplication.cpp:885) repolishes every widget of every window. `StyleChange` is
-//! `update(); updateGeometry(); layout->invalidate()` (qwidget.cpp:9502). A `QMenu` finds its sheet
+//! a repaint, a geometry update and a layout invalidation (qwidget.cpp:9502). A `QMenu` finds its sheet
 //! through its parent chain (`styleRules`, qstylesheetstyle.cpp:1654).
 //!
 //! Every observation here is one event-loop pump away from the change; nothing calls

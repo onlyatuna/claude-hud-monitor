@@ -3,9 +3,9 @@
 //! or `render_and_present()`.
 //!
 //! Qt (`QWidget::event`, qwidget.cpp:9502-9510): `FontChange` / `StyleChange` run
-//! `update(); updateGeometry(); layout->invalidate()`. `updateGeometry` (qwidget.cpp:10571-10587)
+//! a repaint, a geometry update and a layout invalidation. `updateGeometry` (qwidget.cpp:10571-10587)
 //! invalidates the parent layout, which posts a `LayoutRequest`. `QWidget::setSizePolicy` calls
-//! `updateGeometry`. `style()->unpolish(w); style()->polish(w)` (what the Python HUD does after
+//! `updateGeometry`. Unpolishing then polishing the style (what the Python HUD does after
 //! `setProperty`) ends in a `StyleChange`; `setProperty` alone restyles nothing in Qt, because
 //! `QWidget` and `QApplication` ignore `DynamicPropertyChange` (qwidget.cpp:9449,
 //! qapplication.cpp:2594).

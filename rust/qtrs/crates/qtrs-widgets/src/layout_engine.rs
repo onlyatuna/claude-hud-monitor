@@ -645,7 +645,7 @@ pub fn item_set_geometry_with(
     limits: ItemLimits,
 ) {
     if item_is_empty(widget) {
-        // Qt QWidgetItem::setGeometry (qlayoutitem.cpp:410): if (isEmpty()) return;
+        // Qt `QWidgetItem::setGeometry` (qlayoutitem.cpp:410) returns early for an empty item.
         // Empty / hidden non-retained items keep their geometry rather than being set to (0,0,0,0).
         return;
     }

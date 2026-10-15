@@ -119,8 +119,8 @@ impl FontMetrics {
     /// Ascent and descent, in pixels, of one line of `text` when it uses fallback font engines,
     /// else `None` (the line is the primary font's own). Qt's line takes the largest ascent and the
     /// largest descent of the engines its text items use, fallback engines included
-    /// (`QTextEngine::shapeText`, qtextengine.cpp:1479-1480: `si.ascent = qMax(
-    /// actualFontEngine->ascent(), si.ascent)`, descent likewise). Values are truncated to 26.6 like
+    /// (`QTextEngine::shapeText`, qtextengine.cpp:1479-1480: the item's ascent becomes the larger of
+    /// its own and the actual engine's, descent likewise). Values are truncated to 26.6 like
     /// [`layout_height`](Self::layout_height) (the GDI engine, used at DPR 1, reports whole pixels).
     pub fn fallback_line_metrics(font: &Font, text: &str) -> Option<(f32, f32)> {
         if font.font_data.is_some()
