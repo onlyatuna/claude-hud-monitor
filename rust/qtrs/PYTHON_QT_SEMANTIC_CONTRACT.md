@@ -4122,8 +4122,11 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **註（GDI layered 的 Expose 列）**：目前預設路徑就是 Layered，所以「被遮蓋後重繪」那一列走的是預設路徑，不需要另外強制。
 
 ### E.3 A 類：待使用者決定
-- DV-08（G2.1.g，已註冊但非 `owned_children` 的 child 在 parent drop 時的處置）是否接受。
+- DV-08（G2.1.g，已註冊但非 `owned_children` 的 child 在 parent drop 時的處置）是否接受。決定前不得改該路徑；替代方案是拒絕把非 owned 物件設為 child（改為 D 類並可見地失敗）（`QTRS_SPEC.md` 01.6 DV-08）。
+- DV-09（G2.1.e、R-00048：以自己或後代為 parent）是否接受：`reparent_owned` 回 `Err(InvalidParent)` 且樹不變；Qt release build 照做而形成自我 parent 或環（Qt 自己標為 undefined behavior）。決定前不得改該路徑（`QTRS_SPEC.md` 01.6 DV-09）。先前的 E.3 漏列此項。
 - crate 發布與更名安排。使用者已指定未來正式名為 **qtoxide**（取代 qtrs）。使用者回報 crates.io 搜尋 `qtoxide` 為 0 個 crate（由使用者提供，我未自行驗證；只涵蓋該名稱，`qtoxide-gui`、`qtoxide-widgets`、`qtoxide-core`、`qtoxide-platform` 等子 crate 名稱、商標與授權面未查）。更名時機與範圍尚未決定；既有 RC 章節與 commit 保留 `qtrs` 作為歷史名稱。
+- 授權路線：使用者已批准 `LGPL-3.0-only`（尚未寫入任何 LICENSE 檔，也沒有推送到 `onlyatuna/qtoxide`）。未決：HUD（AGPL-3.0）與 LGPL 的相容性、把 qtrs 改授權的權利歸屬（待 git 作者統計）、是否公開歷史、NOTICE 與 LICENSE 的最終文字。這不是法律意見。
+- 建議順序：先搬（保留歷史、名稱仍為 qtrs）、後在新 repo 改名 qtoxide。使用者已讓搬遷前調查開始，順序本身尚未另行批准。
 - Chapter 03 spec 整合（在使用者確認 chapter 02 方法前不開始）。
 
 ### E.4 A 類：可見行為的持續追蹤（不是新的阻擋，只是記錄現狀）
