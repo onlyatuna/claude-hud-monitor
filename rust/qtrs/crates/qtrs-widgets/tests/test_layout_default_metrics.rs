@@ -142,6 +142,27 @@ fn owned_box_spacing_is_style_6() {
 }
 
 #[test]
+fn owned_grid_spacing_is_style_6() {
+    // Qt: an owned `QGridLayout` asks the style for both spacings (qgridlayout.cpp:1093-1129), 6.
+    // PySide6 (`layout_default_style.py`): two 50x20 items in a top-level owner give hint
+    // (128, 42) side by side (11 + 50 + 6 + 50 + 11) and (72, 68) stacked (11 + 20 + 6 + 20 + 11).
+    for (horizontal, expected) in [(true, Size::new(128, 42)), (false, Size::new(72, 68))] {
+        let top = owner(200, 100);
+        let mut l = GridLayout::new();
+        l.add_widget(fixed_item(), 0, 0);
+        if horizontal {
+            l.add_widget(fixed_item(), 0, 1);
+        } else {
+            l.add_widget(fixed_item(), 1, 0);
+        }
+        top.borrow_mut().set_layout(Box::new(l));
+        top.borrow().update_layout();
+        let hint = top.borrow().layout_ref_mut().unwrap().size_hint();
+        assert_eq!(hint, expected, "owned grid, horizontal={horizontal}");
+    }
+}
+
+#[test]
 fn parentless_box_spacing_is_minus_one() {
     // Qt: `QLayout::spacing()` with no owner or parent layout is -1 (qlayoutengine.cpp:390-401).
     let l = BoxLayout::horizontal();
