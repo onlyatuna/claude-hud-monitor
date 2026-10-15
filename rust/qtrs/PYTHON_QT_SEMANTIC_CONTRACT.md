@@ -4123,7 +4123,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### E.3 A 類：待使用者決定
 - DV-08（G2.1.g，已註冊但非 `owned_children` 的 child 在 parent drop 時的處置）是否接受。
-- crate 發布與更名安排。
+- crate 發布與更名安排。使用者已指定未來正式名為 **qtoxide**（取代 qtrs）。使用者回報 crates.io 搜尋 `qtoxide` 為 0 個 crate（由使用者提供，我未自行驗證；只涵蓋該名稱，`qtoxide-gui`、`qtoxide-widgets`、`qtoxide-core`、`qtoxide-platform` 等子 crate 名稱、商標與授權面未查）。更名時機與範圍尚未決定；既有 RC 章節與 commit 保留 `qtrs` 作為歷史名稱。
 - Chapter 03 spec 整合（在使用者確認 chapter 02 方法前不開始）。
 
 ### E.4 A 類：可見行為的持續追蹤（不是新的阻擋，只是記錄現狀）
