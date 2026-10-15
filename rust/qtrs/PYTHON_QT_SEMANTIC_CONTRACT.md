@@ -4092,3 +4092,48 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **修正**：`FontMetrics::fallback_line_metrics(font, text)`（`qtrs-gui/src/text/font_metrics.rs`）以 `resolve_font_engines_for_text_global` 與 `GlyphLayout::partition_into_runs` 找出文字實際用到的引擎，取各引擎 `vertical_metrics` 的最大 ascent 與最大 descent（DirectWrite 引擎截斷為 26.6，GDI 引擎〔DPR 1〕為整數像素，與 `layout_height` 同規則）；沒有用到 fallback 引擎時回 `None`，行為不變。`Label::text_size`（未換行純文字）取各行最大高度；單行繪製的基線與垂直置中用同一組值。`layout_height_for_text` 為其 `ascent + descent`。
 - **驗證**：HUD `usage_table_relayout_tests.rs` 的 `stale_badge_height_matches_pyside6_at_dpr_1_0`／`_1_25`（原 `#[ignore]` 的已知差異；修復前 DPR 1.0 失敗，`stale.agy.badge qtrs (…,13) PySide6 (…,14)`，修復後兩項通過，取消 `#[ignore]`）。引擎資料：fallback 引擎（索引 2）ascent 10.791／descent 2.510（主字型 10.156／2.544）；DPR 1.0 整數化後 11＋3＝14，DPR 1.25 截斷 26.6 後 10.781＋2.531＝13.31，ceil 14。全套（本機 Windows，`-j 1`、`--skip real_windows`）：HUD 150 passed、0 failed、5 ignored；`rust/qtrs` workspace 1106 passed、0 failed、4 ignored；HUD `cargo fmt --check`、`clippy -D warnings` 通過。
 - **Residual**：(1) 單行繪製的基線／置中位置沒有與 Qt 逐像素比對（測試比的是矩形，不是字形像素）。(2) 多行（含 `\n`）的繪製、換行文字、`Button`、`ProgressBar` 的行高仍用主字型；`Label::text_size` 的多行高度已取各行最大值，但繪製仍等距，兩者在含 fallback 字元的多行文字上不一致。(3) 引擎選擇沿用既有的 fallback 鏈（G12.6.d：字型來源與缺字型替換規則與 Qt 不同）；本修復只在該鏈選到與 Qt 相同的字型時才與 Qt 相符，這台機器的 `⏱` 兩者相符。(4) 非 Windows 的引擎沒有 `vertical_metrics`（回 `None` 時 `fallback_line_metrics` 以 `?` 回 `None`），行為不變。
+
+---
+
+## 附錄 E：Windows HUD 發布阻擋分類與實機驗收清單（提案，待使用者確認）
+
+用途：把「Windows x64 HUD 能不能交付」與「qtrs 還差多少 Qt 語意」分開。本附錄只整理 Contract 與各 RC 已有的記錄，沒有新增 gap；分類規則是提案，尚未經使用者決定。平台決策（使用者）：Rust／qtrs 正式支援 Windows x86_64，macOS／Linux 是實驗性、只編譯的產物。
+
+### E.1 分類規則（提案，待使用者批准；批准前不是正式發布政策）
+- **A 類（可能阻擋 Windows 發布）**：會改變 Windows 上 HUD 可見行為，或需要實機證據才能下結論的項目。
+- **B 類（追蹤，不阻擋）**：Qt 子集的語意差異。依 Contract 記錄，HUD 沒有呼叫者或差異不可見。
+- **C 類（跨平台實驗路徑）**：macOS／Linux。不阻擋 Windows 發布，但不得宣稱跨平台完成。
+
+### E.2 A 類：需要實機或人工的驗收項目（候選阻擋項目，不是已證實的阻擋項目）
+這些項目在單螢幕開發機上無法完成。**每一項的狀態都是「未執行」**；下表只記錄來源、環境需求、做法與判定標準。
+
+| 項目 | 來源 | 環境需求 | 做法 | 判定 | 狀態 |
+|---|---|---|---|---|---|
+| 互動式視窗尺寸限制與多縮放 | RC-204～207 Residual | 兩台以上螢幕或可切換 100／125／150% 縮放，滑鼠 | 在各縮放的螢幕上拖曳 HUD 的邊與角；再把視窗拖過兩個不同縮放的螢幕 | 縮小與（若有設）放大停在邏輯限制換算後的位置；跨螢幕後限制仍以邏輯值對應。`WM_DPICHANGED` 的處理順序在 RC-204 是 `[INFERENCE]`（讀程式推得，沒有換螢幕觀察），要一併觀察 | 未執行 |
+| 原生滑鼠 capture | RC-90 | 實體滑鼠 | 按住左鍵拖出 HUD 視窗外再放開；雙擊 | 視窗外的 move 與 release 仍抵達 press 目標；雙擊是否也設 capture 與 Qt 一致（RC-90 記載未驗證，結果未知） | 未執行 |
+| 被遮蓋後的重繪 | RC-86 Residual（Expose） | 預設路徑（Layered）即可，一台螢幕即可 | 用其他視窗遮蓋再移開 HUD | 內容不需其他變更就恢復（RC-86 記載未驗證，結果未知） | 未執行 |
+| 混合 DPI 的 tooltip／螢幕 | G8.8.g、G11.4.g、G10.7.i | 兩台不同縮放的螢幕 | 兩台螢幕上顯示 tooltip、拖曳視窗 | 位置與尺寸與預期一致（預期值需另行定義，Contract 尚無數值） | 未執行 |
+| DComp 真實裝置 | RC-203 Residual | 有 DirectComposition 硬體的機器；能製造裝置遺失 | 以 `QTRS_ENABLE_DCOMP=1` 啟用後驗證 GPU 呈現品質、DXGI `DEVICE_REMOVED`、驅動故障 | 見下方「RC-203 的事實與條件」 | 未執行 |
+
+**RC-203 的事實與條件（2026-10-15 讀程式確認）**
+- **已確認事實**：`qtrs-platform/src/window.rs:1404` 的 `is_dcomp_enabled()` 在沒有 `set_dcomp_enabled` 覆寫時，只有環境變數 `QTRS_ENABLE_DCOMP` 為 `1` 或 `true` 才回 `true`，否則為 `false`；`surface/mod.rs:45` 的 `WindowsSurface::create` 只在它為 `true` 且 `DCompSurface::new` 成功時選 DComp，否則建立 `Win32LayeredSurface`；`window.rs:1902` 的降級判斷同樣受它控制。HUD（`rust/src`）沒有呼叫 `set_dcomp_enabled`，也沒有設定該環境變數。`test_dcomp_recovery.rs:142` 斷言「DComp must be disabled by default」。
+- **尚待確認**：使用者或安裝程式實際執行 HUD 時是否會設定 `QTRS_ENABLE_DCOMP`（程式碼之外的部署面）。
+- **條件式要求**：若未來要預設啟用 DComp，必須先完成本列的真實裝置與裝置遺失驗收；在目前的預設路徑（Layered）下，它不是這次 Windows 發布的候選阻擋項目。
+- **註（GDI layered 的 Expose 列）**：目前預設路徑就是 Layered，所以「被遮蓋後重繪」那一列走的是預設路徑，不需要另外強制。
+
+### E.3 A 類：待使用者決定
+- DV-08（G2.1.g，已註冊但非 `owned_children` 的 child 在 parent drop 時的處置）是否接受。
+- crate 發布與更名安排。
+- Chapter 03 spec 整合（在使用者確認 chapter 02 方法前不開始）。
+
+### E.4 A 類：可見行為的持續追蹤（不是新的阻擋，只是記錄現狀）
+- G9.7.b（部分修復）：QSS 圓角的角落弧線在量測容差內，不是逐像素一致（Qt 的 cosmetic stroker）。
+- G12.6.d：字型來源與缺字型替換規則與 Qt 不同；Windows 上目前量測相符（`⏱`，見 RC-211），其他字元或其他 Windows 版本未驗證。
+
+### E.5 B、C 類
+- B 類：附錄 A 其餘開放的 P2、D、test gap，G9.4.a 的剩餘限制（HUD 不使用的帶 parent `Popup`／`Tool`／`Window` 與非 96 DPI），G7.9.a 限定情境以外的啟動交錯。
+- C 類：G11.13.r、G11.9.b、G7.6.j、G7.6.k 以及其他 Cocoa／X11／Wayland 項目。
+
+### E.6 這份清單不代表什麼
+- 沒有任何 E.2 項目已經實機驗證；CI 通過不代替實機驗收。
+- 本附錄沒有重新核對各 RC 的測試結果；來源是各 RC 章節的 Residual。唯一重新讀程式確認的是 RC-203 的 DComp 預設值（E.2）。
