@@ -9,6 +9,8 @@ mod header_row_tests;
 pub mod hud_window;
 pub mod placement;
 pub mod provider_card;
+#[cfg(all(test, windows))]
+mod provider_card_relayout_tests;
 #[cfg(test)]
 mod qss_box_audit;
 pub mod styles;
