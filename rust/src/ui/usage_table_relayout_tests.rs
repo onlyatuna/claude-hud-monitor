@@ -113,7 +113,7 @@ type Step = (&'static str, (i32, i32), [Cells; 3]);
 /// Which steps `run` compares.
 #[derive(Clone, Copy, PartialEq)]
 enum Steps {
-    /// Every step but `stale`: the `⏱ STALE` badge is a known difference (see `stale_*` below).
+    /// Every step but `stale` (which has its own tests below).
     ButStale,
     OnlyStale,
 }
@@ -496,11 +496,10 @@ fn usage_table_relayout_matches_pyside6_at_dpr_1_25() {
     run(1.25, expected_dpr_1_25(), Steps::ButStale);
 }
 
-/// Known difference, not fixed: Qt's line height for a text with a glyph the font lacks includes the
-/// fallback font's ascent and descent, so the `⏱ STALE` badge is 14 high in PySide6 and 13 in qtrs
-/// (`Label` uses the primary font's height whatever the text). See the Contract, G9.7.b sub-scope 4.
+/// Qt's line height for a text with a glyph the font lacks includes the fallback font's ascent and
+/// descent, so the `⏱ STALE` badge is 14 high (RC-211; it was 13 while `Label` used the primary
+/// font's height whatever the text).
 #[test]
-#[ignore = "known difference: label height ignores fallback font metrics (G9.7.b sub-scope 4)"]
 fn stale_badge_height_matches_pyside6_at_dpr_1_25() {
     run(1.25, expected_dpr_1_25(), Steps::OnlyStale);
 }
@@ -767,11 +766,10 @@ fn usage_table_relayout_matches_pyside6_at_dpr_1_0() {
     run(1.0, expected_dpr_1_0(), Steps::ButStale);
 }
 
-/// Known difference, not fixed: Qt's line height for a text with a glyph the font lacks includes the
-/// fallback font's ascent and descent, so the `⏱ STALE` badge is 14 high in PySide6 and 13 in qtrs
-/// (`Label` uses the primary font's height whatever the text). See the Contract, G9.7.b sub-scope 4.
+/// Qt's line height for a text with a glyph the font lacks includes the fallback font's ascent and
+/// descent, so the `⏱ STALE` badge is 14 high (RC-211; it was 13 while `Label` used the primary
+/// font's height whatever the text).
 #[test]
-#[ignore = "known difference: label height ignores fallback font metrics (G9.7.b sub-scope 4)"]
 fn stale_badge_height_matches_pyside6_at_dpr_1_0() {
     run(1.0, expected_dpr_1_0(), Steps::OnlyStale);
 }

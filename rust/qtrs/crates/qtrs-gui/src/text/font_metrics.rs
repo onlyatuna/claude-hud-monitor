@@ -116,6 +116,50 @@ impl FontMetrics {
         }
     }
 
+    /// Ascent and descent, in pixels, of one line of `text` when it uses fallback font engines,
+    /// else `None` (the line is the primary font's own). Qt's line takes the largest ascent and the
+    /// largest descent of the engines its text items use, fallback engines included
+    /// (`QTextEngine::shapeText`, qtextengine.cpp:1479-1480: `si.ascent = qMax(
+    /// actualFontEngine->ascent(), si.ascent)`, descent likewise). Values are truncated to 26.6 like
+    /// [`layout_height`](Self::layout_height) (the GDI engine, used at DPR 1, reports whole pixels).
+    pub fn fallback_line_metrics(font: &Font, text: &str) -> Option<(f32, f32)> {
+        if font.font_data.is_some()
+            || font.size <= 0.0
+            || text.is_empty()
+        {
+            return None;
+        }
+        let engines = crate::text::font_database::resolve_font_engines_for_text_global(font, text);
+        if engines.len() < 2 {
+            return None;
+        }
+        let runs = crate::text::glyph_layout::GlyphLayout::partition_into_runs(text, &engines);
+        if runs.iter().all(|run| run.engine_index == 0) {
+            return None;
+        }
+        let (mut ascent, mut descent) = (0.0f32, 0.0f32);
+        for run in &runs {
+            let (a, d) = engines[run.engine_index].face.vertical_metrics(font.size)?;
+            let (a, d) = if crate::text::font_database::uses_directwrite_engine() {
+                ((a * 64.0).floor() / 64.0, (d * 64.0).floor() / 64.0)
+            } else {
+                (a.round(), d.round())
+            };
+            ascent = ascent.max(a);
+            descent = descent.max(d);
+        }
+        Some((ascent, descent))
+    }
+
+    /// [`layout_height`](Self::layout_height) of one line of `text`, with fallback engines
+    /// ([`fallback_line_metrics`](Self::fallback_line_metrics)).
+    pub fn layout_height_for_text(font: &Font, text: &str) -> f32 {
+        match Self::fallback_line_metrics(font, text) {
+            Some((ascent, descent)) => ascent + descent,
+            None => Self::layout_height(font),
+        }
+    }
+
     /// Ascent and descent of the face `font` resolves to, from the font database.
     fn face_line_metrics(font: &Font) -> Option<(f32, f32)> {
         if font.font_data.is_some() || font.size <= 0.0 {

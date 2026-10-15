@@ -237,8 +237,11 @@ impl Label {
                 return self.document_size(font, None);
             }
             // Plain and unwrapped: one `layout_height` line per `\n`-separated line.
-            let line_h = FontMetrics::layout_height(font).ceil();
             let lines: Vec<&str> = self.text.split('\n').collect();
+            let line_h = lines
+                .iter()
+                .map(|line| FontMetrics::layout_height_for_text(font, line).ceil())
+                .fold(0.0, f32::max);
             let w = lines
                 .iter()
                 .map(|line| metrics.horizontal_advance_exact(line, font))
@@ -593,7 +596,11 @@ impl Widget for Label {
             }
         } else {
             let text_w = metrics.horizontal_advance_exact(&self.text, &font);
-            let text_h = metrics.height;
+            // A line that uses fallback fonts is as tall as the tallest engine (`sizeHint` agrees).
+            let (ascent, text_h) = match FontMetrics::fallback_line_metrics(&font, &self.text) {
+                Some((a, d)) => (a, (a + d).ceil()),
+                None => (metrics.ascent, metrics.height),
+            };
             let top = y_for(text_h);
             let x = x_for(text_w);
             let clip = overflows(x, top, text_w, text_h);
@@ -601,7 +608,7 @@ impl Widget for Label {
                 painter.save();
                 painter.clip_to_rect(content);
             }
-            painter.draw_text(PointF::new(x, top + metrics.ascent), &self.text, &font);
+            painter.draw_text(PointF::new(x, top + ascent), &self.text, &font);
             if clip {
                 painter.restore();
             }
