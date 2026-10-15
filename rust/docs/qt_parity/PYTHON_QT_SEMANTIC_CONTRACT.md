@@ -4171,14 +4171,16 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **跑不了的**：`ferrokit-core` 的 lib 單元測試（`object::qobject`、`signal::`）：第一個測試就呼叫 `timeBeginPeriod`（Windows 外部函式），Miri 不支援。沒有跑 ASan（沒有嘗試設定 MSVC 的 ASan）。
 - **結論**：G2.1.i 維持「已實作、待完整驗證」。驗收項目全部有測試且通過；Miri 在別名檢查關閉時通過；別名模型下的檢查被既有的 registry 指標來源擋住，沒有解決。是否恢復第 03 章要使用者判斷這個殘餘是否可接受。
 - **完整測試**（ferrokit 本機 commit，Windows，`-j 1`，略過 `real_windows`）：exit 0，165 個結果行，1140 passed、0 failed、4 ignored（`f0640d3` 時是 1126）。`cargo clippy -p ferrokit-core --all-targets`：這次新增與修改的程式沒有警告（其他警告原本就有，例如 `qobject.rs` 的一處 `unnecessary_map_or` 不在這次的 diff 裡）；`cargo fmt --check` 只剩 `qobject.rs` 原有的 2 處差異。
+- **逐個 commit 驗證**：三個 commit（`04f67f8`、`d3bb289`、`a622ac2`）各在獨立的 worktree 單獨建置，跑 `test_signal_sender_destroyed_during_emit`、`test_owned_child_destroyed_in_callback`、`test_parent_children_during_callbacks`、`test_parent_tree_rules`、`test_owned_child_ownership` 五個 test binary：`04f67f8` 通過（8、5、7、10、9 項）；`d3bb289` 通過（8、9、9、10、9 項，第二個 commit 把 `test_owned_child_destroyed_in_callback` 加到 9 項）。完整測試（上一條）是在最終的樹上跑的，也就是 `a622ac2` 的樹。第一次拆 commit 時這個檢查抓到第一個 commit 放錯位置（見 RC-225 的更正），重做之後才通過。
 - **Residual**：(1) 這批變更是 ferrokit 的本機 commit，尚未推送，CI 未跑；(2) Miri 的別名模型限制，見上；(3) 沒有 ASan；(4) 暫存清單是執行緒區域的，guard 被 `mem::forget` 時的行為沒有測 `[INFERENCE]`；(5) `add_owned_child` 在 parent 被借用時仍回 `Busy`（Qt 的建構子允許；這是 RC 既有的、有測試的行為，不在這次範圍）。
 
 #### RC-225 階段三：HUD 的 ferrokit 固定版本升到 `f0640d3`
 - **內容**：`rust/Cargo.toml`（4 處）、`.github/workflows/ci.yml` 的 `ref`、`rust/Cargo.lock`（10 處）由 `cd46354` 改為 `f0640d3e338f1e356ba5c4994fc93e37ba919dda`，也就是 ferrokit CI 通過的 commit（RC-222）。三個檔案一起改。
 - **本機驗證**（Windows，升級之後）：`cargo check -j 1 --all-features` 通過；`cargo test -j 1 --all-targets -- --skip real_windows`：exit 0，8 個結果行，164 passed、0 failed、5 ignored（和升級前的數字相同）；`cargo clippy -j 1 -- -D warnings` exit 0；`cargo fmt --check` exit 0；Python 回歸測試（在 `python/`，`QT_QPA_PLATFORM=offscreen python -B -m unittest discover -s tests`）：55 項 OK。這些是本機結果，沒有啟動 HUD 的 GUI，不是 CI，也不是實機驗收。
 - **HUD 程式沒有改**。HUD 不呼叫這三批變更涉及的 API（`set_parent`、`reparent_owned`、`add_owned_child`、`Signal::with_owner_parts`）。
-- **不在這個固定版本裡**：ferrokit 的本機 commit `6aaf453`、`ac22c05`、`996f1fd`（RC-223、RC-224）還沒推送，所以 HUD 用的 ferrokit 不含 R-00077 的修復、後代同時銷毀與 registry 清單的修正。
-- **HUD 的 CI**：這個變更含 `.github/workflows/ci.yml`，路徑偵測的 `workflow` 為 true，所以 Python 與 Rust 的 job 都會執行。推送後的 run 結果在推送之後才知道，這份文件沒有記錄它。
+- **不在這個固定版本裡**：ferrokit 的本機 commit `04f67f8`（signal）、`d3bb289`（後代同時銷毀、registry 清單）、`a622ac2`（交錯測試）（RC-223、RC-224）還沒推送，所以 HUD 用的 ferrokit 不含 R-00077 的修復、後代同時銷毀與 registry 清單的修正。
+- **更正**：這份文件最早推送的版本把這三個 commit 記成 `6aaf453`、`ac22c05`、`996f1fd`，那三個 commit 從來沒有推送。事後逐個 commit 單獨建置並跑測試時發現：第一個 commit 裡 `ObjectData::drop` 的修改被我用 `git apply --unidiff-zero` 拆 hunk 時放錯了位置（落在 `with_object_mut` 的閉包裡，只有 child 有 parent 時才執行），`a_signal_emitted_while_its_owner_is_being_destroyed_reaches_no_slot` 在那個 commit 上 FAIL，第二個 commit 之後才 PASS。因為三個 commit 都沒推送，我用 `git reset` 重做：改用 `f0640d3` 的檔案加上確切的字串替換組出第一個 commit，重新建立三個 commit；重做之後的最終樹與原本的完全相同（`git diff` 無輸出），三個 commit 的各自驗證結果見 RC-224。
+- **HUD 的 CI**（2026-10-15，推送 `0d313c8`、`79ce399`、`9d5419b` 到 `origin/develop` 之後，run 38751897087）：這個變更含 `.github/workflows/ci.yml`，路徑偵測的 `workflow` 為 true，所以 Python 與 Rust 的 job 都沒有被跳過。`Detect Changed Paths` 成功；`Rust Test` 在 windows-latest、macos-latest、ubuntu-22.04 都成功（`Check`、`Run Tests`、`Lint (clippy)`、`Format (rustfmt)` 四步都成功）；`Python Test` 在 windows-latest 與 macos-14 成功；`Missing dependencies`（診斷用，只在手動觸發時執行）跳過。從日誌統計：Rust 的 `test result` 8 行，Windows 164 passed、0 failed、5 ignored（和本機相同），macOS 與 ubuntu 各 102 passed、0 failed、5 ignored（只在 Windows 執行的測試被條件編譯排除）；Python 回歸測試在兩個 OS 各跑 55 項。這是 CI，不是實機驗收。
 
 ---
 
