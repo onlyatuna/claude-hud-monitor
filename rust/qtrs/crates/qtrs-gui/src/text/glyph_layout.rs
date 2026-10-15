@@ -244,6 +244,13 @@ pub struct GlyphLayout {
     pub width: f32,
 }
 
+/// The letter spacing Qt adds per glyph: `QFont::setLetterSpacing` stores `QFixed::fromReal(spacing)`
+/// (`qfont.cpp`), which truncates to 26.6 fixed point (`(int)(r * 64) / 64`, `qfixed_p.h`), so
+/// `0.4` px becomes 25/64 = 0.390625 px. Summed over a long text that is a pixel.
+fn qt_letter_spacing(spacing: f32) -> f32 {
+    ((spacing as f64 * 64.0) as i32) as f32 / 64.0
+}
+
 /// `hb_font_t::x_mult` of the font Qt hands HarfBuzz (`hb_font_set_scale(QFixed::fromReal(ppem))`):
 /// the 16.16 factor taking font units to 26.6 pixels.
 fn hb_font_multiplier(size: f32, units_per_em: i32) -> i64 {
@@ -603,7 +610,7 @@ impl GlyphLayout {
                     current_y += (pos.y_advance as f32) * scale;
                     // `QTextEngine::shapeText`: spacing goes after the last glyph of every cluster.
                     if infos.get(i + 1).is_none_or(|next| next.cluster != info.cluster) {
-                        current_x += font.letter_spacing;
+                        current_x += qt_letter_spacing(font.letter_spacing);
                     }
                 }
             } else {
@@ -638,7 +645,7 @@ impl GlyphLayout {
                         x: current_x,
                         y: current_y,
                     });
-                    current_x += adv_x + font.letter_spacing;
+                    current_x += adv_x + qt_letter_spacing(font.letter_spacing);
                 }
             }
         }
