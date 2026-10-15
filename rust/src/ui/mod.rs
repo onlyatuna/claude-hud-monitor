@@ -4,6 +4,8 @@
 mod geometry_audit;
 #[cfg(all(test, windows))]
 mod geometry_persist_tests;
+#[cfg(all(test, windows))]
+mod header_row_tests;
 pub mod hud_window;
 pub mod placement;
 pub mod provider_card;
