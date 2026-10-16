@@ -128,7 +128,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G2.1.f [P2, READ]** `set_parent` 跨 registry 鎖與物件借用，非原子；`QT_CPP_MAPPING.md` 寫「atomically」不實。
   - **G2.1.g [P2, READ；已修復：RC-212、RC-213、RC-214；DV-08 已核准]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。原分類 D 與 Core 範圍衝突（spec v0.2.3）：改為 `QTRS_SPEC.md` 01.6 的 B 類候選差異 DV-08，核准前視同缺陷（R-00008）。使用者於 2026-10-15 核准 DV-08（選項 (a) 保留差異，並附使用規則）；同日以一次性測試重現：parent 被 drop 後，非 owned child 的 `parent()` 仍回已死 parent 的 id，不是「無」；RC-212 修復；RC-213 補上 child 被借用或從未登記的情形，RC-214 補上在 parent 被借用時才掛上的 child（殘餘見這兩個 RC 與 G2.1.j）。
   - **G2.1.h [P2, READ]** 改變 parent 時，`ChildRemoved` 回呼看到的樹狀態與 Qt 不同：Qt 在送 `ChildRemoved` 時 child 的 parent 仍是舊 parent、新 parent 的 children 尚不含它（`qobject.cpp:2322-2337`，PySide 6.11.2 實測）；`reparent_owned` 在全部更新完才送事件（`qobject.rs:894-899`），`set_parent` 先更新 registry 的 parent（`qobject.rs:756-758`）。見 R-00049。
-  - **G2.1.i [P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229]** parent 在擁有的 child 的 callback 裡被 drop 時，`ObjectData::delete_children` 不檢查 child 是否被借用就清掉 `owned_children`，child 的 `Drop` 在它自己的 callback 返回前執行。一次性 probe（已刪除）的記錄順序：`callback start`、`reactor before: parent Some(..)`、`drop node`（parent）、`drop reactor`（child）、`reactor after`、`callback returned`。callback 之後讀到已釋放的 `self` 是從順序推論 `[INFERENCE]`，沒有用 Miri 或 ASan 驗證。`add_owned_child` 的 Safety 已寫明（RC-217），沒有防護。非 owned 的 child 不受影響（RC-213）。處理方式（使用者要求不得只靠文件警告）：被借用的 owned child 立刻解除登記，`Box` 暫存到那個 callback 返回才釋放（ferrokit `276b6e7`，RC-221；Qt 在 parent 銷毀時立刻釋放，這個差異是 DV-13，有條件核准，見 RC-222）。HUD 不呼叫 `add_owned_child`，所以不是 P0。見 R-00075。後續（RC-222、RC-224）：DV-13 有條件核准；驗收項目補測，查出並修復兩處缺口（被借用的 owned child 底下的後代沒有同時被銷毀；registry 的 children 清單沒有列 `add_owned_child` 掛上的 child）；Miri 在別名檢查關閉時通過，預設的別名模型下被既有的 registry 指標來源擋住（未改動的測試也一樣）。維持「已實作、待完整驗證」，不標為全面安全。 2026-10-16：三個 ferrokit commit 已推送，CI run 38835938926 三個 OS 成功（RC-226）；Miri 在預設別名模型下仍被 registry 的指標來源擋住，另開設計工作（G2.7.d，RC-227）；仍不標為全面安全。
+  - **G2.1.i [P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229、RC-230]** parent 在擁有的 child 的 callback 裡被 drop 時，`ObjectData::delete_children` 不檢查 child 是否被借用就清掉 `owned_children`，child 的 `Drop` 在它自己的 callback 返回前執行。一次性 probe（已刪除）的記錄順序：`callback start`、`reactor before: parent Some(..)`、`drop node`（parent）、`drop reactor`（child）、`reactor after`、`callback returned`。callback 之後讀到已釋放的 `self` 是從順序推論 `[INFERENCE]`，沒有用 Miri 或 ASan 驗證。`add_owned_child` 的 Safety 已寫明（RC-217），沒有防護。非 owned 的 child 不受影響（RC-213）。處理方式（使用者要求不得只靠文件警告）：被借用的 owned child 立刻解除登記，`Box` 暫存到那個 callback 返回才釋放（ferrokit `276b6e7`，RC-221；Qt 在 parent 銷毀時立刻釋放，這個差異是 DV-13，有條件核准，見 RC-222）。HUD 不呼叫 `add_owned_child`，所以不是 P0。見 R-00075。後續（RC-222、RC-224）：DV-13 有條件核准；驗收項目補測，查出並修復兩處缺口（被借用的 owned child 底下的後代沒有同時被銷毀；registry 的 children 清單沒有列 `add_owned_child` 掛上的 child）；Miri 在別名檢查關閉時通過，預設的別名模型下被既有的 registry 指標來源擋住（未改動的測試也一樣）。維持「已實作、待完整驗證」，不標為全面安全。 2026-10-16：三個 ferrokit commit 已推送，CI run 38835938926 三個 OS 成功（RC-226）；Miri 在預設別名模型下仍被 registry 的指標來源擋住，另開設計工作（G2.7.d，RC-227）；仍不標為全面安全。 RC-230：DV-14 的最小原型（沒有合併）拆解時發現，`delete_children` 在 child 的 callback 執行中讀 child 的 id，也與那個 callback 的 `&mut self` 衝突（Stacked Borrows、Tree Borrows 都報）；原型改成把 id 存在所有權代理裡，現行 ferrokit 沒有改。維持未完成。
   - **G2.1.j [P1, RAN；已修復；DV-12 有條件核准的關閉條件（已推送後的 CI、交錯情況測試補齊）已滿足，2026-10-16 以已知限制關閉（`children()` 在 callback 中仍回傳舊清單，尚未達完整 Qt 等價行為，關閉只代表約定的交錯情境完成驗收；日後若要在 callback 中立即反映變更，須另立驗收條件）：RC-220、RC-222、RC-224、RC-226、RC-229]** 新 parent 被借用時（例如在 parent 自己的 callback 裡呼叫 `set_parent`），`with_object_mut(new_parent)` 回 `None`，child 只記在 registry 的 children 清單；parent 自己的 `ObjectData.children` 不含它，callback 結束後仍是 `[]`（一次性 probe 只看到這個時點），`children()` 漏列。parent 的 drop 已能到達這種 child（RC-214）。`ChildAdded` 的延後已處理（RC-123），這裡是清單本身。見 R-00074。修復（ferrokit `ec43dae`，RC-220）：對 parent 清單的修改在 parent 被借用時排進 registry 紀錄，借用結束時套用；同一個根因的另外兩個方向（舊 parent 被借用時移走 child、child 在 parent 被借用時被 drop）一併修了。callback 裡仍是舊清單，DV-12（有條件核准，見 RC-222）。後續（RC-222、RC-224）：DV-12 有條件核准；已知限制是 callback 裡的 `children()` 仍是舊清單，不等同 Qt；交錯情況測試補了 3 項（ferrokit `a622ac2`，已推送，CI run 38835938926 三個 OS 成功）；關閉條件已滿足（RC-226）。已知限制不因關閉而消失：callback 裡的 `children()` 仍是舊清單，不等同 Qt；不得宣稱 G2.1.j 等同 Qt。
   - **G2.1.k [P2, RAN；使用者核准修復，已實作並推送（`04f67f8`），CI 通過；行為驗收待確認，不標為完成：RC-223、RC-226]** sender 在自己的 slot 裡被銷毀（例如 slot 裡 drop 了它的 owned parent，RC-221）後，同一次發射剩下的、用 `Signal::connect`（沒有接收物件）接上的 slot 仍被呼叫；Qt 在 sender 銷毀後停止這次發射（PySide6 實測；`qobject.cpp:1171, 4427-4432`）。`connect_object` 接上的 slot 已隨解除登記斷線，沒有這個問題。一次性測試（已刪除），沒有正式測試（會釘住非 Qt 行為）。見 R-00077。HUD 不呼叫 `add_owned_child`。處理（使用者 2026-10-15 核准修復）：`Signal` 持有 owner 的 liveness token，每個 slot 之前檢查（RC-223；ferrokit `04f67f8`，已推送，CI run 38835938926 三個 OS 成功）；修復後有正式測試（`test_signal_sender_destroyed_during_emit.rs`，8 項）。依使用者 2026-10-16 的指示不標為完成，等行為驗收；超出原需求的行為變更見 RC-228。
 - **HUD usage**：Python `QTimer(self)`（`refresh_controller.py:35,39`）、`UsageTable(parent=self)` + `old_table.deleteLater()`（`hud_window.py:262-266`）、`widget.setParent(None)` + `deleteLater()`（`:187-189`）。Rust：`rust/src` 不用 core `set_parent`/`add_owned_child`（grep 為空）；走 `qtrs-widgets` 自己的 `set_parent_widget`。
@@ -167,7 +167,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### C2.7 Registry、借用排他、重入
 - **已遷移**：要求見 `QTRS_SPEC.md` §02（R-00037～R-00039）。本節只保留缺陷（G）與 HUD 使用位置；Qt behavior、qtrs required、Current implementation、Test 以新規格為準。
-- **Known gap**：**G2.7.a [P1, RAN；已修復：RC-123]** （修復前）對已被借用的物件送事件會**無聲丟失**（含重入 `send_event` 與 parent 自己 handler 內觸發的 `ChildAdded`）；**G2.7.b [DV-07（已核准 B 類差異；原標 D，spec v0.2.3 改標：Core 要求不得標 D）]** 跨執行緒直接派送不支援（`registered_ptr` 拒絕非註冊執行緒）。理由：registry 存 thread-local 原始指標；誤用回 `false`，須補上診斷（見 C7.4）；**G2.7.c [test gap]** `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tests」標題下沒有任何測試；**G2.7.d [P1, RAN；選項 1 的 spike 已做、沒有合併，設計待使用者決定（DV-14 候選）：RC-227、RC-229]** registry 保存的裸指標，與擁有者的 `Box` 或直接存取，在 Stacked Borrows 與 Tree Borrows 下都不合法（Miri 對 `add_owned_child` 的寫法與「登記之後直接存取」的最小重現都報 UB；位置在 `register_qobject`、`ObjectBorrowGuard::deref_mut`）。對應 R-00075。這不是 Qt 行為差異；沒有觀察到實際的錯誤行為，只是目前的別名模型下不合法，不能據此聲稱記憶體安全。2026-10-16 的 spike（RC-229）：只改 `add_owned_child` 的取指標時機，只修那一個位置，既有 45 項測試的結果與失敗位置不變；`ObjectData` 加一個 `PhantomPinned` 的對照實驗讓 55 項在兩種模型都通過，但那是 Miri 對 `!Unpin` 的豁免，不等於別名正確。
+- **Known gap**：**G2.7.a [P1, RAN；已修復：RC-123]** （修復前）對已被借用的物件送事件會**無聲丟失**（含重入 `send_event` 與 parent 自己 handler 內觸發的 `ChildAdded`）；**G2.7.b [DV-07（已核准 B 類差異；原標 D，spec v0.2.3 改標：Core 要求不得標 D）]** 跨執行緒直接派送不支援（`registered_ptr` 拒絕非註冊執行緒）。理由：registry 存 thread-local 原始指標；誤用回 `false`，須補上診斷（見 C7.4）；**G2.7.c [test gap]** `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tests」標題下沒有任何測試；**G2.7.d [P1, RAN；方向已核准（DV-14：方案 2＋3），最小原型已做、沒有合併，實作未核准；維持開放：RC-227、RC-229、RC-230]** registry 保存的裸指標，與擁有者的 `Box` 或直接存取，在 Stacked Borrows 與 Tree Borrows 下都不合法（Miri 對 `add_owned_child` 的寫法與「登記之後直接存取」的最小重現都報 UB；位置在 `register_qobject`、`ObjectBorrowGuard::deref_mut`）。對應 R-00075。這不是 Qt 行為差異；沒有觀察到實際的錯誤行為，只是目前的別名模型下不合法，不能據此聲稱記憶體安全。2026-10-16 的 spike（RC-229）：只改 `add_owned_child` 的取指標時機，只修那一個位置，既有 45 項測試的結果與失敗位置不變；`ObjectData` 加一個 `PhantomPinned` 的對照實驗讓 55 項在兩種模型都通過，但那是 Miri 對 `!Unpin` 的豁免，不等於別名正確。2026-10-16 第五輪：使用者選定方案 2＋3，否決方案 1、4、5；最小原型（RC-230，沒有合併）在遷移測試輔助函式之後，讓既有 45 項在兩種模型都通過；`register_boxed_qobject`、`Timer` 與舊的 `register_qobject(&mut …)` 寫法沒有改，仍不合法。
 - **HUD usage**：Rust HUD 不直接碰 registry。
 
 ---
@@ -1256,7 +1256,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.1.f | P2, READ | `set_parent` 跨 registry 鎖與物件借用，非原子 |
 | G2.1.g | P2, READ；已修復：RC-212、RC-213、RC-214；DV-08 已核准 | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
 | G2.1.h | P2, READ | `ChildRemoved` 回呼期間的樹狀態與 Qt 不同（R-00049） |
-| G2.1.i | P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229 | parent 在擁有的 child 的 callback 裡被 drop，child 的 `Box` 在 callback 還在跑時被釋放（`delete_children` 不檢查借用；R-00075） |
+| G2.1.i | P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229、RC-230 | parent 在擁有的 child 的 callback 裡被 drop，child 的 `Box` 在 callback 還在跑時被釋放（`delete_children` 不檢查借用；R-00075） |
 | G2.1.j | P1, RAN；已修復並關閉（DV-12 有條件核准的條件已滿足；已知限制：`children()` 在 callback 中仍回傳舊清單，尚未達完整 Qt 等價行為，關閉只代表約定的交錯情境完成驗收；R-00074 維持部分符合；日後若要在 callback 中立即反映變更，須另立驗收條件）：RC-220、RC-222、RC-224、RC-226、RC-229 | 在 parent 被借用時掛上的 child 只記在 registry，parent 自己的 `children()` 漏列（R-00074） |
 | G2.1.k | P2, RAN；使用者核准修復，已實作並推送，CI 通過；行為驗收待確認，不標為完成：RC-223、RC-226 | sender 在自己的 slot 裡被銷毀後，發射中的 `connect` slot 仍被呼叫（R-00077） |
 | G2.2.a | P1, RAN；已修復：RC-92 | `delete_later` 不會自我 post、不會 drop |
@@ -1280,7 +1280,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.7.a | P1, RAN；已修復：RC-123 | 對已被借用的物件送事件會**無聲丟失** |
 | G2.7.b | DV-07（已核准 B 類差異；原標 D） | 跨執行緒直接派送不支援 |
 | G2.7.c | test gap | `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tes |
-| G2.7.d | P1, RAN；選項 1 的 spike 已做、沒有合併，設計待使用者決定（DV-14 候選）：RC-227、RC-229 | registry 的裸指標與擁有者的 `Box`／直接存取在預設別名模型下不合法（Miri；R-00075） |
+| G2.7.d | P1, RAN；方向已核准（DV-14：方案 2＋3），最小原型已做、沒有合併，實作未核准；維持開放：RC-227、RC-229、RC-230 | registry 的裸指標與擁有者的 `Box`／直接存取在預設別名模型下不合法（Miri；R-00075） |
 | G3.1.a | P2, READ；已修復：RC-175 | Pointer=218、DpiChanged=222 符合 Qt QEvent 數值 |
 | G3.1.b | D | `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)` |
 | G3.1.c | P1, RAN；已修復：RC-129 | 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等 |
@@ -4396,14 +4396,14 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   </details>
 
   - **讀法**：失敗的 case（A、A3、D）共同點是「先取裸指標，之後擁有者那一側又做了一次新的 Unique retag」：`Box<W>` 的 unsize 強制轉型加 `push`、`Box<W>` 的回傳、對物件的直接存取。登記的指標和擁有者持有的路徑是兄弟關係，擁有者的下一次使用就使它失效；所以問題不只是「`Box` 被移動」。C1 到 C3 通過，表示把指標取在最終位置之後，這個 Miri 版本不因之後的 `Box` 搬動而失效；C3 為什麼通過我沒有查 Miri 的實作，別名模型仍是實驗性的，結果可能隨版本改變 `[INFERENCE]`。
-  - **ferrokit 裡符合失敗模式的位置**（讀碼，`[INFERENCE]`，沒有逐一在 Miri 下執行）：`add_owned_child`（case A）；`register_boxed_qobject`（case A3）；`Timer::start`、`Timer` 的另外兩處 `register_pinned_qobject(self.as_mut())`（`timer.rs`，case D：登記之後擁有者繼續直接呼叫 `rearm`、`stop` 等）；測試與單元測試裡 28 個檔案共 156 處 `register_qobject(&mut …)`。HUD 的 `rust/src` 直接呼叫這幾個登記函式的次數是 0，但 HUD 使用 ferrokit 的 `Timer`（`main.rs`），所以經由 `Timer` 與 case D 有關 `[INFERENCE]`；Miri 跑不了 `Timer` 的單元測試（`timeBeginPeriod`），所以沒有直接證據。
+  - **ferrokit 裡符合失敗模式的位置**（讀碼，`[INFERENCE]`，沒有逐一在 Miri 下執行）：`add_owned_child`（case A）；`register_boxed_qobject`（case A3）；`Timer::start`、`Timer` 的另外兩處 `register_pinned_qobject(self.as_mut())`（`timer.rs`，case D：登記之後擁有者繼續直接呼叫 `rearm`、`stop` 等）；測試與單元測試裡 28 個檔案共 156 處 `register_qobject(&mut …)`（更正：重數是 31 個檔案共 123 處，見 RC-230）。HUD 的 `rust/src` 直接呼叫這幾個登記函式的次數是 0，但 HUD 使用 ferrokit 的 `Timer`（`main.rs`），所以經由 `Timer` 與 case D 有關 `[INFERENCE]`；Miri 跑不了 `Timer` 的單元測試（`timeBeginPeriod`），所以沒有直接證據。
 - **設計選項**（只評估，ferrokit 沒有改）：
 
   | 選項 | 內容 | 在最小重現裡 | 代價 |
   |---|---|---|---|
   | 1. 取指標的時機 | `add_owned_child` 先把 `Box<dyn QObject>` 放進 `owned_children`，再從最終位置取指標登記；`register_boxed_qobject` 因為要回傳 `Box<T>`，需要改簽名或改由呼叫端登記 | C1 通過 | 改動最小；依賴目前 Miri 的 retag 規則（C3 為何通過不明）；不處理 case D（`register_qobject(&mut …)`、`Timer`） |
   | 2. 所有權代理 | `owned_children` 與 `reparent_owned` 的回傳改用持有 `NonNull<dyn QObject>` 的型別（`Box::into_raw`，`Drop` 時 `Box::from_raw`）；registry 的指標與代理共用同一個裸指標來源，擁有者經代理的 `Deref`／`DerefMut`（由裸指標重新衍生）存取 | B、B2 通過 | 公開 API 會變：`reparent_owned` 現在回傳 `Option<Box<dyn QObject>>`，`register_boxed_qobject` 回傳 `Box<T>`；要新的 DV、遷移所有呼叫端 |
-  | 3. 登記改用指標 | `register_qobject(&mut dyn QObject)` 與 `register_pinned_qobject(Pin<&mut dyn QObject>)` 改成接受來源是 `NonNull` 或 `UnsafeCell` 的指標，擁有者經同一個指標存取；`Timer` 改持有代理 | B2 通過（D 的對照） | 處理 case D；對 156 處測試呼叫端與 `Timer` 影響最大；要新的 DV |
+  | 3. 登記改用指標 | `register_qobject(&mut dyn QObject)` 與 `register_pinned_qobject(Pin<&mut dyn QObject>)` 改成接受來源是 `NonNull` 或 `UnsafeCell` 的指標，擁有者經同一個指標存取；`Timer` 改持有代理 | B2 通過（D 的對照） | 處理 case D；對 123 處呼叫端（RC-230 更正，原寫 156）與 `Timer` 影響最大；要新的 DV |
   | 4. 接受並記錄 | 不改程式；Contract 寫明 ferrokit 在 Stacked Borrows 與 Tree Borrows 下不通過，以及原因和位置 | 沒有 | 沒有改動；但這是目前別名模型下的 UB。我沒有檢查 release 組譯：`Box` 引數在 LLVM 會被標 `noalias`，是否真的產生錯誤的組譯不知道 `[INFERENCE]`，不能據此聲稱安全 |
 
   - **建議的下一步**（需要使用者決定，這次沒做）：先做選項 1 的一次性 spike（只改 `add_owned_child`），看 Miri 預設模式能走多遠、哪些 case 仍失敗；長期的方向是選項 2 加 3，因為只有它們讓登記指標與擁有者的存取共用同一個來源。選項 2、3 會改公開 API，需要新的 DV 與核准。（後續：選項 1 的 spike 已在 RC-229 做完：只修 `add_owned_child` 一個位置，既有測試的結果不變；選項 2、3 的設計評估與新的 DV-14 也在 RC-229。）
@@ -4986,7 +4986,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   |---|---|---|---|---|
   | 1. 取指標的時機 | `add_owned_child` 改成 `push` 之後登記；沒有簽名變動 | 不動；`register_boxed_qobject` 與 case D 不受影響 | 登記時 `Box` 已在最終位置 | spike：只修 a1–a3，既有 45 項不變 |
   | 2. 所有權代理 | `owned_children` 改成持有 `NonNull<dyn QObject>` 的代理（`Box::into_raw`，`Drop` 時 `Box::from_raw`）；`reparent_owned` 現在回 `Option<Box<dyn QObject>>`、`register_boxed_qobject` 回 `Box<T>`，兩者的回傳型別會變；`add_owned_child` 仍可收 `Box<T>`，失敗時經 `from_raw` 還回去；`PARKED_CHILDREN`、`destroy_when_released`、`free_parked_children`、`delete_children` 都要遷移 | `Timer` 以 `Pin<Box<Timer>>` 持有，不經 `owned_children`（讀碼 `[INFERENCE]`）；測試端要改持有代理的地方（`register_boxed_qobject` 的 5 個檔案共 7 處呼叫） | 代理是唯一擁有者；`into_raw` 的指標是唯一的來源，registry 與代理共用；每次存取由裸指標重新衍生 `&mut`；`Drop` 只釋放一次 | 最小重現 B、B2 通過；沒有在 ferrokit 裡試過；對堆疊與 `Pin` 的物件（case D）沒有幫助 |
-  | 3. 以指標登記 | `register_qobject(&mut dyn QObject)`、`register_pinned_qobject(Pin<&mut dyn QObject>)` 改收 `*mut dyn QObject`（或 `NonNull`），呼叫端用 `&raw mut` 取指標；簽名變 | `Timer` 的 3 處、測試端約 156 處 `register_qobject(&mut …)` 都要改；文件的 Safety 要寫明「指標不得經由中間的 `&mut` 取得」，安全 Rust 無法強制 | 呼叫端負責指標的來源；擁有者之後經同一個來源存取 | F3 通過（堆疊物件）；F1、F2、F4 仍 UB（`Box` 持有的物件）：單獨做不夠，要搭配選項 2 |
+  | 3. 以指標登記 | `register_qobject(&mut dyn QObject)`、`register_pinned_qobject(Pin<&mut dyn QObject>)` 改收 `*mut dyn QObject`（或 `NonNull`），呼叫端用 `&raw mut` 取指標；簽名變 | `Timer` 的 3 處、呼叫端 123 處 `register_qobject(&mut …)`（RC-230 更正，原寫約 156）都要改；文件的 Safety 要寫明「指標不得經由中間的 `&mut` 取得」，安全 Rust 無法強制 | 呼叫端負責指標的來源；擁有者之後經同一個來源存取 | F3 通過（堆疊物件）；F1、F2、F4 仍 UB（`Box` 持有的物件）：單獨做不夠，要搭配選項 2 |
   | 5. `!Unpin`（對照，不是使用者列的選項） | `ObjectData` 加 `PhantomPinned`；簽名不變；所有含 `ObjectData` 的型別不再是 `Unpin` | `Timer` 已經是 `!Unpin`；測試端 0 處要改（55 項全通過） | 不變量沒有改善，只是 Miri 不再檢查這些型別的 `&mut` 唯一性；依賴 rustc 與 Miri 未保證的行為 | 55 項兩種模型都通過；`UnsafePinned` 在 stable 上不可用 |
   | 4. 接受並文件化 | 不改程式；Contract 寫明在 SB 與 TB 下不通過，以及原因和位置 | 不動 | 沒有 | RC-227 |
 
@@ -5009,7 +5009,1186 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **G2.1.j 的關閉紀錄**：維持關閉。限制寫在關閉紀錄裡：`children()` 在 callback 中仍回傳舊清單（尚未達完整 Qt 等價行為），關閉只代表約定的交錯情境（RC-220、RC-224 的測試）完成驗收；R-00074 維持部分符合；日後若要在 callback 中立即反映變更，須另立驗收條件。
 - **`rustfmt`**：沒有做格式整理的 commit。`f0640d3` 的基底有 485 個 hunk、105 個檔案不符合 `rustfmt`；`cargo fmt --all -- --check` 在 `2f2a96c`（含這次的註解 commit）仍是 485 個 hunk、105 個檔案，所以相對基底沒有新增格式差異。CI 沒有 rustfmt 或 clippy 的步驟。
 - **更正**：RC-226 與 RC-228 先前把 `Compile every target` 的結果寫成「5 個 warning」；重新用同一個計法數 `a622ac2` 與 `2f2a96c` 兩個 run 的日誌，是 3 個 warning 加 2 行 `generated N warnings` 摘要（共 5 行含 `warning` 的輸出），內容相同。已就地改正。
-- **Residual**：(1) DV-14 待核准；G2.7.d 與 G2.1.i 維持開放。(2) spike 沒有合併，也沒有在 stable 上跑 ferrokit 的完整測試（只有 `!Unpin` 對照做過 `cargo check --workspace --all-targets --keep-going`）；選項 1 的改動只用 Miri 的子集驗證。(3) Miri 只跑了 Windows host 與 ferrokit-core 的 54 項（加 b2）整合測試；lib 單元測試（`timeBeginPeriod`）、`ferrokit-widgets`、其他整合測試、HUD 都沒跑；沒有 ASan；Stacked Borrows 與 Tree Borrows 仍是實驗性的模型，結果可能隨版本改變。(4) `Timer` 的 c5 沒有事件迴圈。(5) 選項 5 依賴未保證的行為。(6) 第 03 章、Windows 實機驗收、正式發布繼續暫停。
+- **Residual**：(1) DV-14 待核准（後續：使用者選定方案 2＋3，設計與最小原型見 RC-230）；G2.7.d 與 G2.1.i 維持開放。(2) spike 沒有合併，也沒有在 stable 上跑 ferrokit 的完整測試（只有 `!Unpin` 對照做過 `cargo check --workspace --all-targets --keep-going`）；選項 1 的改動只用 Miri 的子集驗證。(3) Miri 只跑了 Windows host 與 ferrokit-core 的 54 項（加 b2）整合測試；lib 單元測試（`timeBeginPeriod`）、`ferrokit-widgets`、其他整合測試、HUD 都沒跑；沒有 ASan；Stacked Borrows 與 Tree Borrows 仍是實驗性的模型，結果可能隨版本改變。(4) `Timer` 的 c5 沒有事件迴圈。(5) 選項 5 依賴未保證的行為。(6) 第 03 章、Windows 實機驗收、正式發布繼續暫停。
+
+#### RC-230 推送 HUD `fe112fc`；DV-14 採方案 2＋3：分階段設計與最小原型（沒有合併）；Miri 階段 A 基線、階段 B 驗證、階段 C 計畫（G2.7.d；G2.1.i；R-00075）
+- **決定**（使用者 2026-10-16 第五輪）：(1) 核准推送 HUD 本機 commit `fe112fc`（RC-229、spec v0.2.11），獨立推送，不必等 DV-14：推送前確認父 commit 是預期的遠端 `HEAD`、沒有混入其他未核准的變更、工作樹與 staged 沒有額外內容；推送後記錄實際的遠端 commit 與 CI run；CI 因路徑過濾跳過測試時，明確標記「本次 commit 未執行測試」，不得沿用其他 commit 的 CI 結果。(2) DV-14 採方案 2＋3（所有權代理搭配指標登記），做分階段設計與最小原型，不直接改 ferrokit 的程式，也不合併；不接受方案 1（spike 結束、不合併，`owned_children` 與 `add_owned_child` 的改法只算局部改善）、方案 4、方案 5（`PhantomPinned`）；不得一次改完整個公開 API、不得大範圍遷移公開 API、不得以 `PhantomPinned` 取代所有權與別名設計。設計與原型要回答：(a) 所有權代理怎麼涵蓋 `reparent_owned`、`register_boxed_qobject`、`PARKED_CHILDREN` 與銷毀流程；(b) 指標登記 API 怎麼處理堆疊物件、`Box` 持有的物件與 `Pin`／`!Unpin` 型別；(c) 登記後指標的有效期、別名規則、重新登記與解除登記的安全不變量；(d) 舊公開 API 的分階段棄用方式，並維持 HUD 與 `Timer` 的相容；(e) 最小重現、SB、TB 與回歸測試的驗收標準。(3) Miri 與 ASan 另排工作、分三階段（A 保存基線；B 驗證設計原型；C 擴大回歸）；不得現在跑完全部測試套件、不得以 UB 數量當進度指標；ASan 只作補充檢查；nightly 只在實際執行 Miri 時安裝，結束後依既定流程移除。(4) G2.7.d 維持開放、G2.1.i 維持未完成（不宣告全面安全）、G2.1.k 維持待行為驗收；第 03 章、Windows 實機驗收與正式發布繼續暫停，除非之後提出具體的風險接受方案並獲明確核准。
+- **推送 `fe112fc` 與 CI**：推送前 `git fetch` 之後確認：`origin/develop` 是 `2fa30a9`，也是 `fe112fc` 的父 commit；`git merge-base --is-ancestor origin/develop HEAD` 成立；`git log origin/develop..HEAD` 只有 `fe112fc` 一個 commit；staged 為空，已追蹤檔案沒有未 staged 的變更；未追蹤的只有 5 個 `rust/tools/pyside_probes/spec03_*.py`（沒有加入）；`fe112fc` 只改 3 個文件（Contract、spec、migration）。推送 `2fa30a9..fe112fc`，遠端 `develop` 是 `fe112fced7eb0a5a8ded92b7ec4201bbcfa258ad`。CI run 38840947690（`fe112fc`，push）：`Detect Changed Paths` 成功；`Missing dependencies`、`Python Test`、`Rust Test` 都是 skipped（路徑過濾：只改了 Markdown）。**本次 commit 未執行測試**；`fe112fc` 的狀態不沿用 `2fa30a9` 的 run 38837155760。
+- **Miri 環境與命令（階段 A：固定）**：nightly 只為這一輪的 Miri 安裝，記錄之後移除（見「清除」）。我先裝了 `nightly-2026-10-15`，以為就是 RC-229 用的版本，實際是 `rustc 1.101.0-nightly (7df81381d 2026-10-14)`（RC-227 的版本；rustup 通道的日期比 rustc 的 commit 日期晚一天），所以先移除它，改裝 `rustup toolchain install nightly-2026-10-16 --profile minimal -c miri -c rust-src`：`rustc 1.101.0-nightly (4ebd25825 2026-10-15)`、`miri 0.1.0 (4ebd258257 2026-10-15)`，與 RC-229 相同；host `x86_64-pc-windows-msvc`，Windows 11。之後的階段固定用 `+nightly-2026-10-16`；換版本要先重跑基線。命令：每個測試各自執行 `cargo +nightly-2026-10-16 miri test -j 1 -p ferrokit-core --test <binary> -- --exact <test> --test-threads=1`；SB 是不設 `MIRIFLAGS`（預設模型），TB 是 `MIRIFLAGS=-Zmiri-tree-borrows`；沒有用 `-Zmiri-disable-stacked-borrows`。每個 worktree 用自己的目標目錄。掃描腳本把每個結果分成「通過」「UB」「panic」「不支援」「逾時」，並記下錯誤、標籤建立與標籤失效的位置：
+
+  <details><summary>掃描腳本 <code>sweep.py</code>（暫存，已刪除）</summary>
+
+  ```python
+  # Sweep: run each listed test singly under Miri (SB = default, TB = -Zmiri-tree-borrows).
+  # usage: python sweep.py WORKTREE TARGETDIR LABEL OUT.json BIN[,BIN...] [SB,TB]
+  import json, os, re, subprocess, sys, time
+  wt, target, label, out, bins = sys.argv[1:6]
+  models = (sys.argv[6] if len(sys.argv) > 6 else "SB,TB").split(",")
+  TOOL = "+nightly-2026-10-16"
+  tests = {}
+  for b in bins.split(","):
+      src = open(f"{wt}/crates/ferrokit-core/tests/{b}.rs", encoding="utf-8").read()
+      tests[b] = re.findall(r"#\[test\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+(\w+)", src)
+  def norm(s):
+      s = re.sub(r"<\d+>", "<N>", s)
+      s = re.sub(r"alloc\d+", "allocN", s)
+      s = re.sub(r"0x[0-9a-f]+", "0xX", s)
+      s = re.sub(r"\[0x[0-9a-f]+(\.\.0x[0-9a-f]+)?\]", "[R]", s)
+      return s.strip()
+  def classify(text):
+      if re.search(r"^test result: ok\. 1 passed", text, re.M): return "pass", None
+      if re.search(r"running 0 tests", text): return "notfound", None
+      m = re.search(r"^error: (.*)$", text, re.M)
+      if m and "Undefined Behavior" in m.group(1):
+          kind = "UB"
+      elif m and "unsupported operation" in m.group(1):
+          kind = "unsupported"
+      elif re.search(r"panicked at", text):
+          kind = "panic"
+      elif m:
+          kind = "error"
+      else:
+          kind = "other"
+      sig = []
+      if m: sig.append(("error", norm(m.group(1))[:90]))
+      cur = "error"
+      after = text[m.end():] if m else text
+      for line in after.splitlines():
+          if "was created by" in line: cur = "created"
+          elif "later invalidated" in line: cur = "invalidated"
+          elif "this indicates a" in line or line.startswith("note: some details"): pass
+          loc = re.match(r"\s*--> (\S+?):(\d+):\d+", line)
+          if loc and len(sig) < 6:
+              sig.append((cur, f"{loc.group(1).replace(chr(92), '/')}:{loc.group(2)}"))
+          if line.startswith("note: some details"): break
+      if kind == "panic":
+          pm = re.search(r"panicked at ([^\n]+)", text)
+          sig.append(("panic", norm(pm.group(1))[:80] if pm else ""))
+      return kind, sig
+  res = {}
+  t0 = time.time()
+  for b, names in tests.items():
+      for n in names:
+          for m in models:
+              env = dict(os.environ, CARGO_TARGET_DIR=target)
+              if m == "TB": env["MIRIFLAGS"] = "-Zmiri-tree-borrows"
+              else: env.pop("MIRIFLAGS", None)
+              try:
+                  p = subprocess.run(["cargo", TOOL, "miri", "test", "-j", "1", "-p", "ferrokit-core", "--test", b, "--", "--exact", n, "--test-threads=1"],
+                                     cwd=wt, env=env, capture_output=True, text=True, timeout=600, encoding="utf-8", errors="replace")
+                  text = p.stdout + "\n" + p.stderr
+                  kind, sig = classify(text)
+              except subprocess.TimeoutExpired:
+                  kind, sig = "timeout", None
+              res[f"{b}::{n}::{m}"] = {"kind": kind, "sig": sig}
+              print(f"{label} {b}::{n} {m} {kind}", flush=True)
+  json.dump({"label": label, "tests": tests, "res": res, "seconds": round(time.time() - t0)}, open(out, "w"), indent=1)
+  print("done", round(time.time() - t0), "s")
+  ```
+
+  </details>
+
+- **階段 A：基線**（ferrokit `2f2a96c`，不改程式，同一個 Miri）：45 項的結果是 SB 1 通過、44 UB；TB 2 通過、43 UB，與 RC-229 的 baseline 完全相同；RC-229 的 10 個場景（`spike_registry_pointer.rs`，原樣加入）也與 RC-229 的 baseline 欄相同。失敗分類：87 個 UB 都是**既有失敗**（未改的程式就有）；**此次變更造成的失敗** 0 項（基線沒有變更）；這 5 個 binary 裡**環境不支援** 0 項。已知的環境不支援在 45 項之外：`ferrokit-core` 的 lib 單元測試會先呼叫 `dispatcher_win.rs` 裡的 `timeBeginPeriod`（Windows 外部函式，RC-227）。下面的數字只用來比對「同一組測試在不同狀態下，哪些項目的結果改變、失敗位置在哪」，不當進度指標。
+
+  <details><summary>既有 45 項測試清單與基線結果（SB／TB）</summary>
+
+  | binary | 測試 | SB | TB |
+  |---|---|---|---|
+  | `test_signal_sender_destroyed_during_emit` | `slots_after_the_one_that_destroyed_the_sender_are_not_called` | UB | UB |
+  | `test_signal_sender_destroyed_during_emit` | `every_slot_runs_when_no_slot_destroys_the_sender` | UB | UB |
+  | `test_signal_sender_destroyed_during_emit` | `destroying_another_object_does_not_stop_the_emission` | UB | UB |
+  | `test_signal_sender_destroyed_during_emit` | `a_nested_emission_that_destroys_the_outer_sender_ends_the_outer_emission` | UB | UB |
+  | `test_signal_sender_destroyed_during_emit` | `a_nested_emission_that_destroys_the_inner_sender_ends_only_the_inner_emission` | UB | UB |
+  | `test_signal_sender_destroyed_during_emit` | `a_slot_that_emits_its_own_signal_again_and_a_later_slot_that_destroys_the_sender_end_both_emissions` | UB | UB |
+  | `test_signal_sender_destroyed_during_emit` | `a_signal_handle_does_not_keep_its_owner_alive` | UB | UB |
+  | `test_signal_sender_destroyed_during_emit` | `a_signal_emitted_while_its_owner_is_being_destroyed_reaches_no_slot` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `an_owned_child_is_freed_when_its_callback_returns_not_when_its_parent_drops` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `only_the_child_whose_callback_is_running_waits_for_it` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `a_grandchild_whose_callback_is_running_keeps_alive_only_itself` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `a_child_that_is_not_running_is_freed_with_its_parent` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `no_slot_of_a_destroyed_child_runs_once_the_slot_that_destroyed_it_has_returned` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `the_parent_the_child_and_its_connections_are_cleaned_up_in_one_order` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `a_callback_nested_in_another_one_leaves_nothing_parked_and_frees_the_inner_child_last` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `freeing_a_parked_child_can_run_a_callback_that_parks_and_frees_another` | UB | UB |
+  | `test_owned_child_destroyed_in_callback` | `a_child_attached_inside_a_callback_that_destroys_its_parent_is_not_listed_in_a_dead_object` | UB | UB |
+  | `test_parent_children_during_callbacks` | `a_child_attached_while_the_parent_is_borrowed_is_listed_when_the_callback_returns` | UB | UB |
+  | `test_parent_children_during_callbacks` | `a_child_detached_while_its_parent_is_borrowed_leaves_the_list_when_the_callback_returns` | UB | UB |
+  | `test_parent_children_during_callbacks` | `a_child_moved_away_from_a_borrowed_parent_is_listed_only_under_the_new_parent` | UB | UB |
+  | `test_parent_children_during_callbacks` | `a_child_dropped_while_its_parent_is_borrowed_leaves_the_list_when_the_callback_returns` | UB | UB |
+  | `test_parent_children_during_callbacks` | `changes_made_during_one_borrow_are_applied_in_the_order_they_were_made` | UB | UB |
+  | `test_parent_children_during_callbacks` | `a_change_is_applied_once_and_later_borrows_leave_the_list_alone` | UB | UB |
+  | `test_parent_children_during_callbacks` | `a_parent_that_is_not_borrowed_is_edited_at_once` | UB | UB |
+  | `test_parent_children_during_callbacks` | `a_child_moved_between_two_borrowed_parents_ends_up_under_the_new_one_only` | UB | UB |
+  | `test_parent_children_during_callbacks` | `a_child_attached_and_dropped_in_the_same_borrow_is_never_listed` | UB | UB |
+  | `test_owned_child_ownership` | `set_parent_none_on_owned_child_keeps_child_alive` | UB | UB |
+  | `test_owned_child_ownership` | `reparent_owned_to_none_returns_the_box_and_child_survives` | UB | UB |
+  | `test_owned_child_ownership` | `reparent_owned_moves_ownership_to_a_new_parent` | UB | UB |
+  | `test_owned_child_ownership` | `reparent_owned_notifies_both_parents_through_event_filters` | UB | UB |
+  | `test_owned_child_ownership` | `reparent_owned_rejects_self_and_descendant_parents_without_changes` | UB | UB |
+  | `test_owned_child_ownership` | `reparent_owned_rejects_children_that_are_not_owned` | UB | UB |
+  | `test_owned_child_ownership` | `reparent_owned_fails_visibly_when_a_party_is_borrowed_and_changes_nothing` | UB | UB |
+  | `test_owned_child_ownership` | `add_owned_child_sends_child_added` | UB | UB |
+  | `test_owned_child_ownership` | `add_owned_child_fails_visibly_when_parent_is_borrowed` | UB | 通過 |
+  | `test_parent_tree_rules` | `an_object_cannot_be_its_own_parent` | 通過 | 通過 |
+  | `test_parent_tree_rules` | `a_descendant_cannot_become_the_parent` | UB | UB |
+  | `test_parent_tree_rules` | `the_cycle_check_follows_the_tree_as_it_is_now` | UB | UB |
+  | `test_parent_tree_rules` | `dropping_a_parent_leaves_a_non_owned_child_without_a_parent` | UB | UB |
+  | `test_parent_tree_rules` | `dropping_a_parent_does_not_touch_the_parent_of_an_unrelated_child` | UB | UB |
+  | `test_parent_tree_rules` | `a_child_borrowed_while_its_parent_is_dropped_is_left_without_a_parent` | UB | UB |
+  | `test_parent_tree_rules` | `a_child_that_was_never_registered_is_left_without_a_parent` | UB | UB |
+  | `test_parent_tree_rules` | `a_former_child_is_not_refused_a_thread_move_for_still_having_a_parent` | UB | UB |
+  | `test_parent_tree_rules` | `a_child_attached_while_its_parent_was_borrowed_goes_with_the_parent` | UB | UB |
+  | `test_parent_tree_rules` | `unregistering_a_parent_ends_its_children_links_like_dropping_it` | UB | UB |
+
+  </details>
+
+- **原型的範圍**（ferrokit 本機 worktree 與本機分支，從 `2f2a96c` 開始；沒有推送、沒有合併，記錄之後刪除）：只改 `crates/ferrokit-core/src/object/qobject.rs`（+127／−11 行）：
+  1. 新增 `register_qobject_ptr(NonNull<dyn QObject>)`：registry 保存的就是呼叫端給的指標。
+  2. 新增 `OwnedObject<T>`（所有權代理）：持有 `Box::into_raw` 產生的 `NonNull<T>`，以及建立時讀一次的物件 id；`Deref`／`DerefMut` 由這個指標重新取得參考；`Drop` 用 `Box::from_raw` 釋放；`from_box`、`into_dyn`、`as_non_null`、`object_id`、`into_box`。
+  3. 新增 `register_owned_qobject(T) -> OwnedObject<T>`：把物件放到堆上、以代理的指標登記，回傳代理（取代 `register_boxed_qobject` 的用途）。
+  4. 新增 `reparent_owned_object`，回傳 `Option<OwnedObject<dyn QObject>>`；`reparent_owned` 的簽名不變，改成呼叫它再 `into_box`。
+  5. `ObjectData::owned_children` 的元素型別由 `Box<dyn QObject>` 改成 `OwnedObject<dyn QObject>`（原型裡唯一的公開型別變動）；`PARKED_CHILDREN`、`destroy_when_released`、`free_parked_children` 改持代理；`delete_children`、parent 被 drop 時的 `retain`、`reparent_owned` 改讀代理的 id，不讀 child 本身。
+  6. `add_owned_child` 的簽名不變：檢查都通過之後才把 `Box` 轉成代理，以代理的指標登記，再放進 `owned_children`。
+  沒有改的：`register_qobject`、`register_pinned_qobject`、`register_boxed_qobject` 與 `Timer`。測試：5 個 test binary 的輔助函式由「`Box::new` 加 `register_qobject(&mut *b)` 再回傳 `Box`」改成 `register_owned_qobject(…)` 回傳代理（+79／−77 行，測試本身與期望值不變）；新增場景檔 `spike_dv14_design.rs`（D1–D6、D9 與對照 X1、X2，另有 `Unpin` 的編譯期斷言；第一次跑時 D3 的計數與 D6 的寫法是我寫錯的，以 panic 出現，改正後重跑）；RC-229 的 `spike_registry_pointer.rs` 原樣加入。
+
+  <details><summary>原型的原始碼差異（相對 <code>2f2a96c</code> 的 <code>qobject.rs</code>）</summary>
+
+  ```diff
+  diff --git a/crates/ferrokit-core/src/object/qobject.rs b/crates/ferrokit-core/src/object/qobject.rs
+  --- a/crates/ferrokit-core/src/object/qobject.rs
+  +++ b/crates/ferrokit-core/src/object/qobject.rs
+  @@ -115,5 +115,5 @@ impl Drop for ObjectBorrowGuard {
+
+   /// An owned child that waits to be freed, with the borrow flag of the callback it waits for.
+  -type ParkedChild = (Arc<AtomicBool>, Box<dyn QObject>);
+  +type ParkedChild = (Arc<AtomicBool>, OwnedObject<dyn QObject>);
+
+   thread_local! {
+  @@ -129,5 +129,5 @@ thread_local! {
+   /// returns, since that callback still runs on `&mut self`; the guard of the callback frees it
+   /// (`free_parked_children`), and with it the memory of the objects below it.
+  -fn destroy_when_released(child_id: ObjectId, child: Box<dyn QObject>) {
+  +fn destroy_when_released(child_id: ObjectId, child: OwnedObject<dyn QObject>) {
+       let Some((entry, _)) = registered_ptr(child_id) else {
+           drop(child);
+  @@ -159,5 +159,5 @@ fn unregister_descendants(id: ObjectId) {
+   /// Frees the children parked while the callback that held `flag` was running.
+   fn free_parked_children(flag: &Arc<AtomicBool>) {
+  -    let ready: Vec<Box<dyn QObject>> = PARKED_CHILDREN.with(|parked| {
+  +    let ready: Vec<OwnedObject<dyn QObject>> = PARKED_CHILDREN.with(|parked| {
+           let mut parked = parked.borrow_mut();
+           let (ready, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut *parked)
+  @@ -457,4 +457,106 @@ pub unsafe fn register_boxed_qobject<T: QObject + 'static>(
+   }
+
+  +use std::ptr::NonNull;
+  +
+  +/// Registers the object at `ptr`. The registry keeps this exact pointer, so every access the owner
+  +/// makes between callbacks must go through a pointer derived from it (or through the owning
+  +/// [`OwnedObject`]); a pointer made by turning a `&mut` into a raw pointer does not qualify.
+  +///
+  +/// # Safety
+  +/// `ptr` must point to a live object that stays at this address until `unregister_qobject`
+  +/// completes. All other requirements are those of [`register_qobject`].
+  +pub unsafe fn register_qobject_ptr(ptr: NonNull<dyn QObject>) {
+  +    let raw = ptr.as_ptr();
+  +    // SAFETY: the caller guarantees the object is alive.
+  +    let data = unsafe { (*raw).object_data() };
+  +    register_object_metadata(data, raw);
+  +}
+  +
+  +/// Owner of a heap object. It holds the raw pointer made by `Box::into_raw`, and the registry is
+  +/// given a copy of that same pointer, so moving an `OwnedObject` moves no `Box` and invalidates
+  +/// nothing. Dropping it frees the object.
+  +pub struct OwnedObject<T: QObject + ?Sized> {
+  +    ptr: NonNull<T>,
+  +    /// Read once, when the proxy is made. A parent decides what to do with a child whose callback
+  +    /// is running without reading the child: a `&` to it would alias the callback's `&mut self`.
+  +    id: ObjectId,
+  +    // `Box<T>` states ownership for drop checking and is `Unpin` for every `T`; a bare
+  +    // `PhantomData<T>` would make every type that holds an `ObjectData` `!Unpin`.
+  +    _owns: std::marker::PhantomData<Box<T>>,
+  +}
+  +
+  +impl<T: QObject + 'static> OwnedObject<T> {
+  +    pub fn from_box(boxed: Box<T>) -> Self {
+  +        let id = boxed.object_data().id;
+  +        // SAFETY: `Box::into_raw` never returns null.
+  +        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(boxed)) };
+  +        Self { ptr, id, _owns: std::marker::PhantomData }
+  +    }
+  +
+  +    /// The same object behind `dyn QObject`, as a parent keeps it.
+  +    pub fn into_dyn(self) -> OwnedObject<dyn QObject> {
+  +        let (ptr, id): (NonNull<dyn QObject>, ObjectId) = (self.ptr, self.id);
+  +        std::mem::forget(self);
+  +        OwnedObject { ptr, id, _owns: std::marker::PhantomData }
+  +    }
+  +}
+  +
+  +impl<T: QObject + ?Sized> OwnedObject<T> {
+  +    /// The pointer the owner and the registry share.
+  +    pub fn as_non_null(this: &Self) -> NonNull<T> {
+  +        this.ptr
+  +    }
+  +
+  +    /// The id of the owned object, without touching the object.
+  +    pub fn object_id(&self) -> ObjectId {
+  +        self.id
+  +    }
+  +
+  +    /// Gives up the proxy for a `Box`. A `Box` is a unique owner, so a registered object used
+  +    /// through it directly falls back to the limits of [`register_boxed_qobject`].
+  +    pub fn into_box(this: Self) -> Box<T> {
+  +        let ptr = this.ptr;
+  +        std::mem::forget(this);
+  +        // SAFETY: `ptr` came from `Box::into_raw` and was owned by `this`.
+  +        unsafe { Box::from_raw(ptr.as_ptr()) }
+  +    }
+  +}
+  +
+  +impl<T: QObject + ?Sized> std::ops::Deref for OwnedObject<T> {
+  +    type Target = T;
+  +    fn deref(&self) -> &T {
+  +        // SAFETY: the pointer is valid while `self` lives; no `&mut` into the object is live
+  +        // while a shared borrow of the proxy is.
+  +        unsafe { self.ptr.as_ref() }
+  +    }
+  +}
+  +
+  +impl<T: QObject + ?Sized> std::ops::DerefMut for OwnedObject<T> {
+  +    fn deref_mut(&mut self) -> &mut T {
+  +        // SAFETY: as for `deref`, and the `&mut` borrow of the proxy is exclusive.
+  +        unsafe { self.ptr.as_mut() }
+  +    }
+  +}
+  +
+  +impl<T: QObject + ?Sized> Drop for OwnedObject<T> {
+  +    fn drop(&mut self) {
+  +        // SAFETY: `ptr` came from `Box::into_raw` and is freed only here (or by `into_box`).
+  +        drop(unsafe { Box::from_raw(self.ptr.as_ptr()) });
+  +    }
+  +}
+  +
+  +/// Moves `obj` to the heap, registers it, and returns its owner.
+  +///
+  +/// # Safety
+  +/// The object must be used on its registration thread, and dropped (which unregisters it) only
+  +/// when no callback of it runs. All other requirements are those of [`register_qobject`].
+  +pub unsafe fn register_owned_qobject<T: QObject + 'static>(obj: T) -> OwnedObject<T> {
+  +    let owned = OwnedObject::from_box(Box::new(obj));
+  +    let ptr: NonNull<dyn QObject> = owned.ptr;
+  +    // SAFETY: the object stays at this address until the owner is dropped.
+  +    unsafe { register_qobject_ptr(ptr) };
+  +    owned
+  +}
+  +
+   /// Unregisters an object from all registries and cleans up active timers and connections.
+   ///
+  @@ -555,5 +657,5 @@ pub struct ObjectData {
+
+       /// Directly owned child objects for cascading destruction.
+  -    pub owned_children: Vec<Box<dyn QObject>>,
+  +    pub owned_children: Vec<OwnedObject<dyn QObject>>,
+       pub timers: Vec<crate::timer::TimerId>,
+
+  @@ -765,7 +867,7 @@ impl ObjectData {
+           let mut idle = Vec::with_capacity(self.owned_children.len());
+           for mut child in std::mem::take(&mut self.owned_children) {
+  -            let id = child.object_data().id;
+  +            let id = child.object_id();
+               if registered_and_borrowed(id) {
+  -                // Only the id was read; nothing else may touch a child a callback is using.
+  +                // The id came from the proxy; the child itself is not touched while it runs.
+                   destroy_when_released(id, child);
+               } else {
+  @@ -854,5 +956,5 @@ impl Drop for ObjectData {
+                           .object_data_mut()
+                           .owned_children
+  -                        .retain(|c| c.object_data().id != self.id);
+  +                        .retain(|c| c.object_id() != self.id);
+                       let mut ev = Event::new(EventKind::ChildRemoved { child_id: self.id });
+                       parent_obj.event(&mut ev);
+  @@ -1151,4 +1253,15 @@ pub fn reparent_owned(
+       new_parent: Option<ObjectId>,
+   ) -> Result<Option<Box<dyn QObject>>, ReparentError> {
+  +    reparent_owned_object(child_id, new_parent).map(|released| released.map(OwnedObject::into_box))
+  +}
+  +
+  +/// [`reparent_owned`] that releases ownership as an [`OwnedObject`] instead of a `Box`. A `Box`
+  +/// is a unique owner: the registry pointer cannot stay valid next to it, so an object released
+  +/// into one keeps the limits of [`register_boxed_qobject`]. The proxy keeps the registry's own
+  +/// pointer as its root.
+  +pub fn reparent_owned_object(
+  +    child_id: ObjectId,
+  +    new_parent: Option<ObjectId>,
+  +) -> Result<Option<OwnedObject<dyn QObject>>, ReparentError> {
+       let (child_record, _) = registered_ptr(child_id).ok_or(ReparentError::UnknownObject)?;
+       // Only the borrow flag is used: the guard is never dereferenced, so no `&mut` aliases the
+  @@ -1163,5 +1276,5 @@ pub fn reparent_owned(
+                   .owned_children
+                   .iter()
+  -                .any(|c| c.object_data().id == child_id)
+  +                .any(|c| c.object_id() == child_id)
+           })
+           .ok_or(ReparentError::Busy)?;
+  @@ -1190,5 +1303,5 @@ pub fn reparent_owned(
+               .owned_children
+               .iter()
+  -            .position(|c| c.object_data().id == child_id)
+  +            .position(|c| c.object_id() == child_id)
+               .ok_or(ReparentError::NotOwned)?;
+           data.children.retain(|&id| id != child_id);
+  @@ -1286,10 +1399,13 @@ pub unsafe fn add_owned_child<T: QObject + 'static>(
+           }
+           parent.object_data_mut().add_child(child_id);
+  +        // The Box becomes the owner proxy (a raw pointer made by `Box::into_raw`); the registry gets
+  +        // a copy of that same pointer, so nothing that moves the proxy later invalidates it.
+  +        let owned = OwnedObject::from_box(child).into_dyn();
+           // SAFETY: delegated to this function's caller contract.
+  -        unsafe { register_qobject(&mut *child) };
+  +        unsafe { register_qobject_ptr(OwnedObject::as_non_null(&owned)) };
+           // The registry's list is what still reaches the child while a running callback of the
+           // parent hides it from the parent's own `children`.
+           list_in_registry(parent_id, child_id);
+  -        parent.object_data_mut().owned_children.push(child);
+  +        parent.object_data_mut().owned_children.push(owned);
+       });
+       match attached {
+  ```
+
+  </details>
+
+  <details><summary>場景檔 <code>spike_dv14_design.rs</code>（<code>crates/ferrokit-core/tests/</code>，265 行）</summary>
+
+  ```rust
+  // SPDX-License-Identifier: LGPL-3.0-only
+  //! Throwaway scenarios for the owner-proxy and pointer-registration prototype. Each test is its own
+  //! scenario; run each on its own under Miri (default Stacked Borrows and `-Zmiri-tree-borrows`).
+  //! `x_*` tests are controls that are expected to report undefined behavior. Not meant to be merged.
+
+  use std::cell::RefCell;
+  use std::ptr::NonNull;
+  use std::rc::Rc;
+
+  use ferrokit_core::event::{Event, EventKind};
+  use ferrokit_core::object::{
+      add_owned_child, dispatch_to_object, register_owned_qobject, register_qobject_ptr,
+      reparent_owned, reparent_owned_object, unregister_qobject, with_object, with_object_mut,
+      ObjectData, ObjectId, OwnedObject, QObject,
+  };
+
+  /// Miri skips the uniqueness check for `!Unpin` types. This keeps a change to `ObjectData` from
+  /// turning it off for every object type without anyone noticing.
+  const _: () = {
+      const fn assert_unpin<T: Unpin>() {}
+      assert_unpin::<ObjectData>();
+      assert_unpin::<OwnedObject<Node>>();
+  };
+
+  struct Node {
+      data: ObjectData,
+      n: u32,
+  }
+
+  impl Node {
+      fn new() -> Self {
+          Self {
+              data: ObjectData::new(ObjectId::next()),
+              n: 0,
+          }
+      }
+      fn bump(&mut self) -> u32 {
+          self.n += 1;
+          self.n
+      }
+  }
+
+  impl QObject for Node {
+      fn object_data(&self) -> &ObjectData {
+          &self.data
+      }
+      fn object_data_mut(&mut self) -> &mut ObjectData {
+          &mut self.data
+      }
+      fn event(&mut self, _event: &mut Event) -> bool {
+          self.n += 1;
+          false
+      }
+  }
+
+  /// A write through the registry (`Node::event` bumps `n`).
+  fn touch(id: ObjectId) {
+      with_object_mut(id, |o| {
+          let mut ev = Event::new(EventKind::ChildAdded {
+              child_id: ObjectId(0),
+          });
+          o.event(&mut ev);
+      })
+      .expect("registered");
+  }
+
+  fn gone(id: ObjectId) -> bool {
+      with_object(id, |_| ()).is_none()
+  }
+
+  fn add(parent: ObjectId) -> ObjectId {
+      // SAFETY: the parent owns the child from here on.
+      unsafe { add_owned_child(parent, Box::new(Node::new())) }
+          .unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"))
+  }
+
+  fn root() -> OwnedObject<Node> {
+      // SAFETY: the owner stays on this thread; dropping it unregisters the object.
+      unsafe { register_owned_qobject(Node::new()) }
+  }
+
+  /// D1. Heap object held by an owner; callbacks and owner access interleave.
+  #[test]
+  fn d1_owner_and_callbacks_interleave() {
+      let mut h = root();
+      let id = h.data.id;
+      touch(id);
+      assert_eq!(h.bump(), 2);
+      touch(id);
+      assert_eq!(h.n, 3);
+      drop(h);
+      assert!(gone(id));
+  }
+
+  /// D2. Three levels through `add_owned_child`; callbacks reach every level; the owner reads down.
+  #[test]
+  fn d2_three_levels_called_and_read_by_the_owner() {
+      let h = root();
+      let pid = h.data.id;
+      let cid = add(pid);
+      let gid = add(cid);
+      touch(gid);
+      touch(cid);
+      assert_eq!(h.data.owned_children.len(), 1);
+      assert_eq!(h.data.owned_children[0].object_data().owned_children.len(), 1);
+      drop(h);
+      assert!(gone(pid) && gone(cid) && gone(gid));
+  }
+
+  /// D3. `reparent_owned` moves an owned child between two parents; callbacks before and after.
+  #[test]
+  fn d3_owned_child_reparented_between_owners() {
+      let mut a = root();
+      let mut b = root();
+      let (aid, bid) = (a.data.id, b.data.id);
+      let cid = add(aid);
+      touch(cid);
+      assert!(reparent_owned(cid, Some(bid)).unwrap().is_none());
+      touch(cid);
+      let before = a.n;
+      assert_eq!(a.bump(), before + 1);
+      drop(a);
+      touch(cid);
+      let before = b.n;
+      assert_eq!(b.bump(), before + 1);
+      drop(b);
+      assert!(gone(cid) && gone(aid) && gone(bid));
+  }
+
+  thread_local! {
+      static PARENT: RefCell<Option<OwnedObject<Node>>> = const { RefCell::new(None) };
+  }
+
+  /// Drops its parent from inside its own callback, then keeps using `&mut self`.
+  struct Reactor {
+      data: ObjectData,
+      n: u32,
+      freed: Rc<RefCell<bool>>,
+  }
+
+  impl Drop for Reactor {
+      fn drop(&mut self) {
+          *self.freed.borrow_mut() = true;
+      }
+  }
+
+  impl QObject for Reactor {
+      fn object_data(&self) -> &ObjectData {
+          &self.data
+      }
+      fn object_data_mut(&mut self) -> &mut ObjectData {
+          &mut self.data
+      }
+      fn event(&mut self, _event: &mut Event) -> bool {
+          self.n += 1;
+          PARENT.with(|p| drop(p.borrow_mut().take()));
+          assert!(!self.data.is_alive(), "destroyed as far as anything else can tell");
+          assert!(!*self.freed.borrow(), "the memory outlives the callback");
+          self.n += 1;
+          true
+      }
+  }
+
+  /// D4. The parent is dropped from inside the child's callback; the callback goes on using `self`.
+  #[test]
+  fn d4_parent_dropped_in_the_childs_callback() {
+      let freed = Rc::new(RefCell::new(false));
+      let h = root();
+      let pid = h.data.id;
+      PARENT.with(|p| *p.borrow_mut() = Some(h));
+      let reactor = Box::new(Reactor {
+          data: ObjectData::new(ObjectId::next()),
+          n: 0,
+          freed: Rc::clone(&freed),
+      });
+      let rid = reactor.data.id;
+      // SAFETY: the parent owns the child from here on.
+      unsafe { add_owned_child(pid, reactor) }.unwrap_or_else(|(e, _)| panic!("attach refused: {e:?}"));
+      dispatch_to_object(rid, &mut Event::new(EventKind::UpdateRequest));
+      assert!(*freed.borrow(), "freed once the callback returned");
+      assert!(gone(rid) && gone(pid));
+  }
+
+  /// D5. A stack object registered by a pointer made with `&raw mut`; the owner calls `&mut self`
+  /// methods between callbacks.
+  #[test]
+  fn d5_stack_object_registered_by_raw_pointer() {
+      let mut x = Node::new();
+      let id = x.data.id;
+      // SAFETY: `x` stays here, unmoved, until it is unregistered below.
+      unsafe {
+          register_qobject_ptr(NonNull::new_unchecked(&raw mut x as *mut dyn QObject));
+      }
+      touch(id);
+      assert_eq!(x.bump(), 2);
+      touch(id);
+      assert_eq!(x.n, 3);
+      // SAFETY: no callback runs.
+      unsafe { unregister_qobject(id) };
+  }
+
+  /// D6. Re-registration of the same heap object while it stays registered (what `Timer::start`
+  /// does after `stop`): the new record replaces the old one and shares the liveness token.
+  #[test]
+  fn d6_reregistered_with_the_owners_pointer() {
+      let mut h = root();
+      let id = h.data.id;
+      touch(id);
+      let p: NonNull<dyn QObject> = OwnedObject::<Node>::as_non_null(&h);
+      // SAFETY: the object stays alive and in place while `h` lives.
+      unsafe { register_qobject_ptr(p) };
+      touch(id);
+      assert_eq!(h.bump(), 3);
+      drop(h);
+      assert!(gone(id));
+  }
+
+  /// D9. `reparent_owned_object` releases an owned child as an `OwnedObject`; the registry pointer
+  /// and the new owner interleave.
+  #[test]
+  fn d9_released_child_keeps_the_registry_pointer_valid() {
+      let a = root();
+      let aid = a.data.id;
+      let cid = add(aid);
+      touch(cid);
+      let mut released = reparent_owned_object(cid, None)
+          .unwrap()
+          .expect("ownership returns to the caller");
+      touch(cid);
+      released.event(&mut Event::new(EventKind::UpdateRequest));
+      touch(cid);
+      drop(a);
+      touch(cid);
+      released.event(&mut Event::new(EventKind::UpdateRequest));
+      drop(released);
+      assert!(gone(cid) && gone(aid));
+  }
+
+  /// X1 (control). `into_box` hands the object to a unique `Box`; using it between callbacks is the
+  /// `register_boxed_qobject` limit again.
+  #[test]
+  fn x1_into_box_then_direct_use() {
+      let h = root();
+      let id = h.data.id;
+      touch(id);
+      let mut b = OwnedObject::into_box(h);
+      assert_eq!(b.bump(), 2);
+      touch(id);
+      assert_eq!(b.bump(), 4);
+      drop(b);
+  }
+
+  /// X2 (control). A pointer made from a reference is no better than `register_qobject(&mut x)`.
+  #[test]
+  fn x2_pointer_made_from_a_reference() {
+      let mut x = Node::new();
+      let id = x.data.id;
+      let p: NonNull<dyn QObject> = NonNull::from(&mut x as &mut dyn QObject);
+      // SAFETY: `x` stays here until it is unregistered below.
+      unsafe { register_qobject_ptr(p) };
+      assert_eq!(x.bump(), 1);
+      touch(id);
+      // SAFETY: no callback runs.
+      unsafe { unregister_qobject(id) };
+  }
+  ```
+
+  </details>
+
+  <details><summary>輔助函式的遷移（以 <code>test_owned_child_ownership.rs</code> 為例，其他 4 個檔案同一個寫法）</summary>
+
+  ```diff
+  diff --git a/crates/ferrokit-core/tests/test_owned_child_ownership.rs b/crates/ferrokit-core/tests/test_owned_child_ownership.rs
+  --- a/crates/ferrokit-core/tests/test_owned_child_ownership.rs
+  +++ b/crates/ferrokit-core/tests/test_owned_child_ownership.rs
+  @@ -12,4 +12,4 @@ use ferrokit_core::event_loop::notify_helper;
+   use ferrokit_core::object::{
+  -    add_owned_child, register_qobject, reparent_owned, set_parent, unregister_qobject, with_object,
+  -    ObjectData, ObjectId, QObject, ReparentError,
+  +    add_owned_child, register_owned_qobject, reparent_owned, set_parent, unregister_qobject,
+  +    with_object, ObjectData, ObjectId, OwnedObject, QObject, ReparentError,
+   };
+  @@ -33,7 +33,11 @@ impl Node {
+       }
+  -    fn registered() -> Box<Self> {
+  -        let mut n = Self::boxed();
+  -        // SAFETY: the Box is never moved out of and stays on this thread until unregistered.
+  -        unsafe { register_qobject(&mut *n) };
+  -        n
+  +    fn registered() -> OwnedObject<Self> {
+  +        // SAFETY: the owner stays on this thread until it is dropped, which unregisters it.
+  +        unsafe {
+  +            register_owned_qobject(Self {
+  +                data: ObjectData::new(ObjectId::next()),
+  +                seen: Arc::new(Mutex::new(Vec::new())),
+  +                hook: Arc::new(Mutex::new(None)),
+  +            })
+  +        }
+       }
+  @@ -86,3 +90,3 @@ impl QObject for Spy {
+
+  -fn adopt(parent: &mut Node) -> (ObjectId, Arc<std::sync::atomic::AtomicBool>) {
+  +fn adopt(parent_id: ObjectId) -> (ObjectId, Arc<std::sync::atomic::AtomicBool>) {
+       let child = Node::boxed();
+  @@ -90,3 +94,3 @@ fn adopt(parent: &mut Node) -> (ObjectId, Arc<std::sync::atomic::AtomicBool>) {
+       // SAFETY: the child's Box is moved into `parent` and only moved again by reparent_owned.
+  -    let id = unsafe { add_owned_child(parent.data.id, child) }
+  +    let id = unsafe { add_owned_child(parent_id, child) }
+           .unwrap_or_else(|(err, _)| panic!("attach refused: {err:?}"));
+  @@ -95,3 +99,3 @@ fn adopt(parent: &mut Node) -> (ObjectId, Arc<std::sync::atomic::AtomicBool>) {
+
+  -fn finish(node: Box<Node>) {
+  +fn finish(node: OwnedObject<Node>) {
+       let id = node.data.id;
+  @@ -114,3 +118,3 @@ fn set_parent_none_on_owned_child_keeps_child_alive() {
+       let mut parent = Node::registered();
+  -    let (child_id, child_alive) = adopt(&mut parent);
+  +    let (child_id, child_alive) = adopt(parent.data.id);
+
+  @@ -130,3 +134,3 @@ fn reparent_owned_to_none_returns_the_box_and_child_survives() {
+       let mut parent = Node::registered();
+  -    let (child_id, child_alive) = adopt(&mut parent);
+  +    let (child_id, child_alive) = adopt(parent.data.id);
+
+  @@ -152,3 +156,3 @@ fn reparent_owned_moves_ownership_to_a_new_parent() {
+       let b = Node::registered();
+  -    let (child_id, alive) = adopt(&mut a);
+  +    let (child_id, alive) = adopt(a.data.id);
+       assert_eq!(a.data.children, vec![child_id]);
+  @@ -174,9 +178,9 @@ fn reparent_owned_notifies_both_parents_through_event_filters() {
+       let log = Arc::new(Mutex::new(Vec::new()));
+  -    let mut spy = Box::new(Spy { data: ObjectData::new(ObjectId::next()), log: Arc::clone(&log) });
+  +    let mut spy = unsafe {
+  +        register_owned_qobject(Spy { data: ObjectData::new(ObjectId::next()), log: Arc::clone(&log) })
+  +    };
+       let spy_id = spy.data.id;
+  -    // SAFETY: stays boxed on this thread until unregistered below.
+  -    unsafe { register_qobject(&mut *spy) };
+       a.data.install_event_filter(spy_id);
+       b.data.install_event_filter(spy_id);
+  -    let (child_id, _alive) = adopt(&mut a);
+  +    let (child_id, _alive) = adopt(a.data.id);
+
+  @@ -210,3 +214,3 @@ fn reparent_owned_rejects_self_and_descendant_parents_without_changes() {
+       let mut top = Node::registered();
+  -    let (mid_id, _) = adopt(&mut top);
+  +    let (mid_id, _) = adopt(top.data.id);
+       // Give `mid` a child of its own, reachable through the registry.
+  @@ -259,3 +263,3 @@ fn reparent_owned_fails_visibly_when_a_party_is_borrowed_and_changes_nothing() {
+       let b = Node::registered();
+  -    let (child_id, alive) = adopt(&mut a);
+  +    let (child_id, alive) = adopt(a.data.id);
+       let b_id = b.data.id;
+  ```
+
+  </details>
+
+- **最小模型**（獨立的小程式，不依賴 ferrokit；模擬 registry、代理、指標登記、停放與釋放；同一個 Miri）：
+
+  | case | 做了什麼 | SB | TB |
+  |---|---|---|---|
+  | G1 | 代理持有的堆上物件；callback 與擁有者的直接存取交錯 | 通過 | 通過 |
+  | G2 | 三層，經 `add_owned_child` 的寫法加入；callback 到每一層；擁有者往下讀 | 通過 | 通過 |
+  | G3 | `reparent_owned` 的寫法：代理在兩個 parent 之間搬動，之後 callback | 通過 | 通過 |
+  | G4 | parent 在 child 自己的 callback 裡被 drop：代理被停放，callback 繼續用 `&mut self`，返回後釋放 | 通過 | 通過 |
+  | G5 | 堆疊物件以 `&raw mut` 取指標登記；擁有者在 callback 之間呼叫 `&mut self` 方法 | 通過 | 通過 |
+  | G5b（對照） | 同 G5，但指標由 `&mut x` 轉來（舊 `register_qobject` 的做法） | UB | UB |
+  | G6 | `!Unpin` 物件在 `Pin<Box<_>>`，解除登記後重新登記（`Timer` 的形狀） | 通過 | 通過 |
+  | G7 | 代理持有的物件，解除登記後以代理的指標重新登記 | 通過 | 通過 |
+  | G8（對照） | 舊 `register_boxed_qobject` 的形狀：參考轉來的指標，之後回傳 `Box` 並直接存取 | UB | UB |
+  | G9 | 整棵樹在沒有 callback 時被 drop；之後全部查不到 | 通過 | 通過 |
+  | P0 | 對照：`owned_children` 仍是 `Box`，取指標在 `push` 之後（方案 1），callback 中整個 `Vec` 被搬去停放 | 通過 | 通過 |
+  | P1 | 同 P0，但每個 `Box` 以傳值交給函式（`destroy_when_released` 的寫法） | 通過 | 通過 |
+  | P2 | 同 P1，但交出去的是代理 | 通過 | 通過 |
+
+  P0、P1 通過表示：在這個 Miri 版本，callback 執行中搬動 `Box` 本身（不碰物件）沒有報錯；ferrokit 裡方案 1 剩下的失敗是「讀 child 的 id」，不是搬動（見階段 B 的讀法 2）。G6 通過是 `!Unpin` 的豁免，不算證據。
+
+  <details><summary>最小模型的原始碼（<code>src/main.rs</code>，暫存，已刪除）</summary>
+
+  ```rust
+  //! Toy model of the owner-proxy + pointer-registration design (throwaway).
+  //! `Handle` / `OwnedChild` keep a raw pointer made by `Box::into_raw`; the registry stores a copy of
+  //! that same pointer. Each case runs on its own under Miri (Stacked Borrows, Tree Borrows).
+  use std::cell::{Cell, RefCell};
+  use std::marker::PhantomPinned;
+  use std::ops::{Deref, DerefMut};
+  use std::pin::Pin;
+  use std::ptr::NonNull;
+
+  trait Obj: 'static {
+      fn d(&mut self) -> &mut Data;
+      fn id(&self) -> u32;
+      fn peek(&self) -> u32;
+      fn bump(&mut self) -> u32 {
+          let d = self.d();
+          d.n += 1;
+          d.n
+      }
+  }
+
+  struct Data {
+      id: u32,
+      n: u32,
+      owned: Vec<OwnedChild>,
+  }
+  impl Data {
+      fn new(id: u32) -> Self {
+          Data { id, n: 0, owned: Vec::new() }
+      }
+  }
+  impl Drop for Data {
+      fn drop(&mut self) {
+          // like ObjectData::drop: delete_children (park a child whose callback runs), then unregister
+          for child in std::mem::take(&mut self.owned) {
+              if BORROWED.with(|b| b.get()) == Some(child.id()) {
+                  PARKED.with(|p| p.borrow_mut().push(child));
+              } else {
+                  drop(child);
+              }
+          }
+          unregister(self.id);
+      }
+  }
+
+  macro_rules! obj_impl {
+      ($t:ty) => {
+          impl Obj for $t {
+              fn d(&mut self) -> &mut Data {
+                  &mut self.data
+              }
+              fn id(&self) -> u32 {
+                  self.data.id
+              }
+              fn peek(&self) -> u32 {
+                  self.data.n
+              }
+          }
+      };
+  }
+  struct W {
+      data: Data,
+  }
+  obj_impl!(W);
+  /// A `!Unpin` object (like `Timer`).
+  struct P {
+      data: Data,
+      _pin: PhantomPinned,
+  }
+  obj_impl!(P);
+
+  // ---- registry --------------------------------------------------------------------------------
+  thread_local! {
+      static REG: RefCell<Vec<(u32, *mut dyn Obj)>> = const { RefCell::new(Vec::new()) };
+      static BORROWED: Cell<Option<u32>> = const { Cell::new(None) };
+      static PARKED: RefCell<Vec<OwnedChild>> = const { RefCell::new(Vec::new()) };
+      static PARKED_BOX: RefCell<Vec<Box<dyn Obj>>> = const { RefCell::new(Vec::new()) };
+  }
+  /// `register_qobject_ptr`: takes a pointer, never a reference.
+  unsafe fn register(id: u32, p: NonNull<dyn Obj>) {
+      REG.with(|r| {
+          let mut r = r.borrow_mut();
+          r.retain(|(i, _)| *i != id);
+          r.push((id, p.as_ptr()));
+      });
+  }
+  fn unregister(id: u32) {
+      REG.with(|r| r.borrow_mut().retain(|(i, _)| *i != id));
+  }
+  fn with_obj<R>(id: u32, f: impl FnOnce(&mut dyn Obj) -> R) -> Option<R> {
+      let p = REG.with(|r| r.borrow().iter().find(|(i, _)| *i == id).map(|(_, p)| *p))?;
+      let prev = BORROWED.with(|b| b.replace(Some(id)));
+      let out = f(unsafe { &mut *p });
+      BORROWED.with(|b| b.set(prev));
+      Some(out)
+  }
+  fn free_parked() {
+      let all = PARKED.with(|p| std::mem::take(&mut *p.borrow_mut()));
+      drop(all);
+  }
+
+  // ---- ownership proxy -------------------------------------------------------------------------
+  struct OwnedChild(NonNull<dyn Obj>);
+  impl OwnedChild {
+      fn id(&self) -> u32 {
+          unsafe { (*self.0.as_ptr()).id() }
+      }
+  }
+  impl Deref for OwnedChild {
+      type Target = dyn Obj;
+      fn deref(&self) -> &dyn Obj {
+          unsafe { &*self.0.as_ptr() }
+      }
+  }
+  impl DerefMut for OwnedChild {
+      fn deref_mut(&mut self) -> &mut dyn Obj {
+          unsafe { &mut *self.0.as_ptr() }
+      }
+  }
+  impl Drop for OwnedChild {
+      fn drop(&mut self) {
+          drop(unsafe { Box::from_raw(self.0.as_ptr()) });
+      }
+  }
+
+  /// Owner handle for a heap object (`register_owned_qobject`).
+  struct Handle<T: Obj + 'static>(NonNull<T>);
+  impl<T: Obj + 'static> Handle<T> {
+      fn new(t: T) -> Self {
+          let raw = Box::into_raw(Box::new(t));
+          let id = unsafe { (*raw).id() };
+          unsafe { register(id, NonNull::new_unchecked(raw as *mut dyn Obj)) };
+          Handle(unsafe { NonNull::new_unchecked(raw) })
+      }
+  }
+  impl<T: Obj + 'static> Deref for Handle<T> {
+      type Target = T;
+      fn deref(&self) -> &T {
+          unsafe { &*self.0.as_ptr() }
+      }
+  }
+  impl<T: Obj + 'static> DerefMut for Handle<T> {
+      fn deref_mut(&mut self) -> &mut T {
+          unsafe { &mut *self.0.as_ptr() }
+      }
+  }
+  impl<T: Obj + 'static> Drop for Handle<T> {
+      fn drop(&mut self) {
+          drop(unsafe { Box::from_raw(self.0.as_ptr()) });
+      }
+  }
+
+  /// `add_owned_child`: the Box becomes a raw pointer, which the registry and the parent share.
+  fn adopt<T: Obj + 'static>(parent: u32, child: Box<T>) -> u32 {
+      let raw = Box::into_raw(child);
+      let id = unsafe { (*raw).id() };
+      let p = unsafe { NonNull::new_unchecked(raw as *mut dyn Obj) };
+      unsafe { register(id, p) };
+      with_obj(parent, |par| par.d().owned.push(OwnedChild(p))).expect("parent registered");
+      id
+  }
+  fn w(id: u32) -> W {
+      W { data: Data::new(id) }
+  }
+
+  // ---- cases -----------------------------------------------------------------------------------
+  /// G1: heap object held by a Handle; callbacks and owner access interleave.
+  fn g1() -> u32 {
+      let mut h = Handle::new(w(1));
+      let a = with_obj(1, |o| o.bump()).unwrap();
+      let b = h.bump();
+      let c = with_obj(1, |o| o.bump()).unwrap();
+      let d = h.peek() + h.data.n;
+      drop(h);
+      assert!(with_obj(1, |o| o.bump()).is_none());
+      a + b + c + d
+  }
+  /// G2: three levels through add_owned_child; callbacks reach every level through the registry.
+  fn g2() -> u32 {
+      let h = Handle::new(w(1));
+      let c = adopt(1, Box::new(w(2)));
+      let g = adopt(c, Box::new(w(3)));
+      let r = with_obj(g, |o| o.bump()).unwrap() + with_obj(c, |o| o.bump()).unwrap();
+      let seen = h.data.owned.len() as u32 + h.data.owned[0].peek();
+      drop(h);
+      assert!(with_obj(g, |o| o.bump()).is_none() && with_obj(c, |o| o.bump()).is_none());
+      r + seen
+  }
+  /// G3: reparent_owned: the proxy moves between two parents; the registry pointer is untouched.
+  fn g3() -> u32 {
+      let mut a = Handle::new(w(1));
+      let mut b = Handle::new(w(4));
+      let c = adopt(1, Box::new(w(2)));
+      let moved = a.data.owned.remove(0);
+      b.data.owned.push(moved);
+      let r = with_obj(c, |o| o.bump()).unwrap();
+      drop(a);
+      let r2 = with_obj(c, |o| o.bump()).unwrap();
+      let r3 = b.bump();
+      drop(b);
+      assert!(with_obj(c, |o| o.bump()).is_none());
+      r + r2 + r3
+  }
+  /// G4: the parent is dropped from inside the child's callback. The proxy is parked (no Box moves),
+  /// the callback keeps using `&mut self`, and the memory is freed after it returns.
+  fn g4() -> u32 {
+      let h = Handle::new(w(1));
+      let c = adopt(1, Box::new(w(2)));
+      let mut parent = Some(h);
+      let r = with_obj(c, |me| {
+          let first = me.bump();
+          drop(parent.take()); // parks the child's proxy while `me` is live
+          first + me.bump() // still valid: nothing freed yet
+      })
+      .unwrap();
+      free_parked();
+      assert!(with_obj(c, |o| o.bump()).is_none());
+      r
+  }
+  /// P0 (control): as G4, but `owned_children` holds `Box<dyn Obj>` and the pointer is taken from the
+  /// final slot after the push (option 1). Parking moves the Box while the callback's `&mut` is live.
+  fn p0() -> u32 {
+      let mut owned: Vec<Box<dyn Obj>> = Vec::new();
+      owned.push(Box::new(w(2)));
+      let ptr: *mut dyn Obj = &mut **owned.last_mut().unwrap();
+      unsafe { register(2, NonNull::new_unchecked(ptr)) };
+      let mut parent = Some(owned);
+      let r = with_obj(2, |me| {
+          let first = me.bump();
+          let boxes = parent.take().unwrap();
+          PARKED_BOX.with(|p| p.borrow_mut().extend(boxes)); // moves the Box
+          first + me.bump()
+      })
+      .unwrap();
+      PARKED_BOX.with(|p| p.borrow_mut().clear());
+      r
+  }
+  /// G5: stack object registered by `&raw mut`; the owner calls `&mut self` methods between callbacks.
+  fn g5() -> u32 {
+      let mut x = w(1);
+      unsafe { register(1, NonNull::new_unchecked(&raw mut x as *mut dyn Obj)) };
+      let a = x.bump();
+      let b = with_obj(1, |o| o.bump()).unwrap();
+      let c = x.bump();
+      let d = with_obj(1, |o| o.bump()).unwrap();
+      let e = x.peek();
+      unregister(1);
+      a + b + c + d + e
+  }
+  /// G5b: stack object registered from a reference (`NonNull::from(&mut x)`): what `register_qobject` does.
+  fn g5b() -> u32 {
+      let mut x = w(1);
+      let p: NonNull<dyn Obj> = NonNull::from(&mut x as &mut dyn Obj);
+      unsafe { register(1, p) };
+      let a = x.bump();
+      let b = with_obj(1, |o| o.bump()).unwrap();
+      unregister(1);
+      a + b
+  }
+  /// G6: re-registration after the object moved (Timer start/stop shape, `!Unpin`, `Pin<Box>`).
+  fn g6() -> u32 {
+      let mut pinned: Pin<Box<P>> = Box::pin(P { data: Data::new(1), _pin: PhantomPinned });
+      let p1 = unsafe { NonNull::new_unchecked(pinned.as_mut().get_unchecked_mut() as *mut dyn Obj) };
+      unsafe { register(1, p1) };
+      let a = with_obj(1, |o| o.bump()).unwrap();
+      unregister(1);
+      let p2 = unsafe { NonNull::new_unchecked(pinned.as_mut().get_unchecked_mut() as *mut dyn Obj) };
+      unsafe { register(1, p2) };
+      let b = with_obj(1, |o| o.bump()).unwrap();
+      let c = unsafe { pinned.as_mut().get_unchecked_mut() }.bump();
+      drop(pinned);
+      a + b + c
+  }
+  /// G7: re-registration of a Handle object (same address, new record).
+  fn g7() -> u32 {
+      let mut h = Handle::new(w(1));
+      let a = with_obj(1, |o| o.bump()).unwrap();
+      unregister(1);
+      unsafe { register(1, NonNull::new_unchecked(h.0.as_ptr() as *mut dyn Obj)) };
+      let b = with_obj(1, |o| o.bump()).unwrap();
+      let c = h.bump();
+      a + b + c
+  }
+  /// G8: legacy `register_boxed_qobject` shape: reference-derived pointer, then the Box is returned.
+  fn legacy_register_boxed(mut b: Box<W>) -> Box<W> {
+      let ptr: *mut dyn Obj = &mut *b;
+      unsafe { register(b.id(), NonNull::new_unchecked(ptr)) };
+      b
+  }
+  fn g8() -> u32 {
+      let mut b = legacy_register_boxed(Box::new(w(1)));
+      let a = with_obj(1, |o| o.bump()).unwrap();
+      let c = b.bump();
+      let d = with_obj(1, |o| o.bump()).unwrap();
+      unregister(1);
+      a + c + d
+  }
+  /// G9: the whole parent tree is dropped while nothing runs; children free in order, later lookups fail.
+  fn g9() -> u32 {
+      let h = Handle::new(w(1));
+      let c1 = adopt(1, Box::new(w(2)));
+      let c2 = adopt(1, Box::new(w(3)));
+      let g = adopt(c1, Box::new(w(4)));
+      let r = with_obj(g, |o| o.bump()).unwrap();
+      drop(h);
+      assert!([c1, c2, g, 1].iter().all(|i| with_obj(*i, |o| o.bump()).is_none()));
+      r
+  }
+
+  /// P1 (control): as P0, but each Box is handed to a function by value, as `destroy_when_released`
+  /// takes its `Box<dyn QObject>`.
+  fn park_box(b: Box<dyn Obj>) {
+      PARKED_BOX.with(|p| p.borrow_mut().push(b));
+  }
+  fn p1() -> u32 {
+      let mut owned: Vec<Box<dyn Obj>> = Vec::new();
+      owned.push(Box::new(w(2)));
+      let ptr: *mut dyn Obj = &mut **owned.last_mut().unwrap();
+      unsafe { register(2, NonNull::new_unchecked(ptr)) };
+      let mut parent = Some(owned);
+      let r = with_obj(2, |me| {
+          let first = me.bump();
+          for b in parent.take().unwrap() {
+              park_box(b);
+          }
+          first + me.bump()
+      })
+      .unwrap();
+      PARKED_BOX.with(|p| p.borrow_mut().clear());
+      r
+  }
+  /// P2: as P1 with the proxy: by-value hand-over of `OwnedChild` (a `NonNull`) retags nothing.
+  fn park_owned(c: OwnedChild) {
+      PARKED.with(|p| p.borrow_mut().push(c));
+  }
+  fn p2() -> u32 {
+      let h = Handle::new(w(1));
+      let c = adopt(1, Box::new(w(2)));
+      let mut parent = Some(h);
+      let r = with_obj(c, |me| {
+          let first = me.bump();
+          let mut h = parent.take().unwrap();
+          for ch in std::mem::take(&mut h.data.owned) {
+              park_owned(ch);
+          }
+          drop(h);
+          first + me.bump()
+      })
+      .unwrap();
+      free_parked();
+      r
+  }
+
+  fn main() {
+      let which = std::env::args().nth(1).unwrap_or_default();
+      let n = match which.as_str() {
+          "G1" => g1(),
+          "G2" => g2(),
+          "G3" => g3(),
+          "G4" => g4(),
+          "P0" => p0(),
+          "P1" => p1(),
+          "P2" => p2(),
+          "G5" => g5(),
+          "G5b" => g5b(),
+          "G6" => g6(),
+          "G7" => g7(),
+          "G8" => g8(),
+          "G9" => g9(),
+          other => panic!("unknown case {other:?}"),
+      };
+      println!("{which}: ok {n}");
+  }
+  ```
+
+  </details>
+
+- **階段 B：結果**（每一列都是同一組 45 項，各自執行；L 開頭是原型的程式狀態，A 開頭是拆開的對照）：
+
+  | 狀態 | 程式 | 測試輔助函式 | SB | TB |
+  |---|---|---|---|---|
+  | 基線 | `2f2a96c` | 原樣 | 1 通過、44 UB | 2 通過、43 UB |
+  | A0 | 只新增第 1–3 項的 API（還沒有 `reparent_owned_object`，代理不存 id），內部仍是 `Box` | 5 個 binary 都遷移 | 21 通過、24 UB | 21 通過、24 UB |
+  | A1 | A0 加方案 1（`add_owned_child` 先 `push` 再以最終位置登記，仍是 `Box`） | 5 個都遷移 | 37 通過、8 UB | 37 通過、8 UB |
+  | A2 | 第 1–6 項，但 id 仍從 child 讀 | 5 個都遷移 | 37 通過、8 UB | 37 通過、8 UB |
+  | L3b | 第 1–6 項，id 存在代理裡（上面的原型） | 5 個都遷移 | **45 通過** | **45 通過** |
+
+  與基線逐項比較，沒有任何一項由通過變成失敗（**此次變更造成的失敗 0 項**）；全部 87 個基線 UB 都在 L3b 消失，沒有「改到別處」的失敗。讀法：
+  1. **只遷移輔助函式（A0）**：沒有經 `add_owned_child` 成功掛上 child 的 21 項通過（`test_parent_children_during_callbacks` 9、`test_parent_tree_rules` 10、`test_owned_child_ownership` 2）；其餘 24 項都經 `add_owned_child` 掛上 child；SB 的 24 項都是 `register_qobject` 建立的標籤在 `add_owned_child` 的 `push` 失效。
+  2. **方案 1（A1）或沒有存 id 的代理（A2）**：剩下的 8 項都是 `test_owned_child_destroyed_in_callback` 裡「parent 在 child 自己的 callback 裡被 drop」的情境，位置是 `delete_children` 讀 child 的 id（A1 是 `child.object_data().id`，A2 是經代理的 `Deref`）。這時 child 的 callback 正以 `&mut self` 執行，那個參考受保護，任何對 child 的讀取都與它衝突（SB：「not granting access to tag … because that would remove [Unique for …] which is strongly protected」；TB：「reborrow through … is forbidden」）。這是 G2.1.i（DV-13）實作裡的另一個別名問題，基線因為更早的 registry 指標 UB 而被遮住；原程式的註解「Only the id was read; nothing else may touch a child a callback is using」在兩種模型下都不成立。原型改成在代理裡存 id（建立代理時讀一次），之後只讀代理。
+  3. **L3b**：45 項在 SB 與 TB 都通過。這只代表這 45 項加下面的場景在這兩個模型下沒有被報錯，不是全面的記憶體安全證明（其他測試沒有跑；模型本身仍是實驗性的）。
+  4. **`Unpin`**：我第一版的代理用 `PhantomData<T>` 表示擁有，結果 `OwnedObject<dyn QObject>` 不是 `Unpin`，連帶 `ObjectData` 與所有物件型別都變成 `!Unpin`；也就是已被否決的方案 5 會無聲地生效，Miri 不再檢查這些型別。是 c3 的 `Pin::get_mut` 編譯失敗才發現的。改成 `PhantomData<Box<T>>`，並在場景檔加編譯期斷言（`ObjectData` 與 `OwnedObject<Node>` 必須是 `Unpin`）；正式實作要保留這個斷言。
+  5. **舊 API 不變，所以舊寫法維持原來的限制**：場景在 L3b 的結果（SB／TB）：a1、a2、a3 通過／通過（基線是 UB／UB）；b1 UB／通過、b2 UB／UB（`register_boxed_qobject`）；c1 UB／UB（登記後經 `Box` 直接存取）；c3 UB／UB（`Unpin` 型別放在 `Pin<Box<_>>`）；c2、c4、c5 通過／通過（`!Unpin`，包括真的 `Timer`；豁免，不算證據）。新場景：D1–D6、D9 通過／通過；X1（`into_box` 之後經 `Box` 直接存取）與 X2（以參考轉來的指標登記）是 UB／UB，對照組本來就該失敗，表示檢查有效，也表示新 API 不能和舊寫法混用。
+  6. **方案 1 的位置**：A1 顯示方案 1 在 `add_owned_child` 本身有效，但不能處理 `register_boxed_qobject`、`reparent_owned` 交回的 `Box`（X1）與讀 id 的問題；依使用者決定，方案 1 不再單獨推進。
+- **stable 回歸**（Windows，本機，`cargo test -j 1 --workspace --no-fail-fast -- --skip real_windows`；不是 CI）：原型 L3b：exit 0，167 個結果行，1159 passed、0 failed、4 ignored。同一個命令在 `2f2a96c`：exit 0，165 個結果行，1140 passed、0 failed、4 ignored。逐項比對測試名稱與結果：差別只有新加的 2 個場景檔的 19 項（`spike_registry_pointer` 10、`spike_dv14_design` 9），沒有任何既有測試消失或改變結果。編譯：新增 6 個 `unused_mut` 警告，都在遷移過的測試裡（代理不需要 `mut` 綁定），原型才有。
+- **HUD**（暫存的 HUD `rust/` 複本，以 `[patch]` 指向原型；repo 本身沒有改）：`cargo test -j 1 --all-targets --all-features -- --skip real_windows`：exit 0，8 個結果行，164 passed、0 failed、5 ignored，與固定在 `a622ac2` 時相同。HUD 不呼叫任何登記函式、不用 `owned_children`；它用 `Timer::new`、`set_interval`、`timeout.connect`、`Timer::single_shot`。Python 測試沒有重跑（HUD 的 Python 沒有改）。
+
+- **(a) 所有權代理怎麼涵蓋各處**：
+  - `add_owned_child`：簽名不變（收 `Box<T>`，拒絕時把同一個 `Box` 還回去）；檢查都通過之後才轉成代理並以代理的指標登記（a1、a2、D2）。
+  - `reparent_owned`：移交時只搬代理（一個 `NonNull` 與 id），registry 的指標不受影響（a3、D3）。簽名不變；`None` 時用 `into_box` 交回 `Box`，之後若經這個 `Box` 直接存取仍登記著的物件，就回到 `register_boxed_qobject` 的限制（X1）。要保持有效，改用 `reparent_owned_object` 拿代理（D9 通過）。
+  - `register_boxed_qobject`：它必須回傳 `Box<T>`，本質上無法讓 registry 指標在擁有者直接存取時保持有效（b1、b2、A3、G8）。原型沒有改它；取代它的是 `register_owned_qobject`（D1、D6）。分階段棄用見 (d)。
+  - `PARKED_CHILDREN` 與銷毀：`owned_children`、`PARKED_CHILDREN`、`destroy_when_released`、`free_parked_children` 都持代理；搬動代理不碰物件（P2、D4，以及 `test_owned_child_destroyed_in_callback` 的 9 項）。釋放只在代理被 drop 時（`Box::from_raw`），順序與原本相同：`delete_children` 把正在 callback 的 child 停放、其餘照舊釋放；停放的在那個 callback 返回時由 guard 釋放。判斷 child 是否正在 callback 只讀代理裡的 id，不碰 child（讀法 2）。
+- **(b) 指標登記 API**：
+  - `register_qobject_ptr(NonNull<dyn QObject>)`，registry 保存的就是這個指標。
+  - 堆疊物件：指標要用 `&raw mut x` 取得（D5、G5 通過）；由 `&mut x` 轉來的指標不行（X2、G5b 是 UB），舊的 `register_qobject(&mut x)` 就是這種。D5 也量到：以 `&raw mut` 登記後，擁有者可以在 callback 之間直接呼叫 `&mut self` 方法。為什麼 `&raw mut` 取的指標在擁有者之後建立 `&mut x` 時仍有效，是從結果推的 `[INFERENCE]`，沒有讀 Miri 的實作。
+  - `Box` 持有的物件：不要先有 `Box` 再登記；用 `register_owned_qobject`，或 `OwnedObject::from_box` 之後以 `as_non_null` 登記，之後擁有者都經代理存取（D1、D6、D9）。
+  - `Pin`／`!Unpin`：`Pin<Box<_>>` 本身不解決問題（c3：`Unpin` 型別放在 `Pin<Box<_>>` 仍是 UB）；`!Unpin` 型別現在通過只因為 Miri 的豁免，不採用（方案 5 已否決）。設計：代理從不搬動它指向的物件，所以可以提供 `Pin<&mut T>`（設計，原型沒有做）；但重新登記必須用代理保存的原始指標，不能用 `Pin<&mut Self>` 轉出來的指標（那是 X2 的形狀）。`Timer::start` 從 `self: Pin<&mut Self>` 重新登記，所以 `Timer` 的遷移要讓它保存自己的原始指標（例如建立時由 `Box::into_raw` 取得），見 (d) 的階段 3；原型沒有改 `Timer`。
+- **(c) 安全不變量**（正式實作的 Safety 文件要逐條寫明）：
+  1. **單一來源**：registry 的指標，與擁有者在 callback 之間的每一次存取，都來自同一個原始指標（`Box::into_raw`，或堆疊物件的 `&raw mut`）；登記時不經過 `&mut`。
+  2. **位址不變**：從登記到 `unregister_qobject` 完成，物件不搬動。代理從不搬動物件；堆疊物件由呼叫端保證（與現行契約相同）。
+  3. **時間上的獨佔**：callback 持有借用旗標時，擁有者不建立任何指向物件的參考，連共享讀取也不行（這就是 id 存在代理裡的原因，讀法 2）；callback 之外，擁有者經代理依序存取。
+  4. **釋放**：只有代理的 `Drop`（或 `into_box`）把指標交回 `Box`，而且只交一次。交回 `Box` 之後第 1 條不再成立，直接存取回到舊限制（X1）。
+  5. **重新登記**：必須給同一個原始指標（D6、G7）；記錄的替換與 liveness 的共用沿用現有邏輯；callback 執行中不得重新登記或解除登記（沿用）。
+  6. **解除登記與釋放的順序**：`ObjectData::drop` 先解除登記再釋放（沿用）；parent 在 child 的 callback 裡被 drop 時，代理被停放，callback 返回後才釋放（D4）。
+  7. **執行緒**：沿用，只在登記的執行緒解參考。`OwnedObject` 因為持有 `NonNull` 而不是 `Send`（`Box<dyn QObject>` 本來也不是）；具體型別的代理要不要能跨執行緒移動，需要另外定規則（未處理）。
+  8. **`Unpin`**：`ObjectData` 與代理必須保持 `Unpin`，否則 Miri 無聲地停止檢查（讀法 4），以編譯期斷言守住。
+- **(d) 分階段棄用與相容**（每個階段都要另外核准才動 ferrokit）：
+  - **階段 1（新增，不刪）**：新增 `OwnedObject`、`register_qobject_ptr`、`register_owned_qobject`、`reparent_owned_object`，內部改用代理。唯一的公開型別變動是 `ObjectData::owned_children` 的元素型別：經 `Deref` 讀取的寫法不受影響（ferrokit 工作區全部編譯並通過測試；HUD 不用這個欄位）；在外部直接放入 `Box` 的程式會編譯失敗 `[INFERENCE：工作區外沒有已知的使用者]`。`add_owned_child`、`reparent_owned`、`register_qobject`、`register_pinned_qobject`、`register_boxed_qobject` 與 `Timer` 的簽名都不變。
+  - **階段 2（遷移，不刪）**：ferrokit 內部與測試的呼叫端逐個 binary 遷移到新 API，每遷移一個就在 SB 與 TB 下跑它。範圍（`2f2a96c`，`grep` 不含註解行）：`register_qobject(&mut …)` 31 個檔案共 123 處（`ferrokit-core/tests` 80；`ferrokit-core/src` 40，其中 39 處在 `#[cfg(test)]` 模組、1 處是 `add_owned_child`；`ferrokit-widgets` 3）；`register_boxed_qobject(` 7 處（`ferrokit-core/tests` 3、`ferrokit-widgets` 4）；`register_pinned_qobject(` 是定義加 `Timer` 的 3 處。生產程式裡除了 `add_owned_child` 沒有其他 `register_qobject` 的呼叫。遷移完再把 `register_qobject` 與 `register_boxed_qobject` 標 `#[deprecated]`（只有警告，不刪除，說明裡指向新 API）。
+  - **階段 3（`Timer`）**：保持 `Timer::new() -> Pin<Box<Timer>>`、`Timer::single_shot`、`set_interval`、`start`、`stop`、`timeout` 的簽名（HUD 用到其中的 `new`、`set_interval`、`timeout.connect`、`single_shot`），內部改成用保存的原始指標登記。先在最小模型與 SB、TB 下證明不靠 `!Unpin` 豁免也能通過（例如暫時讓測試用的計時器型別是 `Unpin`），再動程式。
+  - **階段 4（移除舊 API）**：另案核准；之前不刪。
+- **(e) 驗收標準**：
+  1. 最小模型：G1–G5、G7、G9、P0–P2 在 SB 與 TB 都通過；對照組 G5b、G8 必須仍是 UB（證明檢查有效）；RC-227 的失敗重現（A、A3、D）保留為失敗；G6 的通過不算證據。
+  2. ferrokit 場景：`spike_dv14_design` 的 D1–D6、D9 在 SB 與 TB 通過，X1、X2 必須仍是 UB；`spike_registry_pointer` 的 a1–a3 通過；b1、b2、c1、c3 在舊 API 遷移以前預期仍是 UB，遷移後改用新 API 的對應場景必須通過；c2、c4、c5 的通過不算證據。
+  3. 既有 45 項（輔助函式遷移後）：SB 與 TB 各 45 項通過；與基線逐項比較，沒有「通過變失敗」。
+  4. 每個階段：用固定的 nightly 先重跑基線；結果分成既有失敗、此次變更造成、環境不支援三類，每一項記下位置；不以 UB 數量當進度。
+  5. 不用 `-Zmiri-disable-stacked-borrows`；不靠 `!Unpin` 豁免（`Unpin` 斷言要編譯通過）。
+  6. stable 回歸：ferrokit 工作區完整測試在 Windows 通過，除了新加的測試以外與基線逐項相同；三個 OS 的 CI 通過；HUD 編譯、Rust 測試、clippy、fmt、Python 55 項通過。
+  7. 行為不變：G2.1.i、G2.1.j、G2.1.k 等既有測試的期望值不改；若需要改，視為行為變更，另行記錄。
+  8. 合併另外核准；這一輪的原型不是合併候選。
+- **階段 C 的計畫**（這一輪沒有跑）：
+  1. `ferrokit-core` 其他 21 個用到登記 API 的整合測試 binary，依「不碰事件迴圈」優先：`test_install_event_filter_self_and_mutual`、`test_signal_connection_identity`、`test_signal_emit_while_mutating`、`test_signal_owner_binding`、`test_signal_unique_single_shot`、`test_move_to_thread_three_levels`、`test_parent_thread_affinity`；再來是用到事件迴圈、應用程式物件或計時器的 `layered_tests`、`test_advanced_event_system`、`test_application_process_events_in_exec`、`test_exec_cleanup_deferred_delete`、`test_filter_consumed_returns_true`、`test_meta_invoke_connection_type`、`test_meta_invoke_queued_resolution`、`test_move_to_thread_state`、`test_post_before_loop`、`test_qobject_lifecycle_and_hierarchy`、`test_qobject_safety_and_qt6_features`、`test_quit_event_veto`、`test_signal_direct_and_queued`、`test_timer_restart`。事件迴圈在 Windows 走 Win32 訊息 API，Miri 可能不支援 `[INFERENCE]`；遇到時歸類為環境不支援，並記下第一個不支援的呼叫。
+  2. 沒有用登記 API 的其他 `ferrokit-core` binary：優先度較低。
+  3. `ferrokit-widgets`：3 處 `register_qobject`、4 處 `register_boxed_qobject`；測試多半會經過 `ferrokit-platform` 與 `ferrokit-gui` 的外部函式，預期大量環境不支援 `[INFERENCE]`。
+  4. lib 單元測試：`timeBeginPeriod`（`dispatcher_win.rs:191`，第一次建立 dispatcher 時呼叫）Miri 不支援。替代做法：(i) 列出不會建立 dispatcher 的單元測試，各自執行；(ii) 在 `cfg(miri)` 下跳過 `timeBeginPeriod`，這是程式改動，要另外核准；(iii) 同一段邏輯改由不碰 dispatcher 的整合測試涵蓋。每一項都記下無法執行的原因與替代驗證。
+  5. ASan：只作補充；`x86_64-pc-windows-msvc` 的 nightly `-Zsanitizer=address` 是否可用、要怎麼設定 MSVC 的執行階段，都還沒試 `[INFERENCE]`。
+  6. 每次執行：固定的 nightly、先重跑基線、三類分類、預設模型與 TB 都跑、執行結束後移除 nightly 與 Miri 快取。
+- **三類證據分開記錄**（原型）：
+
+  | 項目 | 測試通過 | 符合 Qt 行為 | Rust 別名模型下的安全性 |
+  |---|---|---|---|
+  | 原型 L3b | 本機 Windows 的 ferrokit 工作區完整測試、HUD Rust 測試通過；沒有 CI（沒有推送） | 沒有打算改行為，既有測試的期望值沒有改；沒有對照 Qt 重驗 | 只有 45 項與場景在 SB、TB 下通過；其他測試沒有跑；不是全面安全 |
+  | HUD `fe112fc` | **本次 commit 未執行測試**（路徑過濾） | 不涉及（只改文件） | 不涉及 |
+
+- **清除**（記錄完成後執行）：ferrokit 的 3 個暫用 worktree 與 2 個本機分支（`spike-dv14-owner-proxy`、`spike-dv14-l3`）已刪除；`git worktree list` 只剩主 worktree，`git branch -a` 只有 `main`、`origin/HEAD`、`origin/main`，`main` 仍是 `2f2a96c` 且乾淨。`rustup toolchain uninstall nightly-2026-10-16` 之後，工具鏈只剩 `stable-x86_64-pc-windows-gnu` 與 `stable-x86_64-pc-windows-msvc`（預設），`rustc`、`cargo` 是 1.98.1；先裝錯的 `nightly-2026-10-15` 在當時就已移除。Miri 快取 `%LOCALAPPDATA%\rust-lang\miri\cache`（約 93 MB，`cargo miri setup` 建的 sysroot）確認裡面只有 `lib` 之後刪除，空的 `rust-lang\miri` 留著。暫存目錄裡的目標目錄（ferrokit stable 回歸 9.4 GB、HUD 複本 1.4 GB、6 個 Miri 目標目錄各約 80 MB）與 HUD 複本已刪除；腳本、最小模型與場景檔只留在上面的 details 裡，剩下的小檔案在提交文件之後刪除。`ferrokit/target/miri`（RC-229 留下的約 80 MB）仍沒有清。
+- **狀態**：DV-14 的方向已核准（方案 2＋3），實作未核准，視同缺陷（01.6）；G2.7.d 維持開放；G2.1.i 維持未完成（另外發現 `delete_children` 讀 child id 的別名問題，見讀法 2）；G2.1.k 維持待行為驗收；R-00075 維持部分符合；狀態計數不變。第 03 章、Windows 實機驗收、正式發布繼續暫停。
+- **更正**：RC-227 與 RC-229 寫的「測試與單元測試裡 28 個檔案共 156 處 `register_qobject(&mut …)`」重數不出來；在 `2f2a96c` 以 `grep` 數 `register_qobject(&mut`，是 31 個檔案共 123 處（分布見 (d) 的階段 2）。我不知道先前的 156 是怎麼來的（可能把 `unregister_qobject(` 也算進去了 `[INFERENCE]`）。三處已就地更正。
+- **Residual**：(1) 原型沒有合併、沒有推送，也沒有跑三個 OS 的 CI；stable 回歸與 HUD 的結果都只在本機 Windows。(2) Miri 只跑了 Windows host、`ferrokit-core` 的 5 個 binary（45 項）與 2 個場景檔（19 項），以及最小模型；其他整合測試、lib 單元測試、`ferrokit-widgets`、HUD 都沒有在 Miri 下跑；沒有 ASan；SB 與 TB 仍是實驗性的模型，結果可能隨版本改變。(3) `Timer` 沒有遷移，c5 的通過靠 `!Unpin` 豁免，也沒有事件迴圈。(4) `OwnedObject` 不是 `Send`，跨執行緒的規則沒有定。(5) 讀法 2 的 id 問題在現行 ferrokit 裡仍在（只在原型裡改了）。(6) 第 03 章、Windows 實機驗收、正式發布繼續暫停。
 
 ---
 
@@ -5060,7 +6239,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - DV-10 的決定（2026-10-15）：使用者核准 affinity 限制與錯誤類型，拒絕沒有證據的舊 parent 移除語義；Qt 實測顯示 Qt 會移除，詳見 RC-218。DV-10 已核准；`reparent_owned` 不移除與不印警告另立 DV-11（候選，待核准）。
 - DV-11 的決定（2026-10-15）：使用者核准選項一（`reparent_owned` 失敗時樹不變，不採用返還 `Box` 或移除的方案），並要求三個 API 的差異寫進 Contract、rustdoc 與測試（RC-219；ferrokit `f0640d3`，本機 commit）。G2.1.e：三個部分都已實作並有測試與規格；ferrokit 已推送且 CI 通過；2026-10-16 依使用者的條件逐條核對後關閉（RC-228）。
 - G2.1.i、G2.1.j 的處理（2026-10-15，使用者列為 P1）：G2.1.j 已修（ferrokit `ec43dae`，RC-220）；G2.1.i 以延後釋放處理，不只靠文件警告（ferrokit `276b6e7`，RC-221）。三個 ferrokit commit（`ec43dae`、`276b6e7`、`f0640d3`）已推送，CI run 38747604315 三個 OS 成功（RC-222）；HUD 的固定版本先升到 `f0640d3`（RC-225），再升到 `a622ac2`（RC-228）。DV-12、DV-13 有條件核准（RC-222）：G2.1.j 的關閉條件（已推送後的 CI、補齊交錯測試）已滿足，已知限制記錄在案（ferrokit `a622ac2`，CI run 38835938926，RC-226）；G2.1.i 維持「已實作、待完整驗證」，不標為全面安全（RC-226、RC-227）。
-- 開放項目（2026-10-16）：G2.1.i 已實作、待完整驗證（不標為全面安全）；G2.1.k／R-00077 已修復並推送、CI 通過，行為驗收待確認（不標為完成）；Miri 在預設別名模型下被既有的 registry 指標來源擋住，另開設計工作（RC-227，G2.7.d）；ferrokit 只改註解與 `NOTICE` 的 `2f2a96c` 已推送，CI 通過（RC-228、RC-229）；registry 指標選項 1 的 spike 已做、沒有合併，結果與新的 DV-14（候選，待核准）見 RC-229。
+- 開放項目（2026-10-16）：G2.1.i 已實作、待完整驗證（不標為全面安全）；G2.1.k／R-00077 已修復並推送、CI 通過，行為驗收待確認（不標為完成）；Miri 在預設別名模型下被既有的 registry 指標來源擋住，另開設計工作（RC-227，G2.7.d）；ferrokit 只改註解與 `NOTICE` 的 `2f2a96c` 已推送，CI 通過（RC-228、RC-229）；registry 指標選項 1 的 spike 已做、沒有合併，結果與新的 DV-14（候選，待核准）見 RC-229；之後 DV-14 的方向核准為方案 2＋3，最小原型與 Miri 階段 A、B 見 RC-230（沒有合併，實作未核准）。
 - Windows 實機驗收與正式發布維持暫停（使用者 2026-10-15 指示）；規格證據補齊不代表可發布。
 - Chapter 03 spec 整合：暫緩（使用者 2026-10-15 指示）。進入條件：(1) chapter 02 的方法定稿；(2) 父子關係、ownership 與生命週期的契約清楚；(3) 已知殘餘各有明確狀態與追蹤紀錄；(4) 第 03 章不重新定義第 02 章未決的語意；(5) `spec03_drafts` 只當待整合的來源，不是已核准的規格。現況：(1) 使用者尚未確認；(2) 使用者的恢復條件改為「DV-13 驗收達標」：驗收項目都有測試且通過，Miri 在別名檢查關閉時通過，但別名模型下的檢查被既有的 registry 指標來源擋住（RC-224），補測的兩處缺口修復也還沒推送與 CI，所以仍暫停，等使用者判斷；(3) 目前的殘餘已記在 RC-213 至 RC-225、G2.1.i、G2.1.j、G2.1.k、DV-12、DV-13；(4)(5) 維持。草稿 5 份（events、loop、signals、threads、timers）依使用者決定放在 repo 之外的本機資料夾，不進 repo；對應的 5 支探針 `rust/tools/pyside_probes/spec03_*.py` 仍是未追蹤檔案。
 
