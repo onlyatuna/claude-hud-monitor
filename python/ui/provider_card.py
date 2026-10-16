@@ -5,11 +5,13 @@ from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QRect
 
 from core.providers.base import UsageMetrics, BaseProvider
 from ui.styles import get_progress_color
+from ui.brand import brand_color
+from core.pace import reset_stamp
 
 PROVIDER_THEMES = {
-    "claude": {"color": "#38bdf8", "name": "CLAUDE CODE"},
-    "agy": {"color": "#10b981", "name": "ANTIGRAVITY"},
-    "codex": {"color": "#a855f7", "name": "OPENAI CODEX"}
+    "claude": {"color": brand_color("claude", True), "name": "CLAUDE CODE"},
+    "agy": {"color": brand_color("agy", True), "name": "ANTIGRAVITY"},
+    "codex": {"color": brand_color("codex", True), "name": "OPENAI CODEX"}
 }
 
 class ProviderCardWidget(QWidget):
@@ -117,6 +119,15 @@ class ProviderCardWidget(QWidget):
         self.extra_container = None
 
     @staticmethod
+    def _reset_text(reset, title, subtext=""):
+        """"重設於: 週五 18:00 · 6天 5時 55分" for weekly rows, just the countdown for short windows."""
+        if not reset:
+            return subtext or "重設於: --"
+        countdown = BaseProvider.format_countdown(reset)
+        stamp = reset_stamp(reset, title)
+        return f"重設於: {stamp} · {countdown}" if stamp else f"重設於: {countdown}"
+
+    @staticmethod
     def _make_cell(box):
         """A metric block as one hoverable, draggable cell."""
         cell = QWidget()
@@ -183,7 +194,7 @@ class ProviderCardWidget(QWidget):
             bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {color}; }}")
             bar.setValue(int(min(100, max(0, metric.val or 0))))
             sub.setStyleSheet("color: #64748b;")
-            sub.setText(f"重設於: {BaseProvider.format_countdown(metric.reset)}" if metric.reset else (metric.subtext or "重設於: --"))
+            sub.setText(self._reset_text(metric.reset, metric.title, metric.subtext))
 
     # ---- drag any metric block to reorder (the first two rows are the main pair)
     def _drag_rows(self):
@@ -271,7 +282,7 @@ class ProviderCardWidget(QWidget):
         base = PROVIDER_THEMES.get(self.provider_id, {"color": "#38bdf8", "name": self.provider_id.upper()})
         self.theme = dict(base)
         if not dark:
-            self.theme["color"] = {"claude": "#0369a1", "agy": "#047857", "codex": "#7e22ce"}.get(self.provider_id, "#0369a1")
+            self.theme["color"] = brand_color(self.provider_id, False)
         self.title.setStyleSheet(f"color: {self.theme['color']}; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;")
         self.update_metrics(self.current_metrics)
 
@@ -366,9 +377,9 @@ class ProviderCardWidget(QWidget):
             label = getattr(self, f"m{index}_sub")
             reset = getattr(data, f"metric{index}_reset")
             subtext = getattr(data, f"metric{index}_subtext")
-            label.setText(f"重設於: {BaseProvider.format_countdown(reset)}" if reset else (subtext or "重設於: --"))
+            label.setText(self._reset_text(reset, getattr(data, f"metric{index}_title"), subtext))
         for metric, row in zip(data.extra_metrics, self.extra_rows):
-            row[4].setText(f"重設於: {BaseProvider.format_countdown(metric.reset)}" if metric.reset else (metric.subtext or "重設於: --"))
+            row[4].setText(self._reset_text(metric.reset, metric.title, metric.subtext))
         if data.stale:
             stamp = data.last_success.astimezone().strftime("%m/%d %H:%M:%S") if data.last_success else "--"
             self.m1_sub.setText(f"舊資料 {stamp}")

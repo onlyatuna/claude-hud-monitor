@@ -54,6 +54,14 @@ def format_reset_time(target: Optional[datetime], with_day: bool) -> str:
     return f"週{WEEKDAYS[local.weekday()]} {hm}" if with_day else hm
 
 
+def reset_stamp(target: Optional[datetime], title: str) -> str:
+    """Wall-clock reset time ("週五 18:00") for windows of a day or longer; empty for short windows."""
+    if not target:
+        return ""
+    long_window = window_seconds(title or "", 0) >= 86400 or "WEEK" in (title or "").upper()
+    return format_reset_time(target, with_day=True) if long_window else ""
+
+
 def short_window(title: str) -> str:
     """'WINDOW 30D' / 'SESSION 5H' / 'WEEKLY 7D' -> '30D' / '5H' / '7D'."""
     return (title or "").replace("WINDOW ", "").replace("SESSION ", "").replace("WEEKLY ", "").replace("GEMINI ", "").replace("C/G ", "").replace("ARGON ", "")

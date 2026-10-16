@@ -19,7 +19,8 @@ from PySide6.QtWidgets import QWidget, QLabel, QGridLayout, QHBoxLayout, QVBoxLa
 from core.pace import (FIVE_HOURS, ONE_WEEK, elapsed_fraction, format_countdown_dhm, format_countdown_hm,
                        format_reset_time, pace_mark, runout_text, scale_level, window_caption, window_seconds)
 from core.providers.base import UsageMetrics
-from ui.styles import get_table_stylesheet
+from ui.styles import get_table_stylesheet, THEMES
+from ui.brand import brand_color
 
 PROVIDER_NAMES = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}
 PROVIDER_ORDER = ["claude", "codex", "agy"]
@@ -49,12 +50,12 @@ def _hidpi_pixmap(size: int) -> QPixmap:
     return pm
 
 
-def provider_icon(provider_id: str, theme: dict, size: int = 18) -> QPixmap:
-    """Monochrome line glyph per provider in the text colour (no brand artwork)."""
+def provider_icon(provider_id: str, theme: dict, size: int = 18, color: Optional[str] = None) -> QPixmap:
+    """Line glyph per provider, drawn in the service colour (or the text colour); no brand artwork."""
     pm = _hidpi_pixmap(size)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(QPen(QColor(theme["text"]), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+    p.setPen(QPen(QColor(color or theme["text"]), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                   Qt.PenJoinStyle.RoundJoin))
     p.setBrush(Qt.BrushStyle.NoBrush)
     s, c = float(size), size / 2
@@ -277,10 +278,12 @@ class ProviderColumn:
         top.setSpacing(5)
         top.addStretch()
         self.icon = QLabel()
-        self.icon.setPixmap(provider_icon(provider_id, theme))
+        self.brand = brand_color(provider_id, theme is THEMES["dark"] or theme == THEMES["dark"])
+        self.icon.setPixmap(provider_icon(provider_id, theme, color=self.brand))
         top.addWidget(self.icon)
         self.name = QLabel(PROVIDER_NAMES.get(provider_id, provider_id))
         self.name.setObjectName("HeaderName")
+        self.name.setStyleSheet(f"color: {self.brand};")
         top.addWidget(self.name)
         top.addStretch()
         hv.addLayout(top)

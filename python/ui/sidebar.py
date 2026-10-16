@@ -10,14 +10,15 @@ import sys
 from PySide6.QtCore import Qt, Signal, QSize, QRect, QRectF, QPoint, QTimer, QEvent, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QGuiApplication, QCursor
 from PySide6.QtWidgets import QWidget, QPushButton, QBoxLayout, QVBoxLayout, QFrame, QSizePolicy
-from core.pace import scale_level, short_window
+from core.pace import scale_level, short_window, reset_stamp
 from core.providers.base import BaseProvider
 from ui.provider_card import PROVIDER_THEMES
+from ui.brand import BRAND, brand_color
 from ui.styles import THEMES, get_cards_stylesheet
 
 SIDEBAR_TOKENS = {
-    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', providers={k: v['color'] for k, v in PROVIDER_THEMES.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
-    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', providers={'claude':'#0369a1','agy':'#047857','codex':'#7e22ce'}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
+    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', providers={k: v['dark'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
+    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', providers={k: v['light'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
 }
 BASE_BUTTON_W, BASE_BUTTON_H = 64, 64
 BASE_PANEL_W = 220
@@ -164,6 +165,11 @@ class _Button(QPushButton):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(t['pressed'] if self.isDown() else t['hover'] if self.underMouse() else t['background']))
         p.drawRoundedRect(QRectF(self.rect()).adjusted(scale,scale,-scale,-scale), t['radius']*scale, t['radius']*scale)
+        if self.kind in _NAMES:
+            # identity stripe: the service colour, never a usage colour
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(t['muted'] if self.offline else t['providers'][self.kind]))
+            p.drawRoundedRect(QRectF(1.5*scale, 7*scale, 2.5*scale, self.height()-14*scale), 1.2*scale, 1.2*scale)
         if self.hasFocus():
             p.setBrush(Qt.NoBrush)
             color = t['providers'].get(self.kind, t['focus'])
@@ -554,7 +560,9 @@ class SidebarWidget(QWidget):
         for title, value, reset in rows:
             text = '--' if value is None else f'{value:.0f}%'
             label = _row_label(title) if key != 'agy' else (title or '')
-            lines.append(f'{label} 已用 {text}，重設於 {BaseProvider.format_countdown(reset)}')
+            stamp = reset_stamp(reset, title)
+            when = f'{stamp} · {BaseProvider.format_countdown(reset)}' if stamp else BaseProvider.format_countdown(reset)
+            lines.append(f'{label} 已用 {text}，重設於 {when}')
         if data.error:
             lines.append(data.error)
         if data.stale:

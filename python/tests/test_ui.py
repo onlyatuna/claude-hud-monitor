@@ -162,7 +162,7 @@ class HudTests(unittest.TestCase):
                 appearance.aboutToShow.emit()
                 self.assertTrue(light.isChecked())
                 self.assertIn('rgba(248, 250, 252, 0.94)', hud.styleSheet())
-                self.assertIn('#0369a1', hud.cards['claude'].title.styleSheet())
+                self.assertIn('#B4532F', hud.cards['claude'].title.styleSheet())
                 self.assertEqual(hud.cards['claude'].m1_val.text(), '42%')
                 self.assertEqual(ConfigManager(config.path).get('appearance'), 'light')
                 hud.cards['claude'].update_metrics(UsageMetrics(provider_id='claude', error='offline'))
@@ -564,5 +564,24 @@ class HudTests(unittest.TestCase):
                     self.assertIn(':hover', cell.styleSheet())
                 self.assertEqual([t for t, _r, _c in card._drag_rows()], ['SESSION 5H', 'WEEKLY 7D'])
                 self.assertEqual(card._cell_of(card.m1_val), card.m1_cell)
+            finally:
+                self._close(hud)
+
+    def test_weekly_rows_show_the_wall_clock_reset_time(self):
+        from datetime import timedelta
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='cards')
+            try:
+                five = datetime.now(timezone.utc) + timedelta(hours=3)
+                week = datetime.now(timezone.utc) + timedelta(days=6, hours=5)
+                hud._on_data_fetched(UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric1_val=1,
+                                                  metric1_reset=five, metric2_title='WEEKLY 7D', metric2_val=2,
+                                                  metric2_reset=week))
+                card = hud.cards['claude']
+                self.assertNotIn('週', card.m1_sub.text())          # short windows: countdown only
+                self.assertIn('·', card.m2_sub.text())              # weekly: "週X HH:MM · countdown"
+                local = week.astimezone()
+                self.assertIn(f"{local.strftime('%H:%M')}", card.m2_sub.text())
+                self.assertIn('週', card.m2_sub.text())
             finally:
                 self._close(hud)
