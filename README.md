@@ -100,10 +100,28 @@ Windows 環境可使用 `python/build_exe.bat` 產出 `dist/ClaudeHUD.exe`；mac
 | :--- | :--- | :--- |
 | **Claude** | 本機 OAuth → `/api/oauth/usage` | `~/.claude/.credentials.json` 包含有效 access token (支援多帳號切換) |
 | **Codex** | 本機 OAuth → `/backend-api/wham/usage` | `~/.codex/auth.json` 包含有效 access token |
-| **AGY** | 本地 API / IPC 查詢 | 已安裝且登入的 Antigravity CLI |
+| **AGY** | Google 端點 `daily-cloudcode-pa` 的額度查詢（5 小時、C/G）＋ agy statusLine 快取（Gemini 週額度、Argon 週額度） | 已安裝且登入的 Antigravity CLI；週額度與 Argon 需啟用 statusLine，見下方 |
 
 * 數值顯示為已使用額度百分比。
-* AGY 的 `C/G 剩餘` 顯示第三方群組可用餘額。
+* AGY 的 `C/G 剩餘` 顯示 Claude/GPT 群組的每週剩餘；`Argon` 顯示 Gemini 4 Argon（Pro 方案獨立額度）的每週剩餘。
+
+### 啟用 AGY 週額度與 Argon（一次性設定）
+
+Gemini 週額度與 Argon 週額度沒有公開 API，agy 只會在互動模式把它們推給 `statusLine` 指令。HUD 提供一支只寫入額度的 hook：
+
+```
+cd python
+python main.py --install-agy-statusline      # 先備份 ~/.gemini/antigravity-cli/settings.json 再寫入
+python main.py --uninstall-agy-statusline    # 移除
+```
+
+安裝後重開 agy 互動模式即可。注意：
+
+* 需要 `python`（Windows）或 `python3` 在 PATH 上，agy 會用它執行 hook。
+* 只有 agy 互動模式開著時才會更新；agy 沒開時沿用最後一次的值，已過重置時間的項目會顯示 `--`。
+* 已設定其他 statusLine 時不會覆蓋；設定資料夾路徑含空白時無法安裝。
+* hook 只保存各項額度的剩餘比例與重置時間，不保存 email、路徑或 token。
+* 未啟用時，Weekly 與 Argon 顯示 `--`，其餘（5 小時、C/G）不受影響。
 * 預設更新週期為 60 秒。若請求失敗，採指數退避重試，若標頭含 `Retry-After` 則優先採用。
 
 ---

@@ -48,7 +48,7 @@ stale 與 last_success 由協調層管理，最後成功資料不可假裝是最
 worker 只持有 Python queue，不持有或從背景執行緒呼叫 Qt 物件；主執行緒每 25ms 取回結果。
 每個 Provider 同時最多一個 worker。手動刷新／休眠恢復使舊結果失效，原查詢結束後只補一次新查詢。
 不得以清除布林鎖或 join timeout 假裝取消 worker。關閉後忽略任何晚到結果。
-各服務獨立排程，AGY 慢查詢不阻塞其他服務。CLI 有總時限；urllib timeout 為 I/O timeout，非整體截止時間。
+各服務獨立排程，AGY 慢查詢不阻塞其他服務。AGY 只走 HTTP（不呼叫 agy 執行檔）；urllib timeout 為 I/O timeout，非整體截止時間。
 OS 層呼叫若卡住，該服務等待原查詢退出，不無限產生 worker；這仍是傳輸層的限制。
 
 ## 設定與平台
