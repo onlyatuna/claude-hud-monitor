@@ -12,10 +12,10 @@ path = "src/main.rs"
 [dependencies]
 # UI library, a Rust implementation of a subset of Qt: https://github.com/onlyatuna/ferrokit
 # Pinned to a commit. CI's `diagnostics` job checks out the same commit; change both together.
-ferrokit-core = { git = "https://github.com/onlyatuna/ferrokit", rev = "f0640d3e338f1e356ba5c4994fc93e37ba919dda" }
-ferrokit-gui = { git = "https://github.com/onlyatuna/ferrokit", rev = "f0640d3e338f1e356ba5c4994fc93e37ba919dda" }
-ferrokit-platform = { git = "https://github.com/onlyatuna/ferrokit", rev = "f0640d3e338f1e356ba5c4994fc93e37ba919dda" }
-ferrokit-widgets = { git = "https://github.com/onlyatuna/ferrokit", rev = "f0640d3e338f1e356ba5c4994fc93e37ba919dda" }
+ferrokit-core = { git = "https://github.com/onlyatuna/ferrokit", rev = "a622ac22a3cb08313134719e650ebdc36f591e4d" }
+ferrokit-gui = { git = "https://github.com/onlyatuna/ferrokit", rev = "a622ac22a3cb08313134719e650ebdc36f591e4d" }
+ferrokit-platform = { git = "https://github.com/onlyatuna/ferrokit", rev = "a622ac22a3cb08313134719e650ebdc36f591e4d" }
+ferrokit-widgets = { git = "https://github.com/onlyatuna/ferrokit", rev = "a622ac22a3cb08313134719e650ebdc36f591e4d" }
 parking_lot = "0.12"
 
 # HTTP (synchronous TLS client; providers already run on worker threads)
