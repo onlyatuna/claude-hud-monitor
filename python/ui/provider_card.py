@@ -105,6 +105,61 @@ class ProviderCardWidget(QWidget):
         m2_box.addWidget(self.m2_sub)
 
         layout.addLayout(m2_box)
+        self.extra_rows = []
+        self.extra_container = None
+
+    def _create_extra_row(self):
+        if self.extra_container is None:
+            self.extra_container = QWidget()
+            extra_layout = QVBoxLayout(self.extra_container)
+            extra_layout.setContentsMargins(0, 0, 0, 0)
+            extra_layout.setSpacing(1)
+            self.layout().addWidget(self.extra_container)
+        widget = QWidget()
+        box = QVBoxLayout(widget)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(0)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(1)
+        title = QLabel()
+        title.setObjectName("MetricTitle")
+        value = QLabel()
+        value.setObjectName("MetricValue")
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(value)
+        box.addLayout(header)
+        bar = QProgressBar()
+        bar.setRange(0, 100)
+        bar.setTextVisible(False)
+        box.addWidget(bar)
+        sub = QLabel()
+        sub.setObjectName("SubDetail")
+        box.addWidget(sub)
+        self.extra_container.layout().addWidget(widget)
+        row = (widget, title, value, bar, sub)
+        self.extra_rows.append(row)
+        return row
+
+    def _update_extra_metrics(self, metrics):
+        while len(self.extra_rows) < len(metrics):
+            self._create_extra_row()
+        if self.extra_container is not None:
+            self.extra_container.setVisible(bool(metrics))
+        for index, (widget, title, value, bar, sub) in enumerate(self.extra_rows):
+            widget.setVisible(index < len(metrics))
+            if index >= len(metrics):
+                continue
+            metric = metrics[index]
+            title.setText(metric.title)
+            value.setText(metric.text)
+            color = get_progress_color(metric.val, self.dark) if metric.val is not None else "#64748b"
+            value.setStyleSheet(f"color: {color}; font-size: 14px;")
+            bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {color}; }}")
+            bar.setValue(int(min(100, max(0, metric.val or 0))))
+            sub.setStyleSheet("color: #64748b;")
+            sub.setText(f"重設於: {BaseProvider.format_countdown(metric.reset)}" if metric.reset else (metric.subtext or "重設於: --"))
 
     def set_appearance(self, dark: bool):
         self.dark = dark
@@ -117,6 +172,7 @@ class ProviderCardWidget(QWidget):
 
     def update_metrics(self, data: UsageMetrics):
         self.current_metrics = data
+        self._update_extra_metrics([] if data.error and not data.stale else data.extra_metrics)
         if data.provider_name:
             self.title.setText(data.provider_name)
         else:
@@ -206,6 +262,8 @@ class ProviderCardWidget(QWidget):
             reset = getattr(data, f"metric{index}_reset")
             subtext = getattr(data, f"metric{index}_subtext")
             label.setText(f"重設於: {BaseProvider.format_countdown(reset)}" if reset else (subtext or "重設於: --"))
+        for metric, row in zip(data.extra_metrics, self.extra_rows):
+            row[4].setText(f"重設於: {BaseProvider.format_countdown(metric.reset)}" if metric.reset else (metric.subtext or "重設於: --"))
         if data.stale:
             stamp = data.last_success.astimezone().strftime("%m/%d %H:%M:%S") if data.last_success else "--"
             self.m1_sub.setText(f"舊資料 {stamp}")

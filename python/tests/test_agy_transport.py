@@ -65,8 +65,15 @@ class AgyTransportTests(unittest.TestCase):
         self.assertIsNone(result.error)
         self.assertEqual(result.error_code, "")
         self.assertAlmostEqual(result.metric1_val, 2.57)
+        self.assertAlmostEqual(result.extra_metrics[0].val, 30.6)
+        self.assertEqual(result.extra_metrics[0].reset.isoformat(), "2026-10-16T14:00:00+00:00")
         self.assertAlmostEqual(result.metric2_val, 0.85502)
         self.assertEqual(result.metric2_reset, self.cache["buckets"]["gemini-weekly"]["reset_time"])
+        self.assertEqual([r.title for r in result.extra_metrics], ["C/G 5H", "C/G 7D", "ARGON 7D"])
+        self.assertAlmostEqual(result.extra_metrics[2].val, 21.369666)
+        self.assertAlmostEqual(result.extra_metrics[1].val, 15.51)
+        self.assertEqual(result.metric1_title, "GEMINI 5H")
+        self.assertEqual(result.metric2_title, "GEMINI 7D")
         self.assertEqual(result.badge1_text, "C/G 剩餘: 84%")
         self.assertEqual(result.badge2_text, "Argon 剩餘: 79%")
 
@@ -79,6 +86,7 @@ class AgyTransportTests(unittest.TestCase):
         self.assertEqual(result.error_code, "")
         self.assertEqual(result.metric1_val, 0.0)
         self.assertEqual(result.metric1_text, "0%")
+        self.assertAlmostEqual(result.extra_metrics[1].val, 15.30076)
         self.assertEqual(result.metric1_reset, self.cache["buckets"]["gemini-5h"]["reset_time"])
         self.assertAlmostEqual(result.metric2_val, 0.85502)
         self.assertEqual(result.badge1_text, "C/G 剩餘: 85%")
@@ -115,6 +123,11 @@ class AgyTransportTests(unittest.TestCase):
             result = provider.fetch_usage()
         self.assertEqual(result.error_code, "no_token")
         self.assertEqual(result.badge2_text, "Argon: --")
+        if result.error:
+            self.assertEqual(result.extra_metrics, [])
+        else:
+            self.assertIsNone(result.extra_metrics[2].val)
+            self.assertEqual(result.extra_metrics[2].subtext, "需啟用 agy statusLine")
 
     def test_no_cache_preserves_http_auth_error(self):
         provider = AgyProvider()
@@ -125,6 +138,11 @@ class AgyTransportTests(unittest.TestCase):
             result = provider.fetch_usage()
         self.assertEqual(result.error_code, "auth")
         self.assertEqual(result.badge2_text, "Argon: --")
+        if result.error:
+            self.assertEqual(result.extra_metrics, [])
+        else:
+            self.assertIsNone(result.extra_metrics[2].val)
+            self.assertEqual(result.extra_metrics[2].subtext, "需啟用 agy statusLine")
 
     def test_empty_cache_returns_schema_error(self):
         self.cache_reader.return_value = {"buckets": {}}
@@ -132,6 +150,7 @@ class AgyTransportTests(unittest.TestCase):
         with patch.object(provider, "_get_access_token", return_value=None):
             result = provider.fetch_usage()
         self.assertEqual(result.error_code, "schema")
+        self.assertEqual(result.extra_metrics, [])
         self.assertEqual(result.error, "未取得有效配額資料")
 
     def test_both_endpoints_succeed_and_request_spec(self):
@@ -144,9 +163,16 @@ class AgyTransportTests(unittest.TestCase):
 
         self.assertIsNone(result.error)
         self.assertAlmostEqual(result.metric1_val, 2.57)
+        self.assertAlmostEqual(result.extra_metrics[0].val, 30.6)
+        self.assertEqual(result.extra_metrics[0].reset.isoformat(), "2026-10-16T14:00:00+00:00")
         self.assertEqual(result.metric1_text, "3%")
         self.assertEqual(result.badge1_text, "C/G 剩餘: 84%")
         self.assertEqual(result.badge2_text, "Argon: --")
+        if result.error:
+            self.assertEqual(result.extra_metrics, [])
+        else:
+            self.assertIsNone(result.extra_metrics[2].val)
+            self.assertEqual(result.extra_metrics[2].subtext, "需啟用 agy statusLine")
         self.assertIsNone(result.metric2_val)
         self.assertEqual(result.metric2_text, "--")
         self.assertEqual(result.metric2_subtext, "Gemini 週額度來源未知")
@@ -203,6 +229,7 @@ class AgyTransportTests(unittest.TestCase):
 
         self.assertIsNone(result.error)
         self.assertAlmostEqual(result.metric1_val, 2.57)
+        self.assertIsNone(result.extra_metrics[0].val)
         self.assertEqual(result.badge1_text, "C/G 剩餘: 84%")
         mock_logger.info.assert_called()
         logged_msgs = [str(call.args[0]) for call in mock_logger.info.call_args_list]
@@ -249,6 +276,7 @@ class AgyTransportTests(unittest.TestCase):
 
         self.assertIsNotNone(result.error)
         self.assertEqual(result.error_code, "schema")
+        self.assertEqual(result.extra_metrics, [])
 
     def test_no_token_returns_no_token_without_subprocess(self):
         provider = AgyProvider()

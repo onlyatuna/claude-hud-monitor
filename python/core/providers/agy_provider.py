@@ -9,7 +9,7 @@ from typing import Optional
 import urllib.request
 import urllib.error
 
-from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse
+from core.providers.base import BaseProvider, UsageMetrics, MetricRow, percentage, percent_text, safe_parse
 from core.logger import logger
 from core.agy_statusline import read_quota_cache
 
@@ -137,17 +137,18 @@ class AgyProvider(BaseProvider):
         m1_val = quota_metrics.metric1_val if quota_metrics else None
         m1_reset = quota_metrics.metric1_reset if quota_metrics else None
         badge1 = summary_metrics.badge1_text if summary_metrics and summary_metrics.badge1_text else f"C/G 剩餘: {percent_text(None)}"
-        has_cg = badge1 != f"C/G 剩餘: {percent_text(None)}"
+        rows = summary_metrics.extra_metrics if summary_metrics else self._empty_rows()
+        has_cg = any(row.val is not None for row in rows[:2])
         has_error = m1_val is None and not has_cg
 
         return UsageMetrics(
             provider_name="Antigravity",
             provider_id=self.provider_id,
-            metric1_title="SESSION 5H",
+            metric1_title="GEMINI 5H",
             metric1_val=m1_val,
             metric1_text=percent_text(m1_val),
             metric1_reset=m1_reset,
-            metric2_title="WEEKLY 7D",
+            metric2_title="GEMINI 7D",
             metric2_val=None,
             metric2_text="--",
             metric2_reset=None,
@@ -157,6 +158,7 @@ class AgyProvider(BaseProvider):
             last_updated_time=now_str,
             error="未取得有效配額資料" if has_error else None,
             error_code="schema" if has_error else "",
+            extra_metrics=[] if has_error else rows,
         )
 
     def fetch_usage(self) -> UsageMetrics:
@@ -177,6 +179,15 @@ class AgyProvider(BaseProvider):
     def _merge_cache(self, res, cache, now_str) -> UsageMetrics:
         result = res if res is not None else UsageMetrics()
         buckets = cache.get("buckets", {}) if cache is not None else {}
+        rows = result.extra_metrics or self._empty_rows()
+        for row, key in zip(rows, ("3p-5h", "3p-weekly", "gemini-argon-wtu-weekly")):
+            bucket = buckets.get(key)
+            if row.val is None and bucket:
+                row.val = max(0.0, min(100.0, (1 - bucket["remaining_fraction"]) * 100))
+                row.text = percent_text(row.val)
+                row.reset = bucket["reset_time"]
+                row.subtext = ""
+        result.extra_metrics = rows
         if result.metric1_val is None and "gemini-5h" in buckets:
             bucket = buckets["gemini-5h"]
             result.metric1_val = max(0.0, min(100.0, (1 - bucket["remaining_fraction"]) * 100))
@@ -190,18 +201,25 @@ class AgyProvider(BaseProvider):
             result.badge1_text = f"C/G 剩餘: {percent_text(cg['remaining_fraction'] * 100 if cg else None)}"
         argon = buckets.get("gemini-argon-wtu-weekly")
         result.badge2_text = f"Argon 剩餘: {percent_text(argon['remaining_fraction'] * 100 if argon else None)}"
-        result.metric1_title = "SESSION 5H"
-        result.metric2_title = "WEEKLY 7D"
+        result.metric1_title = "GEMINI 5H"
+        result.metric2_title = "GEMINI 7D"
         result.metric1_text = percent_text(result.metric1_val)
         result.metric2_text = percent_text(result.metric2_val)
         result.provider_name = "Antigravity"
         result.provider_id = self.provider_id
         result.last_updated_time = now_str
         has_value = (result.metric1_val is not None or result.metric2_val is not None
-                     or result.badge1_text != "C/G 剩餘: --" or argon is not None)
+                     or any(row.val is not None for row in rows))
         result.error = None if has_value else "未取得有效配額資料"
         result.error_code = "" if has_value else "schema"
+        if not has_value:
+            result.extra_metrics = []
         return result
+
+    @staticmethod
+    def _empty_rows():
+        return [MetricRow("C/G 5H"), MetricRow("C/G 7D"),
+                MetricRow("ARGON 7D", subtext="需啟用 agy statusLine")]
 
     def _failure(self, now_str, code, message):
         return UsageMetrics(
@@ -248,11 +266,11 @@ class AgyProvider(BaseProvider):
         return UsageMetrics(
             provider_name="Antigravity",
             provider_id=self.provider_id,
-            metric1_title="SESSION 5H",
+            metric1_title="GEMINI 5H",
             metric1_val=m1_used_pct,
             metric1_text=percent_text(m1_used_pct),
             metric1_reset=m1_reset_dt,
-            metric2_title="WEEKLY 7D",
+            metric2_title="GEMINI 7D",
             metric2_val=None,
             metric2_text="--",
             metric2_reset=None,
@@ -261,6 +279,7 @@ class AgyProvider(BaseProvider):
             last_updated_time=now_str,
             error="未取得有效配額資料" if m1_used_pct is None else None,
             error_code="schema" if m1_used_pct is None else "",
+            extra_metrics=[] if m1_used_pct is None else self._empty_rows(),
         )
 
     @safe_parse
@@ -291,6 +310,7 @@ class AgyProvider(BaseProvider):
         m2_used_pct = None
         m2_reset_dt = None
         third_party_rem_pct = None
+        rows = self._empty_rows()
 
         for g in groups:
             name = g.get("name") or g.get("displayName") or ""
@@ -322,12 +342,23 @@ class AgyProvider(BaseProvider):
             elif ("claude" in g_name or "gpt" in g_name) and "argon" not in g_name:
                 for b in g.get("buckets", []):
                     b_id = (b.get("id") or b.get("bucketId") or "").lower()
-                    if "week" in b_id:
-                        rem_frac = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
-                        if rem_frac is None:
-                            continue
-                        remaining = rem_frac * 100.0
-                        third_party_rem_pct = remaining if third_party_rem_pct is None else min(third_party_rem_pct, remaining)
+                    row = rows[1] if "week" in b_id else rows[0] if "5h" in b_id else None
+                    if row is None:
+                        continue
+                    rem_frac = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
+                    if rem_frac is None:
+                        continue
+                    used = (1 - rem_frac) * 100
+                    if row.val is None or used > row.val:
+                        row.val = used
+                        row.text = percent_text(used)
+                        reset = b.get("reset_time") or b.get("resetTime")
+                        try:
+                            row.reset = datetime.fromisoformat(reset.replace("Z", "+00:00")) if reset else None
+                        except (ValueError, TypeError, AttributeError):
+                            row.reset = None
+                    if row is rows[1]:
+                        third_party_rem_pct = 100 - row.val
             else:
                 logger.info(f"[AgyProvider] unknown quota group: {name}")
 
@@ -335,16 +366,16 @@ class AgyProvider(BaseProvider):
         m2_text = percent_text(m2_used_pct)
         badge1 = f"C/G 剩餘: {percent_text(third_party_rem_pct)}"
         badge2 = "Gemini Models"
-        has_error = m1_used_pct is None and third_party_rem_pct is None
+        has_error = m1_used_pct is None and m2_used_pct is None and all(row.val is None for row in rows)
 
         return UsageMetrics(
             provider_name="Antigravity",
             provider_id=self.provider_id,
-            metric1_title="SESSION 5H",
+            metric1_title="GEMINI 5H",
             metric1_val=m1_used_pct,
             metric1_text=m1_text,
             metric1_reset=m1_reset_dt,
-            metric2_title="WEEKLY 7D",
+            metric2_title="GEMINI 7D",
             metric2_val=m2_used_pct,
             metric2_text=m2_text,
             metric2_reset=m2_reset_dt,
@@ -354,4 +385,5 @@ class AgyProvider(BaseProvider):
             last_updated_time=now_str,
             error="未取得有效配額資料" if has_error else None,
             error_code="schema" if has_error else "",
+            extra_metrics=[] if has_error else rows,
         )

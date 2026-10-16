@@ -1,6 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 import math
 import ssl
 from functools import lru_cache, wraps
@@ -67,6 +67,15 @@ def retry_delay(value):
 
 
 @dataclass
+class MetricRow:
+    title: str = ""
+    val: Optional[float] = None
+    text: str = "--"
+    reset: Optional[datetime] = None
+    subtext: str = ""
+
+
+@dataclass
 class UsageMetrics:
     provider_name: str = ""
     provider_id: str = ""
@@ -92,6 +101,7 @@ class UsageMetrics:
     retry_after: Optional[float] = None
     stale: bool = False
     last_success: Optional[datetime] = None
+    extra_metrics: List[MetricRow] = field(default_factory=list)
 
 class BaseProvider:
     provider_id: str = "base"

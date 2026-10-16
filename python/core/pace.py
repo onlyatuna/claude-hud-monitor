@@ -56,7 +56,7 @@ def format_reset_time(target: Optional[datetime], with_day: bool) -> str:
 
 def short_window(title: str) -> str:
     """'WINDOW 30D' / 'SESSION 5H' / 'WEEKLY 7D' -> '30D' / '5H' / '7D'."""
-    return (title or "").replace("WINDOW ", "").replace("SESSION ", "").replace("WEEKLY ", "")
+    return (title or "").replace("WINDOW ", "").replace("SESSION ", "").replace("WEEKLY ", "").replace("GEMINI ", "").replace("C/G ", "").replace("ARGON ", "")
 
 
 def window_caption(title: str, expected: str) -> str:

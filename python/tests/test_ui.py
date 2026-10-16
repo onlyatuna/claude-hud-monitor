@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 from core.config_manager import ConfigManager
-from core.providers.base import UsageMetrics
+from core.providers.base import UsageMetrics, MetricRow
 from ui.provider_card import ProviderCardWidget
 from ui.styles import THEMES
 from ui.usage_table import UsageTable
@@ -21,6 +21,35 @@ def make_table(scheme='scale', appearance='dark'):
 
 
 class CardTests(unittest.TestCase):
+    def test_extra_rows_show_hide_reuse_and_countdown(self):
+        card = ProviderCardWidget('agy')
+        reset = datetime.now(timezone.utc) + timedelta(hours=1)
+        metrics = [MetricRow("C/G 5H", 30, "30%", reset),
+                   MetricRow("C/G 7D", 15, "15%"),
+                   MetricRow("ARGON 7D", subtext="需啟用 agy statusLine")]
+        card.update_metrics(UsageMetrics(extra_metrics=metrics))
+        self.assertEqual(len(card.extra_rows), 3)
+        self.assertTrue(all(not row[0].isHidden() for row in card.extra_rows))
+        self.assertEqual([row[1].text() for row in card.extra_rows], [m.title for m in metrics])
+        self.assertEqual([row[2].text() for row in card.extra_rows], ['30%', '15%', '--'])
+        with patch('ui.provider_card.BaseProvider.format_countdown', return_value='updated'):
+            card.update_countdown()
+        self.assertEqual(card.extra_rows[0][4].text(), '重設於: updated')
+        self.assertEqual(card.extra_rows[2][4].text(), '需啟用 agy statusLine')
+        original = card.extra_rows[0][0]
+        card.update_metrics(UsageMetrics())
+        self.assertTrue(all(row[0].isHidden() for row in card.extra_rows))
+        card.update_metrics(UsageMetrics(extra_metrics=metrics[:1]))
+        self.assertIs(card.extra_rows[0][0], original)
+        self.assertFalse(original.isHidden())
+        self.assertTrue(card.extra_rows[1][0].isHidden())
+        card.update_metrics(UsageMetrics(error='offline', extra_metrics=metrics))
+        self.assertTrue(all(row[0].isHidden() for row in card.extra_rows))
+        claude = ProviderCardWidget('claude')
+        claude.update_metrics(UsageMetrics(metric1_val=20))
+        self.assertFalse(any(not row[0].isHidden() for row in claude.extra_rows))
+
+
     def test_error_recovery_clears_text(self):
         card = ProviderCardWidget('agy')
         card.update_metrics(UsageMetrics(provider_id='agy', error='timeout'))
