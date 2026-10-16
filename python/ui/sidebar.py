@@ -1,4 +1,4 @@
-"""Scalable quota dials and reusable provider-card flyouts.
+"""Scalable quota tiles and reusable provider-card flyouts.
 
 Compact desktop tokens: 4 px rhythm, 12 px labels, native buttons, a visible
 2 px focus ring and paired AA text colours; hover is supplementary to keyboard
@@ -10,23 +10,22 @@ import sys
 from PySide6.QtCore import Qt, Signal, QSize, QRect, QRectF, QPoint, QTimer, QEvent, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QGuiApplication, QCursor
 from PySide6.QtWidgets import QWidget, QPushButton, QBoxLayout, QVBoxLayout, QFrame, QSizePolicy
-from core.pace import FIVE_HOURS, ONE_WEEK, window_seconds, elapsed_fraction, pace_mark, scale_level
+from core.pace import scale_level
+from core.providers.base import BaseProvider
 from ui.provider_card import PROVIDER_THEMES
 from ui.styles import THEMES, get_cards_stylesheet
-from ui.usage_table import UsageDial
 
 SIDEBAR_TOKENS = {
     'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', providers={k: v['color'] for k, v in PROVIDER_THEMES.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
     'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', providers={'claude':'#0369a1','agy':'#047857','codex':'#7e22ce'}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
 }
-BASE_BUTTON_W, BASE_BUTTON_H = 64, 68
-BASE_DIAL = 44
+BASE_BUTTON_W, BASE_BUTTON_H = 64, 64
 BASE_PANEL_W = 220
 _NAMES = {'claude':'Claude', 'agy':'AGY', 'codex':'Codex'}
 
 
 class _Indicators(QWidget):
-    """Paint status above the dial without intercepting its button's input."""
+    """Paint status above the tile without intercepting its button's input."""
     def __init__(self, button):
         super().__init__(button)
         self.button = button
@@ -41,12 +40,12 @@ class _Indicators(QWidget):
         if button.stale:
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(t['stale']))
-            p.drawEllipse(QRectF(self.width()-10*scale,5*scale,6*scale,6*scale))
+            p.drawEllipse(QRectF(self.width()-10*scale,0*scale,6*scale,6*scale))
         if button.kind == 'agy':
             for i, color in enumerate(button.dot_colors):
                 p.setPen(QPen(QColor(t['background']), scale))
-                p.setBrush(QColor(color))
-                p.drawEllipse(QRectF((43+8*i)*scale,40*scale,6*scale,6*scale))
+                p.setBrush(QColor(t['muted'] if button.offline else color))
+                p.drawEllipse(QRectF((44+8*i)*scale,10*scale,6*scale,6*scale))
 
 
 class _Button(QPushButton):
@@ -56,9 +55,9 @@ class _Button(QPushButton):
         self.stale, self.offline = False, False
         self._press_pos, self._dragged = None, False
         self.dot_colors = [THEMES['dark']['neutral']] * 2
-        self.dial = UsageDial(THEMES['dark'], self) if kind in _NAMES else None
-        if self.dial:
-            self.dial.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.rows = [('5H', None, owner._color(None)), ('7D', None, owner._color(None, 'outer'))]
+        self.display = ['--', '--']
+        self.show_labels = owner.scale() >= 0.8
         self.indicators = _Indicators(self)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
@@ -125,19 +124,58 @@ class _Button(QPushButton):
             p.setPen(QPen(QColor(color), t['focus_width']*scale))
             p.drawRoundedRect(QRectF(self.rect()).adjusted(2*scale,2*scale,-2*scale,-2*scale), t['radius']*scale, t['radius']*scale)
         font = QFont(t['font'])
-        font.setPixelSize(max(1, round(t['font_size']*scale)))
+        font.setPixelSize(max(8, round(t['font_size']*scale)))
         p.setFont(font)
         if self.kind == 'toggle':
             p.setPen(QColor(t['text']))
             p.drawText(self.rect(), Qt.AlignCenter, '\u2261' if self.owner.state() == 'strip' else '\u25a5')
             return
-        p.setPen(QColor(t['providers'][self.kind]))
-        p.drawText(QRectF(0,48*scale,self.width(),18*scale), Qt.AlignCenter, _NAMES[self.kind])
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor(t['muted'] if self.offline else t['providers'][self.kind]))
+        title_width = 38 if self.kind == 'agy' else 52
+        p.drawText(QRectF(6*scale, 2*scale, title_width*scale, 16*scale), Qt.AlignLeft | Qt.AlignVCenter, _NAMES[self.kind])
+        theme = THEMES['dark' if self.owner.dark else 'light']
+        for index, (label, value, color) in enumerate(self.rows):
+            y = (19 + index*21)*scale
+            font.setPixelSize(max(8, round(10*scale)))
+            font.setBold(False)
+            p.setFont(font)
+            p.setPen(QColor(t['muted']))
+            if self.show_labels:
+                p.drawText(QRectF(6*scale,y,22*scale,15*scale), Qt.AlignLeft | Qt.AlignVCenter, label)
+            font.setPixelSize(max(8, round(12*scale)))
+            font.setBold(True)
+            p.setFont(font)
+            p.setPen(QColor(t['muted'] if self.offline else self.text_color(color)))
+            p.drawText(QRectF(6*scale,y,52*scale,15*scale), Qt.AlignRight | Qt.AlignVCenter, self.display[index])
+            track = QRectF(6*scale, y+15*scale, 52*scale, 4*scale)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(*theme['track']))
+            p.drawRoundedRect(track,2*scale,2*scale)
+            if value is not None and not self.offline:
+                fill = QRectF(track)
+                fill.setWidth(track.width()*max(0,min(100,value))/100)
+                p.setBrush(QColor(color))
+                p.drawRoundedRect(fill,2*scale,2*scale)
+
+    @staticmethod
+    def contrast(foreground, background):
+        def luminance(color):
+            rgb = QColor(color).getRgbF()[:3]
+            linear = [v/12.92 if v <= 0.04045 else ((v+0.055)/1.055)**2.4 for v in rgb]
+            return sum(v*w for v,w in zip(linear,(0.2126,0.7152,0.0722)))
+        a,b = sorted((luminance(foreground),luminance(background)))
+        return (b+0.05)/(a+0.05)
+
+    def text_color(self, color):
+        t = self.owner.tokens
+        backgrounds = (t['background'], t['hover'], t['pressed'])
+        return color if all(self.contrast(color,bg) >= 3 for bg in backgrounds) else t['text']
+
 
 
 class SidebarWidget(QWidget):
-    # Compatibility for the existing host until its separately assigned migration.
-    settingsRequested = Signal()
     stateChangeRequested = Signal(str)
     contextMenuRequested = Signal(QPoint)
     scaleStepRequested = Signal(int)
@@ -297,10 +335,7 @@ class SidebarWidget(QWidget):
         self.toggle_button.setFixedSize(round(BASE_BUTTON_W*s),round(22*s))
         for button in self.buttons.values():
             button.setFixedSize(round(BASE_BUTTON_W*s),round(BASE_BUTTON_H*s))
-            button.dial.setFixedSize(round(BASE_DIAL*s),round(BASE_DIAL*s))
-            button.dial.move(round(10*s),round(3*s))
-            if button.kind not in self._metrics:
-                button.dial.set_values((None,None,None), '' if button.dial.width() < 36 else '--', (None,None,None))
+            button.show_labels = s >= 0.8
             button.indicators.setGeometry(button.rect())
             button.indicators.raise_()
             button.indicators.update()
@@ -341,9 +376,9 @@ class SidebarWidget(QWidget):
         self.setObjectName('Sidebar')
         self.setStyleSheet(get_cards_stylesheet(dark=dark)+f"QWidget#Sidebar {{background:{t['background']};border-radius:{t['radius']*self._scale}px;}} QFrame#SidebarDivider {{background:{t['separator']};border:none;}}")
         self._flyout.setStyleSheet(get_cards_stylesheet(dark=dark)+f"QWidget {{background-color:{t['background']};}}")
-        for button in self.buttons.values():
-            button.dial.t = THEMES['dark' if dark else 'light']
         self._relayout()
+        for key in self._metrics:
+            self._refresh_tile(key)
         self.update_countdown()
 
     def _color(self, value, which='inner', force_scale=False):
@@ -360,33 +395,46 @@ class SidebarWidget(QWidget):
         self._metrics[data.provider_id] = data
         button.offline = bool(data.error and not data.stale)
         button.stale = bool(data.stale)
-        rows = [(data.metric1_title,data.metric1_val),(data.metric2_title,data.metric2_val)] + [(r.title,r.val) for r in data.extra_metrics]
-        summary = '; '.join(f'{name}: {value:.0f}%' if value is not None else f'{name}: --' for name,value in rows)
-        button.setToolTip(f"{_NAMES[data.provider_id]} ? {summary}"+(' ? STALE' if data.stale else '')+(f' ? {data.error}' if data.error else ''))
-        button.setAccessibleDescription(button.toolTip())
-        self._refresh_dial(data.provider_id)
+        self._refresh_tile(data.provider_id)
+        self._refresh_tooltip(data.provider_id)
         if self._state == 'panel':
             self._relayout()
 
-    def _refresh_dial(self, key):
+    def _refresh_tile(self, key):
         button, data = self.buttons[key], self._metrics[key]
-        text = 'OFF' if button.offline else data.metric1_text
-        if button.dial.width() < 36:
-            text = ''
+        values = (None, None) if button.offline else (data.metric1_val, data.metric2_val)
+        button.rows = [(label, value, self._color(value, which))
+                       for label,value,which in zip(('5H','7D'),values,('inner','outer'))]
+        button.display = ['--' if value is None else f'{value:.0f}%' for value in values]
         if button.offline:
-            button.dial.set_values((None,None,None),text,(None,None,None),muted=True)
-        else:
-            inner = (data.metric1_val, pace_mark(elapsed_fraction(data.metric1_reset,window_seconds(data.metric1_title,FIVE_HOURS))), self._color(data.metric1_val))
-            outer = (data.metric2_val, pace_mark(elapsed_fraction(data.metric2_reset,window_seconds(data.metric2_title,ONE_WEEK))), self._color(data.metric2_val,'outer'))
-            button.dial.set_values(inner,text,outer)
+            button.display = ['OFF', '--']
         extra = {row.title:row.val for row in data.extra_metrics}
         button.dot_colors = [self._color(extra.get(title),force_scale=True) for title in ('C/G 7D','ARGON 7D')]
         button.indicators.update()
         button.update()
 
+    def _refresh_tooltip(self, key):
+        button, data = self.buttons[key], self._metrics[key]
+        lines = [_NAMES[key]]
+        for label,value,reset in (('5H',data.metric1_val,data.metric1_reset),('7D',data.metric2_val,data.metric2_reset)):
+            text = '--' if value is None else f'{value:.0f}%'
+            lines.append(f'{label} 已用 {text}，重設於 {BaseProvider.format_countdown(reset)}')
+        if key == 'agy':
+            extra = {row.title.upper():row.val for row in data.extra_metrics}
+            for title in ('C/G 7D','Argon 7D'):
+                value = extra.get(title.upper())
+                text = '--' if value is None else f'{value:.0f}%'
+                lines.append(f'{title} {text}')
+        if data.error:
+            lines.append(data.error)
+        if data.stale:
+            lines.append('STALE')
+        button.setToolTip('\n'.join(lines))
+        button.setAccessibleDescription(button.toolTip())
+
     def update_countdown(self):
         for key in self._metrics:
-            self._refresh_dial(key)
+            self._refresh_tooltip(key)
 
     def preferred_size(self):
         s, pad = self._scale, round(self.tokens['spacing']*self._scale)*2

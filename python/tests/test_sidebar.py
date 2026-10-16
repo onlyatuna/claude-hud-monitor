@@ -76,32 +76,70 @@ class SidebarTests(unittest.TestCase):
             self.sidebar.update_metrics(data)
             update.assert_not_called()
         button=self.sidebar.buttons['claude']
-        self.assertEqual(button.dial.inner[0],20)
-        self.assertEqual(button.dial.outer[0],8)
-        self.assertAlmostEqual(button.dial.inner[1],60,delta=1)
-        self.assertEqual(button.dial.inner_text,'20%')
+        self.assertEqual(button.rows, [('5H',20,self.sidebar._color(20)),('7D',8,self.sidebar._color(8,'outer'))])
+        self.assertEqual(button.display,['20%','8%'])
+        self.assertFalse(hasattr(button, 'dial'))
         self.sidebar.set_scale(0.6)
-        self.assertEqual(button.dial.inner_text,'')
+        self.assertFalse(button.show_labels)
         self.sidebar.set_scale(1)
-        self.assertEqual(button.dial.inner_text,'20%')
-        self.sidebar.update_metrics(UsageMetrics(provider_id='claude',error='offline'))
-        self.assertTrue(button.dial.muted)
-        self.assertEqual(button.dial.inner_text,'OFF')
+        self.assertTrue(button.show_labels)
+        self.sidebar.update_metrics(UsageMetrics(provider_id='claude'))
+        self.assertEqual(button.display,['--','--'])
+        self.assertTrue(all(row[1] is None for row in button.rows))
+        self.sidebar.update_metrics(UsageMetrics(provider_id='claude',error='offline',metric1_val=20))
+        self.assertTrue(button.offline)
+        self.assertEqual(button.display,['OFF','--'])
+        self.assertTrue(all(row[1] is None for row in button.rows))
         self.sidebar.update_metrics(UsageMetrics(provider_id='claude',error='timeout',stale=True,metric1_val=0,metric1_text='0%'))
         self.assertTrue(button.stale)
-        self.assertFalse(button.dial.muted)
-        self.assertEqual(button.dial.inner_text,'0%')
+        self.assertFalse(button.offline)
+        self.assertEqual(button.display,['0%','--'])
+        self.assertEqual(self.sidebar.tokens['stale'], '#f59e0b')
         self.assertIn('STALE',button.accessibleDescription())
 
     def test_agy_dots(self):
         self.sidebar.update_metrics(UsageMetrics(provider_id='agy',extra_metrics=[MetricRow('C/G 7D',15),MetricRow('ARGON 7D',21)]))
         button=self.sidebar.buttons['agy']
         self.assertEqual(button.dot_colors,[THEMES['dark']['scale']['green']]*2)
-        self.assertIn('C/G 7D: 15%',button.toolTip())
+        self.assertIn('C/G 7D 15%',button.toolTip())
         self.sidebar.set_appearance(False,'duo')
         self.assertEqual(button.dot_colors,[THEMES['light']['scale']['green']]*2)
         self.sidebar.update_metrics(UsageMetrics(provider_id='agy'))
         self.assertEqual(button.dot_colors,[THEMES['light']['neutral']]*2)
+
+    def test_tile_colors_and_contrast(self):
+        for dark in (True,False):
+            for scheme in ('scale','duo'):
+                self.sidebar.set_appearance(dark,scheme)
+                self.sidebar.update_metrics(UsageMetrics(provider_id='claude',metric1_val=95,metric2_val=10))
+                button = self.sidebar.buttons['claude']
+                self.assertEqual([r[2] for r in button.rows], [self.sidebar._color(95),self.sidebar._color(10,'outer')])
+                self.assertNotEqual(button.rows[0][2],button.rows[1][2])
+                for row in button.rows:
+                    for state in ('background','hover','pressed'):
+                        self.assertGreaterEqual(button.contrast(button.text_color(row[2]),self.sidebar.tokens[state]),3)
+        self.sidebar.set_appearance(True,'scale')
+        scale_colors = [r[2] for r in self.sidebar.buttons['claude'].rows]
+        self.sidebar.set_appearance(True,'duo')
+        self.assertNotEqual(scale_colors,[r[2] for r in self.sidebar.buttons['claude'].rows])
+
+    def test_tooltip_countdown_only_and_no_dial_import(self):
+        self.sidebar.update_metrics(UsageMetrics(provider_id='agy',metric1_val=21,metric2_val=1,
+            extra_metrics=[MetricRow('C/G 7D',15),MetricRow('ARGON 7D',21)]))
+        button = self.sidebar.buttons['agy']
+        for text in ('5H \u5df2\u7528','\u91cd\u8a2d\u65bc --','C/G 7D','Argon 7D'):
+            self.assertIn(text,button.toolTip())
+        self.assertNotIn('?',button.toolTip())
+        with patch('ui.sidebar.BaseProvider.format_countdown',return_value='countdown') as countdown:
+            before = list(button.rows)
+            self.sidebar.update_countdown()
+            self.assertEqual(button.rows,before)
+            self.assertIn('countdown',button.toolTip())
+            self.assertEqual(countdown.call_count,2)
+        import inspect
+        import ui.sidebar
+        self.assertNotIn('UsageDial',inspect.getsource(ui.sidebar))
+        self.assertFalse(hasattr(self.sidebar,'settingsRequested'))
 
     def test_context_wheel_drag(self):
         contexts=[]; scales=[]; drags=[]
