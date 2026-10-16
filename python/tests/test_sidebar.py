@@ -4,13 +4,13 @@ import unittest
 from unittest.mock import patch
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QPoint, QPointF, Qt, QRect, QSize, QEvent
-from PySide6.QtGui import QWheelEvent, QContextMenuEvent, QMouseEvent
+from PySide6.QtGui import QWheelEvent, QContextMenuEvent, QMouseEvent, QColor
 from datetime import datetime, timedelta, timezone
 from ui.styles import THEMES
 from PySide6.QtTest import QTest
 from core.providers.base import UsageMetrics, MetricRow
 from ui.provider_card import ProviderCardWidget
-from ui.sidebar import SidebarWidget, SIDEBAR_TOKENS
+from ui.sidebar import SidebarWidget, SIDEBAR_TOKENS, FLASH_MS
 
 APP = QApplication.instance() or QApplication([])
 
@@ -300,6 +300,58 @@ class SidebarTests(unittest.TestCase):
         self.sidebar._click_provider('codex')             # second click on the pinned tile unpins and closes
         self.assertIsNone(self.sidebar._active)
         self.assertFalse(self.sidebar._flyout.isVisible())
+
+    def test_tile_shows_an_alert_mark_from_ninety_percent(self):
+        button = self.sidebar.buttons['claude']
+        self.sidebar.update_metrics(UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric1_val=89,
+                                                 metric2_title='WEEKLY 7D', metric2_val=10))
+        self.assertFalse(button.alert)
+        self.sidebar.update_metrics(UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric1_val=90,
+                                                 metric2_title='WEEKLY 7D', metric2_val=10))
+        self.assertTrue(button.alert)
+        self.assertIn('90%', button.toolTip())
+        self.sidebar.update_metrics(UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric1_val=95,
+                                                 metric2_title='WEEKLY 7D', metric2_val=10, error='offline'))
+        self.assertFalse(button.alert)                       # offline tiles do not claim a level
+        self.sidebar.update_metrics(UsageMetrics(provider_id='agy', metric1_val=1, metric2_val=2,
+                                                 extra_metrics=[MetricRow('ARGON 7D', 93)]))
+        self.assertTrue(self.sidebar.buttons['agy'].alert)   # extra rows count too
+        pixmap = button.indicators.grab()                    # painting the mark must not raise
+        self.assertFalse(pixmap.isNull())
+
+    def test_tile_flashes_when_a_window_resets(self):
+        now = datetime.now(timezone.utc)
+        button = self.sidebar.buttons['codex']
+        def data(val, reset):
+            return UsageMetrics(provider_id='codex', metric1_title='WINDOW 5H', metric1_val=val, metric1_reset=reset,
+                                metric2_title='WINDOW 7D', metric2_val=5, metric2_reset=now + timedelta(days=5))
+        self.sidebar.update_metrics(data(80, now + timedelta(hours=1)))
+        self.assertEqual(button.flash, 0.0)
+        self.sidebar.update_metrics(data(82, now + timedelta(hours=1)))          # normal growth
+        self.assertEqual(button.flash, 0.0)
+        self.sidebar.update_metrics(data(3, now + timedelta(hours=5)))           # new window: lower use, later reset
+        self.assertEqual(button.flash, 1.0)
+        QTest.qWait(FLASH_MS + 400)
+        self.assertEqual(button.flash, 0.0)
+        self.sidebar.update_metrics(data(40, now + timedelta(hours=5, minutes=2)))   # tiny drift is not a reset
+        self.assertEqual(button.flash, 0.0)
+
+    def test_bar_and_number_always_share_one_colour(self):
+        for dark in (True, False):
+            for scheme in ('scale', 'duo'):
+                self.sidebar.set_appearance(dark, scheme)
+                for value in (0, 30, 60, 85, 95):
+                    self.sidebar.update_metrics(UsageMetrics(provider_id='codex', metric1_val=value, metric2_val=value))
+                    button = self.sidebar.buttons['codex']
+                    for index in (0, 1):
+                        shown = button.row_color(index)
+                        for state in ('background', 'hover', 'pressed'):
+                            self.assertGreaterEqual(button.contrast(shown, self.sidebar.tokens[state]), 3)
+                        raw = QColor(button.rows[index][2])
+                        adjusted = QColor(shown)
+                        hue_gap = abs(raw.hslHueF() - adjusted.hslHueF())
+                        if raw.name() != adjusted.name() and raw.hslSaturationF() > 0.1:
+                            self.assertLess(min(hue_gap, 1 - hue_gap), 0.04)   # same hue, only lightness moved
 
 
 if __name__=='__main__': unittest.main()

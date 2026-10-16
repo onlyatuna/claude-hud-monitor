@@ -7,8 +7,8 @@ and click activation. Motion honours the system accessibility preference.
 import math
 import re
 import sys
-from PySide6.QtCore import Qt, Signal, QSize, QRect, QRectF, QPoint, QTimer, QEvent, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPainter, QColor, QPen, QFont, QGuiApplication, QCursor
+from PySide6.QtCore import Qt, Signal, QSize, QRect, QRectF, QPoint, QPointF, QTimer, QEvent, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QGuiApplication, QCursor, QPolygonF
 from PySide6.QtWidgets import QWidget, QPushButton, QBoxLayout, QVBoxLayout, QFrame, QSizePolicy
 from core.pace import scale_level, short_window, reset_stamp
 from core.providers.base import BaseProvider
@@ -17,14 +17,17 @@ from ui.brand import BRAND, brand_color
 from ui.styles import THEMES, get_cards_stylesheet
 
 SIDEBAR_TOKENS = {
-    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', providers={k: v['dark'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
-    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', providers={k: v['light'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
+    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', alert='#dc2626', providers={k: v['dark'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
+    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', alert='#b91c1c', providers={k: v['light'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
 }
 BASE_BUTTON_W, BASE_BUTTON_H = 64, 64
 BASE_PANEL_W = 220
 _NAMES = {'claude':'Claude', 'agy':'AGY', 'codex':'Codex'}
 DEFAULT_ORDER = ('claude', 'agy', 'codex')
 HOLD_MS = 350
+ALERT_PCT = 90          # a row at or above this used % marks the tile
+FLASH_MS = 1800         # how long a tile glows after one of its windows reset
+FLASH_STEP_MS = 60
 
 
 def _row_label(title):
@@ -49,10 +52,26 @@ class _Indicators(QWidget):
         t, scale = button.owner.tokens, button.owner.scale()
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        right = self.width()
+        if button.alert:
+            # warning triangle with "!" -- readable without relying on colour
+            size = 11*scale
+            x, y = right-size-2*scale, 1.5*scale
+            triangle = QPolygonF([QPointF(x+size/2, y), QPointF(x+size, y+size*0.92), QPointF(x, y+size*0.92)])
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(t['alert']))
+            p.drawPolygon(triangle)
+            font = QFont(t['font'])
+            font.setBold(True)
+            font.setPixelSize(max(6, round(8*scale)))
+            p.setFont(font)
+            p.setPen(QColor('#ffffff'))
+            p.drawText(QRectF(x, y+size*0.28, size, size*0.64), Qt.AlignCenter, '!')
+            right -= size + 4*scale
         if button.stale:
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(t['stale']))
-            p.drawEllipse(QRectF(self.width()-10*scale,0*scale,6*scale,6*scale))
+            p.drawEllipse(QRectF(right-10*scale,0*scale,6*scale,6*scale))
         if button.kind == 'agy':
             count = len(button.dot_colors)
             for i, color in enumerate(button.dot_colors):
@@ -66,6 +85,8 @@ class _Button(QPushButton):
         super().__init__(owner)
         self.kind, self.owner = kind, owner
         self.stale, self.offline = False, False
+        self.alert = False
+        self.flash = 0.0
         self._press_pos, self._dragged = None, False
         self.dot_colors = [THEMES['dark']['neutral']] * 3
         self._reordering = False
@@ -165,6 +186,12 @@ class _Button(QPushButton):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(t['pressed'] if self.isDown() else t['hover'] if self.underMouse() else t['background']))
         p.drawRoundedRect(QRectF(self.rect()).adjusted(scale,scale,-scale,-scale), t['radius']*scale, t['radius']*scale)
+        if self.flash > 0 and self.kind in _NAMES:
+            glow = QColor(t['providers'][self.kind])
+            glow.setAlphaF(min(0.45, 0.45 * self.flash))
+            p.setPen(Qt.NoPen)
+            p.setBrush(glow)
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(scale,scale,-scale,-scale), t['radius']*scale, t['radius']*scale)
         if self.kind in _NAMES:
             # identity stripe: the service colour, never a usage colour
             p.setPen(Qt.NoPen)
@@ -199,7 +226,8 @@ class _Button(QPushButton):
             font.setPixelSize(max(8, round(12*scale)))
             font.setBold(True)
             p.setFont(font)
-            p.setPen(QColor(t['muted'] if self.offline else self.text_color(color)))
+            shown = self.row_color(index)
+            p.setPen(QColor(t['muted'] if self.offline else shown))
             p.drawText(QRectF(6*scale,y,52*scale,15*scale), Qt.AlignRight | Qt.AlignVCenter, self.display[index])
             track = QRectF(6*scale, y+15*scale, 52*scale, 4*scale)
             p.setPen(Qt.NoPen)
@@ -208,7 +236,7 @@ class _Button(QPushButton):
             if value is not None and not self.offline:
                 fill = QRectF(track)
                 fill.setWidth(track.width()*max(0,min(100,value))/100)
-                p.setBrush(QColor(color))
+                p.setBrush(QColor(shown))
                 p.drawRoundedRect(fill,2*scale,2*scale)
 
     @staticmethod
@@ -221,9 +249,24 @@ class _Button(QPushButton):
         return (b+0.05)/(a+0.05)
 
     def text_color(self, color):
+        """The row colour, nudged lighter (dark theme) or darker (light theme) only as far as needed to read on the
+        tile. The bar and the number share this one colour, so they can never disagree."""
         t = self.owner.tokens
         backgrounds = (t['background'], t['hover'], t['pressed'])
-        return color if all(self.contrast(color,bg) >= 3 for bg in backgrounds) else t['text']
+        if all(self.contrast(color,bg) >= 3 for bg in backgrounds):
+            return color
+        base = QColor(color)
+        hue, sat, light, _alpha = base.getHslF()
+        direction = 1 if self.owner.dark else -1
+        for _ in range(40):
+            light = min(1.0, max(0.0, light + 0.025*direction))
+            candidate = QColor.fromHslF(max(0.0, hue), sat, light).name()
+            if all(self.contrast(candidate,bg) >= 3 for bg in backgrounds):
+                return candidate
+        return t['text']
+
+    def row_color(self, index):
+        return self.text_color(self.rows[index][2])
 
 
 
@@ -262,6 +305,7 @@ class SidebarWidget(QWidget):
         self._metrics = {}
         self._active, self._pinned, self._hover_id = None, False, None
         self._pinned_key = None
+        self._row_state = {}
         self._wheel_remainder = 0
         self._order = list(DEFAULT_ORDER)
         self._card_styles = {}
@@ -529,9 +573,14 @@ class SidebarWidget(QWidget):
         button = self.buttons.get(data.provider_id)
         if button is None:
             return
+        previous = self._row_state.get(data.provider_id, {})
         self._metrics[data.provider_id] = data
         button.offline = bool(data.error and not data.stale)
         button.stale = bool(data.stale)
+        current = self._row_state[data.provider_id] = {
+            (title or '').upper(): (val, reset) for title, val, reset in self._row_values(data)}
+        if not button.offline and self._window_reset(previous, current):
+            self._flash(button)
         self._refresh_tile(data.provider_id)
         self._refresh_tooltip(data.provider_id)
         if self._state == 'panel':
@@ -548,8 +597,43 @@ class SidebarWidget(QWidget):
             button.display = ['OFF', '--']
         button.dot_colors = ([self._color(row.val, force_scale=True) for row in data.extra_metrics]
                              if button.kind == 'agy' else [])
+        button.alert = (not button.offline) and any(
+            val is not None and val >= ALERT_PCT for _t, val, _r in self._row_values(data))
         button.indicators.update()
         button.update()
+
+    @staticmethod
+    def _row_values(data):
+        rows = [(data.metric1_title, data.metric1_val, data.metric1_reset),
+                (data.metric2_title, data.metric2_val, data.metric2_reset)]
+        return rows + [(row.title, row.val, row.reset) for row in data.extra_metrics]
+
+    @staticmethod
+    def _window_reset(previous, current):
+        """True when any row moved to a later reset time with lower usage (its window rolled over)."""
+        for title, (val, reset) in current.items():
+            old = previous.get(title)
+            if not old or val is None or reset is None or old[0] is None or old[1] is None:
+                continue
+            if (reset - old[1]).total_seconds() > 600 and val < old[0]:
+                return True
+        return False
+
+    def _flash(self, button):
+        button.flash = 1.0
+        steps = max(1, FLASH_MS // FLASH_STEP_MS)
+        if not self._animations_enabled():
+            QTimer.singleShot(FLASH_MS, lambda: (setattr(button, 'flash', 0.0), button.update()))
+            button.update()
+            return
+
+        def tick():
+            button.flash = max(0.0, button.flash - 1.0 / steps)
+            button.update()
+            if button.flash > 0:
+                QTimer.singleShot(FLASH_STEP_MS, tick)
+        button.update()
+        QTimer.singleShot(FLASH_STEP_MS, tick)
 
     def _refresh_tooltip(self, key):
         button, data = self.buttons[key], self._metrics[key]
@@ -563,6 +647,8 @@ class SidebarWidget(QWidget):
             stamp = reset_stamp(reset, title)
             when = f'{stamp} · {BaseProvider.format_countdown(reset)}' if stamp else BaseProvider.format_countdown(reset)
             lines.append(f'{label} 已用 {text}，重設於 {when}')
+        if button.alert:
+            lines.append(f'! 接近上限（已用 ≥ {ALERT_PCT}%）')
         if data.error:
             lines.append(data.error)
         if data.stale:

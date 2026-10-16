@@ -42,6 +42,8 @@ DEF_VERT_W, DEF_VERT_H = 280, 410
 QWIDGETSIZE_MAX = 16777215
 SIDEBAR_SNAP_PX = 24
 RESIZE_GRIP_PX = 7
+IDLE_FADE_FACTOR = 0.6
+IDLE_FADE_DELAY_MS = 900
 
 if sys.platform == "win32":
     import ctypes
@@ -122,6 +124,9 @@ class HUDWindow(QWidget):
         self.sidebar.set_order(self.provider_order())
         self._resize = None
         self._grip_cursor = False
+        self._fade_timer = QTimer(self)
+        self._fade_timer.setSingleShot(True)
+        self._fade_timer.timeout.connect(self._apply_opacity)
         QApplication.instance().installEventFilter(self)
         self._docking = False
         self._snap_timer = QTimer(self)
@@ -386,6 +391,7 @@ class HUDWindow(QWidget):
         state = self.config.get("sidebar_state", "strip")
         self.inner_layout.addWidget(self.sidebar)
         self.sidebar.show()
+        self._fade_timer.start(1500)      # stay fully visible for a moment after the mode is chosen
         self.sidebar.set_scale(self._sidebar_scale())
         self.sidebar.set_orientation(self._sidebar_orientation())
         self.sidebar.set_dock_edge(self._sidebar_edge())
@@ -1067,7 +1073,30 @@ class HUDWindow(QWidget):
 
     def _set_opacity(self, value: float):
         self.config.set("opacity", value)
-        self.setWindowOpacity(value)
+        self._apply_opacity()
+
+    def _idle_fade_active(self) -> bool:
+        return (self.config.get("ui_mode") == "sidebar" and self.config.get("sidebar_idle_fade", True)
+                and not self.config.get("click_through", False) and not self.underMouse()
+                and self._resize is None and self.sidebar._active is None)
+
+    def _apply_opacity(self):
+        """Window opacity = the user's setting, dimmed while the sidebar is idle (no hover, no open detail page)."""
+        base = float(self.config.get("opacity", 0.88))
+        self.setWindowOpacity(base * IDLE_FADE_FACTOR if self._idle_fade_active() else base)
+
+    def toggle_idle_fade(self):
+        self.config.set("sidebar_idle_fade", not self.config.get("sidebar_idle_fade", True))
+        self._apply_opacity()
+
+    def enterEvent(self, event):
+        super().enterEvent(event)
+        self._fade_timer.stop()
+        self._apply_opacity()
+
+    def leaveEvent(self, event):
+        super().leaveEvent(event)
+        self._fade_timer.start(IDLE_FADE_DELAY_MS)
 
     def _set_interval(self, seconds: int):
         self.config.set("refresh_interval_sec", seconds)

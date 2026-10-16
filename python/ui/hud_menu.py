@@ -13,12 +13,12 @@ from core.logger import open_log_dir
 SIDEBAR_SCALES = (60, 80, 100, 125, 150, 200)
 OPACITIES = (100, 90, 80, 70, 50, 30)
 INTERVALS = (30, 60, 120, 300)
-UI_MODES = (("cards", "🗂️ 傳統卡片 (Classic Cards)"),
-            ("table", "📊 儀表表格 (Modern Table)"),
-            ("sidebar", "📌 側邊欄 (Sidebar)"))
+UI_MODES = (("cards", "傳統卡片 (Classic Cards)"),
+            ("table", "儀表表格 (Modern Table)"),
+            ("sidebar", "側邊欄 (Sidebar)"))
 SIDEBAR_FORMS = (("strip", "細條 (Strip)"), ("panel", "固定窄欄 (Panel)"))
-LAYOUTS = (("horizontal", "💻 橫向三欄並排 (Horizontal Triple)"),
-           ("vertical", "📱 直立三層堆疊 (Vertical Stack)"))
+LAYOUTS = (("horizontal", "橫向三欄並排 (Horizontal Triple)"),
+           ("vertical", "直立三層堆疊 (Vertical Stack)"))
 
 
 def _check(menu, label, checked, callback):
@@ -36,7 +36,7 @@ def _choices(menu, items, current, callback):
 
 def _build_interface(hud, menu):
     mode = hud.config.get("ui_mode", "cards")
-    sub = menu.addMenu("🎭 介面 (Interface)")
+    sub = menu.addMenu("介面 (Interface)")
     _choices(sub, UI_MODES, mode, hud._apply_ui_mode)
     if mode == "cards":
         sub.addSeparator()
@@ -46,7 +46,7 @@ def _build_interface(hud, menu):
         _choices(sub, SIDEBAR_FORMS, hud.config.get("sidebar_state", "strip"), hud.set_sidebar_state)
         sub.addSeparator()
         current = round(float(hud.config.get("sidebar_scale", 1.0)) * 100)
-        size_menu = sub.addMenu("🔎 大小 (Ctrl＋滾輪)")
+        size_menu = sub.addMenu("大小 (Ctrl＋滾輪)")
         for pct in SIDEBAR_SCALES:
             _check(size_menu, f"{pct}%", pct == current, lambda p=pct: hud.set_sidebar_scale(p / 100))
     sub.addSeparator()
@@ -56,14 +56,14 @@ def _build_interface(hud, menu):
 def _build_agy_rows(hud, menu):
     """Shows the current agy row order; the order itself is changed by dragging rows in the detail page."""
     order = hud.agy_order()
-    sub = menu.addMenu("🧭 AGY 項目順序 (Row order)")
+    sub = menu.addMenu("AGY 項目順序 (Row order)")
     hint = sub.addAction("在詳細頁面拖拉標題可調整，前兩條為主要顯示")
     hint.setEnabled(False)
     sub.addSeparator()
     for index, title in enumerate(order, start=1):
         sub.addAction(f"{index}. {title}").setEnabled(False)
     sub.addSeparator()
-    reset = sub.addAction("↺ 還原預設順序")
+    reset = sub.addAction("還原預設順序")
     reset.setEnabled(tuple(order) != tuple(AGY_DEFAULT_ORDER))
     reset.triggered.connect(hud.reset_agy_order)
 
@@ -72,27 +72,28 @@ def _build_appearance(hud, menu):
     mode = hud.config.get("ui_mode", "cards")
     from ui.hud_window import APPEARANCE_LABELS, SCHEME_LABELS
     from ui.styles import APPEARANCES, SCHEMES
-    sub = menu.addMenu("🌓 外觀 (Appearance)")
+    sub = menu.addMenu("外觀 (Appearance)")
     current = hud.config.get("appearance", "auto")
     for value in APPEARANCES:
         _check(sub, APPEARANCE_LABELS[value], value == current, lambda v=value: hud.set_appearance(v))
     if mode in ("table", "sidebar"):
         sub.addSeparator()
         for value in SCHEMES:
-            _check(sub, f"🎨 {SCHEME_LABELS[value]}", value == hud.color_scheme(), lambda v=value: hud.set_color_scheme(v))
+            _check(sub, f"{SCHEME_LABELS[value]}", value == hud.color_scheme(), lambda v=value: hud.set_color_scheme(v))
     sub.addSeparator()
     opacity = hud.config.get("opacity", 0.88)
-    opacity_menu = sub.addMenu("🪟 視窗透明度 (Opacity)")
+    opacity_menu = sub.addMenu("視窗透明度 (Opacity)")
     for pct in OPACITIES:
         _check(opacity_menu, f"{pct}%", abs(opacity - pct / 100.0) < 0.05, lambda p=pct: hud._set_opacity(p / 100.0))
 
 
 def _build_behaviour(hud, menu):
-    sub = menu.addMenu("⚙️ 行為 (Behaviour)")
-    _check(sub, "👻 滑鼠點擊穿透 (Alt+Shift+C)", hud.config.get("click_through", False), hud.toggle_click_through)
-    _check(sub, "📌 視窗永遠置頂 (Always on Top)", hud.config.get("always_on_top", True), hud._toggle_always_on_top)
-    _check(sub, "🔒 鎖定視窗位置 (Lock Drag)", hud.config.get("locked", False), hud._toggle_lock)
-    _check(sub, "🚀 開機自動啟動 (Start on Boot)", is_autostart_enabled(), hud._toggle_autostart)
+    sub = menu.addMenu("行為 (Behaviour)")
+    _check(sub, "滑鼠點擊穿透 (Alt+Shift+C)", hud.config.get("click_through", False), hud.toggle_click_through)
+    _check(sub, "視窗永遠置頂 (Always on Top)", hud.config.get("always_on_top", True), hud._toggle_always_on_top)
+    _check(sub, "鎖定視窗位置 (Lock Drag)", hud.config.get("locked", False), hud._toggle_lock)
+    _check(sub, "閒置時淡化 (Idle fade)", hud.config.get("sidebar_idle_fade", True), hud.toggle_idle_fade)
+    _check(sub, "開機自動啟動 (Start on Boot)", is_autostart_enabled(), hud._toggle_autostart)
     sub.addSeparator()
     interval_menu = sub.addMenu("⏱️ 更新頻率 (Interval)")
     current = hud.config.get("refresh_interval_sec", 60)
@@ -102,13 +103,13 @@ def _build_behaviour(hud, menu):
 
 def _build_claude_accounts(hud, menu):
     from core.providers.claude_provider import discover_profiles, resolve_active_profile
-    sub = menu.addMenu("✳️ Claude 帳號 (Claude Account)")
+    sub = menu.addMenu("Claude 帳號 (Claude Account)")
     current = hud.config.get("claude_profile", "auto")
     is_auto = current == "auto"
     active, _ = resolve_active_profile(current)
     title = (f"智慧自動追蹤 (目前: {active.short_name})" if is_auto and active.id != "default"
              else "智慧自動追蹤 (最近活躍)")
-    _check(sub, f"🎯 {title}", is_auto, lambda: hud._set_claude_profile("auto"))
+    _check(sub, f"{title}", is_auto, lambda: hud._set_claude_profile("auto"))
     sub.addSeparator()
     for profile in discover_profiles()[:40]:
         selected = not is_auto and (current == profile.id or (current == ".claude" and profile.id == "default"))
@@ -116,12 +117,12 @@ def _build_claude_accounts(hud, menu):
 
 
 def _build_more(hud, menu):
-    sub = menu.addMenu("⋯ 更多 (More)")
+    sub = menu.addMenu("更多 (More)")
     _build_claude_accounts(hud, sub)
     sub.addSeparator()
-    sub.addAction("📂 開啟記錄檔目錄 (Open Logs)").triggered.connect(open_log_dir)
-    sub.addAction("📐 重設預設尺寸與位置").triggered.connect(hud._reset_geometry)
-    sub.addAction("👁️ 隱藏 HUD (Alt+C 重新喚出)").triggered.connect(hud.hide)
+    sub.addAction("開啟記錄檔目錄 (Open Logs)").triggered.connect(open_log_dir)
+    sub.addAction("重設預設尺寸與位置").triggered.connect(hud._reset_geometry)
+    sub.addAction("隱藏 HUD (Alt+C 重新喚出)").triggered.connect(hud.hide)
 
 
 def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
@@ -130,8 +131,8 @@ def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
     if menu is None:
         menu = QMenu(parent if parent is not None else hud)
     if tray:
-        menu.addAction("👁️ 顯示 / 隱藏 HUD (Alt+C)").triggered.connect(hud.toggle_visibility)
-    menu.addAction("🔄 立即重新整理所有 AI (Refresh All)").triggered.connect(hud.trigger_async_refresh)
+        menu.addAction("顯示 / 隱藏 HUD (Alt+C)").triggered.connect(hud.toggle_visibility)
+    menu.addAction("立即重新整理所有 AI (Refresh All)").triggered.connect(hud.trigger_async_refresh)
     menu.addSeparator()
     _build_interface(hud, menu)
     _build_appearance(hud, menu)
@@ -139,5 +140,5 @@ def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
     if not tray:
         _build_more(hud, menu)
     menu.addSeparator()
-    menu.addAction("❌ 結束程式 (Exit)").triggered.connect(hud.close_application)
+    menu.addAction("結束程式 (Exit)").triggered.connect(hud.close_application)
     return menu

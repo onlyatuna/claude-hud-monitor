@@ -585,3 +585,71 @@ class HudTests(unittest.TestCase):
                 self.assertIn('週', card.m2_sub.text())
             finally:
                 self._close(hud)
+
+    def test_sidebar_dims_when_idle_and_recovers_on_hover(self):
+        from unittest.mock import PropertyMock
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', opacity=0.9)
+            try:
+                hud._fade_timer.stop()
+                with patch.object(type(hud), 'underMouse', lambda self: False):
+                    hud._apply_opacity()
+                    self.assertAlmostEqual(hud.windowOpacity(), 0.9 * 0.6, delta=0.02)
+                with patch.object(type(hud), 'underMouse', lambda self: True):
+                    hud._apply_opacity()
+                    self.assertAlmostEqual(hud.windowOpacity(), 0.9, delta=0.02)
+                with patch.object(type(hud), 'underMouse', lambda self: False):
+                    hud.toggle_idle_fade()                       # setting off: never dims
+                    self.assertAlmostEqual(hud.windowOpacity(), 0.9, delta=0.02)
+                    hud.toggle_idle_fade()
+                    config.set('click_through', True)            # click-through cannot be hovered: no dimming
+                    hud._apply_opacity()
+                    self.assertAlmostEqual(hud.windowOpacity(), 0.9, delta=0.02)
+                    config.set('click_through', False)
+                    hud.sidebar._active = 'claude'               # a detail page is open: stay opaque
+                    hud._apply_opacity()
+                    self.assertAlmostEqual(hud.windowOpacity(), 0.9, delta=0.02)
+                    hud.sidebar._active = None
+            finally:
+                self._close(hud)
+
+    def test_cards_mode_never_dims(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='cards', opacity=0.9)
+            try:
+                with patch.object(type(hud), 'underMouse', lambda self: False):
+                    hud._apply_opacity()
+                    self.assertAlmostEqual(hud.windowOpacity(), 0.9, delta=0.02)
+            finally:
+                self._close(hud)
+
+    def test_menu_labels_are_plain_text(self):
+        import re
+        from PySide6.QtWidgets import QMenu
+        captured = []
+
+        class RecordingMenu(QMenu):
+            def exec(self, *args):
+                captured.append(self)
+
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                patch('ui.hud_menu.QMenu', RecordingMenu):
+            _, hud = self._hud(directory, ui_mode='sidebar')
+            try:
+                from PySide6.QtGui import QContextMenuEvent
+                from PySide6.QtCore import QPoint
+                hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
+                emoji = re.compile('[\U0001F300-\U0001FAFF\u2190-\u21FF\u2600-\u27BF\u2B00-\u2BFF]')
+
+                def texts(menu):
+                    for action in menu.actions():
+                        yield action.text()
+                        if action.menu():
+                            yield from texts(action.menu())
+                labels = list(texts(captured[0]))
+                self.assertTrue(labels)
+                self.assertFalse([t for t in labels if emoji.search(t)])
+                behaviour = next(a.menu() for a in captured[0].actions() if a.menu() and 'Behaviour' in a.text())
+                self.assertTrue(any('Idle fade' in a.text() for a in behaviour.actions()))
+            finally:
+                self._close(hud)
