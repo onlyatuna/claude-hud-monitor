@@ -291,3 +291,44 @@ class HudTests(unittest.TestCase):
                 self.assertIsNone(hud._calc_edge(QPoint(0, 0)))
             finally:
                 self._close(hud)
+
+    def test_cards_window_grows_for_agy_extra_bars(self):
+        from datetime import timedelta
+        from core.providers.base import MetricRow
+        for layout in ('horizontal', 'vertical'):
+            with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+                _, hud = self._hud(directory, ui_mode='cards', layout_mode=layout)
+                try:
+                    hud.show()
+                    before = hud.height()
+                    reset = datetime.now(timezone.utc) + timedelta(hours=3)
+                    hud._on_data_fetched(UsageMetrics(
+                        provider_id='agy', metric1_val=1, metric1_text='1%', metric2_val=2, metric2_text='2%',
+                        extra_metrics=[MetricRow('C/G 5H', 3, '3%', reset), MetricRow('C/G 7D', 4, '4%', reset),
+                                       MetricRow('ARGON 7D', 5, '5%', reset)]))
+                    QApplication.processEvents()
+                    card = hud.cards['agy']
+                    self.assertGreaterEqual(hud.height(), before)
+                    self.assertGreaterEqual(card.height(), card.minimumSizeHint().height())
+                    self.assertGreaterEqual(hud.minimumHeight(), card.minimumSizeHint().height())
+                finally:
+                    self._close(hud)
+
+    def test_context_menu_lists_sidebar_mode(self):
+        from PySide6.QtWidgets import QMenu
+        captured = []
+
+        class RecordingMenu(QMenu):
+            def exec(self, *args):
+                captured.append(self)
+
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}),                 patch('ui.hud_window.QMenu', RecordingMenu):
+            _, hud = self._hud(directory, ui_mode='cards')
+            try:
+                from PySide6.QtGui import QContextMenuEvent
+                from PySide6.QtCore import QPoint
+                hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
+                style = next(a.menu() for a in captured[0].actions() if a.menu() and 'UI Style' in a.text())
+                self.assertTrue(any('Sidebar' in a.text() for a in style.actions()))
+            finally:
+                self._close(hud)

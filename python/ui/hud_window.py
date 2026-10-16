@@ -405,6 +405,18 @@ class HUDWindow(QWidget):
         pos = button.mapToGlobal(QPoint(0, button.height()))
         self.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, self.mapFromGlobal(pos), pos))
 
+    def _fit_cards_height(self):
+        """Grow the window when the cards need more room than the saved size (agy shows five bars)."""
+        if self.config.get("ui_mode", "cards") != "cards":
+            return
+        mode = self.config.get("layout_mode", "horizontal")
+        base_h = MIN_HORIZ_H if mode == "horizontal" else MIN_VERT_H
+        self.root_layout.activate()
+        needed = max(base_h, self.root_layout.totalMinimumSize().height())
+        self.setMinimumHeight(needed)
+        if self.height() < needed:
+            self.resize(self.width(), needed)
+
     def _apply_cards_layout(self, mode: str) -> tuple[int, int]:
         self._clear_layout(self.cards_layout)
         provider_ids = ["claude", "agy", "codex"]
@@ -534,6 +546,8 @@ class HUDWindow(QWidget):
         self._latest_metrics[metrics.provider_id] = metrics
         if metrics.provider_id in self.cards:
             self.cards[metrics.provider_id].update_metrics(metrics)
+        if metrics.provider_id in self.cards:
+            self._fit_cards_height()
         if metrics.provider_id in self.sidebar_cards:
             self.sidebar_cards[metrics.provider_id].update_metrics(metrics)
         self.sidebar.update_metrics(metrics)
@@ -834,7 +848,20 @@ class HUDWindow(QWidget):
         table_act.setChecked(cur_ui_mode == "table")
         table_act.triggered.connect(lambda: self._apply_ui_mode("table"))
 
+        sidebar_act = ui_mode_menu.addAction("📌 側邊欄 (Sidebar)")
+        sidebar_act.setCheckable(True)
+        sidebar_act.setChecked(cur_ui_mode == "sidebar")
+        sidebar_act.triggered.connect(lambda: self._apply_ui_mode("sidebar"))
+
         # Context-specific options
+        if cur_ui_mode == "sidebar":
+            state_menu = menu.addMenu("📏 側邊欄形態 (Sidebar Form)")
+            cur_state = self.config.get("sidebar_state", "strip")
+            for key, label in (("strip", "細條 (Strip)"), ("panel", "固定窄欄 (Panel)")):
+                act = state_menu.addAction(label)
+                act.setCheckable(True)
+                act.setChecked(cur_state == key)
+                act.triggered.connect(lambda checked=False, k=key: self.set_sidebar_state(k))
         if cur_ui_mode == "cards":
             layout_menu = menu.addMenu("📐 顯示佈局 (Layout)")
             cur_layout = self.config.get("layout_mode", "horizontal")
@@ -957,6 +984,10 @@ class HUDWindow(QWidget):
 
     def _reset_geometry(self):
         ui_mode = self.config.get("ui_mode", "cards")
+        if ui_mode == "sidebar":
+            self.config.set("sidebar_bottom_offset", SIDEBAR_BOTTOM_OFFSET)
+            self._dock_sidebar()
+            return
         if ui_mode == "table":
             w, h = DEF_TABLE_W, DEF_TABLE_H
         else:
