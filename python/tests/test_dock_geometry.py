@@ -16,6 +16,7 @@ from ui.dock_geometry import (
     pick_work_area,
     scale_size,
     snap_rect,
+    snap_rect_corner,
     step_scale,
 )
 
@@ -261,6 +262,40 @@ class TestDockGeometry(unittest.TestCase):
         # scale_size
         self.assertEqual(scale_size(64, 68, 1.5), (96, 102))
         self.assertEqual(scale_size(64, 68, 0.1), (38, 41))
+
+class TestSnapCorner(unittest.TestCase):
+    WA = (0, 0, 1920, 1040)
+
+    def test_vertical_bar_in_bottom_right_corner_stays_vertical(self):
+        rect, edge, offset = snap_rect_corner((1850, 790, 64, 240), self.WA, 24, prefer="vertical")
+        self.assertEqual((edge, offset), ("right", "end"))
+        self.assertEqual(rect, (1856, 800, 64, 240))
+
+    def test_horizontal_bar_in_bottom_right_corner_stays_horizontal(self):
+        rect, edge, offset = snap_rect_corner((1700, 975, 240, 64), self.WA, 24, prefer="horizontal")
+        self.assertEqual((edge, offset), ("bottom", "end"))
+        self.assertEqual(rect, (1680, 976, 240, 64))
+
+    def test_without_preference_nearest_edge_wins(self):
+        _, edge, _ = snap_rect_corner((1850, 790, 64, 240), self.WA, 24)
+        self.assertEqual(edge, "right")      # right 6 px away, bottom 10 px away
+        _, edge, _ = snap_rect_corner((1840, 800, 64, 240), self.WA, 24)
+        self.assertEqual(edge, "bottom")     # right 16 px, bottom 0 px
+
+    def test_top_corners_and_plain_edge_offset(self):
+        rect, edge, offset = snap_rect_corner((1850, 6, 64, 240), self.WA, 24, prefer="vertical")
+        self.assertEqual((rect, edge, offset), ((1856, 0, 64, 240), "right", 0))
+        rect, edge, offset = snap_rect_corner((1850, 300, 64, 240), self.WA, 24, prefer="vertical")
+        self.assertEqual((rect, edge, offset), ((1856, 300, 64, 240), "right", 300))
+
+    def test_nothing_near_returns_none(self):
+        rect, edge, offset = snap_rect_corner((800, 400, 64, 240), self.WA, 24, prefer="vertical")
+        self.assertEqual((edge, offset), (None, None))
+        self.assertEqual(rect, (800, 400, 64, 240))
+
+    def test_dock_to_edge_accepts_end(self):
+        self.assertEqual(dock_to_edge(self.WA, "right", 64, 240, "end"), (1856, 800, 64, 240))
+        self.assertEqual(dock_to_edge(self.WA, "bottom", 240, 64, "end"), (1680, 976, 240, 64))
 
 
 if __name__ == "__main__":

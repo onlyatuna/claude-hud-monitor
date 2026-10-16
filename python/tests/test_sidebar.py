@@ -283,4 +283,20 @@ class SidebarTests(unittest.TestCase):
         self.sidebar._finish_reorder()
         self.assertEqual(seen, [self.sidebar.order()])
 
+    def test_click_pins_then_second_click_on_same_tile_unpins(self):
+        self.sidebar._click_provider('claude')
+        self.assertEqual(self.sidebar._active, 'claude')
+        self.assertTrue(self.sidebar._pinned)
+        self.sidebar._hover('codex')                      # hover while pinned switches the content
+        self.assertEqual(self.sidebar._active, 'codex')
+        self.assertTrue(self.sidebar._pinned)
+        self.sidebar._click_provider('codex')             # clicking what is already showing must not close it
+        self.assertEqual(self.sidebar._active, 'codex')
+        self.assertTrue(self.sidebar._flyout.isVisible())
+        self.assertEqual(self.sidebar._pinned_key, 'codex')
+        self.sidebar._click_provider('codex')             # second click on the pinned tile unpins and closes
+        self.assertIsNone(self.sidebar._active)
+        self.assertFalse(self.sidebar._flyout.isVisible())
+
+
 if __name__=='__main__': unittest.main()

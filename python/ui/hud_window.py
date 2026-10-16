@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 
 from core.providers import PROVIDERS, UsageMetrics
-from core.agy_rows import arrange_agy, normalize_primary, toggle_primary
+from core.agy_rows import arrange_agy, normalize_order, DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.config_manager import ConfigManager
 from core.refresh_controller import RefreshController
 from core.autostart import is_autostart_enabled, set_autostart
@@ -22,7 +22,7 @@ from ui.provider_card import ProviderCardWidget
 from ui.usage_table import UsageTable
 from ui.sidebar import SidebarWidget, DEFAULT_ORDER
 from ui.dock_geometry import (EDGES, dock_to_edge, offset_along_edge, orientation_for_edge, pick_work_area,
-                              snap_rect, step_scale, clamp_scale)
+                              snap_rect, snap_rect_corner, step_scale, clamp_scale)
 from ui.hud_menu import build_hud_menu
 from ui import vibrancy
 from system.memory import trim_memory
@@ -116,6 +116,8 @@ class HUDWindow(QWidget):
         self.sidebar.scaleStepRequested.connect(self._on_sidebar_scale_step)
         self.sidebar.dragRequested.connect(self._start_sidebar_drag)
         self.sidebar.orderChanged.connect(self.set_provider_order)
+        for card in (self.cards["agy"], self.sidebar_cards["agy"]):
+            card.rowOrderChanged.connect(self.set_agy_order)
         self.sidebar.set_order(self.provider_order())
         self._resize = None
         self._grip_cursor = False
@@ -419,7 +421,8 @@ class HUDWindow(QWidget):
         edge = self._sidebar_edge()
         if edge is not None:
             offset = self.config.get("sidebar_offset")
-            rect = dock_to_edge(work, edge, size.width(), size.height(), offset if isinstance(offset, int) else None)
+            rect = dock_to_edge(work, edge, size.width(), size.height(),
+                                offset if isinstance(offset, int) or offset == "end" else None)
         else:
             x, y = self.config.get("sidebar_x"), self.config.get("sidebar_y")
             if not isinstance(x, int) or not isinstance(y, int):
@@ -443,11 +446,13 @@ class HUDWindow(QWidget):
         if work is None:
             return
         g = self.geometry()
-        rect, edge = snap_rect((g.x(), g.y(), g.width(), g.height()), work, SIDEBAR_SNAP_PX)
-        orientation = orientation_for_edge(edge, self.config.get("sidebar_orientation", "vertical"))
+        current = self.config.get("sidebar_orientation", "vertical")
+        # near a corner the bar keeps its orientation and sticks to the corner instead of turning sideways
+        rect, edge, offset = snap_rect_corner((g.x(), g.y(), g.width(), g.height()), work, SIDEBAR_SNAP_PX, prefer=current)
+        orientation = orientation_for_edge(edge, current)
         updates = {"sidebar_edge": edge or "none", "sidebar_orientation": orientation}
         if edge is not None:
-            updates["sidebar_offset"] = offset_along_edge(rect, work, edge)
+            updates["sidebar_offset"] = offset
         else:
             updates["sidebar_x"], updates["sidebar_y"] = rect[0], rect[1]
         self.config.set_many(updates)
@@ -745,14 +750,20 @@ class HUDWindow(QWidget):
         elif mode == "cards":
             self._apply_ui_mode("cards")
 
-    def set_agy_primary(self, titles):
-        self.config.set("agy_primary", list(normalize_primary(titles)))
+    def agy_order(self) -> tuple:
+        return normalize_order(self.config.get("agy_order", self.config.get("agy_primary")))
+
+    def set_agy_order(self, titles):
+        order = normalize_order(titles)
+        if order == self.agy_order():
+            return
+        self.config.set("agy_order", list(order))
         raw = self._raw_metrics.get("agy")
         if raw is not None:
             self._publish(self._arranged(raw))
 
-    def toggle_agy_row(self, title: str):
-        self.set_agy_primary(toggle_primary(self.config.get("agy_primary"), title))
+    def reset_agy_order(self):
+        self.set_agy_order(AGY_DEFAULT_ORDER)
 
     def _on_data_fetched(self, metrics: UsageMetrics):
         self._raw_metrics[metrics.provider_id] = metrics
@@ -760,7 +771,7 @@ class HUDWindow(QWidget):
 
     def _arranged(self, metrics: UsageMetrics) -> UsageMetrics:
         if metrics.provider_id == "agy":
-            return arrange_agy(metrics, normalize_primary(self.config.get("agy_primary")))
+            return arrange_agy(metrics, self.agy_order())
         return metrics
 
     def _publish(self, metrics: UsageMetrics):

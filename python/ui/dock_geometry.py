@@ -93,6 +93,57 @@ def snap_rect(rect: Rect, work_area: Rect, threshold: int = 24) -> tuple[Rect, "
     return ((x, y, w, h), best_edge)
 
 
+def snap_rect_corner(rect: Rect, work_area: Rect, threshold: int = 24, prefer: "str | None" = None):
+    """Like snap_rect, but corner-aware (for a bar that must keep its orientation near a corner).
+    - when candidate edges of both axes qualify (a corner) and `prefer` is "vertical" / "horizontal", only the
+      preferred axis' edges are used (vertical -> left/right, horizontal -> top/bottom)
+    - along the chosen edge the bar also sticks flush to either end when within `threshold`
+    Returns (rect, edge | None, offset) where offset is "end" (flush to the far end), otherwise the distance
+    from the start of the edge (0 = flush to the start); None when nothing snapped."""
+    snapped, edge = snap_rect(rect, work_area, threshold)
+    rx, ry, rw, rh = rect
+    wx, wy, ww, wh = work_area
+    distances = (
+        ("left", rx - wx),
+        ("right", (wx + ww) - (rx + rw)),
+        ("top", ry - wy),
+        ("bottom", (wy + wh) - (ry + rh)),
+    )
+    candidates = [(e, d) for e, d in distances if d <= threshold]
+    if not candidates:
+        return (snapped, None, None)
+    if prefer in ("vertical", "horizontal"):
+        axis = ("left", "right") if prefer == "vertical" else ("top", "bottom")
+        preferred = [(e, d) for e, d in candidates if e in axis]
+        if preferred:
+            candidates = preferred
+    edge = min(candidates, key=lambda item: item[1])[0]
+    x, y, w, h = snapped
+    if edge in ("left", "right"):
+        x = wx if edge == "left" else wx + ww - w
+        near_end = (wy + wh) - (ry + rh) <= threshold
+        near_start = ry - wy <= threshold
+        y = _clamp(ry, wy, wy + wh - h)
+        if near_end and ((wy + wh) - (ry + rh) <= ry - wy or not near_start):
+            y, offset = wy + wh - h, "end"
+        elif near_start:
+            y, offset = wy, 0
+        else:
+            offset = y - wy
+    else:
+        y = wy if edge == "top" else wy + wh - h
+        near_end = (wx + ww) - (rx + rw) <= threshold
+        near_start = rx - wx <= threshold
+        x = _clamp(rx, wx, wx + ww - w)
+        if near_end and ((wx + ww) - (rx + rw) <= rx - wx or not near_start):
+            x, offset = wx + ww - w, "end"
+        elif near_start:
+            x, offset = wx, 0
+        else:
+            offset = x - wx
+    return ((x, y, w, h), edge, offset)
+
+
 def orientation_for_edge(edge: "str | None", current: str = "vertical") -> str:
     """left/right -> "vertical"；top/bottom -> "horizontal"；None（或不認得的值）-> current。"""
     if edge in ("left", "right"):
@@ -104,7 +155,7 @@ def orientation_for_edge(edge: "str | None", current: str = "vertical") -> str:
 
 def dock_to_edge(work_area: Rect, edge: str, width: int, height: int, offset: "int | None" = None, margin: int = 12) -> Rect:
     """依邊產生貼齊矩形。offset 是沿著該邊、從起點算起的距離（left/right 邊從工作區上緣算起；top/bottom 邊從工作區左緣算起）。
-    offset 為 None 時採預設：left/right 邊貼底（下緣離工作區下緣 margin）、top/bottom 邊貼右（右緣離工作區右緣 margin）。
+    offset 為 "end" 時貼齊該邊的終點（下／右，邊距 0，也就是角落）；offset 為 None 時採預設：left/right 邊貼底（下緣離工作區下緣 margin）、top/bottom 邊貼右（右緣離工作區右緣 margin）。
     width、height 先夾在 [1, 工作區對應邊長]；offset 夾在 [0, 邊長 - 矩形長]；結果必定完全落在工作區內。edge 不合法 raise ValueError。"""
     if edge not in EDGES:
         raise ValueError(f"Invalid edge: {edge!r}")
@@ -112,12 +163,12 @@ def dock_to_edge(work_area: Rect, edge: str, width: int, height: int, offset: "i
     w = _clamp(width, 1, ww)
     h = _clamp(height, 1, wh)
     if edge in ("left", "right"):
-        raw_offset = (wh - h - margin) if offset is None else offset
+        raw_offset = (wh - h - margin) if offset is None else (wh - h if offset == "end" else offset)
         clamped_offset = _clamp(raw_offset, 0, wh - h)
         x = wx if edge == "left" else wx + ww - w
         y = wy + clamped_offset
     else:
-        raw_offset = (ww - w - margin) if offset is None else offset
+        raw_offset = (ww - w - margin) if offset is None else (ww - w if offset == "end" else offset)
         clamped_offset = _clamp(raw_offset, 0, ww - w)
         x = wx + clamped_offset
         y = wy if edge == "top" else wy + wh - h

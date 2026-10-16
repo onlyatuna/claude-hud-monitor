@@ -394,10 +394,13 @@ class HudTests(unittest.TestCase):
                 card = hud.cards['agy']
                 self.assertEqual((card.m1_label.text(), card.m1_val.text()), ('C/G 5H', '3%'))
                 self.assertEqual((card.m2_label.text(), card.m2_val.text()), ('ARGON 7D', '21%'))
-                hud.toggle_agy_row('GEMINI 5H')
-                self.assertEqual(card.m1_label.text(), 'ARGON 7D')
-                self.assertEqual(card.m2_label.text(), 'GEMINI 5H')
-                self.assertEqual(ConfigManager(config.path).get('agy_primary'), ['ARGON 7D', 'GEMINI 5H'])
+                hud.set_agy_order(['GEMINI 5H', 'ARGON 7D', 'C/G 5H', 'C/G 7D', 'GEMINI 7D'])
+                self.assertEqual(card.m1_label.text(), 'GEMINI 5H')
+                self.assertEqual(card.m2_label.text(), 'ARGON 7D')
+                self.assertEqual(ConfigManager(config.path).get('agy_order'),
+                                 ['GEMINI 5H', 'ARGON 7D', 'C/G 5H', 'C/G 7D', 'GEMINI 7D'])
+                hud.reset_agy_order()
+                self.assertEqual(card.m1_label.text(), 'C/G 5H')
             finally:
                 self._close(hud)
 
@@ -454,8 +457,75 @@ class HudTests(unittest.TestCase):
                 from PySide6.QtCore import QPoint
                 hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
                 interface = next(a.menu() for a in captured[0].actions() if a.menu() and 'Interface' in a.text())
-                rows = next(a.menu() for a in interface.actions() if a.menu() and 'Main rows' in a.text())
-                self.assertEqual(len(rows.actions()), 5)
-                self.assertEqual(sum(a.isChecked() for a in rows.actions()), 2)
+                rows = next(a.menu() for a in interface.actions() if a.menu() and 'Row order' in a.text())
+                texts = [a.text() for a in rows.actions() if not a.isSeparator()]
+                self.assertTrue(any(t.startswith('1. C/G 5H') for t in texts))
+                self.assertTrue(any(t.startswith('5. ') for t in texts))
+            finally:
+                self._close(hud)
+
+    def test_sidebar_sticks_to_the_corner_without_turning_sideways(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar')
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                hud._docking = True
+                hud.move(work.right() - hud.width() - 3, work.bottom() - hud.height() - 8)
+                hud._docking = False
+                hud._finish_sidebar_move()
+                self.assertEqual(config.get('sidebar_edge'), 'right')
+                self.assertEqual(config.get('sidebar_orientation'), 'vertical')
+                self.assertEqual(config.get('sidebar_offset'), 'end')
+                self.assertEqual(hud.geometry().right() + 1, work.x() + work.width())
+                self.assertEqual(hud.geometry().bottom() + 1, work.y() + work.height())
+                # the same corner for a horizontal bar
+                config.set_many({'sidebar_edge': 'bottom', 'sidebar_orientation': 'horizontal', 'sidebar_offset': None})
+                hud.sidebar.set_orientation('horizontal')
+                hud._dock_sidebar()
+                hud._docking = True
+                hud.move(work.right() - hud.width() - 5, work.bottom() - hud.height() - 4)
+                hud._docking = False
+                hud._finish_sidebar_move()
+                self.assertEqual(config.get('sidebar_edge'), 'bottom')
+                self.assertEqual(config.get('sidebar_orientation'), 'horizontal')
+                self.assertEqual(config.get('sidebar_offset'), 'end')
+                self.assertEqual(hud.geometry().right() + 1, work.x() + work.width())
+            finally:
+                self._close(hud)
+
+    def test_dragging_a_row_title_in_the_agy_card_reorders_and_republishes(self):
+        from datetime import timedelta
+        from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+        from core.providers.base import MetricRow
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='cards', layout_mode='vertical')
+            try:
+                hud.show()
+                reset = datetime.now(timezone.utc) + timedelta(hours=3)
+                hud._on_data_fetched(UsageMetrics(
+                    provider_id='agy', metric1_title='GEMINI 5H', metric1_val=0, metric1_text='0%',
+                    metric2_title='GEMINI 7D', metric2_val=1, metric2_text='1%',
+                    extra_metrics=[MetricRow('C/G 5H', 3, '3%', reset), MetricRow('C/G 7D', 15, '15%', reset),
+                                   MetricRow('ARGON 7D', 21, '21%', reset)]))
+                APP.processEvents()
+                card = hud.cards['agy']
+                rows = card._drag_rows()
+                self.assertEqual([t for t, _r, _l in rows], ['C/G 5H', 'ARGON 7D', 'GEMINI 5H', 'GEMINI 7D', 'C/G 7D'])
+                label = rows[4][2]                                   # drag the last row (C/G 7D) ...
+                start = label.mapToGlobal(QPoint(3, 3))
+                top_y = card.mapToGlobal(QPoint(0, rows[0][1].top() + 1)).y()   # ... above the first row
+                press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(3, 3), QPointF(start), Qt.MouseButton.LeftButton,
+                                    Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+                self.assertTrue(card.eventFilter(label, press))
+                move = QMouseEvent(QEvent.Type.MouseMove, QPointF(3, 3), QPointF(start.x(), top_y), Qt.MouseButton.NoButton,
+                                   Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+                card.eventFilter(label, move)
+                release = QMouseEvent(QEvent.Type.MouseButtonRelease, QPointF(3, 3), QPointF(start.x(), top_y),
+                                      Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
+                card.eventFilter(label, release)
+                self.assertEqual(ConfigManager(config.path).get('agy_order')[:2], ['C/G 7D', 'C/G 5H'])
+                self.assertEqual(card.m1_label.text(), 'C/G 7D')
             finally:
                 self._close(hud)

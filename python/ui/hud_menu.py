@@ -6,7 +6,7 @@ A setting appears exactly once. The menu is rebuilt each time it is shown, so ch
 
 from PySide6.QtWidgets import QMenu
 
-from core.agy_rows import AGY_ROW_TITLES, normalize_primary
+from core.agy_rows import DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.autostart import is_autostart_enabled
 from core.logger import open_log_dir
 
@@ -54,11 +54,18 @@ def _build_interface(hud, menu):
 
 
 def _build_agy_rows(hud, menu):
-    first, second = normalize_primary(hud.config.get("agy_primary"))
-    sub = menu.addMenu("🧭 AGY 主要兩條 (Main rows)")
-    for title in AGY_ROW_TITLES:
-        mark = " ①" if title == first else (" ②" if title == second else "")
-        _check(sub, f"{title}{mark}", title in (first, second), lambda t=title: hud.toggle_agy_row(t))
+    """Shows the current agy row order; the order itself is changed by dragging rows in the detail page."""
+    order = hud.agy_order()
+    sub = menu.addMenu("🧭 AGY 項目順序 (Row order)")
+    hint = sub.addAction("在詳細頁面拖拉標題可調整，前兩條為主要顯示")
+    hint.setEnabled(False)
+    sub.addSeparator()
+    for index, title in enumerate(order, start=1):
+        sub.addAction(f"{index}. {title}").setEnabled(False)
+    sub.addSeparator()
+    reset = sub.addAction("↺ 還原預設順序")
+    reset.setEnabled(tuple(order) != tuple(AGY_DEFAULT_ORDER))
+    reset.triggered.connect(hud.reset_agy_order)
 
 
 def _build_appearance(hud, menu):

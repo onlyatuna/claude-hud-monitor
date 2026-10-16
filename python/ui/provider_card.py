@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QRect
 
 from core.providers.base import UsageMetrics, BaseProvider
 from ui.styles import get_progress_color
@@ -13,6 +13,8 @@ PROVIDER_THEMES = {
 }
 
 class ProviderCardWidget(QWidget):
+    rowOrderChanged = Signal(list)   # agy only: new order of the five row titles after a drag
+
     def __init__(self, provider_id: str, parent=None):
         super().__init__(parent)
         self.provider_id = provider_id
@@ -20,6 +22,10 @@ class ProviderCardWidget(QWidget):
         self.theme = PROVIDER_THEMES.get(provider_id, {"color": "#38bdf8", "name": provider_id.upper()})
         self.current_metrics = UsageMetrics(provider_id=provider_id)
         self._init_ui()
+        self._row_drag = None
+        self._drop_line = None
+        for label in (self.m1_label, self.m2_label):
+            label.installEventFilter(self)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -124,6 +130,7 @@ class ProviderCardWidget(QWidget):
         header.setSpacing(1)
         title = QLabel()
         title.setObjectName("MetricTitle")
+        title.installEventFilter(self)
         value = QLabel()
         value.setObjectName("MetricValue")
         header.addWidget(title)
@@ -160,6 +167,84 @@ class ProviderCardWidget(QWidget):
             bar.setValue(int(min(100, max(0, metric.val or 0))))
             sub.setStyleSheet("color: #64748b;")
             sub.setText(f"重設於: {BaseProvider.format_countdown(metric.reset)}" if metric.reset else (metric.subtext or "重設於: --"))
+
+    # ---- agy: drag a row by its title to reorder (the top two rows are the main pair)
+    def _drag_rows(self):
+        """[(title, QRect in card coordinates, title label)] in display order, or [] when not draggable."""
+        if self.provider_id != "agy" or len(self.current_metrics.extra_metrics) != 3 or self.current_metrics.error:
+            return []
+
+        def rect(top_widget, bottom_widget):
+            top = top_widget.mapTo(self, QPoint(0, 0)).y()
+            bottom = bottom_widget.mapTo(self, QPoint(0, bottom_widget.height())).y()
+            return QRect(0, top, self.width(), max(1, bottom - top))
+
+        rows = [(self.m1_label.text(), rect(self.m1_label, self.m1_sub), self.m1_label),
+                (self.m2_label.text(), rect(self.m2_label, self.m2_sub), self.m2_label)]
+        for widget, title, _value, _bar, _sub in self.extra_rows[:3]:
+            rows.append((title.text(), rect(widget, widget), title))
+        return rows
+
+    def _drop_index(self, rows, source, y):
+        others = [row for i, row in enumerate(rows) if i != source]
+        index = sum(1 for _t, r, _l in others if y > r.center().y())
+        return others, index
+
+    def _show_drop_line(self, others, index):
+        if self._drop_line is None:
+            self._drop_line = QFrame(self)
+            self._drop_line.setFixedHeight(3)
+            self._drop_line.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._drop_line.setStyleSheet(f"background: {self.theme['color']}; border-radius: 1px;")
+        if index == 0:
+            y = others[0][1].top() - 2
+        else:
+            y = others[index - 1][1].bottom() + 1
+        self._drop_line.setGeometry(4, y, max(10, self.width() - 8), 3)
+        self._drop_line.show()
+        self._drop_line.raise_()
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        drag = self._row_drag
+        if drag is not None and obj is drag["label"]:
+            if kind == QEvent.Type.MouseMove:
+                pos = event.globalPosition().toPoint()
+                if not drag["active"] and (pos - drag["start"]).manhattanLength() > 6:
+                    drag["active"] = True
+                    obj.setCursor(Qt.CursorShape.ClosedHandCursor)
+                if drag["active"]:
+                    rows = self._drag_rows()
+                    if rows:
+                        y = self.mapFromGlobal(pos).y()
+                        others, index = self._drop_index(rows, drag["source"], y)
+                        drag["target"] = index
+                        self._show_drop_line(others, index)
+                return True
+            if kind == QEvent.Type.MouseButtonRelease:
+                obj.releaseMouse()
+                obj.unsetCursor()
+                if self._drop_line is not None:
+                    self._drop_line.hide()
+                self._row_drag = None
+                if drag["active"] and drag.get("target") is not None:
+                    rows = self._drag_rows()
+                    if rows:
+                        titles = [t for t, _r, _l in rows]
+                        moved = titles.pop(drag["source"])
+                        titles.insert(drag["target"], moved)
+                        if titles != [t for t, _r, _l in rows]:
+                            self.rowOrderChanged.emit(titles)
+                return True
+        elif kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            rows = self._drag_rows()
+            for index, (_title, _rect, label) in enumerate(rows):
+                if label is obj:
+                    self._row_drag = {"label": obj, "source": index, "active": False, "target": None,
+                                      "start": event.globalPosition().toPoint()}
+                    obj.grabMouse()
+                    return True
+        return super().eventFilter(obj, event)
 
     def set_appearance(self, dark: bool):
         self.dark = dark

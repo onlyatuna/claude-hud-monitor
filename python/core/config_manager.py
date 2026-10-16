@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "sidebar_x": None,  # free position, used when sidebar_edge is "none"
     "sidebar_y": None,
     "sidebar_scale": 1.0,  # 0.6 - 2.0, Ctrl+wheel or drag any edge/corner of the bar
-    "agy_primary": ["C/G 5H", "ARGON 7D"],  # which two agy rows are the main pair (others become extras)
+    "agy_order": ["C/G 5H", "ARGON 7D", "GEMINI 5H", "GEMINI 7D", "C/G 7D"],  # agy row order; the first two are the main pair
     "provider_order": ["claude", "agy", "codex"],  # tile/card/column order; press-hold and drag a tile to change
     "layout_mode": "vertical",  # "vertical" or "horizontal" (for cards mode)
     "vertical_width": 280,

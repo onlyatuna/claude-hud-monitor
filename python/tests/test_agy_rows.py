@@ -1,6 +1,7 @@
 import unittest
 
-from core.agy_rows import AGY_ROW_TITLES, DEFAULT_PRIMARY, arrange_agy, normalize_primary, toggle_primary
+from core.agy_rows import (AGY_ROW_TITLES, DEFAULT_ORDER, DEFAULT_PRIMARY, arrange_agy, move_row, normalize_order,
+                           normalize_primary, toggle_primary)
 from core.providers.base import MetricRow, UsageMetrics
 
 
@@ -46,6 +47,32 @@ class AgyRowsTests(unittest.TestCase):
         self.assertEqual(toggle_primary(['C/G 5H', 'ARGON 7D'], 'ARGON 7D'), ('ARGON 7D', 'C/G 5H'))
         self.assertEqual(toggle_primary(['C/G 5H', 'ARGON 7D'], 'C/G 5H'), ('C/G 5H', 'ARGON 7D'))
         self.assertEqual(toggle_primary(['C/G 5H', 'ARGON 7D'], 'bogus'), ('C/G 5H', 'ARGON 7D'))
+
+class AgyOrderTests(unittest.TestCase):
+    def test_default_order_starts_with_the_default_pair(self):
+        self.assertEqual(DEFAULT_ORDER[:2], DEFAULT_PRIMARY)
+        self.assertEqual(sorted(DEFAULT_ORDER), sorted(AGY_ROW_TITLES))
+
+    def test_normalize_order_accepts_full_orders_and_legacy_pairs(self):
+        full = ['GEMINI 7D', 'C/G 7D', 'ARGON 7D', 'C/G 5H', 'GEMINI 5H']
+        self.assertEqual(normalize_order(full), tuple(full))
+        self.assertEqual(normalize_order(['ARGON 7D', 'GEMINI 5H'])[:2], ('ARGON 7D', 'GEMINI 5H'))
+        self.assertEqual(len(normalize_order(['ARGON 7D', 'GEMINI 5H'])), 5)
+        for bad in (None, 'x', [], ['C/G 5H'], full[:4] + ['bogus']):
+            self.assertEqual(normalize_order(bad), DEFAULT_ORDER)
+
+    def test_move_row(self):
+        order = list(DEFAULT_ORDER)
+        self.assertEqual(move_row(order, 'GEMINI 7D', 0)[0], 'GEMINI 7D')
+        self.assertEqual(move_row(order, 'C/G 5H', 4)[-1], 'C/G 5H')
+        self.assertEqual(sorted(move_row(order, 'ARGON 7D', 2)), sorted(AGY_ROW_TITLES))
+        self.assertEqual(move_row(order, 'nope', 0), tuple(order))
+
+    def test_arrange_uses_the_full_order(self):
+        order = ['GEMINI 7D', 'C/G 7D', 'ARGON 7D', 'C/G 5H', 'GEMINI 5H']
+        result = arrange_agy(agy_metrics(), order)
+        self.assertEqual((result.metric1_title, result.metric2_title), ('GEMINI 7D', 'C/G 7D'))
+        self.assertEqual([r.title for r in result.extra_metrics], ['ARGON 7D', 'C/G 5H', 'GEMINI 5H'])
 
 
 if __name__ == '__main__':

@@ -255,6 +255,7 @@ class SidebarWidget(QWidget):
         self.tokens = SIDEBAR_TOKENS['dark']
         self._metrics = {}
         self._active, self._pinned, self._hover_id = None, False, None
+        self._pinned_key = None
         self._wheel_remainder = 0
         self._order = list(DEFAULT_ORDER)
         self._card_styles = {}
@@ -591,11 +592,12 @@ class SidebarWidget(QWidget):
         self._hover_timer.start(self.tokens['hover_ms'])
 
     def _click_provider(self, key):
-        if self._active == key and self._pinned:
+        if self._pinned and self._pinned_key == key:
             self.close_flyout()
             return
         self._open_flyout(key)
         self._pinned = True
+        self._pinned_key = key
 
     def _flyout_position(self, button, size, area=None):
         origin = button.mapToGlobal(QPoint(0,0))
@@ -617,9 +619,9 @@ class SidebarWidget(QWidget):
         if self._active == key:
             self._leave_timer.stop()
             return
-        pinned = self._pinned
+        pinned, pinned_key = self._pinned, self._pinned_key
         self.close_flyout()
-        self._pinned = pinned
+        self._pinned, self._pinned_key = pinned, pinned_key
         self._active = key
         card = self.cards[key]
         self._restore_card_style(card)
@@ -665,7 +667,7 @@ class SidebarWidget(QWidget):
         self._hover_timer.stop(); self._leave_timer.stop(); self._animation.stop()
         if self._active is not None:
             card=self.cards[self._active]; self._flyout_layout.removeWidget(card); card.setParent(self._storage); card.hide()
-        self._flyout.hide(); self._active=None; self._pinned=False
+        self._flyout.hide(); self._active=None; self._pinned=False; self._pinned_key=None
     def _schedule_close(self):
         if not self._pinned: self._leave_timer.start(self.tokens['leave_ms'])
     def _maybe_close(self):
