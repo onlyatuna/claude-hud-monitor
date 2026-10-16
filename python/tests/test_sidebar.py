@@ -331,7 +331,10 @@ class SidebarTests(unittest.TestCase):
         self.assertEqual(button.flash, 0.0)
         self.sidebar.update_metrics(data(3, now + timedelta(hours=5)))           # new window: lower use, later reset
         self.assertEqual(button.flash, 1.0)
-        QTest.qWait(FLASH_MS + 400)
+        for _ in range(60):                                                     # slow CI runners tick late
+            if button.flash == 0.0:
+                break
+            QTest.qWait(100)
         self.assertEqual(button.flash, 0.0)
         self.sidebar.update_metrics(data(40, now + timedelta(hours=5, minutes=2)))   # tiny drift is not a reset
         self.assertEqual(button.flash, 0.0)
