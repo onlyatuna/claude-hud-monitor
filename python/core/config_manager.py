@@ -16,7 +16,9 @@ DEFAULT_CONFIG = {
     "sidebar_offset": None,  # distance along the edge from its start; None = bottom/right default
     "sidebar_x": None,  # free position, used when sidebar_edge is "none"
     "sidebar_y": None,
-    "sidebar_scale": 1.0,  # 0.6 - 2.0, Ctrl+wheel on the bar
+    "sidebar_scale": 1.0,  # 0.6 - 2.0, Ctrl+wheel or drag any edge/corner of the bar
+    "agy_primary": ["C/G 5H", "ARGON 7D"],  # which two agy rows are the main pair (others become extras)
+    "provider_order": ["claude", "agy", "codex"],  # tile/card/column order; press-hold and drag a tile to change
     "layout_mode": "vertical",  # "vertical" or "horizontal" (for cards mode)
     "vertical_width": 280,
     "vertical_height": 410,

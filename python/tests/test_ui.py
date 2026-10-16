@@ -377,3 +377,85 @@ class HudTests(unittest.TestCase):
                 self.assertTrue(any('Sidebar' in a.text() for a in style.actions()))
             finally:
                 self._close(hud)
+
+
+    def test_agy_main_rows_follow_the_setting_and_republish(self):
+        from datetime import timedelta
+        from core.providers.base import MetricRow
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='cards')
+            try:
+                reset = datetime.now(timezone.utc) + timedelta(hours=3)
+                hud._on_data_fetched(UsageMetrics(
+                    provider_id='agy', metric1_title='GEMINI 5H', metric1_val=0, metric1_text='0%',
+                    metric2_title='GEMINI 7D', metric2_val=1, metric2_text='1%',
+                    extra_metrics=[MetricRow('C/G 5H', 3, '3%', reset), MetricRow('C/G 7D', 15, '15%', reset),
+                                   MetricRow('ARGON 7D', 21, '21%', reset)]))
+                card = hud.cards['agy']
+                self.assertEqual((card.m1_label.text(), card.m1_val.text()), ('C/G 5H', '3%'))
+                self.assertEqual((card.m2_label.text(), card.m2_val.text()), ('ARGON 7D', '21%'))
+                hud.toggle_agy_row('GEMINI 5H')
+                self.assertEqual(card.m1_label.text(), 'ARGON 7D')
+                self.assertEqual(card.m2_label.text(), 'GEMINI 5H')
+                self.assertEqual(ConfigManager(config.path).get('agy_primary'), ['ARGON 7D', 'GEMINI 5H'])
+            finally:
+                self._close(hud)
+
+    def test_provider_order_applies_to_cards_table_and_sidebar(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='table')
+            try:
+                hud.set_provider_order(['codex', 'claude', 'agy'])
+                self.assertEqual(list(hud.table.columns), ['codex', 'claude', 'agy'])
+                self.assertEqual(hud.sidebar.order(), ['codex', 'claude', 'agy'])
+                hud.set_provider_order(['codex', 'claude'])
+                self.assertEqual(hud.provider_order(), ['codex', 'claude', 'agy'])
+                hud._apply_ui_mode('cards')
+                self.assertEqual(ConfigManager(config.path).get('provider_order'), ['codex', 'claude', 'agy'])
+            finally:
+                self._close(hud)
+
+    def test_sidebar_edge_and_corner_drag_scales_proportionally(self):
+        from PySide6.QtCore import QPoint
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar')
+            try:
+                g = hud.geometry()
+                base = hud.size()
+                hud._begin_resize(QPoint(g.left() + 2, g.top() + 2), 'lt')
+                hud._resize_to(QPoint(g.left() - 40, g.top() - 40))
+                self.assertGreater(hud.width(), base.width())
+                self.assertAlmostEqual(hud.width() / hud.height(), base.width() / base.height(), delta=0.08)
+                self.assertEqual(hud.geometry().bottom(), g.bottom())
+                hud._end_resize()
+                scale = ConfigManager(config.path).get('sidebar_scale')
+                self.assertGreater(scale, 1.0)
+                self.assertLessEqual(scale, 2.0)
+                hud._begin_resize(QPoint(0, 0), 'r')
+                hud._resize_to(QPoint(-10000, 0))
+                hud._end_resize()
+                self.assertEqual(ConfigManager(config.path).get('sidebar_scale'), 0.6)
+            finally:
+                self._close(hud)
+
+    def test_menu_offers_agy_rows_inside_interface(self):
+        from PySide6.QtWidgets import QMenu
+        captured = []
+
+        class RecordingMenu(QMenu):
+            def exec(self, *args):
+                captured.append(self)
+
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                patch('ui.hud_menu.QMenu', RecordingMenu):
+            _, hud = self._hud(directory, ui_mode='cards')
+            try:
+                from PySide6.QtGui import QContextMenuEvent
+                from PySide6.QtCore import QPoint
+                hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
+                interface = next(a.menu() for a in captured[0].actions() if a.menu() and 'Interface' in a.text())
+                rows = next(a.menu() for a in interface.actions() if a.menu() and 'Main rows' in a.text())
+                self.assertEqual(len(rows.actions()), 5)
+                self.assertEqual(sum(a.isChecked() for a in rows.actions()), 2)
+            finally:
+                self._close(hud)

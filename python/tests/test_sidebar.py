@@ -101,11 +101,13 @@ class SidebarTests(unittest.TestCase):
         self.sidebar.update_metrics(UsageMetrics(provider_id='agy',extra_metrics=[MetricRow('C/G 7D',15),MetricRow('ARGON 7D',21)]))
         button=self.sidebar.buttons['agy']
         self.assertEqual(button.dot_colors,[THEMES['dark']['scale']['green']]*2)
-        self.assertIn('C/G 7D 15%',button.toolTip())
+        self.assertIn('C/G 7D 已用 15%',button.toolTip())
         self.sidebar.set_appearance(False,'duo')
         self.assertEqual(button.dot_colors,[THEMES['light']['scale']['green']]*2)
         self.sidebar.update_metrics(UsageMetrics(provider_id='agy'))
-        self.assertEqual(button.dot_colors,[THEMES['light']['neutral']]*2)
+        self.assertEqual(button.dot_colors,[])
+        self.sidebar.update_metrics(UsageMetrics(provider_id='agy',extra_metrics=[MetricRow('C/G 7D',None)]))
+        self.assertEqual(button.dot_colors,[THEMES['light']['neutral']])
 
     def test_tile_colors_and_contrast(self):
         for dark in (True,False):
@@ -127,7 +129,7 @@ class SidebarTests(unittest.TestCase):
         self.sidebar.update_metrics(UsageMetrics(provider_id='agy',metric1_val=21,metric2_val=1,
             extra_metrics=[MetricRow('C/G 7D',15),MetricRow('ARGON 7D',21)]))
         button = self.sidebar.buttons['agy']
-        for text in ('5H \u5df2\u7528','\u91cd\u8a2d\u65bc --','C/G 7D','Argon 7D'):
+        for text in ('已用','重設於 --','C/G 7D','ARGON 7D'):
             self.assertIn(text,button.toolTip())
         self.assertNotIn('?',button.toolTip())
         with patch('ui.sidebar.BaseProvider.format_countdown',return_value='countdown') as countdown:
@@ -135,7 +137,7 @@ class SidebarTests(unittest.TestCase):
             self.sidebar.update_countdown()
             self.assertEqual(button.rows,before)
             self.assertIn('countdown',button.toolTip())
-            self.assertEqual(countdown.call_count,2)
+            self.assertEqual(countdown.call_count,4)
         import inspect
         import ui.sidebar
         self.assertNotIn('UsageDial',inspect.getsource(ui.sidebar))
@@ -246,5 +248,39 @@ class SidebarTests(unittest.TestCase):
                 self.sidebar.set_appearance(dark); appearance.assert_not_called()
             self.sidebar.update_countdown(); self.sidebar.grab()
 
-if __name__=='__main__': unittest.main()
 
+    def test_row_labels_follow_the_chosen_rows(self):
+        self.sidebar.update_metrics(UsageMetrics(provider_id='agy', metric1_title='C/G 5H', metric1_val=3,
+                                                 metric2_title='ARGON 7D', metric2_val=21,
+                                                 extra_metrics=[MetricRow('GEMINI 5H', 0), MetricRow('GEMINI 7D', 1),
+                                                                MetricRow('C/G 7D', 15)]))
+        button = self.sidebar.buttons['agy']
+        self.assertEqual([r[0] for r in button.rows], ['CG 5H', 'Ar 7D'])
+        self.assertEqual(len(button.dot_colors), 3)
+        self.sidebar.update_metrics(UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric2_title='WEEKLY 7D'))
+        self.assertEqual([r[0] for r in self.sidebar.buttons['claude'].rows], ['5H', '7D'])
+
+    def test_order_applies_to_strip_and_panel_and_rejects_bad_values(self):
+        self.sidebar.set_order(['codex', 'claude', 'agy'])
+        ys = [self.sidebar.buttons[k].y() for k in ('codex', 'claude', 'agy')]
+        self.assertEqual(ys, sorted(ys))
+        with self.assertRaises(ValueError):
+            self.sidebar.set_order(['claude', 'agy'])
+        self.sidebar.set_state('panel')
+        cards = [self.sidebar.cards[k] for k in ('codex', 'claude', 'agy')]
+        self.assertEqual([c.y() for c in cards], sorted(c.y() for c in cards))
+
+    def test_press_hold_drag_reorders_and_emits_once(self):
+        seen = []
+        self.sidebar.orderChanged.connect(seen.append)
+        button = self.sidebar.buttons['claude']
+        button._press_pos = QPoint(5, 5)
+        button._begin_reorder()
+        self.assertTrue(button._reordering)
+        target = self.sidebar.buttons['codex'].mapToGlobal(QPoint(5, self.sidebar.buttons['codex'].height() - 2))
+        self.sidebar._move_reorder('claude', target)
+        self.assertEqual(self.sidebar.order()[-1], 'claude')
+        self.sidebar._finish_reorder()
+        self.assertEqual(seen, [self.sidebar.order()])
+
+if __name__=='__main__': unittest.main()

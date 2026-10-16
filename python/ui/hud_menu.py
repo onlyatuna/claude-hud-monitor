@@ -6,6 +6,7 @@ A setting appears exactly once. The menu is rebuilt each time it is shown, so ch
 
 from PySide6.QtWidgets import QMenu
 
+from core.agy_rows import AGY_ROW_TITLES, normalize_primary
 from core.autostart import is_autostart_enabled
 from core.logger import open_log_dir
 
@@ -48,6 +49,16 @@ def _build_interface(hud, menu):
         size_menu = sub.addMenu("🔎 大小 (Ctrl＋滾輪)")
         for pct in SIDEBAR_SCALES:
             _check(size_menu, f"{pct}%", pct == current, lambda p=pct: hud.set_sidebar_scale(p / 100))
+    sub.addSeparator()
+    _build_agy_rows(hud, sub)
+
+
+def _build_agy_rows(hud, menu):
+    first, second = normalize_primary(hud.config.get("agy_primary"))
+    sub = menu.addMenu("🧭 AGY 主要兩條 (Main rows)")
+    for title in AGY_ROW_TITLES:
+        mark = " ①" if title == first else (" ②" if title == second else "")
+        _check(sub, f"{title}{mark}", title in (first, second), lambda t=title: hud.toggle_agy_row(t))
 
 
 def _build_appearance(hud, menu):

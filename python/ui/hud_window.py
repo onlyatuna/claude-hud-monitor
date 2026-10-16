@@ -2,13 +2,14 @@ import sys
 import os
 import time
 from datetime import datetime
-from PySide6.QtCore import Qt, QPoint, QRect, QTimer
+from PySide6.QtCore import Qt, QEvent, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication
 )
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 
 from core.providers import PROVIDERS, UsageMetrics
+from core.agy_rows import arrange_agy, normalize_primary, toggle_primary
 from core.config_manager import ConfigManager
 from core.refresh_controller import RefreshController
 from core.autostart import is_autostart_enabled, set_autostart
@@ -19,7 +20,7 @@ from ui.styles import (
 )
 from ui.provider_card import ProviderCardWidget
 from ui.usage_table import UsageTable
-from ui.sidebar import SidebarWidget
+from ui.sidebar import SidebarWidget, DEFAULT_ORDER
 from ui.dock_geometry import (EDGES, dock_to_edge, offset_along_edge, orientation_for_edge, pick_work_area,
                               snap_rect, step_scale, clamp_scale)
 from ui.hud_menu import build_hud_menu
@@ -40,6 +41,7 @@ DEF_VERT_W, DEF_VERT_H = 280, 410
 
 QWIDGETSIZE_MAX = 16777215
 SIDEBAR_SNAP_PX = 24
+RESIZE_GRIP_PX = 7
 
 if sys.platform == "win32":
     import ctypes
@@ -84,6 +86,7 @@ class HUDWindow(QWidget):
         self.current_edge = None
 
         self._latest_metrics = {}
+        self._raw_metrics = {}
         self._provider_errors = {}
         self.providers = PROVIDERS if providers is None else providers
         for p in self.providers.values():
@@ -102,7 +105,7 @@ class HUDWindow(QWidget):
         }
 
         # Usage Table (Modern Table UI)
-        self.table = UsageTable(self.theme(), self.color_scheme(), parent=self)
+        self.table = UsageTable(self.theme(), self.color_scheme(), provider_ids=self.provider_order(), parent=self)
 
         # Sidebar (docked strip/panel); owns its own card instances so the other modes are untouched
         self.sidebar_cards = {pid: ProviderCardWidget(pid) for pid in ("claude", "agy", "codex")}
@@ -112,6 +115,11 @@ class HUDWindow(QWidget):
         self.sidebar.contextMenuRequested.connect(self._show_sidebar_menu)
         self.sidebar.scaleStepRequested.connect(self._on_sidebar_scale_step)
         self.sidebar.dragRequested.connect(self._start_sidebar_drag)
+        self.sidebar.orderChanged.connect(self.set_provider_order)
+        self.sidebar.set_order(self.provider_order())
+        self._resize = None
+        self._grip_cursor = False
+        QApplication.instance().installEventFilter(self)
         self._docking = False
         self._snap_timer = QTimer(self)
         self._snap_timer.setSingleShot(True)
@@ -286,7 +294,7 @@ class HUDWindow(QWidget):
         t = self.theme()
         s = self.color_scheme()
         old_table = self.table
-        self.table = UsageTable(t, s, parent=self)
+        self.table = UsageTable(t, s, provider_ids=self.provider_order(), parent=self)
         for m in self._latest_metrics.values():
             self.table.update_metrics(m)
 
@@ -381,7 +389,11 @@ class HUDWindow(QWidget):
         self._dock_sidebar()
 
     def _sidebar_scale(self) -> float:
-        return clamp_scale(self.config.get("sidebar_scale", 1.0))
+        value = self.config.get("sidebar_scale", 1.0)
+        try:
+            return max(0.6, min(2.0, round(float(value), 2)))
+        except (TypeError, ValueError):
+            return 1.0
 
     def _sidebar_edge(self):
         edge = self.config.get("sidebar_edge", "right")
@@ -450,8 +462,117 @@ class HUDWindow(QWidget):
         if handle:
             handle.startSystemMove()
 
+    def _resize_zone(self, pos: QPoint):
+        g = self.geometry()
+        if not g.adjusted(-2, -2, 2, 2).contains(pos):
+            return None
+        m = RESIZE_GRIP_PX
+        zone = ""
+        if pos.x() - g.left() < m:
+            zone += "l"
+        elif g.right() - pos.x() < m:
+            zone += "r"
+        if pos.y() - g.top() < m:
+            zone += "t"
+        elif g.bottom() - pos.y() < m:
+            zone += "b"
+        return zone or None
+
+    def _set_grip_cursor(self, zone):
+        if zone is None:
+            if self._grip_cursor:
+                QApplication.restoreOverrideCursor()
+                self._grip_cursor = False
+            return
+        if zone in ("l", "r"):
+            shape = Qt.CursorShape.SizeHorCursor
+        elif zone in ("t", "b"):
+            shape = Qt.CursorShape.SizeVerCursor
+        elif zone in ("lt", "rb"):
+            shape = Qt.CursorShape.SizeFDiagCursor
+        else:
+            shape = Qt.CursorShape.SizeBDiagCursor
+        if self._grip_cursor:
+            QApplication.changeOverrideCursor(shape)
+        else:
+            QApplication.setOverrideCursor(shape)
+            self._grip_cursor = True
+
+    def _begin_resize(self, pos: QPoint, zone: str):
+        self.sidebar.close_flyout()
+        self._snap_timer.stop()
+        self._resize = {"start": pos, "geom": QRect(self.geometry()), "scale": self._sidebar_scale(), "zone": zone}
+        self.grabMouse()
+
+    def _resize_to(self, pos: QPoint):
+        r = self._resize
+        g, zone = r["geom"], r["zone"]
+        dx, dy = pos.x() - r["start"].x(), pos.y() - r["start"].y()
+        ratios = []
+        if "r" in zone:
+            ratios.append((g.width() + dx) / g.width())
+        if "l" in zone:
+            ratios.append((g.width() - dx) / g.width())
+        if "b" in zone:
+            ratios.append((g.height() + dy) / g.height())
+        if "t" in zone:
+            ratios.append((g.height() - dy) / g.height())
+        ratio = max(ratios, key=lambda v: abs(v - 1.0))
+        scale = max(0.6, min(2.0, round(r["scale"] * ratio, 2)))
+        if scale == self.sidebar.scale():
+            return
+        self.sidebar.set_scale(scale)
+        size = self.sidebar.preferred_size()
+        w, h = size.width(), size.height()
+        x = g.x() if "r" in zone else (g.right() + 1 - w if "l" in zone else g.center().x() - w // 2)
+        y = g.y() if "b" in zone else (g.bottom() + 1 - h if "t" in zone else g.center().y() - h // 2)
+        self._docking = True
+        try:
+            self.setFixedSize(w, h)
+            self.setGeometry(x, y, w, h)
+        finally:
+            self._docking = False
+
+    def _end_resize(self):
+        self.releaseMouse()
+        self._resize = None
+        self._set_grip_cursor(None)
+        self.config.set("sidebar_scale", round(self.sidebar.scale(), 2))
+        self._finish_sidebar_move()
+
+    def eventFilter(self, obj, event):
+        if self.config.get("ui_mode") != "sidebar":
+            return False
+        kind = event.type()
+        if self._resize is not None:
+            if kind == QEvent.Type.MouseMove:
+                self._resize_to(event.globalPosition().toPoint())
+                return True
+            if kind == QEvent.Type.MouseButtonRelease:
+                self._end_resize()
+                return True
+            return False
+        if self.config.get("locked", False):
+            return False
+        if kind == QEvent.Type.Leave and obj is self:
+            self._set_grip_cursor(None)
+        elif kind in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress) and isinstance(obj, QWidget) \
+                and (obj is self or self.isAncestorOf(obj)):
+            pos = event.globalPosition().toPoint()
+            zone = self._resize_zone(pos)
+            if kind == QEvent.Type.MouseMove and event.buttons() == Qt.MouseButton.NoButton:
+                self._set_grip_cursor(zone)
+            elif kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and zone:
+                self._begin_resize(pos, zone)
+                return True
+        return False
+
     def set_sidebar_scale(self, scale: float):
-        self.config.set("sidebar_scale", clamp_scale(scale))
+        try:
+            scale = max(0.6, min(2.0, round(float(scale), 2)))
+        except (TypeError, ValueError):
+            scale = 1.0
+        self.config.set("sidebar_scale", scale)
         if self.config.get("ui_mode") == "sidebar":
             self.sidebar.set_scale(self._sidebar_scale())
             self._dock_sidebar()
@@ -483,7 +604,7 @@ class HUDWindow(QWidget):
 
     def _apply_cards_layout(self, mode: str) -> tuple[int, int]:
         self._clear_layout(self.cards_layout)
-        provider_ids = ["claude", "agy", "codex"]
+        provider_ids = self.provider_order()
 
         if mode == "horizontal":
             self.setMinimumSize(MIN_HORIZ_W, MIN_HORIZ_H)
@@ -606,7 +727,43 @@ class HUDWindow(QWidget):
     def trigger_async_refresh(self):
         self.refresh_controller.refresh()
 
+    def provider_order(self) -> list:
+        order = self.config.get("provider_order", list(DEFAULT_ORDER))
+        if isinstance(order, list) and sorted(order) == sorted(DEFAULT_ORDER):
+            return list(order)
+        return list(DEFAULT_ORDER)
+
+    def set_provider_order(self, order):
+        order = list(order)
+        if sorted(order) != sorted(DEFAULT_ORDER) or order == self.provider_order():
+            return
+        self.config.set("provider_order", order)
+        self.sidebar.set_order(order)
+        mode = self.config.get("ui_mode", "cards")
+        if mode == "table":
+            self._rebuild_table()
+        elif mode == "cards":
+            self._apply_ui_mode("cards")
+
+    def set_agy_primary(self, titles):
+        self.config.set("agy_primary", list(normalize_primary(titles)))
+        raw = self._raw_metrics.get("agy")
+        if raw is not None:
+            self._publish(self._arranged(raw))
+
+    def toggle_agy_row(self, title: str):
+        self.set_agy_primary(toggle_primary(self.config.get("agy_primary"), title))
+
     def _on_data_fetched(self, metrics: UsageMetrics):
+        self._raw_metrics[metrics.provider_id] = metrics
+        self._publish(self._arranged(metrics))
+
+    def _arranged(self, metrics: UsageMetrics) -> UsageMetrics:
+        if metrics.provider_id == "agy":
+            return arrange_agy(metrics, normalize_primary(self.config.get("agy_primary")))
+        return metrics
+
+    def _publish(self, metrics: UsageMetrics):
         self._latest_metrics[metrics.provider_id] = metrics
         if metrics.provider_id in self.cards:
             self.cards[metrics.provider_id].update_metrics(metrics)
