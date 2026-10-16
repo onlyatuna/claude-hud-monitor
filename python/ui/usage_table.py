@@ -333,11 +333,18 @@ class ProviderColumn:
                 w.setText(text)
             return
 
-        self.badge.setText("⏱ STALE" if data.stale else (data.badge1_text or data.badge2_text or " "))
+        self.badge.setText("⏱ STALE" if data.stale else self._badge_text(data))
         if data.stale:
             stamp = data.last_success.astimezone().strftime("%m/%d %H:%M:%S") if data.last_success else "--"
             self.header.setToolTip("\n".join(s for s in (f"舊資料 {stamp}", data.error) if s))
         self.update_countdown()
+
+    @staticmethod
+    def _badge_text(data):
+        if data.provider_id == "agy" and data.badge1_text and data.badge2_text:
+            compact = lambda t: t.replace(" 剩餘:", ":").replace("剩餘:", ":")
+            return f"{compact(data.badge1_text)} · {compact(data.badge2_text)}"
+        return data.badge1_text or data.badge2_text or " "
 
     def update_countdown(self):
         """Refresh everything that depends on the clock: countdowns, pace marks, run-out estimate."""

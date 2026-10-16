@@ -11,6 +11,7 @@ import urllib.error
 
 from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse
 from core.logger import logger
+from core.agy_statusline import read_quota_cache
 
 class AgyProvider(BaseProvider):
     provider_id = "agy"
@@ -160,10 +161,47 @@ class AgyProvider(BaseProvider):
 
     def fetch_usage(self) -> UsageMetrics:
         now_str = datetime.now().strftime("%H:%M:%S")
+        try:
+            cache = read_quota_cache()
+        except Exception:
+            cache = None
         token = self._get_access_token()
-        if not token:
-            return self._failure(now_str, "no_token", "未找到 Antigravity 登入憑證\n請先登入 Antigravity")
-        return self._fetch_via_http(token, now_str)
+        res = self._fetch_via_http(token, now_str) if token else None
+        if cache is None:
+            if res is None:
+                res = self._failure(now_str, "no_token", "未找到 Antigravity 登入憑證\n請先登入 Antigravity")
+            res.badge2_text = "Argon: --"
+            return res
+        return self._merge_cache(res, cache, now_str)
+
+    def _merge_cache(self, res, cache, now_str) -> UsageMetrics:
+        result = res if res is not None else UsageMetrics()
+        buckets = cache.get("buckets", {}) if cache is not None else {}
+        if result.metric1_val is None and "gemini-5h" in buckets:
+            bucket = buckets["gemini-5h"]
+            result.metric1_val = max(0.0, min(100.0, (1 - bucket["remaining_fraction"]) * 100))
+            result.metric1_reset = bucket["reset_time"]
+        weekly = buckets.get("gemini-weekly")
+        result.metric2_val = max(0.0, min(100.0, (1 - weekly["remaining_fraction"]) * 100)) if weekly else None
+        result.metric2_reset = weekly["reset_time"] if weekly else None
+        result.metric2_subtext = "" if weekly else "需啟用 agy statusLine"
+        if res is None or result.badge1_text in ("", "C/G 剩餘: --"):
+            cg = buckets.get("3p-weekly")
+            result.badge1_text = f"C/G 剩餘: {percent_text(cg['remaining_fraction'] * 100 if cg else None)}"
+        argon = buckets.get("gemini-argon-wtu-weekly")
+        result.badge2_text = f"Argon 剩餘: {percent_text(argon['remaining_fraction'] * 100 if argon else None)}"
+        result.metric1_title = "SESSION 5H"
+        result.metric2_title = "WEEKLY 7D"
+        result.metric1_text = percent_text(result.metric1_val)
+        result.metric2_text = percent_text(result.metric2_val)
+        result.provider_name = "Antigravity"
+        result.provider_id = self.provider_id
+        result.last_updated_time = now_str
+        has_value = (result.metric1_val is not None or result.metric2_val is not None
+                     or result.badge1_text != "C/G 剩餘: --" or argon is not None)
+        result.error = None if has_value else "未取得有效配額資料"
+        result.error_code = "" if has_value else "schema"
+        return result
 
     def _failure(self, now_str, code, message):
         return UsageMetrics(

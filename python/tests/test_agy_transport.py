@@ -1,5 +1,6 @@
 import json
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from urllib.error import HTTPError
 from core.providers.agy_provider import AgyProvider
@@ -36,6 +37,103 @@ class _MockResponse:
 
 
 class AgyTransportTests(unittest.TestCase):
+    def setUp(self):
+        cache_patch = patch("core.providers.agy_provider.read_quota_cache", return_value=None, create=True)
+        self.cache_reader = cache_patch.start()
+        self.addCleanup(cache_patch.stop)
+        reset = datetime.now(timezone.utc) + timedelta(days=7)
+        self.cache = {
+            "written_at": datetime.now(timezone.utc),
+            "buckets": {
+                key: {"remaining_fraction": fraction, "reset_time": reset}
+                for key, fraction in {
+                    "gemini-5h": 1.0, "gemini-weekly": 0.9914498,
+                    "3p-5h": 1.0, "3p-weekly": 0.8469924,
+                    "gemini-argon-wtu-weekly": 0.78630334,
+                }.items()
+            },
+        }
+
+    def test_cache_complements_http_with_rest_priority(self):
+        self.cache_reader.return_value = self.cache
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value="token"), patch(
+            "core.providers.agy_provider.urllib.request.urlopen",
+            side_effect=[_MockResponse(SUMMARY_FIXTURE), _MockResponse(QUOTA_FIXTURE)],
+        ):
+            result = provider.fetch_usage()
+        self.assertIsNone(result.error)
+        self.assertEqual(result.error_code, "")
+        self.assertAlmostEqual(result.metric1_val, 2.57)
+        self.assertAlmostEqual(result.metric2_val, 0.85502)
+        self.assertEqual(result.metric2_reset, self.cache["buckets"]["gemini-weekly"]["reset_time"])
+        self.assertEqual(result.badge1_text, "C/G 剩餘: 84%")
+        self.assertEqual(result.badge2_text, "Argon 剩餘: 79%")
+
+    def test_cache_without_token_provides_complete_metrics(self):
+        self.cache_reader.return_value = self.cache
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value=None):
+            result = provider.fetch_usage()
+        self.assertIsNone(result.error)
+        self.assertEqual(result.error_code, "")
+        self.assertEqual(result.metric1_val, 0.0)
+        self.assertEqual(result.metric1_text, "0%")
+        self.assertEqual(result.metric1_reset, self.cache["buckets"]["gemini-5h"]["reset_time"])
+        self.assertAlmostEqual(result.metric2_val, 0.85502)
+        self.assertEqual(result.badge1_text, "C/G 剩餘: 85%")
+        self.assertEqual(result.badge2_text, "Argon 剩餘: 79%")
+
+    def test_cache_recovers_when_all_http_requests_fail(self):
+        self.cache_reader.return_value = self.cache
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value="token"), patch(
+            "core.providers.agy_provider.urllib.request.urlopen", side_effect=OSError("offline")
+        ):
+            result = provider.fetch_usage()
+        self.assertIsNone(result.error)
+        self.assertEqual(result.error_code, "")
+        self.assertEqual(result.metric1_val, 0.0)
+        self.assertAlmostEqual(result.metric2_val, 0.85502)
+        self.assertEqual(result.badge1_text, "C/G 剩餘: 85%")
+        self.assertEqual(result.badge2_text, "Argon 剩餘: 79%")
+
+    def test_missing_weekly_bucket_requests_statusline(self):
+        del self.cache["buckets"]["gemini-weekly"]
+        self.cache_reader.return_value = self.cache
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value=None):
+            result = provider.fetch_usage()
+        self.assertIsNone(result.metric2_val)
+        self.assertEqual(result.metric2_text, "--")
+        self.assertEqual(result.metric2_subtext, "需啟用 agy statusLine")
+
+    def test_cache_exception_preserves_no_token_error(self):
+        self.cache_reader.side_effect = OSError("unreadable")
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value=None):
+            result = provider.fetch_usage()
+        self.assertEqual(result.error_code, "no_token")
+        self.assertEqual(result.badge2_text, "Argon: --")
+
+    def test_no_cache_preserves_http_auth_error(self):
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value="token"), patch(
+            "core.providers.agy_provider.urllib.request.urlopen",
+            side_effect=HTTPError(provider.SUMMARY_URL, 401, "unauthorized", {}, None),
+        ):
+            result = provider.fetch_usage()
+        self.assertEqual(result.error_code, "auth")
+        self.assertEqual(result.badge2_text, "Argon: --")
+
+    def test_empty_cache_returns_schema_error(self):
+        self.cache_reader.return_value = {"buckets": {}}
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value=None):
+            result = provider.fetch_usage()
+        self.assertEqual(result.error_code, "schema")
+        self.assertEqual(result.error, "未取得有效配額資料")
+
     def test_both_endpoints_succeed_and_request_spec(self):
         provider = AgyProvider()
         with patch.object(provider, "_get_access_token", return_value="token"), patch(
@@ -48,7 +146,7 @@ class AgyTransportTests(unittest.TestCase):
         self.assertAlmostEqual(result.metric1_val, 2.57)
         self.assertEqual(result.metric1_text, "3%")
         self.assertEqual(result.badge1_text, "C/G 剩餘: 84%")
-        self.assertEqual(result.badge2_text, "Gemini Models")
+        self.assertEqual(result.badge2_text, "Argon: --")
         self.assertIsNone(result.metric2_val)
         self.assertEqual(result.metric2_text, "--")
         self.assertEqual(result.metric2_subtext, "Gemini 週額度來源未知")
