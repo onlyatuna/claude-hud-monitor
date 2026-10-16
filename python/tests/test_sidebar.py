@@ -3,7 +3,10 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import unittest
 from unittest.mock import patch
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, QPointF, Qt, QRect, QSize, QEvent
+from PySide6.QtGui import QWheelEvent, QContextMenuEvent, QMouseEvent
+from datetime import datetime, timedelta, timezone
+from ui.styles import THEMES
 from PySide6.QtTest import QTest
 from core.providers.base import UsageMetrics, MetricRow
 from ui.provider_card import ProviderCardWidget
@@ -18,32 +21,147 @@ class SidebarTests(unittest.TestCase):
         self.sidebar.resize(self.sidebar.preferred_size()); self.sidebar.show(); APP.processEvents()
     def tearDown(self):
         self.sidebar.close_flyout(); self.sidebar.close(); self.sidebar.deleteLater(); APP.processEvents()
+    def fit(self):
+        self.sidebar.resize(self.sidebar.preferred_size())
+        APP.processEvents()
+
     def test_states_and_signals(self):
-        states=[]; settings=[]
+        states=[]
         self.sidebar.stateChangeRequested.connect(states.append)
-        self.sidebar.settingsRequested.connect(lambda:settings.append(True))
-        self.sidebar.toggle_button.click(); self.sidebar.settings_button.click()
-        self.assertEqual(states,['panel']); self.assertEqual(settings,[True])
+        QTest.mouseClick(self.sidebar.toggle_button, Qt.LeftButton)
+        self.assertEqual(states,['panel'])
         self.assertEqual(self.sidebar.state(),'strip')
-        self.assertEqual(self.sidebar.preferred_size().width(),92)
-        self.sidebar.set_state('panel'); self.sidebar.set_state('panel'); APP.processEvents()
-        self.assertEqual(self.sidebar.preferred_size().width(),220)
-        self.assertTrue(all(self.sidebar.isAncestorOf(c) and c.isVisible() for c in self.cards.values()))
-        self.assertEqual(self.sidebar._panel_layout.count(),5)
-        self.sidebar.set_state('strip'); self.assertEqual(self.sidebar.preferred_size().width(),92)
-        self.assertTrue(all(c.isHidden() for c in self.cards.values()))
-        self.sidebar.set_state('panel'); self.assertEqual(self.sidebar._panel_layout.count(),5)
+        for state in ('panel','strip','panel','strip'):
+            self.sidebar.set_state(state)
+            self.sidebar.set_state(state)
+            self.fit()
+            self.assertEqual(self.sidebar.state(),state)
+            self.assertTrue(all(c.isHidden() == (state=='strip') for c in self.cards.values()))
         with self.assertRaises(ValueError): self.sidebar.set_state('bad')
+        with self.assertRaises(ValueError): self.sidebar.set_orientation('bad')
+        with self.assertRaises(ValueError): self.sidebar.set_dock_edge('bad')
+        with self.assertRaises(ValueError): self.sidebar.set_appearance(True,'bad')
+
+    def test_geometry_scaling_and_layout(self):
+        initial=self.sidebar.preferred_size()
+        self.assertLessEqual(initial.width(),80)
+        self.assertEqual(initial.width(),72)
+        self.sidebar.set_scale(1.5)
+        scaled=self.sidebar.preferred_size()
+        self.assertAlmostEqual(scaled.width(),initial.width()*1.5,delta=3)
+        self.assertAlmostEqual(scaled.height(),initial.height()*1.5,delta=3)
+        self.sidebar.set_scale(0.5)
+        self.assertEqual(self.sidebar.scale(),0.6)
+        self.sidebar.set_scale(1)
+        self.sidebar.set_orientation('horizontal')
+        self.assertGreater(self.sidebar.preferred_size().width(),self.sidebar.preferred_size().height())
+        self.fit()
+        self.assertEqual(self.sidebar.size(),self.sidebar.preferred_size())
+        self.sidebar.set_state('panel')
+        self.fit()
+        self.assertLess(self.cards['claude'].x(),self.cards['agy'].x())
+        self.assertLess(self.cards['agy'].x(),self.cards['codex'].x())
+        self.sidebar.set_orientation('vertical')
+        self.fit()
+        self.assertLess(self.cards['claude'].y(),self.cards['agy'].y())
+        self.assertLess(self.cards['agy'].y(),self.cards['codex'].y())
+        self.assertEqual(self.sidebar.preferred_size().width(),220)
+        self.sidebar.set_state('strip')
+        self.assertTrue(all(c.isHidden() for c in self.cards.values()))
+
     def test_metrics_and_external_ownership(self):
-        data=UsageMetrics(provider_id='agy',metric1_val=0,metric2_val=1,extra_metrics=[MetricRow(val=v) for v in (15,15,21)])
-        with patch.object(self.cards['agy'],'update_metrics') as update:
-            self.sidebar.update_metrics(data); update.assert_not_called()
-        button=self.sidebar.buttons['agy']; self.assertEqual(button.display_text,'21%')
-        self.assertIn('21%',button.toolTip())
-        self.sidebar.update_metrics(UsageMetrics(provider_id='agy')); self.assertEqual(button.display_text,'--')
-        self.sidebar.update_metrics(UsageMetrics(provider_id='agy',error='offline')); self.assertEqual(button.display_text,'OFF')
-        self.sidebar.update_metrics(UsageMetrics(provider_id='agy',error='timeout',stale=True,metric1_val=0))
-        self.assertTrue(button.stale); self.assertFalse(button.offline); self.assertEqual(button.display_text,'0%')
+        reset=datetime.now(timezone.utc)+timedelta(hours=2)
+        data=UsageMetrics(provider_id='claude',metric1_val=20,metric1_text='20%',metric2_val=8,metric1_reset=reset)
+        with patch.object(self.cards['claude'],'update_metrics') as update:
+            self.sidebar.update_metrics(data)
+            update.assert_not_called()
+        button=self.sidebar.buttons['claude']
+        self.assertEqual(button.dial.inner[0],20)
+        self.assertEqual(button.dial.outer[0],8)
+        self.assertAlmostEqual(button.dial.inner[1],60,delta=1)
+        self.assertEqual(button.dial.inner_text,'20%')
+        self.sidebar.set_scale(0.6)
+        self.assertEqual(button.dial.inner_text,'')
+        self.sidebar.set_scale(1)
+        self.assertEqual(button.dial.inner_text,'20%')
+        self.sidebar.update_metrics(UsageMetrics(provider_id='claude',error='offline'))
+        self.assertTrue(button.dial.muted)
+        self.assertEqual(button.dial.inner_text,'OFF')
+        self.sidebar.update_metrics(UsageMetrics(provider_id='claude',error='timeout',stale=True,metric1_val=0,metric1_text='0%'))
+        self.assertTrue(button.stale)
+        self.assertFalse(button.dial.muted)
+        self.assertEqual(button.dial.inner_text,'0%')
+        self.assertIn('STALE',button.accessibleDescription())
+
+    def test_agy_dots(self):
+        self.sidebar.update_metrics(UsageMetrics(provider_id='agy',extra_metrics=[MetricRow('C/G 7D',15),MetricRow('ARGON 7D',21)]))
+        button=self.sidebar.buttons['agy']
+        self.assertEqual(button.dot_colors,[THEMES['dark']['scale']['green']]*2)
+        self.assertIn('C/G 7D: 15%',button.toolTip())
+        self.sidebar.set_appearance(False,'duo')
+        self.assertEqual(button.dot_colors,[THEMES['light']['scale']['green']]*2)
+        self.sidebar.update_metrics(UsageMetrics(provider_id='agy'))
+        self.assertEqual(button.dot_colors,[THEMES['light']['neutral']]*2)
+
+    def test_context_wheel_drag(self):
+        contexts=[]; scales=[]; drags=[]
+        self.sidebar.contextMenuRequested.connect(contexts.append)
+        self.sidebar.scaleStepRequested.connect(scales.append)
+        self.sidebar.dragRequested.connect(lambda:drags.append(True))
+        button=self.sidebar.buttons['claude']
+        pos=button.mapToGlobal(QPoint(10,10))
+        APP.sendEvent(button,QContextMenuEvent(QContextMenuEvent.Mouse,QPoint(10,10),pos))
+        self.assertEqual(contexts,[pos])
+        def wheel(delta, modifiers):
+            APP.sendEvent(button,QWheelEvent(QPointF(10,10),QPointF(pos),QPoint(),QPoint(0,delta),Qt.NoButton,modifiers,Qt.NoScrollPhase,False))
+        wheel(240,Qt.ControlModifier)
+        wheel(-120,Qt.ControlModifier)
+        wheel(120,Qt.NoModifier)
+        self.assertEqual(scales,[1,1,-1])
+        self.assertEqual(self.sidebar.scale(),1)
+        QTest.mousePress(button,Qt.LeftButton,pos=QPoint(10,10))
+        QTest.mouseMove(button,QPoint(25,10))
+        QTest.mouseMove(button,QPoint(30,10))
+        QTest.mouseRelease(button,Qt.LeftButton,pos=QPoint(30,10))
+        self.assertEqual(drags,[True])
+        self.assertIsNone(self.sidebar._active)
+
+    def test_independent_setter_order_and_card_font_restore(self):
+        other=SidebarWidget({k:ProviderCardWidget(k) for k in self.cards})
+        try:
+            self.sidebar.set_scale(1.5)
+            self.sidebar.set_orientation('horizontal')
+            self.sidebar.set_state('panel')
+            other.set_state('panel')
+            other.set_orientation('horizontal')
+            other.set_scale(1.5)
+            self.assertEqual(self.sidebar.preferred_size(),other.preferred_size())
+            card=self.cards['claude']
+            self.assertIn('21px',card.m1_val.styleSheet())
+            self.sidebar.set_scale(1.5)
+            self.assertIn('21px',card.m1_val.styleSheet())
+            self.sidebar.set_state('strip')
+            self.assertIn('14px',card.m1_val.styleSheet())
+        finally:
+            other.close()
+            other.deleteLater()
+
+    def test_flyout_directions(self):
+        self.sidebar.move(500,400)
+        button=self.sidebar.buttons['claude']
+        origin=button.mapToGlobal(QPoint())
+        size=QSize(260,200)
+        area=QRect(0,0,2000,1500)
+        for edge in ('right','left','top','bottom',None):
+            self.sidebar.set_dock_edge(edge)
+            pos=self.sidebar._flyout_position(button,size,area)
+            self.assertTrue(area.contains(QRect(pos,size)))
+            if edge in ('right',None): self.assertEqual(pos.x()+size.width(),origin.x())
+            if edge=='left': self.assertEqual(pos.x(),origin.x()+button.width())
+            if edge=='top': self.assertEqual(pos.y(),origin.y()+button.height())
+            if edge=='bottom': self.assertEqual(pos.y()+size.height(),origin.y())
+        self.assertTrue(QRect(490,390,300,250).contains(QRect(self.sidebar._flyout_position(button,size,QRect(490,390,300,250)),size)))
+
     def test_flyout_reparent_pin_and_restore(self):
         self.sidebar.buttons['agy'].click(); APP.processEvents()
         card=self.cards['agy']

@@ -11,7 +11,12 @@ DEFAULT_CONFIG = {
     "window_y": None,
     "ui_mode": "cards",  # "cards" (Classic Cards), "table" (Modern Table) or "sidebar" (docked right-edge strip)
     "sidebar_state": "strip",  # "strip" (92px icon strip) or "panel" (220px column)
-    "sidebar_bottom_offset": 12,  # distance from the work-area bottom, updated when dragged
+    "sidebar_edge": "right",  # "left" | "right" | "top" | "bottom" | "none" (free position)
+    "sidebar_orientation": "vertical",  # follows the edge; remembered while floating
+    "sidebar_offset": None,  # distance along the edge from its start; None = bottom/right default
+    "sidebar_x": None,  # free position, used when sidebar_edge is "none"
+    "sidebar_y": None,
+    "sidebar_scale": 1.0,  # 0.6 - 2.0, Ctrl+wheel on the bar
     "layout_mode": "vertical",  # "vertical" or "horizontal" (for cards mode)
     "vertical_width": 280,
     "vertical_height": 410,

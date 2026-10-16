@@ -2,10 +2,21 @@ import sys
 import unittest
 
 from ui.dock_geometry import (
+    EDGES,
+    SCALE_MAX,
+    SCALE_MIN,
+    SCALE_STEP,
     bottom_offset_from_rect,
+    clamp_scale,
     constrain_to_edge,
     dock_rect,
+    dock_to_edge,
+    offset_along_edge,
+    orientation_for_edge,
     pick_work_area,
+    scale_size,
+    snap_rect,
+    step_scale,
 )
 
 
@@ -124,6 +135,134 @@ class TestDockGeometry(unittest.TestCase):
         with self.assertRaises(ValueError):
             pick_work_area((100, 100), [])
 
+    def test_snap_rect(self):
+        wa = (0, 0, 1920, 1040)
+        # right edge exceeded (-44) -> snap right, x=1856, y=300
+        self.assertEqual(
+            snap_rect((1900, 300, 64, 200), wa),
+            ((1856, 300, 64, 200), "right"),
+        )
+        # left edge within threshold -> snap left, x=0
+        self.assertEqual(
+            snap_rect((10, 500, 64, 200), wa),
+            ((0, 500, 64, 200), "left"),
+        )
+        # top edge within threshold -> snap top, y=0
+        self.assertEqual(
+            snap_rect((500, 8, 200, 64), wa),
+            ((500, 0, 200, 64), "top"),
+        )
+        # bottom edge exceeded (-4) -> snap bottom, y=976
+        self.assertEqual(
+            snap_rect((500, 980, 200, 64), wa),
+            ((500, 976, 200, 64), "bottom"),
+        )
+        # far from all edges -> (rect, None)
+        self.assertEqual(
+            snap_rect((800, 400, 64, 200), wa),
+            ((800, 400, 64, 200), None),
+        )
+        # corner tie (left=5, top=5) -> priority left
+        self.assertEqual(
+            snap_rect((5, 5, 64, 200), wa),
+            ((0, 5, 64, 200), "left"),
+        )
+        # far outside work area (x=-500, y=-100) -> snap left and clamp y inside
+        self.assertEqual(
+            snap_rect((-500, -100, 64, 200), wa),
+            ((0, 0, 64, 200), "left"),
+        )
+        # secondary monitor offset work_area (1920, 0, 1920, 1080)
+        wa_sec = (1920, 0, 1920, 1080)
+        self.assertEqual(
+            snap_rect((1930, 200, 64, 200), wa_sec),
+            ((1920, 200, 64, 200), "left"),
+        )
+        self.assertEqual(
+            snap_rect((3800, 200, 64, 200), wa_sec),
+            ((3776, 200, 64, 200), "right"),
+        )
+
+    def test_orientation_for_edge(self):
+        self.assertEqual(orientation_for_edge("left"), "vertical")
+        self.assertEqual(orientation_for_edge("right", "horizontal"), "vertical")
+        self.assertEqual(orientation_for_edge("top"), "horizontal")
+        self.assertEqual(orientation_for_edge("bottom", "vertical"), "horizontal")
+        self.assertEqual(orientation_for_edge(None), "vertical")
+        self.assertEqual(orientation_for_edge(None, "horizontal"), "horizontal")
+        self.assertEqual(orientation_for_edge("unknown", "horizontal"), "horizontal")
+        self.assertEqual(orientation_for_edge("invalid"), "vertical")
+
+    def test_dock_to_edge(self):
+        wa = (0, 0, 1920, 1040)
+        # right default (bottom-aligned with margin 12) matches dock_rect
+        self.assertEqual(
+            dock_to_edge(wa, "right", 92, 270),
+            dock_rect(wa, 92, 270, 12),
+        )
+        # left with offset=100 -> (wa.x, wa.y+100, w, h)
+        wa_offset = (100, 50, 1920, 1040)
+        self.assertEqual(
+            dock_to_edge(wa_offset, "left", 92, 270, offset=100),
+            (100, 150, 92, 270),
+        )
+        # top default (right-aligned with margin 12)
+        self.assertEqual(
+            dock_to_edge(wa, "top", 270, 64),
+            (1920 - 270 - 12, 0, 270, 64),
+        )
+        # bottom with oversized offset -> clamped to [0, ww - w]
+        self.assertEqual(
+            dock_to_edge(wa, "bottom", 270, 64, offset=99999),
+            (1920 - 270, 1040 - 64, 270, 64),
+        )
+        # width/height exceeding work_area -> clamped to work_area size
+        self.assertEqual(
+            dock_to_edge(wa, "left", 5000, 5000),
+            (0, 0, 1920, 1040),
+        )
+        # invalid edge raises ValueError
+        with self.assertRaises(ValueError):
+            dock_to_edge(wa, "center", 92, 270)
+
+        # DPI scaling scenarios: (0,0,1536,816) and (0,0,1280,680) completely inside work_area
+        for wa_scaled in ((0, 0, 1536, 816), (0, 0, 1280, 680)):
+            for edge in EDGES:
+                r = dock_to_edge(wa_scaled, edge, 92, 270)
+                self.assertGreaterEqual(r[0], wa_scaled[0])
+                self.assertGreaterEqual(r[1], wa_scaled[1])
+                self.assertLessEqual(r[0] + r[2], wa_scaled[0] + wa_scaled[2])
+                self.assertLessEqual(r[1] + r[3], wa_scaled[1] + wa_scaled[3])
+
+    def test_offset_along_edge_round_trip(self):
+        wa = (100, 50, 1920, 1040)
+        for edge in EDGES:
+            w, h = (92, 270) if edge in ("left", "right") else (270, 64)
+            rect = dock_to_edge(wa, edge, w, h, offset=180)
+            self.assertEqual(offset_along_edge(rect, wa, edge), 180)
+
+        with self.assertRaises(ValueError):
+            offset_along_edge((0, 0, 92, 270), wa, "invalid")
+
+    def test_scale_helpers(self):
+        # clamp_scale
+        self.assertEqual(clamp_scale(0.3), 0.6)
+        self.assertEqual(clamp_scale(5), 2.0)
+        self.assertEqual(clamp_scale(1.04), 1.0)
+        self.assertEqual(clamp_scale(1.06), 1.1)
+        self.assertEqual(clamp_scale(float("nan")), 1.0)
+        self.assertEqual(clamp_scale("x"), 1.0)  # type: ignore[arg-type]
+
+        # step_scale
+        self.assertEqual(step_scale(1.0, 3), 1.3)
+        self.assertEqual(step_scale(0.6, -1), 0.6)
+        self.assertEqual(step_scale(2.0, 1), 2.0)
+
+        # scale_size
+        self.assertEqual(scale_size(64, 68, 1.5), (96, 102))
+        self.assertEqual(scale_size(64, 68, 0.1), (38, 41))
+
 
 if __name__ == "__main__":
     unittest.main()
+

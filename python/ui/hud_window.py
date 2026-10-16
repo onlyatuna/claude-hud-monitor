@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication
 )
-from PySide6.QtGui import QContextMenuEvent, QCursor, QGuiApplication, QIcon
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 
 from core.providers import PROVIDERS, UsageMetrics
 from core.config_manager import ConfigManager
@@ -20,7 +20,9 @@ from ui.styles import (
 from ui.provider_card import ProviderCardWidget
 from ui.usage_table import UsageTable
 from ui.sidebar import SidebarWidget
-from ui.dock_geometry import dock_rect, constrain_to_edge, bottom_offset_from_rect, pick_work_area
+from ui.dock_geometry import (EDGES, dock_to_edge, offset_along_edge, orientation_for_edge, pick_work_area,
+                              snap_rect, step_scale, clamp_scale)
+from ui.hud_menu import build_hud_menu
 from ui import vibrancy
 from system.memory import trim_memory
 
@@ -37,7 +39,7 @@ MIN_VERT_W, MIN_VERT_H = 250, 320
 DEF_VERT_W, DEF_VERT_H = 280, 410
 
 QWIDGETSIZE_MAX = 16777215
-SIDEBAR_BOTTOM_OFFSET = 12
+SIDEBAR_SNAP_PX = 24
 
 if sys.platform == "win32":
     import ctypes
@@ -107,8 +109,14 @@ class HUDWindow(QWidget):
         self.sidebar = SidebarWidget(self.sidebar_cards, parent=self)
         self.sidebar.hide()
         self.sidebar.stateChangeRequested.connect(self.set_sidebar_state)
-        self.sidebar.settingsRequested.connect(self._show_sidebar_menu)
+        self.sidebar.contextMenuRequested.connect(self._show_sidebar_menu)
+        self.sidebar.scaleStepRequested.connect(self._on_sidebar_scale_step)
+        self.sidebar.dragRequested.connect(self._start_sidebar_drag)
         self._docking = False
+        self._snap_timer = QTimer(self)
+        self._snap_timer.setSingleShot(True)
+        self._snap_timer.setInterval(180)
+        self._snap_timer.timeout.connect(self._finish_sidebar_move)
 
         self._init_window_flags()
         self._init_ui_skeleton()
@@ -215,6 +223,8 @@ class HUDWindow(QWidget):
         if scheme not in SCHEMES:
             return
         self.config.set("color_scheme", scheme)
+        if self.config.get("ui_mode") == "sidebar":
+            self._apply_theme()
         self._rebuild_table()
 
     def set_appearance(self, appearance: str):
@@ -262,7 +272,7 @@ class HUDWindow(QWidget):
             vibrancy.clear(self)
             dark = t is THEMES["dark"]
             self.setStyleSheet(get_cards_stylesheet(dark=dark))
-            self.sidebar.set_appearance(dark)
+            self.sidebar.set_appearance(dark, self.color_scheme())
             for card in self.sidebar_cards.values():
                 card.set_appearance(dark)
         else:
@@ -361,11 +371,24 @@ class HUDWindow(QWidget):
         self.inner_layout.setContentsMargins(0, 0, 0, 0)
         self.inner_layout.setSpacing(0)
         state = self.config.get("sidebar_state", "strip")
-        self._apply_theme()
         self.inner_layout.addWidget(self.sidebar)
         self.sidebar.show()
+        self.sidebar.set_scale(self._sidebar_scale())
+        self.sidebar.set_orientation(self._sidebar_orientation())
+        self.sidebar.set_dock_edge(self._sidebar_edge())
         self.sidebar.set_state(state if state in ("strip", "panel") else "strip")
+        self._apply_theme()
         self._dock_sidebar()
+
+    def _sidebar_scale(self) -> float:
+        return clamp_scale(self.config.get("sidebar_scale", 1.0))
+
+    def _sidebar_edge(self):
+        edge = self.config.get("sidebar_edge", "right")
+        return edge if edge in EDGES else None
+
+    def _sidebar_orientation(self) -> str:
+        return orientation_for_edge(self._sidebar_edge(), self.config.get("sidebar_orientation", "vertical"))
 
     def _sidebar_work_area(self):
         areas = [(g.x(), g.y(), g.width(), g.height())
@@ -376,34 +399,75 @@ class HUDWindow(QWidget):
         return pick_work_area((center.x(), center.y()), areas)
 
     def _dock_sidebar(self):
-        """Snap to the right edge of the current screen, keeping the saved distance from the bottom."""
+        """Place the bar on its saved edge (or saved free position) of the current screen."""
         work = self._sidebar_work_area()
         if work is None:
             return
         size = self.sidebar.preferred_size()
-        offset = self.config.get("sidebar_bottom_offset", SIDEBAR_BOTTOM_OFFSET)
-        if not isinstance(offset, int):
-            offset = SIDEBAR_BOTTOM_OFFSET
-        x, y, w, h = dock_rect(work, size.width(), size.height(), offset)
+        edge = self._sidebar_edge()
+        if edge is not None:
+            offset = self.config.get("sidebar_offset")
+            rect = dock_to_edge(work, edge, size.width(), size.height(), offset if isinstance(offset, int) else None)
+        else:
+            x, y = self.config.get("sidebar_x"), self.config.get("sidebar_y")
+            if not isinstance(x, int) or not isinstance(y, int):
+                x, y = work[0] + work[2], work[1] + work[3]
+            rect, _ = snap_rect((x, y, size.width(), size.height()), work, -10**6)
         self._docking = True
         try:
-            self.setFixedSize(w, h)
-            self.setGeometry(x, y, w, h)
+            self.setFixedSize(rect[2], rect[3])
+            self.setGeometry(*rect)
         finally:
             self._docking = False
+
+    def _finish_sidebar_move(self):
+        """After a drag: snap to the nearest screen edge (or stay free) and remember the position."""
+        if self.config.get("ui_mode") != "sidebar" or self._docking:
+            return
+        if QGuiApplication.mouseButtons() != Qt.MouseButton.NoButton:
+            self._snap_timer.start()
+            return
+        work = self._sidebar_work_area()
+        if work is None:
+            return
+        g = self.geometry()
+        rect, edge = snap_rect((g.x(), g.y(), g.width(), g.height()), work, SIDEBAR_SNAP_PX)
+        orientation = orientation_for_edge(edge, self.config.get("sidebar_orientation", "vertical"))
+        updates = {"sidebar_edge": edge or "none", "sidebar_orientation": orientation}
+        if edge is not None:
+            updates["sidebar_offset"] = offset_along_edge(rect, work, edge)
+        else:
+            updates["sidebar_x"], updates["sidebar_y"] = rect[0], rect[1]
+        self.config.set_many(updates)
+        self.sidebar.set_orientation(orientation)
+        self.sidebar.set_dock_edge(edge)
+        self._dock_sidebar()
+
+    def _start_sidebar_drag(self):
+        if self.config.get("locked", False):
+            return
+        handle = self.windowHandle()
+        if handle:
+            handle.startSystemMove()
+
+    def set_sidebar_scale(self, scale: float):
+        self.config.set("sidebar_scale", clamp_scale(scale))
+        if self.config.get("ui_mode") == "sidebar":
+            self.sidebar.set_scale(self._sidebar_scale())
+            self._dock_sidebar()
+
+    def _on_sidebar_scale_step(self, steps: int):
+        self.set_sidebar_scale(step_scale(self._sidebar_scale(), steps))
 
     def set_sidebar_state(self, state: str):
         if state not in ("strip", "panel") or self.config.get("ui_mode") != "sidebar":
             return
-        self._persist_geometry()
         self.config.set("sidebar_state", state)
         self.sidebar.set_state(state)
         self._dock_sidebar()
 
-    def _show_sidebar_menu(self):
-        button = self.sidebar.settings_button
-        pos = button.mapToGlobal(QPoint(0, button.height()))
-        self.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, self.mapFromGlobal(pos), pos))
+    def _show_sidebar_menu(self, global_pos):
+        build_hud_menu(self, self).exec(global_pos)
 
     def _fit_cards_height(self):
         """Grow the window when the cards need more room than the saved size (agy shows five bars)."""
@@ -709,21 +773,8 @@ class HUDWindow(QWidget):
     def moveEvent(self, event):
         super().moveEvent(event)
         if self.config.get("ui_mode") == "sidebar" and not self._docking and not self._restoring_geometry:
-            self._constrain_sidebar()
+            self._snap_timer.start()
         self._save_geometry()
-
-    def _constrain_sidebar(self):
-        work = self._sidebar_work_area()
-        if work is None:
-            return
-        g = self.geometry()
-        x, y, w, h = constrain_to_edge((g.x(), g.y(), g.width(), g.height()), work)
-        if (x, y) != (g.x(), g.y()):
-            self._docking = True
-            try:
-                self.move(x, y)
-            finally:
-                self._docking = False
 
     def closeEvent(self, event):
         self._persist_geometry()
@@ -753,12 +804,7 @@ class HUDWindow(QWidget):
         pos, size = self.pos(), self.size()
         ui_mode = self.config.get("ui_mode", "cards")
         if ui_mode == "sidebar":
-            work = self._sidebar_work_area()
-            if work is not None:
-                g = self.geometry()
-                self.config.set("sidebar_bottom_offset",
-                                bottom_offset_from_rect((g.x(), g.y(), g.width(), g.height()), work))
-            return
+            return  # position is saved when a drag settles (_finish_sidebar_move)
         updates = {
             "window_x": pos.x(),
             "window_y": pos.y(),
@@ -803,137 +849,7 @@ class HUDWindow(QWidget):
               lambda: self.config.get("appearance", "auto"), self.set_appearance)
 
     def contextMenuEvent(self, event):
-        menu = QMenu(self)
-
-        refresh_act = menu.addAction("🔄 立即重新整理所有 AI (Refresh All)")
-        refresh_act.triggered.connect(self.trigger_async_refresh)
-
-        menu.addSeparator()
-
-        # Claude Account Submenu (PR 13)
-        claude_menu = menu.addMenu("✳️ Claude 帳號 (Claude Account)")
-        from core.providers.claude_provider import discover_profiles, resolve_active_profile
-        cur_profile = self.config.get("claude_profile", "auto")
-        is_auto = (cur_profile == "auto")
-        active_prof, _ = resolve_active_profile(cur_profile)
-
-        auto_title = f"智慧自動追蹤 (目前: {active_prof.short_name})" if (is_auto and active_prof.id != "default") else "智慧自動追蹤 (最近活躍)"
-        auto_act = claude_menu.addAction(f"🎯 {auto_title}")
-        auto_act.setCheckable(True)
-        auto_act.setChecked(is_auto)
-        auto_act.triggered.connect(lambda: self._set_claude_profile("auto"))
-
-        claude_menu.addSeparator()
-
-        for prof in discover_profiles()[:40]:
-            is_selected = (not is_auto and (cur_profile == prof.id or (cur_profile == ".claude" and prof.id == "default")))
-            p_act = claude_menu.addAction(prof.display_name)
-            p_act.setCheckable(True)
-            p_act.setChecked(is_selected)
-            p_act.triggered.connect(lambda checked, pid=prof.id: self._set_claude_profile(pid))
-
-        menu.addSeparator()
-
-        # UI Mode Submenu (Dual Mode Switcher)
-        ui_mode_menu = menu.addMenu("🎭 介面風格 (UI Style)")
-        cur_ui_mode = self.config.get("ui_mode", "cards")
-
-        cards_act = ui_mode_menu.addAction("🗂️ 傳統卡片 (Classic Cards)")
-        cards_act.setCheckable(True)
-        cards_act.setChecked(cur_ui_mode == "cards")
-        cards_act.triggered.connect(lambda: self._apply_ui_mode("cards"))
-
-        table_act = ui_mode_menu.addAction("📊 儀表表格 (Modern Table)")
-        table_act.setCheckable(True)
-        table_act.setChecked(cur_ui_mode == "table")
-        table_act.triggered.connect(lambda: self._apply_ui_mode("table"))
-
-        sidebar_act = ui_mode_menu.addAction("📌 側邊欄 (Sidebar)")
-        sidebar_act.setCheckable(True)
-        sidebar_act.setChecked(cur_ui_mode == "sidebar")
-        sidebar_act.triggered.connect(lambda: self._apply_ui_mode("sidebar"))
-
-        # Context-specific options
-        if cur_ui_mode == "sidebar":
-            state_menu = menu.addMenu("📏 側邊欄形態 (Sidebar Form)")
-            cur_state = self.config.get("sidebar_state", "strip")
-            for key, label in (("strip", "細條 (Strip)"), ("panel", "固定窄欄 (Panel)")):
-                act = state_menu.addAction(label)
-                act.setCheckable(True)
-                act.setChecked(cur_state == key)
-                act.triggered.connect(lambda checked=False, k=key: self.set_sidebar_state(k))
-        if cur_ui_mode == "cards":
-            layout_menu = menu.addMenu("📐 顯示佈局 (Layout)")
-            cur_layout = self.config.get("layout_mode", "horizontal")
-            horiz_act = layout_menu.addAction("💻 橫向三欄並排 (Horizontal Triple)")
-            horiz_act.setCheckable(True)
-            horiz_act.setChecked(cur_layout == "horizontal")
-            horiz_act.triggered.connect(lambda: self._apply_cards_layout_mode("horizontal"))
-
-            vert_act = layout_menu.addAction("📱 直立三層堆疊 (Vertical Stack)")
-            vert_act.setCheckable(True)
-            vert_act.setChecked(cur_layout == "vertical")
-            vert_act.triggered.connect(lambda: self._apply_cards_layout_mode("vertical"))
-        self.add_theme_menus(menu)
-
-        # Click-through toggle
-        ghost_act = menu.addAction("👻 滑鼠點擊穿透 (Alt+Shift+C)")
-        ghost_act.setCheckable(True)
-        ghost_act.setChecked(self.config.get("click_through", False))
-        ghost_act.triggered.connect(self.toggle_click_through)
-
-        # Always on top
-        aot_act = menu.addAction("📌 視窗永遠置頂 (Always on Top)")
-        aot_act.setCheckable(True)
-        aot_act.setChecked(self.config.get("always_on_top", True))
-        aot_act.triggered.connect(self._toggle_always_on_top)
-
-        # Lock position
-        lock_act = menu.addAction("🔒 鎖定視窗位置 (Lock Drag)")
-        lock_act.setCheckable(True)
-        lock_act.setChecked(self.config.get("locked", False))
-        lock_act.triggered.connect(self._toggle_lock)
-
-        # Opacity submenu
-        opacity_menu = menu.addMenu("🌗 視窗透明度 (Opacity)")
-        current_op = self.config.get("opacity", 0.88)
-        for pct in [100, 90, 80, 70, 50, 30]:
-            val = pct / 100.0
-            act = opacity_menu.addAction(f"{pct}%")
-            act.setCheckable(True)
-            act.setChecked(abs(current_op - val) < 0.05)
-            act.triggered.connect(lambda checked, v=val: self._set_opacity(v))
-
-        # Refresh interval submenu
-        interval_menu = menu.addMenu("⏱️ 更新頻率 (Interval)")
-        cur_int = self.config.get("refresh_interval_sec", 60)
-        for sec in [30, 60, 120, 300]:
-            act = interval_menu.addAction(f"{sec} 秒")
-            act.setCheckable(True)
-            act.setChecked(cur_int == sec)
-            act.triggered.connect(lambda checked, s=sec: self._set_interval(s))
-
-        # Autostart (cross-platform)
-        autostart_act = menu.addAction("🚀 開機自動啟動 (Start on Boot)")
-        autostart_act.setCheckable(True)
-        autostart_act.setChecked(is_autostart_enabled())
-        autostart_act.triggered.connect(self._toggle_autostart)
-
-        menu.addSeparator()
-
-        log_act = menu.addAction("📂 開啟記錄檔目錄 (Open Logs)")
-        log_act.triggered.connect(open_log_dir)
-
-        reset_act = menu.addAction("📐 重設預設尺寸與位置")
-        reset_act.triggered.connect(self._reset_geometry)
-
-        hide_act = menu.addAction("👁️ 隱藏 HUD (Alt+C 重新喚出)")
-        hide_act.triggered.connect(self.hide)
-
-        exit_act = menu.addAction("❌ 結束程式 (Exit)")
-        exit_act.triggered.connect(self.close_application)
-
-        menu.exec(event.globalPos())
+        build_hud_menu(self, self).exec(event.globalPos())
 
     def _apply_cards_layout_mode(self, mode: str):
         self._persist_geometry()
@@ -985,7 +901,11 @@ class HUDWindow(QWidget):
     def _reset_geometry(self):
         ui_mode = self.config.get("ui_mode", "cards")
         if ui_mode == "sidebar":
-            self.config.set("sidebar_bottom_offset", SIDEBAR_BOTTOM_OFFSET)
+            self.config.set_many({"sidebar_edge": "right", "sidebar_orientation": "vertical", "sidebar_offset": None,
+                                  "sidebar_x": None, "sidebar_y": None, "sidebar_scale": 1.0})
+            self.sidebar.set_scale(1.0)
+            self.sidebar.set_orientation("vertical")
+            self.sidebar.set_dock_edge("right")
             self._dock_sidebar()
             return
         if ui_mode == "table":

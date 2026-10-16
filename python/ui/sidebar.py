@@ -1,31 +1,71 @@
-"""Compact provider navigation and reusable card flyouts."""
+"""Scalable quota dials and reusable provider-card flyouts.
+
+Compact desktop tokens: 4 px rhythm, 12 px labels, native buttons, a visible
+2 px focus ring and paired AA text colours; hover is supplementary to keyboard
+and click activation. Motion honours the system accessibility preference.
+"""
 import math
+import re
 import sys
-from PySide6.QtCore import Qt, Signal, QSize, QRectF, QPoint, QTimer, QEvent, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, Signal, QSize, QRect, QRectF, QPoint, QTimer, QEvent, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QGuiApplication, QCursor
-from PySide6.QtWidgets import QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QFrame, QSizePolicy
+from PySide6.QtWidgets import QWidget, QPushButton, QBoxLayout, QVBoxLayout, QFrame, QSizePolicy
+from core.pace import FIVE_HOURS, ONE_WEEK, window_seconds, elapsed_fraction, pace_mark, scale_level
 from ui.provider_card import PROVIDER_THEMES
-from ui.styles import get_progress_color, get_cards_stylesheet
+from ui.styles import THEMES, get_cards_stylesheet
+from ui.usage_table import UsageDial
 
 SIDEBAR_TOKENS = {
-    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', track='#454550', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', providers={k: v['color'] for k, v in PROVIDER_THEMES.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, hover_ms=300, leave_ms=600, animation_ms=160),
-    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', track='#ceced8', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', providers={'claude':'#0369a1','agy':'#047857','codex':'#7e22ce'}, font='Segoe UI', font_size=12, spacing=4, radius=6, hover_ms=300, leave_ms=600, animation_ms=160),
+    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', providers={k: v['color'] for k, v in PROVIDER_THEMES.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
+    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', providers={'claude':'#0369a1','agy':'#047857','codex':'#7e22ce'}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
 }
-STRIP_WIDTH = 92
-PANEL_WIDTH = 220
+BASE_BUTTON_W, BASE_BUTTON_H = 64, 68
+BASE_DIAL = 44
+BASE_PANEL_W = 220
 _NAMES = {'claude':'Claude', 'agy':'AGY', 'codex':'Codex'}
+
+
+class _Indicators(QWidget):
+    """Paint status above the dial without intercepting its button's input."""
+    def __init__(self, button):
+        super().__init__(button)
+        self.button = button
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WA_NoSystemBackground)
+
+    def paintEvent(self, event):
+        button = self.button
+        t, scale = button.owner.tokens, button.owner.scale()
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        if button.stale:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(t['stale']))
+            p.drawEllipse(QRectF(self.width()-10*scale,5*scale,6*scale,6*scale))
+        if button.kind == 'agy':
+            for i, color in enumerate(button.dot_colors):
+                p.setPen(QPen(QColor(t['background']), scale))
+                p.setBrush(QColor(color))
+                p.drawEllipse(QRectF((43+8*i)*scale,40*scale,6*scale,6*scale))
+
 
 class _Button(QPushButton):
     def __init__(self, kind, owner):
         super().__init__(owner)
         self.kind, self.owner = kind, owner
-        self.value, self.stale, self.offline = None, False, False
-        self.display_text = '--'
-        self.setFixedSize(92, 84) if kind in _NAMES else self.setFixedSize(40, 40)
+        self.stale, self.offline = False, False
+        self._press_pos, self._dragged = None, False
+        self.dot_colors = [THEMES['dark']['neutral']] * 2
+        self.dial = UsageDial(THEMES['dark'], self) if kind in _NAMES else None
+        if self.dial:
+            self.dial.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.indicators = _Indicators(self)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
-        self.setAccessibleName(_NAMES.get(kind, 'Toggle sidebar' if kind == 'toggle' else 'Settings'))
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAccessibleName(_NAMES.get(kind, 'Toggle sidebar'))
         self.setToolTip(self.accessibleName())
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             self.click()
@@ -33,165 +73,398 @@ class _Button(QPushButton):
             self.owner.close_flyout()
         else:
             super().keyPressEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._press_pos = event.position().toPoint()
+            self._dragged = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._press_pos is not None and not self._dragged:
+            delta = event.position().toPoint() - self._press_pos
+            if math.hypot(delta.x(), delta.y()) > 6:
+                self._dragged = True
+                self.setDown(False)
+                self.owner._hover_timer.stop()
+                self.owner.dragRequested.emit()
+        if not self._dragged:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        dragged = self._dragged
+        self._press_pos = None
+        if dragged and event.button() == Qt.LeftButton:
+            self.setDown(False)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+
     def enterEvent(self, event):
         self.update()
         if self.kind in _NAMES:
             self.owner._hover(self.kind)
         super().enterEvent(event)
+
     def leaveEvent(self, event):
         self.update()
         self.owner._hover_timer.stop()
         self.owner._schedule_close()
         super().leaveEvent(event)
+
     def paintEvent(self, event):
-        t = self.owner.tokens
+        t, scale = self.owner.tokens, self.owner.scale()
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(t['pressed'] if self.isDown() else t['hover'] if self.underMouse() else t['background']))
-        p.drawRoundedRect(QRectF(self.rect()).adjusted(2,2,-2,-2), t['radius'], t['radius'])
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(scale,scale,-scale,-scale), t['radius']*scale, t['radius']*scale)
         if self.hasFocus():
-            p.setBrush(Qt.NoBrush); p.setPen(QPen(QColor(t['focus']), 2))
-            p.drawRoundedRect(QRectF(self.rect()).adjusted(3,3,-3,-3), t['radius'], t['radius'])
-        p.setPen(QPen(QColor(t['text']), 1.6))
+            p.setBrush(Qt.NoBrush)
+            color = t['providers'].get(self.kind, t['focus'])
+            p.setPen(QPen(QColor(color), t['focus_width']*scale))
+            p.drawRoundedRect(QRectF(self.rect()).adjusted(2*scale,2*scale,-2*scale,-2*scale), t['radius']*scale, t['radius']*scale)
+        font = QFont(t['font'])
+        font.setPixelSize(max(1, round(t['font_size']*scale)))
+        p.setFont(font)
         if self.kind == 'toggle':
-            p.drawRect(12,12,16,16); p.drawLine(22,12,22,28)
+            p.setPen(QColor(t['text']))
+            p.drawText(self.rect(), Qt.AlignCenter, '\u2261' if self.owner.state() == 'strip' else '\u25a5')
             return
-        if self.kind == 'settings':
-            p.drawEllipse(12,12,16,16); p.drawEllipse(17,17,6,6)
-            for a in range(0,360,45):
-                r=math.radians(a); p.drawLine(QPoint(round(20+9*math.cos(r)),round(20+9*math.sin(r))),QPoint(round(20+12*math.cos(r)),round(20+12*math.sin(r))))
-            return
-        ring = QRectF(28,6,36,36)
-        p.setPen(QPen(QColor(t['track']), 2)); p.setBrush(Qt.NoBrush); p.drawEllipse(ring)
-        if self.value is not None and not self.offline:
-            p.setPen(QPen(QColor(get_progress_color(self.value,self.owner.dark)),2))
-            p.drawArc(ring,90*16,-round(self.value*3.6*16))
-        p.setPen(QPen(QColor(t['muted'] if self.offline else t['providers'][self.kind]),2))
-        if self.kind == 'claude':
-            for a in range(0,360,45):
-                r=math.radians(a); p.drawLine(QPoint(round(46+4*math.cos(r)),round(24+4*math.sin(r))),QPoint(round(46+11*math.cos(r)),round(24+11*math.sin(r))))
-        elif self.kind == 'agy':
-            p.drawLine(36,31,46,16); p.drawLine(46,16,56,31); p.drawLine(40,27,52,27)
-        else:
-            p.drawLine(42,17,36,24); p.drawLine(36,24,42,31); p.drawLine(50,17,56,24); p.drawLine(56,24,50,31)
-        p.setFont(QFont(t['font'], t['font_size']-3)); p.setPen(QColor(t['text']))
-        p.drawText(QRectF(0,45,92,18),Qt.AlignCenter,_NAMES[self.kind])
-        p.setPen(QColor(t['muted'] if self.offline else t['text']))
-        p.drawText(QRectF(0,63,92,18),Qt.AlignCenter,self.display_text)
-        if self.stale:
-            p.setPen(Qt.NoPen); p.setBrush(QColor(t['stale'])); p.drawEllipse(68,9,6,6)
+        p.setPen(QColor(t['providers'][self.kind]))
+        p.drawText(QRectF(0,48*scale,self.width(),18*scale), Qt.AlignCenter, _NAMES[self.kind])
+
 
 class SidebarWidget(QWidget):
-    stateChangeRequested = Signal(str)
+    # Compatibility for the existing host until its separately assigned migration.
     settingsRequested = Signal()
+    stateChangeRequested = Signal(str)
+    contextMenuRequested = Signal(QPoint)
+    scaleStepRequested = Signal(int)
+    dragRequested = Signal()
+
     def __init__(self, cards: dict, parent=None):
         super().__init__(parent)
         self.cards = dict(cards)
-        self._state, self.dark = 'strip', True
+        self._state, self._orientation, self._scale = 'strip', 'vertical', 1.0
+        self._dock_edge, self.dark, self.scheme = None, True, 'scale'
         self.tokens = SIDEBAR_TOKENS['dark']
-        self._active, self._pinned = None, False
-        self._hover_id = None
-        self._hover_timer = QTimer(self); self._hover_timer.setSingleShot(True)
+        self._metrics = {}
+        self._active, self._pinned, self._hover_id = None, False, None
+        self._wheel_remainder = 0
+        self._card_styles = {}
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
         self._hover_timer.timeout.connect(lambda: self._open_flyout(self._hover_id))
-        self._leave_timer = QTimer(self); self._leave_timer.setSingleShot(True)
+        self._leave_timer = QTimer(self)
+        self._leave_timer.setSingleShot(True)
         self._leave_timer.timeout.connect(self._maybe_close)
-        self._layout = QVBoxLayout(self); self._layout.setContentsMargins(0,0,0,0); self._layout.setSpacing(0)
-        header = QHBoxLayout(); header.setContentsMargins(4,0,4,0); header.setSpacing(4)
-        self.toggle_button = _Button('toggle',self); self.settings_button = _Button('settings',self)
-        header.addWidget(self.toggle_button); header.addStretch(); header.addWidget(self.settings_button)
-        self._layout.addLayout(header)
-        self.toggle_button.clicked.connect(lambda: self.stateChangeRequested.emit('panel' if self._state=='strip' else 'strip'))
-        self.settings_button.clicked.connect(self.settingsRequested.emit)
-        self._strip = QWidget(self); strip_layout = QVBoxLayout(self._strip); strip_layout.setContentsMargins(0,0,0,0); strip_layout.setSpacing(0)
+        self._layout = QBoxLayout(QBoxLayout.TopToBottom, self)
+        self.toggle_button = _Button('toggle', self)
+        self.toggle_button.clicked.connect(lambda: self.stateChangeRequested.emit('panel' if self._state == 'strip' else 'strip'))
+        self._layout.addWidget(self.toggle_button)
+        self._strip = QWidget(self)
+        self._strip_layout = QBoxLayout(QBoxLayout.TopToBottom, self._strip)
+        self._strip_layout.setContentsMargins(0,0,0,0)
+        self._strip_layout.setSpacing(0)
         self.buttons = {}
         for key in _NAMES:
-            button = _Button(key,self); self.buttons[key]=button; strip_layout.addWidget(button)
-            button.clicked.connect(lambda checked=False,k=key: self._click_provider(k))
+            button = _Button(key, self)
+            self.buttons[key] = button
+            self._strip_layout.addWidget(button)
+            button.clicked.connect(lambda checked=False, k=key: self._click_provider(k))
         self._layout.addWidget(self._strip)
-        self._panel = QWidget(self); self._panel_layout = QVBoxLayout(self._panel); self._panel_layout.setContentsMargins(4,4,4,4); self._panel_layout.setSpacing(4)
-        self._layout.addWidget(self._panel); self._panel.hide()
-        self._storage = QWidget(self); self._storage.hide()
+        self._panel = QWidget(self)
+        self._panel_layout = QBoxLayout(QBoxLayout.TopToBottom, self._panel)
+        self._panel_layout.setContentsMargins(0,0,0,0)
+        self._layout.addWidget(self._panel)
+        self._panel.hide()
+        self._storage = QWidget(self)
+        self._storage.hide()
         for card in self.cards.values():
-            card.setParent(self._storage); card.hide()
-            card.setMinimumWidth(0); card.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Preferred)
-        self._flyout = QWidget(self,Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            card.setParent(self._storage)
+            card.hide()
+            card.setMinimumWidth(0)
+            card.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self._flyout = QWidget(self, Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self._flyout.setAttribute(Qt.WA_ShowWithoutActivating)
-        self._flyout_layout=QVBoxLayout(self._flyout); self._flyout_layout.setContentsMargins(4,4,4,4)
+        self._flyout_layout = QVBoxLayout(self._flyout)
+        self._flyout_layout.setContentsMargins(4,4,4,4)
         self._flyout.installEventFilter(self)
-        self._animation=QPropertyAnimation(self._flyout,b'pos',self)
+        self._animation = QPropertyAnimation(self._flyout, b'pos', self)
         self._animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.installEventFilter(self)
+        for child in self.findChildren(QWidget):
+            child.installEventFilter(self)
         self.set_appearance(True)
+
     def state(self):
         return self._state
-    def set_state(self,state):
-        if state not in ('strip','panel'): raise ValueError(state)
-        if state==self._state: return
-        self.close_flyout(); self._state=state
-        self._strip.setVisible(state=='strip'); self._panel.setVisible(state=='panel')
-        for key,card in self.cards.items():
-            if state=='panel':
-                self._panel_layout.addWidget(card); card.show()
-            else:
-                self._panel_layout.removeWidget(card); card.setParent(self._storage); card.hide()
-        if state=='panel':
-            for index in range(self._panel_layout.count()-1,0,-1):
-                line=QFrame(self._panel); line.setObjectName('SidebarDivider'); line.setFixedHeight(1)
-                self._panel_layout.insertWidget(index,line)
+
+    def orientation(self):
+        return self._orientation
+
+    def scale(self):
+        return self._scale
+
+    def set_state(self, state):
+        if state not in ('strip', 'panel'):
+            raise ValueError(state)
+        if state == self._state:
+            return
+        self.close_flyout()
+        self._state = state
+        self._strip.setVisible(state == 'strip')
+        self._panel.setVisible(state == 'panel')
+        if state == 'panel':
+            for index, card in enumerate(self.cards.values()):
+                if index:
+                    line = QFrame(self._panel)
+                    line.setObjectName('SidebarDivider')
+                    self._panel_layout.addWidget(line)
+                self._panel_layout.addWidget(card)
+                card.show()
         else:
             while self._panel_layout.count():
-                item=self._panel_layout.takeAt(0)
-                if item.widget(): item.widget().deleteLater()
-        self.setFixedWidth(STRIP_WIDTH if state=='strip' else PANEL_WIDTH)
-        self.updateGeometry()
-    def set_appearance(self,dark):
-        self.dark=bool(dark); self.tokens=SIDEBAR_TOKENS['dark' if dark else 'light']; t=self.tokens
-        self.setObjectName('Sidebar')
-        sheet=get_cards_stylesheet(dark=dark)+f"QWidget#Sidebar {{background:{t['background']};}} QFrame#SidebarDivider {{background:{t['separator']};border:none;}}"
-        self.setStyleSheet(sheet)
-        self._flyout.setStyleSheet(get_cards_stylesheet(dark=dark)+f"QWidget {{background-color:{t['background']};}}")
-        self.setFixedWidth(STRIP_WIDTH if self._state=='strip' else PANEL_WIDTH)
-        for button in self.buttons.values(): button.update()
-        self.toggle_button.update(); self.settings_button.update()
-    def update_metrics(self,data):
-        button=self.buttons.get(data.provider_id)
-        if button is None: return
-        rows=[(data.metric1_title,data.metric1_val),(data.metric2_title,data.metric2_val)]+[(r.title,r.val) for r in data.extra_metrics]
-        values=[v for _,v in rows if v is not None]
-        button.value=max(values) if values else None
-        button.offline=bool(data.error and not data.stale); button.stale=bool(data.stale)
-        button.display_text='OFF' if button.offline else '--' if button.value is None else f'{button.value:.0f}%'
-        summary='; '.join(f'{name}: {value:.0f}%' if value is not None else f'{name}: --' for name,value in rows)
-        button.setToolTip(f"{_NAMES[data.provider_id]} — {summary}"+(' — STALE' if data.stale else '')+(f' — {data.error}' if data.error else ''))
-        button.setAccessibleDescription(button.toolTip()); button.update()
-    def update_countdown(self):
-        pass
-    def preferred_size(self):
+                widget = self._panel_layout.takeAt(0).widget()
+                if widget in self.cards.values():
+                    self._restore_card_style(widget)
+                    widget.setParent(self._storage)
+                    widget.hide()
+                else:
+                    widget.deleteLater()
+        self._relayout()
+
+    def set_orientation(self, orientation):
+        if orientation not in ('vertical', 'horizontal'):
+            raise ValueError(orientation)
+        if orientation == self._orientation:
+            return
+        self.close_flyout()
+        self._orientation = orientation
+        self._relayout()
+
+    def set_dock_edge(self, edge):
+        if edge not in ('left', 'right', 'top', 'bottom', None):
+            raise ValueError(edge)
+        if edge == self._dock_edge:
+            return
+        self._dock_edge = edge
+        if self._active:
+            self._animation.stop()
+            self._flyout.move(self._flyout_position(self.buttons[self._active], self._flyout.size()))
+
+    def set_scale(self, scale):
+        scale = float(scale)
+        if not math.isfinite(scale):
+            raise ValueError(scale)
+        scale = min(2.0, max(0.6, scale))
+        if scale == self._scale:
+            return
+        self._scale = scale
+        self._relayout()
+        self.update_countdown()
+
+    def _restore_card_style(self, card):
+        for widget in [card] + card.findChildren(QWidget):
+            if widget in self._card_styles:
+                original, applied = self._card_styles.pop(widget)
+                if widget.styleSheet() == applied:
+                    widget.setStyleSheet(original)
+
+    def _scale_card_style(self, card):
+        # Local provider styles outrank container QSS. Scale their font sizes,
+        # retaining the original so returning to a flyout restores readable text.
+        for widget in [card] + card.findChildren(QWidget):
+            current = widget.styleSheet()
+            previous = self._card_styles.get(widget)
+            original = previous[0] if previous and current == previous[1] else current
+            applied = re.sub(r'font-size:\s*([\d.]+)px', lambda m: f'font-size: {float(m[1])*self._scale:g}px', original)
+            self._card_styles[widget] = (original, applied)
+            if current != applied:
+                widget.setStyleSheet(applied)
+
+    def _relayout(self):
+        s, vertical = self._scale, self._orientation == 'vertical'
+        direction = QBoxLayout.TopToBottom if vertical else QBoxLayout.LeftToRight
+        self._layout.setDirection(direction)
+        self._strip_layout.setDirection(direction)
+        self._panel_layout.setDirection(direction)
+        padding = round(self.tokens['spacing']*s)
+        self._layout.setContentsMargins(padding,padding,padding,padding)
+        self._layout.setSpacing(0)
+        self._panel_layout.setSpacing(round(4*s))
+        self.toggle_button.setFixedSize(round(BASE_BUTTON_W*s),round(22*s))
+        for button in self.buttons.values():
+            button.setFixedSize(round(BASE_BUTTON_W*s),round(BASE_BUTTON_H*s))
+            button.dial.setFixedSize(round(BASE_DIAL*s),round(BASE_DIAL*s))
+            button.dial.move(round(10*s),round(3*s))
+            if button.kind not in self._metrics:
+                button.dial.set_values((None,None,None), '' if button.dial.width() < 36 else '--', (None,None,None))
+            button.indicators.setGeometry(button.rect())
+            button.indicators.raise_()
+            button.indicators.update()
+            button.update()
+        panel_sheet = get_cards_stylesheet(dark=self.dark)
+        self._panel.setStyleSheet(re.sub(r'([\d.]+)px', lambda m: f'{float(m[1])*s:g}px', panel_sheet))
+        for card in self.cards.values():
+            if self._state == 'panel':
+                self._scale_card_style(card)
+                card.setFixedWidth(round(BASE_PANEL_W*s)-2*padding if vertical else round(BASE_PANEL_W*s))
+                card.ensurePolished()
+                card.layout().activate()
+            else:
+                card.setMinimumWidth(0)
+                card.setMaximumWidth(16777215)
+        for line in self._panel.findChildren(QFrame, 'SidebarDivider'):
+            line.setMinimumSize(0,0)
+            line.setMaximumSize(16777215,16777215)
+            if vertical:
+                line.setFixedHeight(max(1,round(s)))
+            else:
+                line.setFixedWidth(max(1,round(s)))
+        self.toggle_button.update()
+        self._strip_layout.invalidate()
+        self._strip_layout.activate()
+        self._panel_layout.invalidate()
+        self._panel_layout.activate()
+        self._layout.invalidate()
         self._layout.activate()
-        return QSize(STRIP_WIDTH if self._state=='strip' else PANEL_WIDTH,self._layout.sizeHint().height())
-    def _hover(self,key):
+        self.updateGeometry()
+
+    def set_appearance(self, dark, scheme='scale'):
+        if scheme not in ('scale','duo'):
+            raise ValueError(scheme)
+        self.dark, self.scheme = bool(dark), scheme
+        self.tokens = SIDEBAR_TOKENS['dark' if dark else 'light']
+        t = self.tokens
+        self.setObjectName('Sidebar')
+        self.setStyleSheet(get_cards_stylesheet(dark=dark)+f"QWidget#Sidebar {{background:{t['background']};border-radius:{t['radius']*self._scale}px;}} QFrame#SidebarDivider {{background:{t['separator']};border:none;}}")
+        self._flyout.setStyleSheet(get_cards_stylesheet(dark=dark)+f"QWidget {{background-color:{t['background']};}}")
+        for button in self.buttons.values():
+            button.dial.t = THEMES['dark' if dark else 'light']
+        self._relayout()
+        self.update_countdown()
+
+    def _color(self, value, which='inner', force_scale=False):
+        theme = THEMES['dark' if self.dark else 'light']
+        if self.scheme == 'duo' and not force_scale:
+            return theme['duo'][which]
+        level = scale_level(value)
+        return theme['scale'][level] if level else theme['neutral']
+
+    def update_metrics(self, data):
+        button = self.buttons.get(data.provider_id)
+        if button is None:
+            return
+        self._metrics[data.provider_id] = data
+        button.offline = bool(data.error and not data.stale)
+        button.stale = bool(data.stale)
+        rows = [(data.metric1_title,data.metric1_val),(data.metric2_title,data.metric2_val)] + [(r.title,r.val) for r in data.extra_metrics]
+        summary = '; '.join(f'{name}: {value:.0f}%' if value is not None else f'{name}: --' for name,value in rows)
+        button.setToolTip(f"{_NAMES[data.provider_id]} ? {summary}"+(' ? STALE' if data.stale else '')+(f' ? {data.error}' if data.error else ''))
+        button.setAccessibleDescription(button.toolTip())
+        self._refresh_dial(data.provider_id)
+        if self._state == 'panel':
+            self._relayout()
+
+    def _refresh_dial(self, key):
+        button, data = self.buttons[key], self._metrics[key]
+        text = 'OFF' if button.offline else data.metric1_text
+        if button.dial.width() < 36:
+            text = ''
+        if button.offline:
+            button.dial.set_values((None,None,None),text,(None,None,None),muted=True)
+        else:
+            inner = (data.metric1_val, pace_mark(elapsed_fraction(data.metric1_reset,window_seconds(data.metric1_title,FIVE_HOURS))), self._color(data.metric1_val))
+            outer = (data.metric2_val, pace_mark(elapsed_fraction(data.metric2_reset,window_seconds(data.metric2_title,ONE_WEEK))), self._color(data.metric2_val,'outer'))
+            button.dial.set_values(inner,text,outer)
+        extra = {row.title:row.val for row in data.extra_metrics}
+        button.dot_colors = [self._color(extra.get(title),force_scale=True) for title in ('C/G 7D','ARGON 7D')]
+        button.indicators.update()
+        button.update()
+
+    def update_countdown(self):
+        for key in self._metrics:
+            self._refresh_dial(key)
+
+    def preferred_size(self):
+        s, pad = self._scale, round(self.tokens['spacing']*self._scale)*2
+        vertical = self._orientation == 'vertical'
+        if self._state == 'strip':
+            if vertical:
+                return QSize(round(BASE_BUTTON_W*s)+pad, round(22*s)+3*round(BASE_BUTTON_H*s)+pad)
+            return QSize(4*round(BASE_BUTTON_W*s)+pad,round(BASE_BUTTON_H*s)+pad)
+        self._panel_layout.activate()
+        height = self._panel_layout.sizeHint().height()
+        if vertical:
+            return QSize(round(BASE_PANEL_W*s),round(22*s)+height+pad)
+        count = len(self.cards)
+        panel_width = count*round(BASE_PANEL_W*s) + max(0,count-1)*(2*round(4*s)+max(1,round(s)))
+        return QSize(round(BASE_BUTTON_W*s)+panel_width+pad,max(round(22*s),height)+pad)
+
+    def _hover(self, key):
         self._leave_timer.stop()
-        if self._state!='strip' or self._pinned: return
-        self._hover_id=key; self._hover_timer.start(self.tokens['hover_ms'])
-    def _click_provider(self,key):
-        if self._active==key and self._pinned: self.close_flyout(); return
+        if self._state != 'strip' or self._pinned:
+            return
+        self._hover_id = key
+        self._hover_timer.start(self.tokens['hover_ms'])
+
+    def _click_provider(self, key):
+        if self._active == key and self._pinned:
+            self.close_flyout()
+            return
         if self._active != key:
             self.close_flyout()
-        self._open_flyout(key); self._pinned=True
-    def _open_flyout(self,key):
-        if self._state!='strip' or key not in self.cards: return
-        if self._pinned and self._active!=key: return
-        self.close_flyout(); self._active=key
-        card=self.cards[key]; self._flyout_layout.addWidget(card); card.show()
-        button=self.buttons[key]; origin=button.mapToGlobal(QPoint(0,button.height()))
-        screen=button.screen(); area=screen.availableGeometry()
-        height=min(self._flyout_layout.sizeHint().height(),area.height())
-        self._flyout.setFixedSize(260,height)
-        target=QPoint(max(area.left(),min(origin.x()-260,area.right()-259)),max(area.top(),min(origin.y()-height,area.bottom()-height+1)))
-        motion = self._animations_enabled()
-        self._flyout.move(target); self._flyout.show()
-        if motion:
-            self._animation.setDuration(self.tokens['animation_ms']); self._animation.setStartValue(target+QPoint(12,0)); self._animation.setEndValue(target); self._animation.start()
+        self._open_flyout(key)
+        self._pinned = True
+
+    def _flyout_position(self, button, size, area=None):
+        origin = button.mapToGlobal(QPoint(0,0))
+        rect = QRect(origin, button.size())
+        area = area if area is not None else button.screen().availableGeometry()
+        if self._dock_edge == 'left':
+            target = QPoint(rect.right()+1,rect.top())
+        elif self._dock_edge == 'top':
+            target = QPoint(rect.left(),rect.bottom()+1)
+        elif self._dock_edge == 'bottom':
+            target = QPoint(rect.left(),rect.top()-size.height())
+        else:
+            target = QPoint(rect.left()-size.width(),rect.top())
+        return QPoint(max(area.left(),min(target.x(),area.right()-size.width()+1)),max(area.top(),min(target.y(),area.bottom()-size.height()+1)))
+
+    def _open_flyout(self, key):
+        if self._state != 'strip' or key not in self.cards:
+            return
+        if self._pinned and self._active != key:
+            return
+        if self._active == key:
+            self._leave_timer.stop()
+            return
+        self.close_flyout()
+        self._active = key
+        card = self.cards[key]
+        self._restore_card_style(card)
+        card.setMinimumWidth(0)
+        card.setMaximumWidth(16777215)
+        self._flyout_layout.addWidget(card)
+        card.show()
+        button = self.buttons[key]
+        area = button.screen().availableGeometry()
+        self._flyout.setFixedSize(min(260,area.width()),min(self._flyout_layout.sizeHint().height(),area.height()))
+        target = self._flyout_position(button,self._flyout.size(),area)
+        self._flyout.move(target)
+        self._flyout.show()
+        if self._animations_enabled():
+            self._animation.setDuration(self.tokens['animation_ms'])
+            # Opacity keeps the window inside the screen throughout the animation.
+            self._animation.setPropertyName(b'windowOpacity')
+            self._animation.setStartValue(0.0)
+            self._animation.setEndValue(1.0)
+            self._animation.start()
+        else:
+            self._flyout.setWindowOpacity(1.0)
+
     @staticmethod
     def _animations_enabled():
         """Use native reduced-motion preference where Qt exposes no equivalent."""
@@ -223,12 +496,29 @@ class SidebarWidget(QWidget):
         button=self.buttons[self._active]
         if button.rect().contains(button.mapFromGlobal(pos)) or self._flyout.rect().contains(self._flyout.mapFromGlobal(pos)): return
         self.close_flyout()
-    def eventFilter(self,obj,event):
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.ContextMenu and obj is not self._flyout:
+            self.contextMenuRequested.emit(event.globalPos())
+            event.accept()
+            return True
+        if event.type() == QEvent.Wheel and event.modifiers() & Qt.ControlModifier:
+            self._wheel_remainder += event.angleDelta().y()
+            while abs(self._wheel_remainder) >= 120:
+                step = 1 if self._wheel_remainder > 0 else -1
+                self._wheel_remainder -= step*120
+                self.scaleStepRequested.emit(step)
+            event.accept()
+            return True
         if obj is self._flyout:
-            if event.type()==QEvent.Enter: self._leave_timer.stop()
-            elif event.type()==QEvent.Leave: self._schedule_close()
-            elif event.type()==QEvent.KeyPress and event.key()==Qt.Key_Escape: self.close_flyout(); return True
-        return super().eventFilter(obj,event)
+            if event.type() == QEvent.Enter:
+                self._leave_timer.stop()
+            elif event.type() == QEvent.Leave:
+                self._schedule_close()
+        if event.type() == QEvent.KeyPress and event.key() == Qt.Key_Escape:
+            self.close_flyout()
+            return True
+        return super().eventFilter(obj, event)
+
     def keyPressEvent(self,event):
         if event.key()==Qt.Key_Escape: self.close_flyout()
         else: super().keyPressEvent(event)

@@ -249,22 +249,66 @@ class HudTests(unittest.TestCase):
     def test_sidebar_mode_docks_right_edge_and_switches_state(self):
         from PySide6.QtGui import QGuiApplication
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_bottom_offset=40)
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_edge='right', sidebar_offset=40)
             try:
                 work = QGuiApplication.primaryScreen().availableGeometry()
-                self.assertEqual(hud.width(), 92)
+                self.assertEqual(hud.width(), hud.sidebar.preferred_size().width())
                 self.assertEqual(hud.geometry().right() + 1, work.x() + work.width())
-                self.assertEqual(hud.geometry().bottom() + 1, work.y() + work.height() - 40)
+                self.assertEqual(hud.geometry().y(), work.y() + 40)
                 hud._on_data_fetched(UsageMetrics(provider_id='agy', metric1_val=3, metric1_text='3%', metric2_val=1,
                                                   metric2_text='1%'))
-                self.assertEqual(hud.sidebar.buttons['agy'].display_text, '3%')
                 self.assertEqual(hud.sidebar_cards['agy'].m1_val.text(), '3%')
+                strip_w = hud.width()
                 hud.set_sidebar_state('panel')
-                self.assertEqual(hud.width(), 220)
+                self.assertGreater(hud.width(), strip_w)
                 self.assertEqual(hud.geometry().right() + 1, work.x() + work.width())
                 self.assertEqual(ConfigManager(config.path).get('sidebar_state'), 'panel')
                 hud.set_sidebar_state('bogus')
-                self.assertEqual(hud.width(), 220)
+                self.assertEqual(ConfigManager(config.path).get('sidebar_state'), 'panel')
+            finally:
+                self._close(hud)
+
+    def test_sidebar_drag_snaps_to_any_edge_and_switches_orientation(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar')
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                vertical = hud.size()
+                hud._docking = True
+                hud.move(work.x() + 5, work.y() + 100)
+                hud._docking = False
+                hud._finish_sidebar_move()
+                self.assertEqual(config.get('sidebar_edge'), 'left')
+                self.assertEqual(hud.x(), work.x())
+                self.assertEqual(hud.sidebar.orientation(), 'vertical')
+                hud._docking = True
+                hud.move(work.x() + 200, work.y() + 4)
+                hud._docking = False
+                hud._finish_sidebar_move()
+                self.assertEqual(config.get('sidebar_edge'), 'top')
+                self.assertEqual(config.get('sidebar_orientation'), 'horizontal')
+                self.assertEqual(hud.y(), work.y())
+                self.assertGreater(hud.width(), hud.height())
+                hud._docking = True
+                hud.move(work.x() + work.width() // 2, work.y() + work.height() // 2)
+                hud._docking = False
+                hud._finish_sidebar_move()
+                self.assertEqual(config.get('sidebar_edge'), 'none')
+                self.assertIsNotNone(config.get('sidebar_x'))
+            finally:
+                self._close(hud)
+
+    def test_sidebar_scale_steps_and_persists(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar')
+            try:
+                base = hud.width()
+                hud._on_sidebar_scale_step(5)
+                self.assertGreater(hud.width(), base)
+                self.assertEqual(ConfigManager(config.path).get('sidebar_scale'), 1.5)
+                hud.set_sidebar_scale(9)
+                self.assertEqual(ConfigManager(config.path).get('sidebar_scale'), 2.0)
             finally:
                 self._close(hud)
 
@@ -275,7 +319,6 @@ class HudTests(unittest.TestCase):
                 hud._apply_ui_mode('sidebar')
                 hud._persist_geometry()
                 self.assertEqual((config.get('window_x'), config.get('window_y')), (120, 130))
-                self.assertIsNotNone(config.get('sidebar_bottom_offset'))
                 hud._apply_ui_mode('cards')
                 self.assertTrue(hud.cards['claude'].isVisibleTo(hud))
                 self.assertGreaterEqual(hud.width(), 250)
@@ -322,13 +365,15 @@ class HudTests(unittest.TestCase):
             def exec(self, *args):
                 captured.append(self)
 
-        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}),                 patch('ui.hud_window.QMenu', RecordingMenu):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}),                 patch('ui.hud_menu.QMenu', RecordingMenu):
             _, hud = self._hud(directory, ui_mode='cards')
             try:
                 from PySide6.QtGui import QContextMenuEvent
                 from PySide6.QtCore import QPoint
                 hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
-                style = next(a.menu() for a in captured[0].actions() if a.menu() and 'UI Style' in a.text())
+                titles = [a.text() for a in captured[0].actions() if a.menu()]
+                self.assertEqual(len(titles), 4)   # 介面 / 外觀 / 行為 / 更多
+                style = next(a.menu() for a in captured[0].actions() if a.menu() and 'Interface' in a.text())
                 self.assertTrue(any('Sidebar' in a.text() for a in style.actions()))
             finally:
                 self._close(hud)
