@@ -128,7 +128,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G2.1.f [P2, READ]** `set_parent` 跨 registry 鎖與物件借用，非原子；`QT_CPP_MAPPING.md` 寫「atomically」不實。
   - **G2.1.g [P2, READ；已修復：RC-212、RC-213、RC-214；DV-08 已核准]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。原分類 D 與 Core 範圍衝突（spec v0.2.3）：改為 `QTRS_SPEC.md` 01.6 的 B 類候選差異 DV-08，核准前視同缺陷（R-00008）。使用者於 2026-10-15 核准 DV-08（選項 (a) 保留差異，並附使用規則）；同日以一次性測試重現：parent 被 drop 後，非 owned child 的 `parent()` 仍回已死 parent 的 id，不是「無」；RC-212 修復；RC-213 補上 child 被借用或從未登記的情形，RC-214 補上在 parent 被借用時才掛上的 child（殘餘見這兩個 RC 與 G2.1.j）。
   - **G2.1.h [P2, READ]** 改變 parent 時，`ChildRemoved` 回呼看到的樹狀態與 Qt 不同：Qt 在送 `ChildRemoved` 時 child 的 parent 仍是舊 parent、新 parent 的 children 尚不含它（`qobject.cpp:2322-2337`，PySide 6.11.2 實測）；`reparent_owned` 在全部更新完才送事件（`qobject.rs:894-899`），`set_parent` 先更新 registry 的 parent（`qobject.rs:756-758`）。見 R-00049。
-  - **G2.1.i [P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229、RC-230]** parent 在擁有的 child 的 callback 裡被 drop 時，`ObjectData::delete_children` 不檢查 child 是否被借用就清掉 `owned_children`，child 的 `Drop` 在它自己的 callback 返回前執行。一次性 probe（已刪除）的記錄順序：`callback start`、`reactor before: parent Some(..)`、`drop node`（parent）、`drop reactor`（child）、`reactor after`、`callback returned`。callback 之後讀到已釋放的 `self` 是從順序推論 `[INFERENCE]`，沒有用 Miri 或 ASan 驗證。`add_owned_child` 的 Safety 已寫明（RC-217），沒有防護。非 owned 的 child 不受影響（RC-213）。處理方式（使用者要求不得只靠文件警告）：被借用的 owned child 立刻解除登記，`Box` 暫存到那個 callback 返回才釋放（ferrokit `276b6e7`，RC-221；Qt 在 parent 銷毀時立刻釋放，這個差異是 DV-13，有條件核准，見 RC-222）。HUD 不呼叫 `add_owned_child`，所以不是 P0。見 R-00075。後續（RC-222、RC-224）：DV-13 有條件核准；驗收項目補測，查出並修復兩處缺口（被借用的 owned child 底下的後代沒有同時被銷毀；registry 的 children 清單沒有列 `add_owned_child` 掛上的 child）；Miri 在別名檢查關閉時通過，預設的別名模型下被既有的 registry 指標來源擋住（未改動的測試也一樣）。維持「已實作、待完整驗證」，不標為全面安全。 2026-10-16：三個 ferrokit commit 已推送，CI run 38835938926 三個 OS 成功（RC-226）；Miri 在預設別名模型下仍被 registry 的指標來源擋住，另開設計工作（G2.7.d，RC-227）；仍不標為全面安全。 RC-230：DV-14 的最小原型（沒有合併）拆解時發現，`delete_children` 在 child 的 callback 執行中讀 child 的 id，也與那個 callback 的 `&mut self` 衝突（Stacked Borrows、Tree Borrows 都報）；原型改成把 id 存在所有權代理裡，現行 ferrokit 沒有改。維持未完成。
+  - **G2.1.i [P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229、RC-230、RC-231]** parent 在擁有的 child 的 callback 裡被 drop 時，`ObjectData::delete_children` 不檢查 child 是否被借用就清掉 `owned_children`，child 的 `Drop` 在它自己的 callback 返回前執行。一次性 probe（已刪除）的記錄順序：`callback start`、`reactor before: parent Some(..)`、`drop node`（parent）、`drop reactor`（child）、`reactor after`、`callback returned`。callback 之後讀到已釋放的 `self` 是從順序推論 `[INFERENCE]`，沒有用 Miri 或 ASan 驗證。`add_owned_child` 的 Safety 已寫明（RC-217），沒有防護。非 owned 的 child 不受影響（RC-213）。處理方式（使用者要求不得只靠文件警告）：被借用的 owned child 立刻解除登記，`Box` 暫存到那個 callback 返回才釋放（ferrokit `276b6e7`，RC-221；Qt 在 parent 銷毀時立刻釋放，這個差異是 DV-13，有條件核准，見 RC-222）。HUD 不呼叫 `add_owned_child`，所以不是 P0。見 R-00075。後續（RC-222、RC-224）：DV-13 有條件核准；驗收項目補測，查出並修復兩處缺口（被借用的 owned child 底下的後代沒有同時被銷毀；registry 的 children 清單沒有列 `add_owned_child` 掛上的 child）；Miri 在別名檢查關閉時通過，預設的別名模型下被既有的 registry 指標來源擋住（未改動的測試也一樣）。維持「已實作、待完整驗證」，不標為全面安全。 2026-10-16：三個 ferrokit commit 已推送，CI run 38835938926 三個 OS 成功（RC-226）；Miri 在預設別名模型下仍被 registry 的指標來源擋住，另開設計工作（G2.7.d，RC-227）；仍不標為全面安全。 RC-230：DV-14 的最小原型（沒有合併）拆解時發現，`delete_children` 在 child 的 callback 執行中讀 child 的 id，也與那個 callback 的 `&mut self` 衝突（Stacked Borrows、Tree Borrows 都報）；原型改成把 id 存在所有權代理裡，現行 ferrokit 沒有改。維持未完成。 RC-231：DV-14 第 1 階段在獨立分支 `owned-object-proxy` 實作（`b243407`、`5a31b22`，已推送，三平台 CI 通過，未核准合併）：擁有的 child 由 `OwnedObject` 持有，`delete_children` 等改用快取的 id，不再讀正在執行 callback 的 child；新的回歸測試在 `2f2a96c` 上失敗、在分支上通過；原 45 項在 Stacked Borrows 與 Tree Borrows 下都通過。修正只在未合併的分支上，維持未完成。
   - **G2.1.j [P1, RAN；已修復；DV-12 有條件核准的關閉條件（已推送後的 CI、交錯情況測試補齊）已滿足，2026-10-16 以已知限制關閉（`children()` 在 callback 中仍回傳舊清單，尚未達完整 Qt 等價行為，關閉只代表約定的交錯情境完成驗收；日後若要在 callback 中立即反映變更，須另立驗收條件）：RC-220、RC-222、RC-224、RC-226、RC-229]** 新 parent 被借用時（例如在 parent 自己的 callback 裡呼叫 `set_parent`），`with_object_mut(new_parent)` 回 `None`，child 只記在 registry 的 children 清單；parent 自己的 `ObjectData.children` 不含它，callback 結束後仍是 `[]`（一次性 probe 只看到這個時點），`children()` 漏列。parent 的 drop 已能到達這種 child（RC-214）。`ChildAdded` 的延後已處理（RC-123），這裡是清單本身。見 R-00074。修復（ferrokit `ec43dae`，RC-220）：對 parent 清單的修改在 parent 被借用時排進 registry 紀錄，借用結束時套用；同一個根因的另外兩個方向（舊 parent 被借用時移走 child、child 在 parent 被借用時被 drop）一併修了。callback 裡仍是舊清單，DV-12（有條件核准，見 RC-222）。後續（RC-222、RC-224）：DV-12 有條件核准；已知限制是 callback 裡的 `children()` 仍是舊清單，不等同 Qt；交錯情況測試補了 3 項（ferrokit `a622ac2`，已推送，CI run 38835938926 三個 OS 成功）；關閉條件已滿足（RC-226）。已知限制不因關閉而消失：callback 裡的 `children()` 仍是舊清單，不等同 Qt；不得宣稱 G2.1.j 等同 Qt。
   - **G2.1.k [P2, RAN；使用者核准修復，已實作並推送（`04f67f8`），CI 通過；行為驗收待確認，不標為完成：RC-223、RC-226]** sender 在自己的 slot 裡被銷毀（例如 slot 裡 drop 了它的 owned parent，RC-221）後，同一次發射剩下的、用 `Signal::connect`（沒有接收物件）接上的 slot 仍被呼叫；Qt 在 sender 銷毀後停止這次發射（PySide6 實測；`qobject.cpp:1171, 4427-4432`）。`connect_object` 接上的 slot 已隨解除登記斷線，沒有這個問題。一次性測試（已刪除），沒有正式測試（會釘住非 Qt 行為）。見 R-00077。HUD 不呼叫 `add_owned_child`。處理（使用者 2026-10-15 核准修復）：`Signal` 持有 owner 的 liveness token，每個 slot 之前檢查（RC-223；ferrokit `04f67f8`，已推送，CI run 38835938926 三個 OS 成功）；修復後有正式測試（`test_signal_sender_destroyed_during_emit.rs`，8 項）。依使用者 2026-10-16 的指示不標為完成，等行為驗收；超出原需求的行為變更見 RC-228。
 - **HUD usage**：Python `QTimer(self)`（`refresh_controller.py:35,39`）、`UsageTable(parent=self)` + `old_table.deleteLater()`（`hud_window.py:262-266`）、`widget.setParent(None)` + `deleteLater()`（`:187-189`）。Rust：`rust/src` 不用 core `set_parent`/`add_owned_child`（grep 為空）；走 `qtrs-widgets` 自己的 `set_parent_widget`。
@@ -167,7 +167,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### C2.7 Registry、借用排他、重入
 - **已遷移**：要求見 `QTRS_SPEC.md` §02（R-00037～R-00039）。本節只保留缺陷（G）與 HUD 使用位置；Qt behavior、qtrs required、Current implementation、Test 以新規格為準。
-- **Known gap**：**G2.7.a [P1, RAN；已修復：RC-123]** （修復前）對已被借用的物件送事件會**無聲丟失**（含重入 `send_event` 與 parent 自己 handler 內觸發的 `ChildAdded`）；**G2.7.b [DV-07（已核准 B 類差異；原標 D，spec v0.2.3 改標：Core 要求不得標 D）]** 跨執行緒直接派送不支援（`registered_ptr` 拒絕非註冊執行緒）。理由：registry 存 thread-local 原始指標；誤用回 `false`，須補上診斷（見 C7.4）；**G2.7.c [test gap]** `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tests」標題下沒有任何測試；**G2.7.d [P1, RAN；方向已核准（DV-14：方案 2＋3），最小原型已做、沒有合併，實作未核准；維持開放：RC-227、RC-229、RC-230]** registry 保存的裸指標，與擁有者的 `Box` 或直接存取，在 Stacked Borrows 與 Tree Borrows 下都不合法（Miri 對 `add_owned_child` 的寫法與「登記之後直接存取」的最小重現都報 UB；位置在 `register_qobject`、`ObjectBorrowGuard::deref_mut`）。對應 R-00075。這不是 Qt 行為差異；沒有觀察到實際的錯誤行為，只是目前的別名模型下不合法，不能據此聲稱記憶體安全。2026-10-16 的 spike（RC-229）：只改 `add_owned_child` 的取指標時機，只修那一個位置，既有 45 項測試的結果與失敗位置不變；`ObjectData` 加一個 `PhantomPinned` 的對照實驗讓 55 項在兩種模型都通過，但那是 Miri 對 `!Unpin` 的豁免，不等於別名正確。2026-10-16 第五輪：使用者選定方案 2＋3，否決方案 1、4、5；最小原型（RC-230，沒有合併）在遷移測試輔助函式之後，讓既有 45 項在兩種模型都通過；`register_boxed_qobject`、`Timer` 與舊的 `register_qobject(&mut …)` 寫法沒有改，仍不合法。
+- **Known gap**：**G2.7.a [P1, RAN；已修復：RC-123]** （修復前）對已被借用的物件送事件會**無聲丟失**（含重入 `send_event` 與 parent 自己 handler 內觸發的 `ChildAdded`）；**G2.7.b [DV-07（已核准 B 類差異；原標 D，spec v0.2.3 改標：Core 要求不得標 D）]** 跨執行緒直接派送不支援（`registered_ptr` 拒絕非註冊執行緒）。理由：registry 存 thread-local 原始指標；誤用回 `false`，須補上診斷（見 C7.4）；**G2.7.c [test gap]** `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tests」標題下沒有任何測試；**G2.7.d [P1, RAN；方向已核准（DV-14：方案 2＋3），第 1 階段已在獨立分支實作、未核准合併；維持開放：RC-227、RC-229、RC-230、RC-231]** registry 保存的裸指標，與擁有者的 `Box` 或直接存取，在 Stacked Borrows 與 Tree Borrows 下都不合法（Miri 對 `add_owned_child` 的寫法與「登記之後直接存取」的最小重現都報 UB；位置在 `register_qobject`、`ObjectBorrowGuard::deref_mut`）。對應 R-00075。這不是 Qt 行為差異；沒有觀察到實際的錯誤行為，只是目前的別名模型下不合法，不能據此聲稱記憶體安全。2026-10-16 的 spike（RC-229）：只改 `add_owned_child` 的取指標時機，只修那一個位置，既有 45 項測試的結果與失敗位置不變；`ObjectData` 加一個 `PhantomPinned` 的對照實驗讓 55 項在兩種模型都通過，但那是 Miri 對 `!Unpin` 的豁免，不等於別名正確。2026-10-16 第五輪：使用者選定方案 2＋3，否決方案 1、4、5；最小原型（RC-230，沒有合併）在遷移測試輔助函式之後，讓既有 45 項在兩種模型都通過；`register_boxed_qobject`、`Timer` 與舊的 `register_qobject(&mut …)` 寫法沒有改，仍不合法。 2026-10-16 第六輪（RC-231）：第 1 階段在獨立分支 `owned-object-proxy` 實作（`b243407`、`5a31b22`，已推送，三平台 CI 通過，未核准合併）：原 45 項在兩種模型下都通過；Miri 階段 C 的 101 個 binary 沒有此次變更造成的失敗。仍不合法的：仍用舊 API 的測試呼叫端（`register_qobject(&mut …)` 114 處、`register_boxed_qobject` 7 處，不含對照組）與 `Timer`；另外發現 `move_to_thread`（持有呼叫端的 `&mut ObjectData` 時，經 registry 把 `ThreadChange` 送給同一個物件）與 `Widget::set_tool_tip`（`&self` 期間經 registry 把事件送給自己）的別名問題，與登記方式無關，遷移呼叫端修不好。
 - **HUD usage**：Rust HUD 不直接碰 registry。
 
 ---
@@ -1256,7 +1256,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.1.f | P2, READ | `set_parent` 跨 registry 鎖與物件借用，非原子 |
 | G2.1.g | P2, READ；已修復：RC-212、RC-213、RC-214；DV-08 已核准 | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
 | G2.1.h | P2, READ | `ChildRemoved` 回呼期間的樹狀態與 Qt 不同（R-00049） |
-| G2.1.i | P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229、RC-230 | parent 在擁有的 child 的 callback 裡被 drop，child 的 `Box` 在 callback 還在跑時被釋放（`delete_children` 不檢查借用；R-00075） |
+| G2.1.i | P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229、RC-230、RC-231 | parent 在擁有的 child 的 callback 裡被 drop，child 的 `Box` 在 callback 還在跑時被釋放（`delete_children` 不檢查借用；R-00075） |
 | G2.1.j | P1, RAN；已修復並關閉（DV-12 有條件核准的條件已滿足；已知限制：`children()` 在 callback 中仍回傳舊清單，尚未達完整 Qt 等價行為，關閉只代表約定的交錯情境完成驗收；R-00074 維持部分符合；日後若要在 callback 中立即反映變更，須另立驗收條件）：RC-220、RC-222、RC-224、RC-226、RC-229 | 在 parent 被借用時掛上的 child 只記在 registry，parent 自己的 `children()` 漏列（R-00074） |
 | G2.1.k | P2, RAN；使用者核准修復，已實作並推送，CI 通過；行為驗收待確認，不標為完成：RC-223、RC-226 | sender 在自己的 slot 裡被銷毀後，發射中的 `connect` slot 仍被呼叫（R-00077） |
 | G2.2.a | P1, RAN；已修復：RC-92 | `delete_later` 不會自我 post、不會 drop |
@@ -1280,7 +1280,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.7.a | P1, RAN；已修復：RC-123 | 對已被借用的物件送事件會**無聲丟失** |
 | G2.7.b | DV-07（已核准 B 類差異；原標 D） | 跨執行緒直接派送不支援 |
 | G2.7.c | test gap | `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tes |
-| G2.7.d | P1, RAN；方向已核准（DV-14：方案 2＋3），最小原型已做、沒有合併，實作未核准；維持開放：RC-227、RC-229、RC-230 | registry 的裸指標與擁有者的 `Box`／直接存取在預設別名模型下不合法（Miri；R-00075） |
+| G2.7.d | P1, RAN；方向已核准（DV-14：方案 2＋3），第 1 階段已在獨立分支實作、未核准合併；維持開放：RC-227、RC-229、RC-230、RC-231 | registry 的裸指標與擁有者的 `Box`／直接存取在預設別名模型下不合法（Miri；R-00075） |
 | G3.1.a | P2, READ；已修復：RC-175 | Pointer=218、DpiChanged=222 符合 Qt QEvent 數值 |
 | G3.1.b | D | `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)` |
 | G3.1.c | P1, RAN；已修復：RC-129 | 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等 |
@@ -6190,6 +6190,531 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - **更正**：RC-227 與 RC-229 寫的「測試與單元測試裡 28 個檔案共 156 處 `register_qobject(&mut …)`」重數不出來；在 `2f2a96c` 以 `grep` 數 `register_qobject(&mut`，是 31 個檔案共 123 處（分布見 (d) 的階段 2）。我不知道先前的 156 是怎麼來的（可能把 `unregister_qobject(` 也算進去了 `[INFERENCE]`）。三處已就地更正。
 - **Residual**：(1) 原型沒有合併、沒有推送，也沒有跑三個 OS 的 CI；stable 回歸與 HUD 的結果都只在本機 Windows。(2) Miri 只跑了 Windows host、`ferrokit-core` 的 5 個 binary（45 項）與 2 個場景檔（19 項），以及最小模型；其他整合測試、lib 單元測試、`ferrokit-widgets`、HUD 都沒有在 Miri 下跑；沒有 ASan；SB 與 TB 仍是實驗性的模型，結果可能隨版本改變。(3) `Timer` 沒有遷移，c5 的通過靠 `!Unpin` 豁免，也沒有事件迴圈。(4) `OwnedObject` 不是 `Send`，跨執行緒的規則沒有定。(5) 讀法 2 的 id 問題在現行 ferrokit 裡仍在（只在原型裡改了）。(6) 第 03 章、Windows 實機驗收、正式發布繼續暫停。
 
+#### RC-231 推送 HUD `df2a8d3`；DV-14 第 1 階段（方案 2＋3）在獨立分支實作，沒有合併；Miri 階段 C（G2.7.d；G2.1.i；R-00075）
+- **決定**（使用者 2026-10-16 第六輪）：(1) 推送 HUD 本機 commit `df2a8d3`（RC-230、spec v0.2.12）。推送前確認父 commit 是遠端 `develop`、只含預期的 3 個文件，5 個未追蹤的 `spec03_*.py` 不加入；CI 因路徑過濾跳過測試時如實記錄，不得為了觸發測試加入程式變更。(2) DV-14 第 1 階段（方案 2＋3）在獨立分支實作，不核准合併。範圍：新增 `OwnedObject<T>`、指標登記 API 與所有權轉移 API；遷移 `add_owned_child`、`reparent_owned`、`PARKED_CHILDREN` 與銷毀流程；修正 `delete_children` 在 child 的 callback 執行中讀它 id 的別名問題；保留編譯期 `Unpin` 斷言，不得用 `PhantomPinned`；舊 API 保留為過渡層，這一階段不刪、不標 deprecated。(3) 第 1 階段的驗收交付審查：diff、公開 API 變更清單、SB／TB 結果、stable 回歸、三平台 CI 證據。原 45 項在 SB 與 TB 都要通過，沒有「通過變失敗」，不得關閉 SB 或使用豁免旗標；`delete_children` 要有獨立的回歸測試；保留能偵測舊用法的對照組，對照組的失敗不算實作失敗；stable 工作區、三平台 CI 與 HUD 相容都要通過；記錄未遷移的呼叫端、舊 API 的限制與下一階段的工作。(4) Miri 階段 C 依序：先跑 21 個核心 binary 與 `ferrokit-widgets`，再處理受外部函式阻擋的單元測試；每批保留可重現的結果。`cfg(miri)` 替代只能用在 Miri 不支援的 OS 外部函式（例如 `timeBeginPeriod`），不得跳過 registry、所有權、銷毀或 callback 的核心邏輯，不得改變 stable 或 release 的建置，並要標明該測試沒有驗證真實計時器或 OS 外部函式。(5) 每個 binary 分成「通過」「發現既有 UB」「此次變更造成的失敗」「環境不支援」四類；發現的問題保留重現與證據，不跳過；ASan 只作補充、分開記錄，不取代 SB／TB。(6) 順序：推送 → 第 1 階段 → 階段 C → 合併前的驗收證據；之後的階段（移除舊 API、`Timer` 遷移）另行審查。G2.1.i 維持未完成，G2.1.k 維持待行為驗收，G2.7.d 維持開放；第 03 章、Windows 實機驗收與正式發布繼續暫停。
+- **推送 `df2a8d3` 與 CI**：推送前 `git fetch` 之後確認：`origin/develop` 是 `fe112fc`，也是 `df2a8d3` 的父 commit；`git merge-base --is-ancestor origin/develop HEAD` 成立；`git log origin/develop..HEAD` 只有 `df2a8d3`；staged 為空，已追蹤檔案沒有未 staged 的變更；未追蹤的只有 5 個 `rust/tools/pyside_probes/spec03_*.py`（沒有加入）；`df2a8d3` 只改 3 個文件（Contract、spec、migration）。推送 `fe112fc..df2a8d3`，遠端 `develop` 是 `df2a8d350789db95e8aaaced0e5946261ab1edfe`。CI run 38846964389（`df2a8d3`，push）：`Detect Changed Paths` 成功；`Missing dependencies`、`Python Test`、`Rust Test` 都是 skipped（路徑過濾：只改了 Markdown）。**本次 commit 未執行測試**；不沿用 `fe112fc` 的 run 38840947690，也沒有為了觸發測試加入任何變更。
+- **分支與 commit**：ferrokit 新分支 `owned-object-proxy`，從 `main` `2f2a96c` 開出，2 個 commit：`b243407`（core: hold owned children in an owner that shares the registry's pointer）與 `5a31b22`（tests: make every Miri control a concrete type and check a released owner through one；程式庫只改 `reparent_owned` 的一段註解）。diff（`git diff --stat main..owned-object-proxy`）：11 個檔案，+994／−129；`ferrokit-core/src/object/` 的 `owned.rs`（新檔，126 行）、`qobject.rs`、`mod.rs`（+2），測試 3 個新檔，5 個測試檔遷移輔助函式。分支推送到 `origin`，`owned-object-proxy` 是 `5a31b229e3fe4b9484523b72510a4912ccb760e9`。推送的原因：使用者要求三平台 CI 證據，ferrokit 的 CI 只在推送到 `main`、對 `main` 開 PR 或手動觸發（`workflow_dispatch`）時執行，手動觸發也要分支在遠端；這一步是我依「三平台 CI 證據」推定的，使用者沒有逐字指示推送這個分支。沒有開 PR，沒有合併，`main` 仍是 `2f2a96c`；HUD 的固定版本沒有動。
+- **公開 API 變更**（`2f2a96c` → `5a31b22`；都在 `ferrokit_core::object`，經 crate 根的 `pub use` 也可取得）：
+
+  | 項目 | 種類 | 內容 |
+  |---|---|---|
+  | `OwnedObject<T: QObject + ?Sized>` | 新增 | 擁有一個在堆上的物件；持有 `NonNull<T>` 與物件 id 的快取；`Drop` 時以 `Box::from_raw` 釋放；`Deref`、`DerefMut`；因為 `NonNull` 而不是 `Send`、`Sync`；是 `Unpin`。`new(T)`、`into_dyn(Self) -> OwnedObject<dyn QObject>`（這兩個要求 `T: QObject`）、`from_box(Box<T>)`（只在這裡讀一次 id）；關聯函式（不是方法，避免與 `Deref` 目標的方法同名）`as_non_null(&Self) -> NonNull<T>`、`object_id(&Self) -> ObjectId`、`into_box(Self) -> Box<T>` |
+  | `unsafe fn register_qobject_ptr(ptr: NonNull<dyn QObject>)` | 新增 | registry 保存這個指標本身。Safety：物件在解除登記前不離開這個位址；擁有者在 callback 之間只經 `ptr` 或由它衍生的指標存取（`OwnedObject::as_non_null`；變數或欄位用 `&raw mut x` 取指標，之後可以直接用 `x`）；由參考做出的指標（`NonNull::from(&mut x)`）或之後還會用到的 `Box` 不符合；callback 執行時其他任何存取都不行，讀也不行；重新登記用同一個指標，且不在 callback 執行中重新登記或解除登記；執行緒規則同 `register_qobject` |
+  | `unsafe fn register_owned_qobject<T: QObject + 'static>(obj: T) -> OwnedObject<T>` | 新增 | 把物件搬到堆上，以擁有者的指標登記；擁有者可以移動，callback 之間可經 `Deref`／`DerefMut` 使用；擁有者被 drop 時物件被 drop 並解除登記。Safety：callback 執行時擁有者不存取物件、不被 drop；在登記的執行緒上使用與 drop |
+  | `fn reparent_owned_object(child_id: ObjectId, new_parent: Option<ObjectId>) -> Result<Option<OwnedObject<dyn QObject>>, ReparentError>` | 新增 | 所有權轉移：與 `reparent_owned` 相同，但釋放的 child 以 `OwnedObject` 交回；child 仍登記，呼叫端可以在它的 callback 之間使用 |
+  | `ObjectData::owned_children` | 變更（不相容） | `Vec<Box<dyn QObject>>` → `Vec<OwnedObject<dyn QObject>>`。經 `Deref` 讀取的寫法不受影響（ferrokit 工作區與 HUD 都不用改）；在外部直接放入或取出 `Box` 的程式會編譯失敗 `[INFERENCE：工作區外沒有已知的使用者]` |
+  | `add_owned_child`、`reparent_owned`、`register_qobject`、`register_pinned_qobject`、`register_boxed_qobject`、`unregister_qobject`、`Timer` | 簽名不變 | 只改文件：三個舊登記函式寫明限制並指向新 API；`reparent_owned` 寫明回傳的 `Box` 宣稱是物件唯一的指標，與 registry 的指標矛盾，並指向 `reparent_owned_object`；`owned_by_parent`、`ReparentError`、`release_child`、`set_parent` 的說明把「`Box`」改成「擁有者」。沒有 `#[deprecated]` |
+
+- **內部變更**（`qobject.rs`）：(1) `add_owned_child` 把收到的 `Box<T>` 用 `OwnedObject::from_box` 轉成擁有者再 `into_dyn`，以 `register_qobject_ptr(OwnedObject::as_non_null(&owner))` 登記，再放進 `owned_children`；registry 與擁有者共用同一個指標來源，RC-227 的 case A 不再成立。(2) `ParkedChild` 改成 `(Arc<AtomicBool>, OwnedObject<dyn QObject>)`；`destroy_when_released(child: OwnedObject<dyn QObject>)` 從擁有者取 id；`free_parked_children` 持有擁有者到釋放為止。(3) `delete_children`、`ObjectData::drop` 從 parent 的 `owned_children` 移除自己的 `retain`、`reparent_owned_object` 的 `.any`／`.position` 搜尋，都改用 `OwnedObject::object_id`（快取的 id），不再經 `Deref` 讀 child 的 `ObjectData`。這修正 RC-230 讀法 2：parent 在 child 的 callback 裡被 drop、或 sibling 在 child 的 callback 裡被移動時，parent 不再讀正在執行 callback 的 child。(4) `reparent_owned` 改成呼叫 `reparent_owned_object` 再 `OwnedObject::into_box`。(5) 新檔 `object/owned.rs`；常數裡的編譯期斷言要求 `ObjectData` 與 `OwnedObject<dyn QObject>` 是 `Unpin`；沒有 `PhantomPinned`。
+- **測試**（`ferrokit-core/tests`）：
+  - **輔助函式遷移**（原 45 項所在的 5 個 binary；期望值沒有改）：`test_owned_child_ownership`（`adopt(parent_id)`、`finish(OwnedObject<Node>)`）、`test_owned_child_destroyed_in_callback`、`test_parent_children_during_callbacks`、`test_parent_tree_rules`、`test_signal_sender_destroyed_during_emit`（`Node::unboxed()`）改用 `register_owned_qobject`。
+  - **`test_owned_object.rs`（新，8 項）**：擁有者與 callback 互相看見對方的寫入；擁有者被移動之後 registry 仍呼叫得到同一個物件；三層擁有的物件被呼叫並由擁有者讀取；在 parent 之間移動的 child 仍可被呼叫；以擁有者釋放的 child 仍登記且可使用（經 `downcast_mut::<Node>()` 以具體型別寫入）；變數裡的物件以 `&raw mut` 登記，callback 之間可以直接使用變數；以擁有者的指標重新登記，物件仍存活；登記的 parent 在 child 的 callback 裡被 drop，child 在 callback 返回之後才釋放。
+  - **`test_owned_child_not_read_during_its_callback.rs`（新，4 項，`delete_children` 的獨立回歸）**：`Probe` 在自己的 callback 執行期間計算 `object_data`／`object_data_mut` 被呼叫的次數，期望是 0。情境：在 child 的 callback 裡 drop parent；把 sibling 用 `reparent_owned` 移到另一個 parent；把 sibling 移回同一個 parent；drop 一個非擁有的 sibling。
+  - **`test_miri_aliasing_controls.rs`（新，4 項對照）**：在非 Miri 的建置以 `#[cfg_attr(not(miri), ignore = "Miri control: expected to be reported as undefined behavior under Miri")]` 略過。每一項都在兩次 registry callback 之間，以具體型別的明確 `&mut` 直接使用物件：`register_qobject_then_use_of_the_box_between_callbacks`、`register_boxed_qobject_then_use_of_the_box_between_callbacks`、`a_pointer_made_from_a_reference_then_use_of_the_variable`（`register_qobject_ptr(NonNull::from(&mut node as &mut dyn QObject))`）、`an_owner_turned_into_a_box_then_use_of_the_box_between_callbacks`（`OwnedObject::into_box` 之後經 `Box` 使用）。
+- **第 1 階段的驗收證據**（三類分開：測試通過、符合 Qt 行為、Rust 別名模型下的安全性）：
+  1. **fail-before**：把 `delete_children` 的回歸測試改寫成 `main` 可以編譯的版本（只用舊 API），在 `2f2a96c` 的暫用 worktree 以 stable 執行：4 項全部失敗，訊息是 `left: 1, right: 0`（child 的 callback 執行期間，它的 `ObjectData` 被讀了 1 次）。同一組 4 項在分支上通過。改寫版只在暫用 worktree 裡，沒有提交。
+  2. **Miri**（`nightly-2026-10-16`：`rustc 1.101.0-nightly (4ebd25825 2026-10-15)`、`miri 0.1.0 (4ebd258257 2026-10-15)`，與 RC-229、RC-230 相同；host `x86_64-pc-windows-msvc`。每項各自執行 `cargo +nightly-2026-10-16 miri test -j 1 -p <crate> --test <binary> -- --exact <test> --test-threads=1`；SB 不設 `MIRIFLAGS`，TB 是 `MIRIFLAGS=-Zmiri-tree-borrows`；沒有 `-Zmiri-disable-stacked-borrows`、`-Zmiri-disable-isolation` 或其他放寬檢查的旗標；每個 worktree 有自己的目標目錄）：
+
+     | 集合 | `main` `2f2a96c`（這一輪重跑的基線） | 分支 |
+     |---|---|---|
+     | 原 45 項，SB | 1 通過、44 UB | 45 通過 |
+     | 原 45 項，TB | 2 通過、43 UB | 45 通過 |
+     | `test_owned_object`（8 項） | 沒有這個檔 | SB 8 通過、TB 8 通過 |
+     | `delete_children` 回歸（4 項） | 見 1（stable 下就失敗） | SB 4 通過、TB 4 通過 |
+     | 對照組（4 項） | 沒有這個檔 | SB 4 UB、TB 4 UB（預期結果） |
+
+     基線與 RC-229、RC-230 記錄的相同。45 項逐項比較：沒有「通過變失敗」。45 項在 `b243407` 執行；`5a31b22` 只改了兩個新測試檔與 `reparent_owned` 的一段註解，45 項所在的 5 個 binary 與程式庫的程式碼相同，沒有重跑。`test_owned_object` 與對照組在 `5a31b22` 執行。
+  3. **對照組的有效性**：4 項在 SB 與 TB 都報 UB，表示 Miri 仍看得到舊用法的問題；它們的失敗是預期結果，不算實作失敗。`b243407` 原本有第 5 項（`reparent_owned` 回傳的 `Box<dyn QObject>` 在 callback 之間使用），在 SB 與 TB 都通過，所以不能當對照組，`5a31b22` 把它移除（原因見「發現」2）。
+  4. **stable 工作區**（Windows 本機，不是 CI；每個 worktree 有自己的目標目錄）：`main` `2f2a96c`：165 個結果行，1140 passed、0 failed、4 ignored；分支 `b243407`：168 個結果行，1152 passed、0 failed、9 ignored。逐項比對測試名稱與結果：差別只有新加的 17 項（12 項通過；5 項是對照組，非 Miri 下 ignored），沒有任何既有測試消失或改變結果。**最後的 stable 重跑**（`5a31b22` 與 `2f2a96c`，同一個命令 `cargo test -j 1 --workspace --no-fail-fast -- --skip real_windows`，rustc／cargo 1.98.1）：分支 exit 0，168 個結果行，1152 passed、0 failed、8 ignored。基線 exit 101：165 個結果行，1139 passed、1 failed、4 ignored；失敗的是 `ferrokit-platform` 的 `test_window_activation::win32::showing_a_tooltip_window_does_not_take_the_foreground`，停在測試自己的對照斷言（第 96 行「control: show() activates」：普通視窗 `show()` 之後沒有成為前景視窗）。同一個 binary 在基線單獨重跑，11 項全部通過。這一項建立真實的 Win32 視窗並檢查桌面的前景視窗，名稱不含 `real_windows`，所以不會被 `--skip real_windows` 略過，結果受當時的桌面狀態影響 `[INFERENCE：Windows 的前景鎖定]`；分支沒有改 `ferrokit-platform`，分支上這一項通過，先前兩次 stable 與兩次 ASan 執行也都通過。逐項比較：分支比基線多 16 項（12 項通過，4 項是 ignored 的對照組），其餘結果相同（上面這一項除外）；與 `b243407` 的執行相比，只少了被移除的第 5 個對照組。
+  5. **三平台 CI**（GitHub Actions，`workflow_dispatch`，分支 `owned-object-proxy`）：run 38849304109（`b243407`）與 run 38852135387（`5a31b22`）：`windows-latest`、`macos-latest`、`ubuntu-22.04` 都成功；三個 OS 的日誌都是「163 targets, 0 not ok」。
+  6. **HUD 相容**（暫存的 HUD 複本：以 `git archive` 取出 `df2a8d3`，`rust/Cargo.toml` 加 `[patch."https://github.com/onlyatuna/ferrokit"]` 以路徑指向分支的 worktree；HUD repo 本身沒有改），在 `5a31b22`：`cargo check --all-features` exit 0；`cargo test --all-targets --all-features -- --skip real_windows`：8 個結果行，164 passed、0 failed、5 ignored；`cargo clippy -- -D warnings` exit 0；`cargo fmt --check` exit 0；Python（`QT_QPA_PLATFORM=offscreen python -B -m unittest discover -s tests`，在複本的 `python/`）55 項 OK。HUD 不呼叫任何登記函式、不用 `owned_children`。
+  7. **fmt、clippy**：ferrokit 本來就不是 rustfmt 乾淨的（`main` 有 485 個既有的格式差異）；只對新檔與我改的行跑 `rustfmt --edition 2021`，沒有重排其他程式碼。clippy 在 `ferrokit-core` 有 14 個既有警告，改動的檔案沒有新的警告。CI 的格式與 clippy 步驟以 CI 的設定為準（上面兩個 run 都成功）。
+  8. **三類證據**：
+
+     | 項目 | 測試通過 | 符合 Qt 行為 | Rust 別名模型下的安全性 |
+     |---|---|---|---|
+     | 分支 `5a31b22` | 本機 Windows stable 工作區通過；三平台 CI 通過；HUD 相容檢查通過 | 沒有打算改行為；既有測試的期望值沒有改；沒有對照 PySide6 重驗 | 原 45 項與新測試在 SB、TB 下通過；階段 C 的結果見下面；不是全面安全（舊 API 的呼叫端、`move_to_thread` 等仍有 UB） |
+     | HUD `df2a8d3` | **本次 commit 未執行測試**（路徑過濾） | 不涉及（只改文件） | 不涉及 |
+- **發現**（每一項都保留重現方式；「既有」表示在 `main` `2f2a96c` 上結果相同）：
+  1. **worktree 共用目標目錄會讓結果無效**：第一次以每項各自執行的方式跑基線時，基線 worktree 與分支 worktree 用了同一個 `CARGO_TARGET_DIR`，cargo 把另一個 worktree 編好的產物當成最新的拿來用，所以那一次的基線結果無效，已全部重跑。之後每個 worktree、每種建置（Miri、stable、跨目標）都有自己的目標目錄。原因是 cargo 依檔案時間判斷產物是否過期 `[INFERENCE：沒有追到 cargo 的指紋細節]`。
+  2. **`dyn QObject` 不是 `Unpin`，Miri 不檢查它的唯一性**：trait 物件沒有 `+ Unpin` 時不是 `Unpin`；Miri 對指向 `!Unpin` 型別的 `&mut` 與 `Box` 不做唯一性檢查。`b243407` 的第 5 個對照組（`reparent_owned` 回傳的 `Box<dyn QObject>` 在兩次 callback 之間使用）因此在 SB 與 TB 都通過，已在 `5a31b22` 移除；其餘對照組都改用具體型別。含義：經 `dyn QObject` 的路徑在 Miri 下通過，不代表它們在別名規則下合法；`OwnedObject` 只對具體型別的 `Unpin` 做了斷言。
+  3. **SB 對兩階段借用較寬**：方法呼叫（例如 `node.event(..)`）產生的兩階段借用，在 SB 下不一定讓先前的指標失效；對照組因此改用明確的 `use_directly(&mut *node)`。
+  4. **`move_to_thread` 本身有別名問題（既有，與登記方式無關）**：`move_to_thread(object_data: &mut ObjectData, ..)`（`object/thread.rs:278-340`）在持有呼叫端的 `&mut ObjectData` 時，以 `send_event(id)`（`thread.rs:299`）經 registry 把 `ThreadChange` 送給同一個 root。TB：`object_data` 參數的標籤（`thread.rs:279`，Reserved，受保護到函式返回）因 registry 的重新借用（`qobject.rs:76`，等同外部讀取）變成 Reserved（conflicted），之後 `flip_owned` 寫入（`thread.rs:261`）就是 UB。SB：registry 的重新借用要移除受保護的 `object_data` 參數標籤，Miri 報「not granting access … strongly protected」。一次性 probe（`ferrokit-core/tests` 的暫時檔案，執行後刪除，沒有提交；原始碼見下面 details）分別以 `register_owned_qobject` 與 `register_qobject_ptr(&raw mut root)` 登記 root，兩種登記方式在 SB 與 TB 都是 UB，所以第 2 階段遷移呼叫端不會修好它；要改 `move_to_thread` 的介面或寫法（例如只收 id，或在送 `ThreadChange` 之前不持有呼叫端的 `&mut`），這是另一個設計決定，沒有做。
+  5. **`Widget::set_tool_tip` 經 registry 把事件送給自己（既有，與登記方式無關）**：`set_tool_tip(&self, ..)`（`ferrokit-widgets/src/widget.rs:632-636`）在 `&self` 仍是受保護的參數時呼叫 `send_event(self.id())`，registry 再為同一個物件做出 `&mut` 呼叫 `event`。一次性 probe 以 `register_owned_qobject` 登記：SB 報 UB（`not granting access … [SharedReadOnly for <…>] which is strongly protected`，在 `event(&mut self)`）；TB 通過，因為 probe 的 `event` 沒有寫物件本身的記憶體 `[INFERENCE：會寫自己欄位的 widget 在 TB 下也會是 UB，沒有實測]`。`ferrokit-widgets/src` 裡用 `send_event(self.id())` 的只有這一處；其他送給自己的事件走 `notify_borrowed`（直接送給已借用的物件，不經 registry）。
+  6. **UniqueConnection 依賴函式指標相等（既有，不是 UB）**：`Signal::connect_unique_to`（`ferrokit-core/src/signal/signal.rs:629-643`）以 `slot as usize` 當作重複判斷的鍵。Rust 不保證同一個函式每次轉成函式指標都得到同一個位址，也不保證不同函式的位址不同（可能被合併）。Miri 會刻意讓同一個函式有多個位址，所以 `test_signal_unique_single_shot::unique_to_rejects_duplicate_receiver_slot_pair` 在 SB 與 TB 都 panic（`test_signal_unique_single_shot.rs:42`「duplicate receiver+slot must be rejected」），基線與分支相同。stable 下通過，因為兩次轉換在同一個函式裡 `[INFERENCE：跨 crate 或跨 codegen unit 的同一個 slot 可能被判成不同，重複連線就不會被拒絕]`。
+  7. **`ferrokit-widgets` 的 lib 測試 `menu::tests::fusion_arrow_matches_qt_fusion` 在 Miri 下中止（既有，不是 UB）**：tiny-skia 0.11.4 `pipeline/mod.rs:197`（`slice16_mask_at_xy`）panic「range end index 46 out of range for slice of length 4」，之後在清理中再 panic，程式中止；呼叫路徑是 `ferrokit_gui::paint::solid_fill::fill_path_source_over`（`solid_fill.rs:134`）→ `Mask::fill_path`。stable 下同一項通過。原因沒有查 `[INFERENCE：Miri 下 tiny-skia 可能走了不同的 pipeline 路徑]`。
+  8. **其餘的 UB 都來自仍用舊 API 的測試（既有）**：錯誤位置是 `ObjectBorrowGuard` 的 `Deref`／`DerefMut`（`qobject.rs:76`／`83`），標籤建立在舊的 `register_qobject`（`qobject.rs:415`）或 `register_boxed_qobject`（`qobject.rs:480`，被同一個函式回傳 `Box` 時的 `qobject.rs:482` 弄失效，即 RC-227 的 case A3），失效位置在測試本身對物件的直接存取；TB 的 `test_child_unlink_notifies_parent`（`vec/mod.rs:2144`，經 `remove_child` 的 `qobject.rs:763`）也是同一類：測試在兩次 registry 寫入之間直接讀 `parent.data.children`（測試第 195 行）。這些預期由第 2 階段遷移處理 `[INFERENCE：遷移後才能確認]`。
+  9. **Miri 下很慢的測試**：`layout_qt_oracle::layout_matches_pyside6_oracle`、`layout_qt_oracle::oracle_covers_required_features`（TB）、`test_window_device_pixel_ratio::custom_presentation_uses_the_window_ratio`（TB）在 300 秒的上限內沒有跑完；分支上以 3600 秒的上限重跑 SB 與 TB，全部通過（最長的是 `layout_matches_pyside6_oracle` 的 TB，2034 秒）。基線上的這幾個逾時沒有重跑（分支通過就不可能是「此次變更造成的失敗」）。
+- **未遷移的呼叫端**（分支 `5a31b22`，`grep`，不含註解行；HUD 的 `rust/src` 不呼叫任何登記函式）：
+
+  | 舊 API | 呼叫處 | 備註 |
+  |---|---|---|
+  | `register_qobject(&mut …)` | 27 個檔案共 115 處：`ferrokit-core/src` 39（都在 `#[cfg(test)]` 模組：`event_loop/loop.rs` 32、`object/qobject.rs` 5、`event_loop/dispatcher_win.rs` 1、`signal/signal.rs` 1）；`ferrokit-core/tests` 73（含對照組 1）；`ferrokit-widgets/tests` 3（`test_tool_tip_change_event` 1、`test_widget_update_cross_thread` 2） | 基線是 31 個檔案共 123 處；遷移掉的是 `add_owned_child` 內部 1 處與 5 個測試檔的 8 處，另外新加的對照組有 1 處。生產程式裡已經沒有呼叫 |
+  | `register_boxed_qobject(` | 8 處：`ferrokit-core/tests` 4（`test_advanced_event_system` 1、`test_qobject_lifecycle_and_hierarchy` 2、對照組 1）；`ferrokit-widgets/tests` 4（`test_application_layers` 2、`test_event_filter_notify` 1、`test_widgets_system` 1） | 生產程式沒有呼叫 |
+  | `register_pinned_qobject(` | `Timer` 3 處（`timer.rs`） | 第 3 階段 |
+  | `reparent_owned(`（回傳 `Box<dyn QObject>`） | 測試 18 處（`test_owned_child_ownership` 11、`test_parent_thread_affinity` 4、`test_owned_child_not_read_during_its_callback` 2、`test_owned_object` 1） | 簽名不變，內部改成 `reparent_owned_object` 再 `into_box` |
+  | `add_owned_child(` | 測試 33 處 | 簽名不變，內部已改用擁有者，呼叫端不必改 |
+
+- **舊 API 的限制**（已寫進各函式的文件）：(1) `register_qobject(&mut x)`：registry 的指標由參考做出；之後經變數、欄位或 `Box` 直接使用物件，指標就失效，之後的 callback 是 UB（具體型別時 Miri 會報；上面「發現」8 的 UB 多屬這一類）。(2) `register_boxed_qobject`：回傳的 `Box` 宣稱是唯一的指標；把它交回呼叫端的那一步就讓 registry 的指標失效（RC-227 的 case A3；b3 的 `test_event_filter_notify` 就停在這裡）。(3) `register_pinned_qobject`：限制同 (1)；Miri 對 `!Unpin` 型別不做唯一性檢查，所以通過不算證據；`Timer` 用它。(4) `reparent_owned` 回傳的 `Box<dyn QObject>` 與 registry 的指標矛盾；因為「發現」2，Miri 看不到。(5) 新 API 也不解除的限制：callback 執行時，呼叫端不能持有物件的參考（b2 跨目標的 `pump_until` 測試）；物件在被借用時經 registry 把事件送給自己（「發現」4、5）仍是 UB。
+- **下一階段的工作**（每一項都要另外核准）：(1) 第 2 階段：逐個 binary 把 `register_qobject(&mut …)` 的 114 處與 `register_boxed_qobject` 的 7 處（都不含對照組）遷移到新 API，每個 binary 遷移後在 SB 與 TB 下重跑；遷移完把 `register_qobject`、`register_boxed_qobject` 標 `#[deprecated]`（只有警告，不刪除），並考慮新增 `add_owned_object`（直接收 `T` 或 `OwnedObject<T>`，呼叫端不必先做 `Box`；這一階段沒有加）。(2) `move_to_thread` 的介面與 `Widget::set_tool_tip` 的寫法（「發現」4、5）：遷移呼叫端修不好，要另做設計決定。(3) 在事件迴圈執行期間持有物件參考的測試（`pump_until`）要改寫。(4) `find_child*`（`QObject` 的預設方法）與 `object/thread.rs` 的 `flip_owned` 仍經 `Deref` 讀擁有的 child；若在 child 的 callback 裡被呼叫，會讀到正在執行的 child，這個情境還沒有測試。(5) 第 3 階段：`Timer` 改用保存的原始指標登記（RC-230 (d)）。(6) 是否讓 `QObject` 以 `Unpin` 為父 trait，使 `dyn QObject` 是 `Unpin`、Miri 會檢查它的唯一性；與 `Timer` 是 `!Unpin` 衝突，要評估。(7) UniqueConnection 的鍵（「發現」6）要決定改法或明列限制。(8) 第 4 階段（移除舊 API）另案核准。
+- **Miri 階段 C：方法**：同一個 nightly；基線是 `main` `2f2a96c` 的 worktree，分支是 `5a31b22`；每項各自執行，SB 與 TB 都跑；每個 worktree 有自己的 Miri 與 stable 目標目錄。測試名單取自同一份原始碼的 stable 建置（`cargo test -- --list`），所以基線與分支用同一份名單。每項的結果分成：通過、UB、panic（含中止）、不支援（Miri 無法執行的外部函式，或 Miri 的隔離模式擋下的系統呼叫）、逾時。每個 binary 的分類依分支的結果：任何一項在基線通過、在分支沒有通過，是「此次變更造成的失敗」；否則有 UB 是「發現既有 UB」；有 panic 但沒有 UB 是「發現既有問題（非 UB）」（不是 UB，也不是環境問題，所以和四類分開列）；只剩不支援是「環境不支援」，其中有些項目通過的標「部分環境不支援，其餘通過」；全部通過是「通過」。表中的簡寫：通＝通過、UB、P＝panic、不＝不支援、逾＝逾時、無＝這個平台沒有這一項。每批的原始結果（JSON，含每項的錯誤摘錄）在記錄完成前都保留；驅動腳本與分類腳本見下面 details。
+- **Miri 階段 C：總表**（分支；「基線→分支」是逐項比較）：
+
+  | 批次 | binary | 項 | 分支 SB | 分支 TB | 基線→分支 |
+  |---|---|---|---|---|---|
+  | b1：`ferrokit-core`，不碰事件迴圈 | 7 | 36 | 通25 UB8 P1 不2 | 通25 UB8 P1 不2 | 全部相同 |
+  | b2：`ferrokit-core`，事件迴圈、應用程式物件、計時器 | 14 | 78 | 通29 UB8 不41 | 通28 UB9 不41 | UB→通過 6（SB 3、TB 3），其餘相同 |
+  | b3：`ferrokit-widgets`（78 個整合測試 binary＋lib） | 79 | 447 | 通213 UB3 P1 不230 | 通216 P1 不230 | 相同；分支的 4 個逾時以 3600 秒重跑後通過，基線的 4 個逾時沒有重跑 |
+  | b4：`ferrokit-core` lib 單元測試 | 1 | 117 | 通54 UB5 不58 | 通54 UB5 不58 | 全部相同 |
+
+  每個 binary 的分類合計（101 個）：通過 35、部分環境不支援其餘通過 16、環境不支援 37、發現既有 UB 11、發現既有問題（非 UB）2、**此次變更造成的失敗 0**。b1 與 b2 是 RC-230 階段 C 計畫裡的 21 個 binary。
+- **Miri 階段 C：b1**（7 個 binary）：
+  | binary | 項 | 基線 SB | 基線 TB | 分支 SB | 分支 TB | 分類 |
+  |---|---|---|---|---|---|---|
+  | `test_install_event_filter_self_and_mutual` | 3 | 通2 UB1 | 通2 UB1 | 通2 UB1 | 通2 UB1 | 發現既有 UB |
+  | `test_signal_connection_identity` | 3 | 通3 | 通3 | 通3 | 通3 | 通過 |
+  | `test_signal_emit_while_mutating` | 7 | 通7 | 通7 | 通7 | 通7 | 通過 |
+  | `test_signal_owner_binding` | 6 | 通6 | 通6 | 通6 | 通6 | 通過 |
+  | `test_signal_unique_single_shot` | 4 | 通3 P1 | 通3 P1 | 通3 P1 | 通3 P1 | 發現既有問題（非 UB） |
+  | `test_move_to_thread_three_levels` | 2 | UB2 | UB2 | UB2 | UB2 | 發現既有 UB |
+  | `test_parent_thread_affinity` | 11 | UB5 通4 不2 | UB5 通4 不2 | UB5 通4 不2 | UB5 通4 不2 | 發現既有 UB |
+
+- **Miri 階段 C：b2**（14 個 binary）：
+  | binary | 項 | 基線 SB | 基線 TB | 分支 SB | 分支 TB | 分類 |
+  |---|---|---|---|---|---|---|
+  | `layered_tests` | 6 | 不3 通2 UB1 | 不3 通2 UB1 | 不3 通2 UB1 | 不3 通2 UB1 | 發現既有 UB |
+  | `test_advanced_event_system` | 4 | 通4 | 通4 | 通4 | 通4 | 通過 |
+  | `test_application_process_events_in_exec` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_exec_cleanup_deferred_delete` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_filter_consumed_returns_true` | 2 | 通1 UB1 | 通1 UB1 | 通1 UB1 | 通1 UB1 | 發現既有 UB |
+  | `test_meta_invoke_connection_type` | 7 | 不4 通3 | 不4 通3 | 不4 通3 | 不4 通3 | 部分環境不支援，其餘通過 |
+  | `test_meta_invoke_queued_resolution` | 5 | 不5 | 不5 | 不5 | 不5 | 環境不支援 |
+  | `test_move_to_thread_state` | 8 | UB4 不3 通1 | UB4 不3 通1 | UB4 不3 通1 | UB4 不3 通1 | 發現既有 UB |
+  | `test_post_before_loop` | 6 | 不6 | 不6 | 不6 | 不6 | 環境不支援 |
+  | `test_qobject_lifecycle_and_hierarchy` | 10 | 通6 UB4 | UB5 通5 | 通9 UB1 | 通8 UB2 | 發現既有 UB |
+  | `test_qobject_safety_and_qt6_features` | 7 | 通4 不2 UB1 | 通4 不2 UB1 | 通4 不2 UB1 | 通4 不2 UB1 | 發現既有 UB |
+  | `test_quit_event_veto` | 2 | 不2 | 不2 | 不2 | 不2 | 環境不支援 |
+  | `test_signal_direct_and_queued` | 8 | 通5 不3 | 通5 不3 | 通5 不3 | 通5 不3 | 部分環境不支援，其餘通過 |
+  | `test_timer_restart` | 11 | 不11 | 不11 | 不11 | 不11 | 環境不支援 |
+
+  UB→通過的 6 個是 `test_qobject_lifecycle_and_hierarchy` 的 `test_find_child_searches_direct_children_before_descendants`、`test_object_hierarchy_search_find_child`、`test_ownership_and_deletion_cascade`（SB 與 TB 各 3）：基線上的 UB 在 `add_owned_child` 的舊登記方式（`qobject.rs:402` 建立的標籤），分支改用擁有者的指標之後通過。
+- **Miri 階段 C：b3**（`ferrokit-widgets`；`tests/` 下的 `fixtures`、`support` 是目錄，不是 binary）：
+  | binary | 項 | 基線 SB | 基線 TB | 分支 SB | 分支 TB | 分類 |
+  |---|---|---|---|---|---|---|
+  | `layout_qt_oracle` | 4 | 通3 逾1 | 通2 逾2 | 通4 | 通4 | 通過 |
+  | `test_accessibility` | 4 | 不2 通2 | 不2 通2 | 不2 通2 | 不2 通2 | 部分環境不支援，其餘通過 |
+  | `test_application_layers` | 15 | 不15 | 不15 | 不15 | 不15 | 環境不支援 |
+  | `test_arc_progress_and_custom_paint` | 2 | 通2 | 通2 | 通2 | 通2 | 通過 |
+  | `test_attribute_selector` | 3 | 不2 通1 | 不2 通1 | 不2 通1 | 不2 通1 | 部分環境不支援，其餘通過 |
+  | `test_box_layout_add_stretch_zero` | 4 | 通4 | 通4 | 通4 | 通4 | 通過 |
+  | `test_box_layout_spacing` | 8 | 通8 | 通8 | 通8 | 通8 | 通過 |
+  | `test_button_block` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_button_minimum_size_hint` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_enabled_change` | 7 | 通7 | 通7 | 通7 | 通7 | 通過 |
+  | `test_event_filter_notify` | 4 | 不2 UB2 | 不2 通2 | 不2 UB2 | 不2 通2 | 發現既有 UB |
+  | `test_event_propagation` | 32 | 不19 通13 | 不19 通13 | 不19 通13 | 不19 通13 | 部分環境不支援，其餘通過 |
+  | `test_explicit_size_and_hfw` | 7 | 通7 | 通7 | 通7 | 通7 | 通過 |
+  | `test_focus_disable` | 5 | 通5 | 通5 | 通5 | 通5 | 通過 |
+  | `test_frame_size_hint` | 4 | 通4 | 通4 | 通4 | 通4 | 通過 |
+  | `test_generic_double_click` | 9 | 通9 | 通9 | 通9 | 通9 | 通過 |
+  | `test_geometry_invalidation` | 3 | 不3 | 不3 | 不3 | 不3 | 環境不支援 |
+  | `test_grid_layout_accessors` | 3 | 通3 | 通3 | 通3 | 通3 | 通過 |
+  | `test_grid_layout_python_semantics` | 2 | 通2 | 通2 | 通2 | 通2 | 通過 |
+  | `test_hit_test_dpi_old_dpr` | 1 | 通1 | 通1 | 通1 | 通1 | 通過 |
+  | `test_label_box_model` | 3 | 不3 | 不3 | 不3 | 不3 | 環境不支援 |
+  | `test_label_focus_policy` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_label_letter_spacing_hint` | 2 | 不2 | 不2 | 不2 | 不2 | 環境不支援 |
+  | `test_label_overflow_alignment` | 3 | 不3 | 不3 | 不3 | 不3 | 環境不支援 |
+  | `test_last_window_closed_signal` | 2 | 不2 | 不2 | 不2 | 不2 | 環境不支援 |
+  | `test_layered_geometry_sync` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_layout_alignment` | 7 | 通7 | 通7 | 通7 | 通7 | 通過 |
+  | `test_layout_alignment_residual` | 21 | 通12 不9 | 通12 不9 | 通12 不9 | 通12 不9 | 部分環境不支援，其餘通過 |
+  | `test_layout_default_metrics` | 9 | 通9 | 通9 | 通9 | 通9 | 通過 |
+  | `test_layout_direction` | 8 | 通8 | 通8 | 通8 | 通8 | 通過 |
+  | `test_layout_grid_alignment` | 11 | 通11 | 通11 | 通11 | 通11 | 通過 |
+  | `test_layout_metric_caching` | 11 | 不8 通3 | 不8 通3 | 不8 通3 | 不8 通3 | 部分環境不支援，其餘通過 |
+  | `test_layout_size_constraint` | 9 | 通9 | 通9 | 通9 | 通9 | 通過 |
+  | `test_layout_stretch_minimum` | 6 | 通6 | 通6 | 通6 | 通6 | 通過 |
+  | `test_margin_longhand` | 2 | 通2 | 通2 | 通2 | 通2 | 通過 |
+  | `test_menu_popup_focus` | 6 | 不6 | 不6 | 不6 | 不6 | 環境不支援 |
+  | `test_menu_popup_posted_events` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_menu_popup_present_offset` | 2 | 不2 | 不2 | 不2 | 不2 | 環境不支援 |
+  | `test_menu_popup_screen` | 3 | 不3 | 不3 | 不3 | 不3 | 環境不支援 |
+  | `test_menu_style_box_model` | 3 | 不3 | 不3 | 不3 | 不3 | 環境不支援 |
+  | `test_mouse_attributes_parity` | 2 | 通2 | 通2 | 通2 | 通2 | 通過 |
+  | `test_nested_layout_maximum` | 2 | 通2 | 通2 | 通2 | 通2 | 通過 |
+  | `test_per_monitor_dpi_sync` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_progress_bar_size_hint` | 7 | 不6 通1 | 不6 通1 | 不6 通1 | 不6 通1 | 部分環境不支援，其餘通過 |
+  | `test_qss_min_max_box` | 5 | 不3 通2 | 不3 通2 | 不3 通2 | 不3 通2 | 部分環境不支援，其餘通過 |
+  | `test_reentrancy_and_deferred` | 5 | 不3 通2 | 不3 通2 | 不3 通2 | 不3 通2 | 部分環境不支援，其餘通過 |
+  | `test_resize_deferred_render` | 15 | 不15 | 不15 | 不15 | 不15 | 環境不支援 |
+  | `test_scroll_area_paint` | 2 | 不2 | 不2 | 不2 | 不2 | 環境不支援 |
+  | `test_single_resize_pipeline` | 2 | 不2 | 不2 | 不2 | 不2 | 環境不支援 |
+  | `test_stacked_layout_geometry` | 4 | 通4 | 通4 | 通4 | 通4 | 通過 |
+  | `test_stacked_layout_hint` | 6 | 通6 | 通6 | 通6 | 通6 | 通過 |
+  | `test_stacked_layout_spacing` | 2 | 通2 | 通2 | 通2 | 通2 | 通過 |
+  | `test_style_and_commands` | 3 | 不2 通1 | 不2 通1 | 不2 通1 | 不2 通1 | 部分環境不支援，其餘通過 |
+  | `test_style_scope` | 9 | 不9 | 不9 | 不9 | 不9 | 環境不支援 |
+  | `test_stylesheet_disabled` | 3 | 不3 | 不3 | 不3 | 不3 | 環境不支援 |
+  | `test_stylesheet_enabled` | 4 | 不2 通2 | 不2 通2 | 不2 通2 | 不2 通2 | 部分環境不支援，其餘通過 |
+  | `test_stylesheet_focus` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_stylesheet_focus_label_bar` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_stylesheet_style` | 4 | 通3 不1 | 通3 不1 | 通3 不1 | 通3 不1 | 部分環境不支援，其餘通過 |
+  | `test_stylesheet_type_inheritance` | 5 | 通5 | 通5 | 通5 | 通5 | 通過 |
+  | `test_system_move_release` | 4 | 不4 | 不4 | 不4 | 不4 | 環境不支援 |
+  | `test_tool_tip_change_event` | 1 | UB1 | 通1 | UB1 | 通1 | 發現既有 UB |
+  | `test_tooltip` | 29 | 不23 通6 | 不23 通6 | 不23 通6 | 不23 通6 | 部分環境不支援，其餘通過 |
+  | `test_top_level_minimum` | 4 | 不4 | 不4 | 不4 | 不4 | 環境不支援 |
+  | `test_update_reaches_window` | 4 | 不4 | 不4 | 不4 | 不4 | 環境不支援 |
+  | `test_widget_attributes_api` | 1 | 通1 | 通1 | 通1 | 通1 | 通過 |
+  | `test_widget_default_size_hint` | 2 | 通2 | 通2 | 通2 | 通2 | 通過 |
+  | `test_widget_enabled` | 3 | 通3 | 通3 | 通3 | 通3 | 通過 |
+  | `test_widget_extensions` | 14 | 不11 通3 | 不11 通3 | 不11 通3 | 不11 通3 | 部分環境不支援，其餘通過 |
+  | `test_widget_invalidation` | 17 | 不17 | 不17 | 不17 | 不17 | 環境不支援 |
+  | `test_widget_partial_update` | 1 | 通1 | 通1 | 通1 | 通1 | 通過 |
+  | `test_widget_update_cross_thread` | 2 | 不2 | 不2 | 不2 | 不2 | 環境不支援 |
+  | `test_widgets_system` | 9 | 不5 通4 | 不5 通4 | 不5 通4 | 不5 通4 | 部分環境不支援，其餘通過 |
+  | `test_window_activation_events` | 3 | 不3 | 不3 | 不3 | 不3 | 環境不支援 |
+  | `test_window_device_pixel_ratio` | 3 | 通3 | 通2 逾1 | 通3 | 通3 | 通過 |
+  | `test_window_flags_api` | 1 | 不1 | 不1 | 不1 | 不1 | 環境不支援 |
+  | `test_window_screen_mapping` | 16 | 通16 | 通16 | 通16 | 通16 | 通過 |
+  | `test_window_size_limits` | 15 | 不15 | 不15 | 不15 | 不15 | 環境不支援 |
+  | `lib` | 5 | 通3 P1 不1 | 通3 P1 不1 | 通3 P1 不1 | 通3 P1 不1 | 發現既有問題（非 UB） |
+
+- **Miri 階段 C：b4**（`ferrokit-core` lib 單元測試，每項各自執行，所以不建立 dispatcher 的 54 項可以跑）：
+  | binary | 項 | 基線 SB | 基線 TB | 分支 SB | 分支 TB | 分類 |
+  |---|---|---|---|---|---|---|
+  | `lib` | 117 | 不58 通54 UB5 | 不58 通54 UB5 | 不58 通54 UB5 | 不58 通54 UB5 | 發現既有 UB |
+
+  5 個 UB 都在 `event_loop/loop.rs` 的 `#[cfg(test)]` 模組：標籤建立在舊的 `register_qobject`（`qobject.rs:415`），在測試本身直接存取物件時失效（`loop.rs:1815`、`1916`、`1953`、`1991`、`2037`）；屬於「發現」8。
+- **環境不支援的原因**（分支，以 SB 計項數；TB 相同）：
+
+  | 原因 | 位置 | b1 | b2 | b3 | b4 |
+  |---|---|---|---|---|---|
+  | Miri 不能呼叫外部函式 `timeBeginPeriod` | `dispatcher_win.rs:191`，建立第一個 Win32 事件 dispatcher 時 | 0 | 37 | 57 | 58 |
+  | 隔離模式擋下 `GetModuleFileNameW`（`std::env::current_exe`） | `CoreApplication::new`（`application/mod.rs:211`）；`test_parent_thread_affinity` 的 2 項另外以子行程執行同一個 binary | 2 | 4 | 17 | 0 |
+  | 隔離模式擋下 `CreateFileW`（`std::fs::metadata`，經 `Path::is_file`） | `ferrokit_gui` 的字型查找 `FontDatabase::find_and_load_font_file`（90 項中 88 項的錯誤摘錄看得到這個呼叫端，另 2 項的摘錄在那之前被截斷） | 0 | 0 | 90 | 0 |
+  | Miri 不能呼叫外部函式 `RegOpenKeyExW` | `ferrokit-platform/src/theme.rs:142`（讀 Windows 主題設定） | 0 | 0 | 62 | 0 |
+  | Miri 不能呼叫外部函式 `EnumWindows` | `test_menu_popup_focus.rs:35`（測試本身） | 0 | 0 | 4 | 0 |
+- **受外部函式阻擋的單元測試：`cfg(miri)` 試驗（沒有提交）**：在分支的工作樹暫時把 `dispatcher_win.rs:191` 的 `timeBeginPeriod(1)` 加上 `#[cfg(not(miri))]`（附註解），重跑 4 項原本停在它的測試（lib 的 `dispatcher_win::tests::test_cross_thread_wakeup`、`test_high_frequency_wakeup_dedup`，整合測試 `test_timer_restart::start_timer_fires_timer_event`、`test_post_before_loop::post_before_loop_exists_is_delivered_when_loop_starts`，SB）。4 項都改停在下一個呼叫：「can't call foreign function `GetModuleHandleW`」（`dispatcher_win.rs:195`，同一個註冊視窗類別的函式）。Win32 事件 dispatcher 之後還要 `RegisterClassExW`、`CreateWindowExW(HWND_MESSAGE)`、`PeekMessageW`、`MsgWaitForMultipleObjectsEx`、`SetTimer`／`KillTimer`、`PostMessageW`、`DispatchMessageW`（讀碼；這幾個沒有逐一試 `[INFERENCE：Miri 都不支援]`）。只跳過 `timeBeginPeriod` 不會讓任何測試多跑一步；要讓這些測試在 Windows 的 Miri 下跑，得在 `cfg(miri)` 下換掉整個 Win32 訊息視窗 dispatcher，那已經不是使用者允許的「只替代 Miri 不支援的 OS 外部函式」的範圍，也會跳過事件迴圈的核心邏輯。所以這個改動沒有提交，工作樹已還原（`git status` 乾淨），stable 與 release 建置沒有任何變化。
+- **補充：跨目標 Miri（`--target x86_64-unknown-linux-gnu`；不是正式平台，只作補充）**：Windows host 上的 Miri 可以解譯 Linux 目標的程式，`ferrokit-core` 在 Linux 用 `UnixEventDispatcher`（`Condvar` 加 epoll），Miri 支援這些系統呼叫，所以原本停在 `timeBeginPeriod` 的事件迴圈邏輯在這裡可以跑。**限制**：這是 Unix dispatcher，不是正式支援的 Windows dispatcher；沒有驗證真實的計時器或任何 OS 外部函式；Miri 的時鐘與執行緒排程和真實執行不同。範圍：b2 的 41 項環境不支援中，扣掉整個檔案是 `#![cfg(windows)]` 的 `test_timer_restart`（11 項）之後的 30 項；b4 的 58 項中，扣掉 `#[cfg(windows)]` 的 `dispatcher_win` 模組（10 項）之後的 48 項。分支 SB 與 TB 全跑；基線只跑分支沒有通過的 16 項（每個目標各自的目標目錄）。結果：
+
+  | binary | 項 | 分支 SB | 分支 TB | 基線（只跑分支未通過的項） |
+  |---|---|---|---|---|
+  | `layered_tests` | 3 | 通3 | 通3 | 沒有跑（分支全部通過） |
+  | `test_application_process_events_in_exec` | 1 | 不1 | 不1 | 1 項，結果與分支相同 |
+  | `test_exec_cleanup_deferred_delete` | 1 | 不1 | 不1 | 1 項，結果與分支相同 |
+  | `test_meta_invoke_connection_type` | 4 | 通2 UB2 | 通2 UB2 | 2 項，結果與分支相同 |
+  | `test_meta_invoke_queued_resolution` | 5 | 通3 UB2 | 通4 UB1 | 2 項，結果與分支相同 |
+  | `test_move_to_thread_state` | 3 | UB3 | UB3 | 3 項，結果與分支相同 |
+  | `test_post_before_loop` | 6 | 通6 | 通6 | 沒有跑（分支全部通過） |
+  | `test_qobject_safety_and_qt6_features` | 2 | UB1 通1 | 通2 | 1 項，結果與分支相同 |
+  | `test_quit_event_veto` | 2 | 不2 | 不2 | 2 項，結果與分支相同 |
+  | `test_signal_direct_and_queued` | 3 | 通2 P1 | 通2 P1 | 1 項，結果與分支相同 |
+  | `lib` | 48 | 通44 無2 UB1 P1 | 通44 無2 P1 UB1 | 3 項，結果與分支相同 |
+
+  基線與分支在這 16 項上的結果全部相同，**沒有此次變更造成的失敗**。分類：(a) 通過：b2 SB 17、TB 19；lib SB 44、TB 44。(b) 新看到的既有 UB：`move_to_thread` 的 3 項（TB 在 `thread.rs:261`，即「發現」4；SB 先停在舊登記函式的指標）；`test_meta_invoke_connection_type` 的 2 項與 `test_meta_invoke_queued_resolution` 的 1 項（TB）：測試的 `pump_until(.., done)` 讓 `done` 閉包在事件迴圈執行期間持有物件的共享參考（受保護、Frozen），排隊的呼叫經 registry 寫入同一個物件（`test_meta_invoke_connection_type.rs:57`、`test_meta_invoke_queued_resolution.rs:67`），違反登記函式的 Safety（callback 執行時不得有其他存取），是測試寫法的問題，改用新 API 也一樣 `[INFERENCE：沒有改寫實測]`；其餘 SB 的 UB 是舊登記函式的指標被測試的直接存取弄失效（「發現」8），包括 `delete_later(obj: &ObjectData)` 經呼叫端傳入的參考寫入 `delete_later_called`（`qobject.rs:958`，原子操作也算寫入；b2 的 `test_delete_later_inside_handler_scope_survives_nested_pump` 與 lib 的 `test_deferred_delete_loop_level`，SB）。lib 的 `test_livelock_prevention`（TB，`loop.rs:1221`）的衝突標籤建立在 `register_qobject(&mut widget)`（`loop.rs:1237`），同一類。(c) 依賴真實時間的測試：`test_signal_direct_and_queued::test_blocking_queued_signal_cross_thread_synchronization`（`sleep(30ms)` 之後假設 worker 已經送出，第 204 行 `assert!(has_event)` 失敗）與 lib 的 `test_live_lock_prevention`（`loop.rs:1580` `elapsed < 50ms`）在 Miri 的時鐘與排程下失敗，基線相同；歸為環境不支援（時序）。(d) 不支援：4 項是 Linux 上的 `readlink`（`current_exe`）被隔離模式擋下，即 `CoreApplication::new`。(e) 無：lib 的 `timer::tests::test_single_shot_timer`、`test_timer_cancellation` 在 Linux 目標不存在（`#[cfg(windows)]`）。
+- **ASan（補充，分開記錄；不取代 SB／TB）**：`nightly-2026-10-16`，`--target x86_64-pc-windows-msvc`，`-Zsanitizer=address`；執行階段用 Visual Studio 18 Community 附的 MSVC 14.44.35207 的 `clang_rt.asan_dynamic-x86_64.dll`。設定過程：第一次連結失敗（`LNK1104`：找不到 `clang_rt.asan_dynamic_runtime_thunk-x86_64.lib`），以 `-Clink-arg=/LIBPATH:` 指向同一個 MSVC 的 `lib\x64` 補上（路徑有空白，所以用 `CARGO_ENCODED_RUSTFLAGS`）；執行時 DLL 的目錄要在 `PATH` 裡，否則是 `STATUS_DLL_NOT_FOUND`。有效性：一次性的 use-after-free 測試（暫時檔案，執行後刪除，沒有提交）被報出 `ERROR: AddressSanitizer: heap-use-after-free`。結果（`cargo +nightly-2026-10-16 test -j 1 --target x86_64-pc-windows-msvc --workspace --no-fail-fast -- --skip real_windows`，各自的目標目錄）：分支 `5a31b22` exit 0，168 個結果行，1152 passed、0 failed、8 ignored，沒有任何 AddressSanitizer 報告；基線 `2f2a96c` exit 0，165 個結果行，1140 passed、0 failed、4 ignored，沒有報告；兩邊都有的測試結果逐項相同。限制：ASan 只看實際發生的記憶體錯誤（越界、釋放後使用等），不檢查別名規則，所以沒有報告不代表 SB／TB 報的 UB 不存在；標準函式庫沒有以 ASan 重新建置；`real_windows` 測試沒有跑。
+
+  <details><summary>Miri 掃描腳本 <code>sweep2.py</code>（暫存，記錄後刪除）</summary>
+
+  ```python
+  # Run each test of the given targets on its own under Miri: SB (default) and TB (-Zmiri-tree-borrows).
+  # usage: python sweep2.py WORKTREE TARGETDIR LABEL OUT.json CRATE TARGETS [MODELS] [ONLY]
+  #   TARGETS: comma list of integration test names, or "lib" for the library unit tests.
+  #   MODELS:  "SB,TB" (default).  ONLY: optional file with "target::test" lines to restrict the run.
+  import json, os, re, subprocess, sys, time
+
+  wt, target, label, out, crate, targets = sys.argv[1:7]
+  models = (sys.argv[7] if len(sys.argv) > 7 and sys.argv[7] else "SB,TB").split(",")
+  only = None
+  if len(sys.argv) > 8:
+      only = {l.strip() for l in open(sys.argv[8], encoding="utf-8") if l.strip()}
+  TOOL = "+nightly-2026-10-16"
+
+
+  def target_args(t):
+      return ["--lib"] if t == "lib" else ["--test", t]
+
+
+  def list_tests(t):
+      # Names come from the stable build of the same source, so both runs use one list.
+      # A stable target dir of its own per worktree: worktrees must not share one, or cargo can
+      # take one worktree's artifacts as fresh for the other.
+      env = dict(os.environ, CARGO_TARGET_DIR=target + "_stable")
+      p = subprocess.run(["cargo", "test", "-j", "1", "-p", crate] + target_args(t) + ["--", "--list", "--format", "terse"],
+                         cwd=wt, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+      names = [l[:-len(": test")] for l in p.stdout.splitlines() if l.endswith(": test")]
+      if p.returncode != 0:
+          print(f"list failed for {t}: {p.stderr[-400:]}", flush=True)
+      return names
+
+
+  def norm(s):
+      s = re.sub(r"<\d+>", "<N>", s)
+      s = re.sub(r"alloc\d+", "allocN", s)
+      s = re.sub(r"0x[0-9a-f]+", "0xX", s)
+      return s.strip()
+
+
+  def classify(text):
+      if re.search(r"^test result: ok\. 1 passed", text, re.M):
+          return "pass", None
+      if re.search(r"^test result: ok\. 0 passed; 0 failed; 1 ignored", text, re.M):
+          return "ignored", None
+      if re.search(r"running 0 tests", text):
+          return "notfound", None
+      m = re.search(r"^error: (.*)$", text, re.M)
+      if m and "Undefined Behavior" in m.group(1):
+          kind = "UB"
+      elif m and ("unsupported operation" in m.group(1) or "can't call foreign function" in m.group(1)):
+          kind = "unsupported"
+      elif m and "deadlock" in m.group(1).lower():
+          kind = "deadlock"
+      elif m and "leaked" in m.group(1):
+          kind = "leak"
+      elif re.search(r"panicked at", text):
+          kind = "panic"
+      elif m:
+          kind = "error"
+      else:
+          kind = "other"
+      sig = []
+      if m:
+          sig.append(("error", norm(m.group(1))[:140]))
+      cur = "error"
+      after = text[m.end():] if m else text
+      for line in after.splitlines():
+          if "was created by" in line:
+              cur = "created"
+          elif "later invalidated" in line:
+              cur = "invalidated"
+          loc = re.match(r"\s*--> (\S+?):(\d+):\d+", line)
+          if loc and len(sig) < 6:
+              sig.append((cur, f"{loc.group(1).replace(chr(92), '/')}:{loc.group(2)}"))
+          if line.startswith("note: some details"):
+              break
+      if kind == "panic":
+          pm = re.search(r"panicked at ([^\n]+)\n([^\n]*)", text)
+          sig.append(("panic", norm(pm.group(1) + " " + pm.group(2))[:160] if pm else ""))
+      return kind, sig
+
+
+  tests = {t: list_tests(t) for t in targets.split(",")}
+  res, excerpts = {}, {}
+  t0 = time.time()
+  for t, names in tests.items():
+      for n in names:
+          if only is not None and f"{t}::{n}" not in only:
+              continue
+          for mdl in models:
+              env = dict(os.environ, CARGO_TARGET_DIR=target)
+              # SWEEP_MIRIFLAGS: extra flags for a separately labelled supplementary run only.
+              flags = os.environ.get("SWEEP_MIRIFLAGS", "").split()
+              if mdl == "TB":
+                  flags.append("-Zmiri-tree-borrows")
+              if flags:
+                  env["MIRIFLAGS"] = " ".join(flags)
+              else:
+                  env.pop("MIRIFLAGS", None)
+              # SWEEP_TARGET: cross-target run (supplementary), e.g. x86_64-unknown-linux-gnu.
+              tgt = ["--target", os.environ["SWEEP_TARGET"]] if os.environ.get("SWEEP_TARGET") else []
+              s0 = time.time()
+              try:
+                  p = subprocess.run(["cargo", TOOL, "miri", "test", "-j", "1", "-p", crate] + tgt + target_args(t)
+                                     + ["--", "--exact", n, "--test-threads=1"],
+                                     cwd=wt, env=env, capture_output=True, text=True, timeout=int(os.environ.get("SWEEP_TIMEOUT", "900")),
+                                     encoding="utf-8", errors="replace")
+                  text = p.stdout + "\n" + p.stderr
+                  kind, sig = classify(text)
+              except subprocess.TimeoutExpired:
+                  text, kind, sig = "", "timeout", None
+              key = f"{t}::{n}::{mdl}"
+              res[key] = {"kind": kind, "sig": sig, "s": round(time.time() - s0)}
+              if kind not in ("pass", "ignored"):
+                  m = re.search(r"^error: ", text, re.M)
+                  start = m.start() if m else max(0, len(text) - 3000)
+                  excerpts[key] = text[start:start + 3000]
+              print(f"{label} {t}::{n} {mdl} {kind} {res[key]['s']}s", flush=True)
+  json.dump({"label": label, "crate": crate, "tests": tests, "res": res, "excerpts": excerpts,
+             "seconds": round(time.time() - t0)}, open(out, "w", encoding="utf-8"), indent=1)
+  print("done", round(time.time() - t0), "s")
+  ```
+
+  </details>
+
+  <details><summary>驅動腳本 <code>phasec.sh</code>（暫存，記錄後刪除；本機路徑改成 <code>$WS</code>）</summary>
+
+  ```bash
+  #!/usr/bin/env bash
+  # Phase C driver: each batch on the base worktree (main) and on the branch, SB and TB, one test per run.
+  # usage: source phasec.sh BATCH...   (b1 b2 b3 b4), from a shell that has python and TEMP;
+  # WS is the directory that holds the two worktrees.
+  S="$(cygpath -m "$TEMP")/s1"
+  BASE="$WS/fk_base"
+  BR="$WS/ferrokit"
+  B1=test_install_event_filter_self_and_mutual,test_signal_connection_identity,test_signal_emit_while_mutating,test_signal_owner_binding,test_signal_unique_single_shot,test_move_to_thread_three_levels,test_parent_thread_affinity
+  B2=layered_tests,test_advanced_event_system,test_application_process_events_in_exec,test_exec_cleanup_deferred_delete,test_filter_consumed_returns_true,test_meta_invoke_connection_type,test_meta_invoke_queued_resolution,test_move_to_thread_state,test_post_before_loop,test_qobject_lifecycle_and_hierarchy,test_qobject_safety_and_qt6_features,test_quit_event_veto,test_signal_direct_and_queued,test_timer_restart
+  B3=$(ls "$BR/crates/ferrokit-widgets/tests" | sed 's/\.rs$//' | paste -sd, -),lib
+  cd "$S"
+  for b in "$@"; do
+    case $b in
+      b1) crate=ferrokit-core; tg=$B1 ;;
+      b2) crate=ferrokit-core; tg=$B2 ;;
+      b3) crate=ferrokit-widgets; tg=$B3; export SWEEP_TIMEOUT=300 ;;
+      b4) crate=ferrokit-core; tg=lib ;;
+    esac
+    for side in branch base; do
+      if [ $side = base ]; then wt=$BASE; tgt="$S/tgt_base"; else wt=$BR; tgt="$S/tgt_branch"; fi
+      python sweep2.py "$wt" "$tgt" "${b}_$side" "res_${b}_$side.json" $crate "$tg" > "sweep_${b}_$side.log" 2>&1
+      echo "$b $side: $(tail -1 sweep_${b}_$side.log) list-failures=$(grep -c 'list failed' sweep_${b}_$side.log)"
+    done
+  done
+  ```
+
+  </details>
+
+  <details><summary>分類腳本 <code>table.py</code>（暫存，記錄後刪除）</summary>
+
+  ```python
+  # Per-binary phase C table: python table.py BATCH [OVERRIDE.json ...] > out.md
+  # Branch results decide the class; base results give the transition. Overrides replace branch
+  # entries (reruns with a longer timeout).
+  import json, sys, collections
+
+  b = sys.argv[1]
+  base = json.load(open(f"res_{b}_base.json", encoding="utf-8"))["res"]
+  br = json.load(open(f"res_{b}_branch.json", encoding="utf-8"))
+  tests, br = br["tests"], br["res"]
+  for o in sys.argv[2:]:
+      br.update(json.load(open(o, encoding="utf-8"))["res"])
+  ABBR = {"pass": "通", "UB": "UB", "panic": "P", "unsupported": "不", "timeout": "逾", "ignored": "略"}
+
+
+  def counts(res, t, mdl):
+      c = collections.Counter(res[f"{t}::{n}::{mdl}"]["kind"] for n in tests[t] if f"{t}::{n}::{mdl}" in res)
+      return " ".join(f"{ABBR.get(k, k)}{v}" for k, v in sorted(c.items(), key=lambda kv: -kv[1])) or "—"
+
+
+  print("| binary | 項 | 基線 SB | 基線 TB | 分支 SB | 分支 TB | 分類 |")
+  print("|---|---|---|---|---|---|---|")
+  tot = collections.Counter()
+  for t, names in tests.items():
+      if not names:
+          continue
+      kinds = [br[f"{t}::{n}::{m}"]["kind"] for n in names for m in ("SB", "TB")]
+      regress = [n for n in names for m in ("SB", "TB")
+                 if base[f"{t}::{n}::{m}"]["kind"] == "pass" and br[f"{t}::{n}::{m}"]["kind"] != "pass"]
+      if regress:
+          cls = "此次變更造成的失敗"
+      elif "UB" in kinds:
+          cls = "發現既有 UB"
+      elif "panic" in kinds:
+          cls = "發現既有問題（非 UB）"
+      elif "timeout" in kinds:
+          cls = "逾時，未分類"
+      elif "unsupported" in kinds:
+          cls = "環境不支援" if "pass" not in kinds else "部分環境不支援，其餘通過"
+      else:
+          cls = "通過"
+      tot[cls] += 1
+      print(f"| `{t}` | {len(names)} | {counts(base, t, 'SB')} | {counts(base, t, 'TB')} | "
+            f"{counts(br, t, 'SB')} | {counts(br, t, 'TB')} | {cls} |")
+  print()
+  print("classes:", dict(tot))
+  ```
+
+  </details>
+
+  <details><summary>一次性 probe（「發現」4、5；執行後刪除，沒有提交）</summary>
+
+  `ferrokit-core/tests/probe_move_to_thread_new_api.rs`：
+
+  ```rust
+  // Throwaway Miri probe (not committed): `move_to_thread` on objects registered through the new
+  // API. The caller passes `&mut ObjectData` of the root while `move_to_thread` sends
+  // `ThreadChange` to that same root through the registry.
+
+  use std::ptr::NonNull;
+
+  use ferrokit_core::object::{
+      move_to_thread, register_owned_qobject, register_qobject_ptr, unregister_qobject, ObjectData,
+      ObjectId, QObject, ThreadId,
+  };
+
+  struct Simple {
+      data: ObjectData,
+  }
+
+  impl Simple {
+      fn new() -> Self {
+          Self {
+              data: ObjectData::new(ObjectId::next()),
+          }
+      }
+  }
+
+  impl QObject for Simple {
+      fn object_data(&self) -> &ObjectData {
+          &self.data
+      }
+      fn object_data_mut(&mut self) -> &mut ObjectData {
+          &mut self.data
+      }
+  }
+
+  #[test]
+  fn owned_root_moved_through_its_owner() {
+      let source = ThreadId::current();
+      let target = std::thread::spawn(ThreadId::current).join().unwrap();
+      // SAFETY: the owner stays on this thread; no callback runs when it is used or dropped.
+      let mut root = unsafe { register_owned_qobject(Simple::new()) };
+      let res = move_to_thread(&mut root.data, target, source);
+      assert_eq!(res, Ok(()));
+      assert_eq!(root.data.thread_id, target);
+  }
+
+  #[test]
+  fn raw_pointer_registered_root_moved_through_the_variable() {
+      let source = ThreadId::current();
+      let target = std::thread::spawn(ThreadId::current).join().unwrap();
+      let mut root = Simple::new();
+      let id = root.data.id;
+      let ptr: *mut dyn QObject = &raw mut root;
+      // SAFETY: `root` stays here until it is unregistered below.
+      unsafe { register_qobject_ptr(NonNull::new(ptr).unwrap()) };
+      let res = move_to_thread(&mut root.data, target, source);
+      assert_eq!(res, Ok(()));
+      assert_eq!(root.data.thread_id, target);
+      // SAFETY: no callback runs.
+      unsafe { unregister_qobject(id) };
+  }
+  ```
+
+  `ferrokit-widgets/tests/probe_tool_tip_new_api.rs`：`test_tool_tip_change_event.rs` 的複本，import 改成 `use ferrokit_core::object::{register_owned_qobject, ObjectId};`，測試換成：
+
+  ```rust
+  #[test]
+  fn set_tool_tip_on_an_owned_probe() {
+      let seen = Arc::new(AtomicBool::new(false));
+      // SAFETY: the owner stays on this thread; it is used and dropped when no callback runs.
+      let probe = unsafe {
+          register_owned_qobject(ToolTipProbe {
+              base: ferrokit_widgets::widget::WidgetBase::new(),
+              change_seen: Arc::clone(&seen),
+          })
+      };
+      assert!(!seen.load(Ordering::SeqCst));
+      probe.set_tool_tip("Hello Tooltip");
+      assert!(seen.load(Ordering::SeqCst));
+  }
+  ```
+
+  </details>
+- **清除**（記錄完成前執行）：ferrokit 的暫用 worktree `fk_base` 已移除，`git worktree list` 只剩 `ferrokit`（在 `owned-object-proxy`）；本機 `main` 與 `origin/main` 仍是 `2f2a96c`。`rustup toolchain uninstall nightly-2026-10-16` 之後，工具鏈只剩 `stable-x86_64-pc-windows-gnu` 與 `stable-x86_64-pc-windows-msvc`（預設），`rustc`、`cargo` 是 1.98.1。Miri 快取 `%LOCALAPPDATA%\rust-lang\miri\cache`（約 205 MB，`lib\rustlib` 下是 `x86_64-pc-windows-msvc` 與 `x86_64-unknown-linux-gnu` 兩個 sysroot）已刪除，空的 `rust-lang\miri` 留著。暫存目錄裡的目標目錄（stable 兩個各約 12–13 GB、ASan 兩個各約 6 GB、Miri 與跨目標的共約 1.7 GB）與 HUD 複本（1.6 GB）已刪除；RC-229 留下的 `ferrokit/target/miri`（80 MB）也已刪除。腳本與 probe 只留在上面的 details；結果 JSON 與日誌在提交這份記錄之後刪除。另外，我先前把這一輪的計畫草稿誤寫到 HUD repo 的 `rust/docs/qt_parity/cygpath`（未追蹤的檔案，從來沒有加入 git），已刪除；HUD repo 的未追蹤檔案回到只有 5 個 `spec03_*.py`。
+- **狀態**：DV-14 的方向已核准（方案 2＋3）；第 1 階段已在獨立分支 `owned-object-proxy`（`b243407`、`5a31b22`）實作並推送，三平台 CI 通過，**未核准合併**，合併以前仍視同缺陷（01.6）。HUD 的固定版本仍是 `a622ac2`。G2.7.d 維持開放：第 1 階段只遷移了 `add_owned_child`、`reparent_owned`、停放與銷毀流程；舊 API 的呼叫端、`Timer`、`move_to_thread` 與 `Widget::set_tool_tip` 仍有問題。G2.1.i 維持未完成：`delete_children` 讀 child id 的修正只在未合併的分支上。G2.1.k 維持待行為驗收。R-00075 維持部分符合；狀態計數不變。第 03 章、Windows 實機驗收、正式發布繼續暫停。
+- **Residual**：(1) 分支沒有合併，HUD 沒有改用它。(2) 舊 API 的 114＋7 處呼叫端與 `Timer` 沒有遷移；`move_to_thread`、`Widget::set_tool_tip` 的別名問題與登記方式無關，沒有修。(3) Windows host 的 Miri 有 152 項（b2 37、b3 57、b4 58）停在 `timeBeginPeriod`，之後是整個 Win32 dispatcher；跨目標只是補充（Unix dispatcher），`#![cfg(windows)]` 或 `#[cfg(windows)]` 的測試（`test_timer_restart`、`dispatcher_win` 模組等）在 Miri 下完全沒有跑。(4) `ferrokit-widgets` 有 230 項在 Miri 下環境不支援（字型檔、Windows 登錄檔、隔離模式、外部函式），其中包括 3 項名稱含 `real_windows` 的測試；這些路徑的別名沒有被檢查。(5) `dyn QObject` 的 `!Unpin` 豁免讓經 trait 物件的路徑檢查較寬。(6) UniqueConnection 依賴函式指標相等。(7) SB 與 TB 仍是實驗性的模型，只用了一個 nightly。(8) ASan 只在 Windows 本機跑，沒有在 CI 跑；沒有發現記憶體錯誤不代表別名安全。(9) `OwnedObject` 不是 `Send`，跨執行緒的規則沒有定；`find_child*`、`flip_owned` 在 child 的 callback 期間讀它的情境沒有測試。(10) `test_window_activation` 的前景視窗測試受桌面狀態影響（這一輪在基線上失敗一次，單獨重跑通過）。(11) 第 03 章、Windows 實機驗收、正式發布繼續暫停。
+
 ---
 
 ## 附錄 E：Windows HUD 發布阻擋分類與實機驗收清單（E.1 已於 2026-10-15 經使用者批准；E.2 全部未執行）
@@ -6239,7 +6764,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - DV-10 的決定（2026-10-15）：使用者核准 affinity 限制與錯誤類型，拒絕沒有證據的舊 parent 移除語義；Qt 實測顯示 Qt 會移除，詳見 RC-218。DV-10 已核准；`reparent_owned` 不移除與不印警告另立 DV-11（候選，待核准）。
 - DV-11 的決定（2026-10-15）：使用者核准選項一（`reparent_owned` 失敗時樹不變，不採用返還 `Box` 或移除的方案），並要求三個 API 的差異寫進 Contract、rustdoc 與測試（RC-219；ferrokit `f0640d3`，本機 commit）。G2.1.e：三個部分都已實作並有測試與規格；ferrokit 已推送且 CI 通過；2026-10-16 依使用者的條件逐條核對後關閉（RC-228）。
 - G2.1.i、G2.1.j 的處理（2026-10-15，使用者列為 P1）：G2.1.j 已修（ferrokit `ec43dae`，RC-220）；G2.1.i 以延後釋放處理，不只靠文件警告（ferrokit `276b6e7`，RC-221）。三個 ferrokit commit（`ec43dae`、`276b6e7`、`f0640d3`）已推送，CI run 38747604315 三個 OS 成功（RC-222）；HUD 的固定版本先升到 `f0640d3`（RC-225），再升到 `a622ac2`（RC-228）。DV-12、DV-13 有條件核准（RC-222）：G2.1.j 的關閉條件（已推送後的 CI、補齊交錯測試）已滿足，已知限制記錄在案（ferrokit `a622ac2`，CI run 38835938926，RC-226）；G2.1.i 維持「已實作、待完整驗證」，不標為全面安全（RC-226、RC-227）。
-- 開放項目（2026-10-16）：G2.1.i 已實作、待完整驗證（不標為全面安全）；G2.1.k／R-00077 已修復並推送、CI 通過，行為驗收待確認（不標為完成）；Miri 在預設別名模型下被既有的 registry 指標來源擋住，另開設計工作（RC-227，G2.7.d）；ferrokit 只改註解與 `NOTICE` 的 `2f2a96c` 已推送，CI 通過（RC-228、RC-229）；registry 指標選項 1 的 spike 已做、沒有合併，結果與新的 DV-14（候選，待核准）見 RC-229；之後 DV-14 的方向核准為方案 2＋3，最小原型與 Miri 階段 A、B 見 RC-230（沒有合併，實作未核准）。
+- 開放項目（2026-10-16）：G2.1.i 已實作、待完整驗證（不標為全面安全）；G2.1.k／R-00077 已修復並推送、CI 通過，行為驗收待確認（不標為完成）；Miri 在預設別名模型下被既有的 registry 指標來源擋住，另開設計工作（RC-227，G2.7.d）；ferrokit 只改註解與 `NOTICE` 的 `2f2a96c` 已推送，CI 通過（RC-228、RC-229）；registry 指標選項 1 的 spike 已做、沒有合併，結果與新的 DV-14（候選，待核准）見 RC-229；之後 DV-14 的方向核准為方案 2＋3，最小原型與 Miri 階段 A、B 見 RC-230（沒有合併，實作未核准）；DV-14 第 1 階段已在獨立分支 `owned-object-proxy` 實作並推送，三平台 CI 通過，未核准合併；Miri 階段 C、跨目標補充與 ASan 補充見 RC-231。
 - Windows 實機驗收與正式發布維持暫停（使用者 2026-10-15 指示）；規格證據補齊不代表可發布。
 - Chapter 03 spec 整合：暫緩（使用者 2026-10-15 指示）。進入條件：(1) chapter 02 的方法定稿；(2) 父子關係、ownership 與生命週期的契約清楚；(3) 已知殘餘各有明確狀態與追蹤紀錄；(4) 第 03 章不重新定義第 02 章未決的語意；(5) `spec03_drafts` 只當待整合的來源，不是已核准的規格。現況：(1) 使用者尚未確認；(2) 使用者的恢復條件改為「DV-13 驗收達標」：驗收項目都有測試且通過，Miri 在別名檢查關閉時通過，但別名模型下的檢查被既有的 registry 指標來源擋住（RC-224），補測的兩處缺口修復也還沒推送與 CI，所以仍暫停，等使用者判斷；(3) 目前的殘餘已記在 RC-213 至 RC-225、G2.1.i、G2.1.j、G2.1.k、DV-12、DV-13；(4)(5) 維持。草稿 5 份（events、loop、signals、threads、timers）依使用者決定放在 repo 之外的本機資料夾，不進 repo；對應的 5 支探針 `rust/tools/pyside_probes/spec03_*.py` 仍是未追蹤檔案。
 
