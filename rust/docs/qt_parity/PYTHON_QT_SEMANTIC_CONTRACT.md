@@ -128,8 +128,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   - **G2.1.f [P2, READ]** `set_parent` 跨 registry 鎖與物件借用，非原子；`QT_CPP_MAPPING.md` 寫「atomically」不實。
   - **G2.1.g [P2, READ；已修復：RC-212、RC-213、RC-214；DV-08 已核准]** 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀。原分類 D 與 Core 範圍衝突（spec v0.2.3）：改為 `QTRS_SPEC.md` 01.6 的 B 類候選差異 DV-08，核准前視同缺陷（R-00008）。使用者於 2026-10-15 核准 DV-08（選項 (a) 保留差異，並附使用規則）；同日以一次性測試重現：parent 被 drop 後，非 owned child 的 `parent()` 仍回已死 parent 的 id，不是「無」；RC-212 修復；RC-213 補上 child 被借用或從未登記的情形，RC-214 補上在 parent 被借用時才掛上的 child（殘餘見這兩個 RC 與 G2.1.j）。
   - **G2.1.h [P2, READ]** 改變 parent 時，`ChildRemoved` 回呼看到的樹狀態與 Qt 不同：Qt 在送 `ChildRemoved` 時 child 的 parent 仍是舊 parent、新 parent 的 children 尚不含它（`qobject.cpp:2322-2337`，PySide 6.11.2 實測）；`reparent_owned` 在全部更新完才送事件（`qobject.rs:894-899`），`set_parent` 先更新 registry 的 parent（`qobject.rs:756-758`）。見 R-00049。
-  - **G2.1.i [P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限）：RC-221、RC-222、RC-224、RC-226、RC-227]** parent 在擁有的 child 的 callback 裡被 drop 時，`ObjectData::delete_children` 不檢查 child 是否被借用就清掉 `owned_children`，child 的 `Drop` 在它自己的 callback 返回前執行。一次性 probe（已刪除）的記錄順序：`callback start`、`reactor before: parent Some(..)`、`drop node`（parent）、`drop reactor`（child）、`reactor after`、`callback returned`。callback 之後讀到已釋放的 `self` 是從順序推論 `[INFERENCE]`，沒有用 Miri 或 ASan 驗證。`add_owned_child` 的 Safety 已寫明（RC-217），沒有防護。非 owned 的 child 不受影響（RC-213）。處理方式（使用者要求不得只靠文件警告）：被借用的 owned child 立刻解除登記，`Box` 暫存到那個 callback 返回才釋放（ferrokit `276b6e7`，RC-221；Qt 在 parent 銷毀時立刻釋放，這個差異是 DV-13，有條件核准，見 RC-222）。HUD 不呼叫 `add_owned_child`，所以不是 P0。見 R-00075。後續（RC-222、RC-224）：DV-13 有條件核准；驗收項目補測，查出並修復兩處缺口（被借用的 owned child 底下的後代沒有同時被銷毀；registry 的 children 清單沒有列 `add_owned_child` 掛上的 child）；Miri 在別名檢查關閉時通過，預設的別名模型下被既有的 registry 指標來源擋住（未改動的測試也一樣）。維持「已實作、待完整驗證」，不標為全面安全。 2026-10-16：三個 ferrokit commit 已推送，CI run 38835938926 三個 OS 成功（RC-226）；Miri 在預設別名模型下仍被 registry 的指標來源擋住，另開設計工作（G2.7.d，RC-227）；仍不標為全面安全。
-  - **G2.1.j [P1, RAN；已修復；DV-12 有條件核准的關閉條件（已推送後的 CI、交錯情況測試補齊）已滿足，2026-10-16 以已知限制關閉：RC-220、RC-222、RC-224、RC-226]** 新 parent 被借用時（例如在 parent 自己的 callback 裡呼叫 `set_parent`），`with_object_mut(new_parent)` 回 `None`，child 只記在 registry 的 children 清單；parent 自己的 `ObjectData.children` 不含它，callback 結束後仍是 `[]`（一次性 probe 只看到這個時點），`children()` 漏列。parent 的 drop 已能到達這種 child（RC-214）。`ChildAdded` 的延後已處理（RC-123），這裡是清單本身。見 R-00074。修復（ferrokit `ec43dae`，RC-220）：對 parent 清單的修改在 parent 被借用時排進 registry 紀錄，借用結束時套用；同一個根因的另外兩個方向（舊 parent 被借用時移走 child、child 在 parent 被借用時被 drop）一併修了。callback 裡仍是舊清單，DV-12（有條件核准，見 RC-222）。後續（RC-222、RC-224）：DV-12 有條件核准；已知限制是 callback 裡的 `children()` 仍是舊清單，不等同 Qt；交錯情況測試補了 3 項（ferrokit `a622ac2`，已推送，CI run 38835938926 三個 OS 成功）；關閉條件已滿足（RC-226）。已知限制不因關閉而消失：callback 裡的 `children()` 仍是舊清單，不等同 Qt；不得宣稱 G2.1.j 等同 Qt。
+  - **G2.1.i [P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229]** parent 在擁有的 child 的 callback 裡被 drop 時，`ObjectData::delete_children` 不檢查 child 是否被借用就清掉 `owned_children`，child 的 `Drop` 在它自己的 callback 返回前執行。一次性 probe（已刪除）的記錄順序：`callback start`、`reactor before: parent Some(..)`、`drop node`（parent）、`drop reactor`（child）、`reactor after`、`callback returned`。callback 之後讀到已釋放的 `self` 是從順序推論 `[INFERENCE]`，沒有用 Miri 或 ASan 驗證。`add_owned_child` 的 Safety 已寫明（RC-217），沒有防護。非 owned 的 child 不受影響（RC-213）。處理方式（使用者要求不得只靠文件警告）：被借用的 owned child 立刻解除登記，`Box` 暫存到那個 callback 返回才釋放（ferrokit `276b6e7`，RC-221；Qt 在 parent 銷毀時立刻釋放，這個差異是 DV-13，有條件核准，見 RC-222）。HUD 不呼叫 `add_owned_child`，所以不是 P0。見 R-00075。後續（RC-222、RC-224）：DV-13 有條件核准；驗收項目補測，查出並修復兩處缺口（被借用的 owned child 底下的後代沒有同時被銷毀；registry 的 children 清單沒有列 `add_owned_child` 掛上的 child）；Miri 在別名檢查關閉時通過，預設的別名模型下被既有的 registry 指標來源擋住（未改動的測試也一樣）。維持「已實作、待完整驗證」，不標為全面安全。 2026-10-16：三個 ferrokit commit 已推送，CI run 38835938926 三個 OS 成功（RC-226）；Miri 在預設別名模型下仍被 registry 的指標來源擋住，另開設計工作（G2.7.d，RC-227）；仍不標為全面安全。
+  - **G2.1.j [P1, RAN；已修復；DV-12 有條件核准的關閉條件（已推送後的 CI、交錯情況測試補齊）已滿足，2026-10-16 以已知限制關閉（`children()` 在 callback 中仍回傳舊清單，尚未達完整 Qt 等價行為，關閉只代表約定的交錯情境完成驗收；日後若要在 callback 中立即反映變更，須另立驗收條件）：RC-220、RC-222、RC-224、RC-226、RC-229]** 新 parent 被借用時（例如在 parent 自己的 callback 裡呼叫 `set_parent`），`with_object_mut(new_parent)` 回 `None`，child 只記在 registry 的 children 清單；parent 自己的 `ObjectData.children` 不含它，callback 結束後仍是 `[]`（一次性 probe 只看到這個時點），`children()` 漏列。parent 的 drop 已能到達這種 child（RC-214）。`ChildAdded` 的延後已處理（RC-123），這裡是清單本身。見 R-00074。修復（ferrokit `ec43dae`，RC-220）：對 parent 清單的修改在 parent 被借用時排進 registry 紀錄，借用結束時套用；同一個根因的另外兩個方向（舊 parent 被借用時移走 child、child 在 parent 被借用時被 drop）一併修了。callback 裡仍是舊清單，DV-12（有條件核准，見 RC-222）。後續（RC-222、RC-224）：DV-12 有條件核准；已知限制是 callback 裡的 `children()` 仍是舊清單，不等同 Qt；交錯情況測試補了 3 項（ferrokit `a622ac2`，已推送，CI run 38835938926 三個 OS 成功）；關閉條件已滿足（RC-226）。已知限制不因關閉而消失：callback 裡的 `children()` 仍是舊清單，不等同 Qt；不得宣稱 G2.1.j 等同 Qt。
   - **G2.1.k [P2, RAN；使用者核准修復，已實作並推送（`04f67f8`），CI 通過；行為驗收待確認，不標為完成：RC-223、RC-226]** sender 在自己的 slot 裡被銷毀（例如 slot 裡 drop 了它的 owned parent，RC-221）後，同一次發射剩下的、用 `Signal::connect`（沒有接收物件）接上的 slot 仍被呼叫；Qt 在 sender 銷毀後停止這次發射（PySide6 實測；`qobject.cpp:1171, 4427-4432`）。`connect_object` 接上的 slot 已隨解除登記斷線，沒有這個問題。一次性測試（已刪除），沒有正式測試（會釘住非 Qt 行為）。見 R-00077。HUD 不呼叫 `add_owned_child`。處理（使用者 2026-10-15 核准修復）：`Signal` 持有 owner 的 liveness token，每個 slot 之前檢查（RC-223；ferrokit `04f67f8`，已推送，CI run 38835938926 三個 OS 成功）；修復後有正式測試（`test_signal_sender_destroyed_during_emit.rs`，8 項）。依使用者 2026-10-16 的指示不標為完成，等行為驗收；超出原需求的行為變更見 RC-228。
 - **HUD usage**：Python `QTimer(self)`（`refresh_controller.py:35,39`）、`UsageTable(parent=self)` + `old_table.deleteLater()`（`hud_window.py:262-266`）、`widget.setParent(None)` + `deleteLater()`（`:187-189`）。Rust：`rust/src` 不用 core `set_parent`/`add_owned_child`（grep 為空）；走 `qtrs-widgets` 自己的 `set_parent_widget`。
 
@@ -167,7 +167,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 
 ### C2.7 Registry、借用排他、重入
 - **已遷移**：要求見 `QTRS_SPEC.md` §02（R-00037～R-00039）。本節只保留缺陷（G）與 HUD 使用位置；Qt behavior、qtrs required、Current implementation、Test 以新規格為準。
-- **Known gap**：**G2.7.a [P1, RAN；已修復：RC-123]** （修復前）對已被借用的物件送事件會**無聲丟失**（含重入 `send_event` 與 parent 自己 handler 內觸發的 `ChildAdded`）；**G2.7.b [DV-07（已核准 B 類差異；原標 D，spec v0.2.3 改標：Core 要求不得標 D）]** 跨執行緒直接派送不支援（`registered_ptr` 拒絕非註冊執行緒）。理由：registry 存 thread-local 原始指標；誤用回 `false`，須補上診斷（見 C7.4）；**G2.7.c [test gap]** `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tests」標題下沒有任何測試；**G2.7.d [P1, RAN；設計工作待排：RC-227]** registry 保存的裸指標，與擁有者的 `Box` 或直接存取，在 Stacked Borrows 與 Tree Borrows 下都不合法（Miri 對 `add_owned_child` 的寫法與「登記之後直接存取」的最小重現都報 UB；位置在 `register_qobject`、`ObjectBorrowGuard::deref_mut`）。對應 R-00075。這不是 Qt 行為差異；沒有觀察到實際的錯誤行為，只是目前的別名模型下不合法，不能據此聲稱記憶體安全。
+- **Known gap**：**G2.7.a [P1, RAN；已修復：RC-123]** （修復前）對已被借用的物件送事件會**無聲丟失**（含重入 `send_event` 與 parent 自己 handler 內觸發的 `ChildAdded`）；**G2.7.b [DV-07（已核准 B 類差異；原標 D，spec v0.2.3 改標：Core 要求不得標 D）]** 跨執行緒直接派送不支援（`registered_ptr` 拒絕非註冊執行緒）。理由：registry 存 thread-local 原始指標；誤用回 `false`，須補上診斷（見 C7.4）；**G2.7.c [test gap]** `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tests」標題下沒有任何測試；**G2.7.d [P1, RAN；選項 1 的 spike 已做、沒有合併，設計待使用者決定（DV-14 候選）：RC-227、RC-229]** registry 保存的裸指標，與擁有者的 `Box` 或直接存取，在 Stacked Borrows 與 Tree Borrows 下都不合法（Miri 對 `add_owned_child` 的寫法與「登記之後直接存取」的最小重現都報 UB；位置在 `register_qobject`、`ObjectBorrowGuard::deref_mut`）。對應 R-00075。這不是 Qt 行為差異；沒有觀察到實際的錯誤行為，只是目前的別名模型下不合法，不能據此聲稱記憶體安全。2026-10-16 的 spike（RC-229）：只改 `add_owned_child` 的取指標時機，只修那一個位置，既有 45 項測試的結果與失敗位置不變；`ObjectData` 加一個 `PhantomPinned` 的對照實驗讓 55 項在兩種模型都通過，但那是 Miri 對 `!Unpin` 的豁免，不等於別名正確。
 - **HUD usage**：Rust HUD 不直接碰 registry。
 
 ---
@@ -1256,8 +1256,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.1.f | P2, READ | `set_parent` 跨 registry 鎖與物件借用，非原子 |
 | G2.1.g | P2, READ；已修復：RC-212、RC-213、RC-214；DV-08 已核准 | 已註冊但非 `owned_children` 的 child，parent drop 時只解除註冊、不銷毀 |
 | G2.1.h | P2, READ | `ChildRemoved` 回呼期間的樹狀態與 Qt 不同（R-00049） |
-| G2.1.i | P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限）：RC-221、RC-222、RC-224、RC-226、RC-227 | parent 在擁有的 child 的 callback 裡被 drop，child 的 `Box` 在 callback 還在跑時被釋放（`delete_children` 不檢查借用；R-00075） |
-| G2.1.j | P1, RAN；已修復並關閉（DV-12 有條件核准的條件已滿足；已知限制：callback 裡的 `children()` 仍是舊清單，不等同 Qt）：RC-220、RC-222、RC-224、RC-226 | 在 parent 被借用時掛上的 child 只記在 registry，parent 自己的 `children()` 漏列（R-00074） |
+| G2.1.i | P1, RAN；已實作、待完整驗證（DV-13 有條件核准，不標為全面安全；已推送、CI 通過，Miri 受限；registry 指標見 G2.7.d）：RC-221、RC-222、RC-224、RC-226、RC-227、RC-229 | parent 在擁有的 child 的 callback 裡被 drop，child 的 `Box` 在 callback 還在跑時被釋放（`delete_children` 不檢查借用；R-00075） |
+| G2.1.j | P1, RAN；已修復並關閉（DV-12 有條件核准的條件已滿足；已知限制：`children()` 在 callback 中仍回傳舊清單，尚未達完整 Qt 等價行為，關閉只代表約定的交錯情境完成驗收；R-00074 維持部分符合；日後若要在 callback 中立即反映變更，須另立驗收條件）：RC-220、RC-222、RC-224、RC-226、RC-229 | 在 parent 被借用時掛上的 child 只記在 registry，parent 自己的 `children()` 漏列（R-00074） |
 | G2.1.k | P2, RAN；使用者核准修復，已實作並推送，CI 通過；行為驗收待確認，不標為完成：RC-223、RC-226 | sender 在自己的 slot 裡被銷毀後，發射中的 `connect` slot 仍被呼叫（R-00077） |
 | G2.2.a | P1, RAN；已修復：RC-92 | `delete_later` 不會自我 post、不會 drop |
 | G2.2.b | P1, RAN；已修復：RC-88 | 不清除 posted events |
@@ -1280,7 +1280,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 | G2.7.a | P1, RAN；已修復：RC-123 | 對已被借用的物件送事件會**無聲丟失** |
 | G2.7.b | DV-07（已核准 B 類差異；原標 D） | 跨執行緒直接派送不支援 |
 | G2.7.c | test gap | `test_qobject_safety_and_qt6_features.rs` 的「Memory Safety & Dynamic Borrow Exclusivity Tes |
-| G2.7.d | P1, RAN；設計工作待排：RC-227 | registry 的裸指標與擁有者的 `Box`／直接存取在預設別名模型下不合法（Miri；R-00075） |
+| G2.7.d | P1, RAN；選項 1 的 spike 已做、沒有合併，設計待使用者決定（DV-14 候選）：RC-227、RC-229 | registry 的裸指標與擁有者的 `Box`／直接存取在預設別名模型下不合法（Miri；R-00075） |
 | G3.1.a | P2, READ；已修復：RC-175 | Pointer=218、DpiChanged=222 符合 Qt QEvent 數值 |
 | G3.1.b | D | `EventKind` 為封閉 enum，使用者自訂事件只有 `EventKind::User(Box<dyn Any>)` |
 | G3.1.c | P1, RAN；已修復：RC-129 | 缺少的事件型別代表 filter 看不到 `Paint`／`Polish`／`LanguageChange` 等 |
@@ -4196,8 +4196,8 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   | macOS | 872（858） | 0 | 2 |
 
   每個 OS 多 14 項：新的 8 項、`test_owned_child_destroyed_in_callback.rs` 由 5 項增為 9 項、`test_parent_children_during_callbacks.rs` 由 7 項增為 9 項。
-- **編譯證據**：`Compile every target` 步驟的結論永遠是 success（`continue-on-error: true`），所以改從日誌確認：三個 job 各有 1 個 `Finished`、0 個 `error`、5 個 warning（`ferrokit-widgets` 的 `test_layout_direction`、`test_widget_update_cross_thread`；`f0640d3` 的 run 也是這 5 個，不在這次變更的檔案）。測試步驟本身會建置每個 test binary（165 個結果行），`Run doc tests` 也成功。
-- **本機門檻**（CI 沒有 clippy 與 rustfmt 步驟；Windows，`-j 1`，`a622ac2` 的樹，stable `rustc 1.98.1`）：(1) `cargo check --workspace --all-targets --keep-going`：exit 0，同樣 5 個 warning。(2) `cargo clippy --workspace --all-targets`：exit 0（沒有 `-D warnings`），共 48 個診斷；這次變更涉及的 5 個檔案裡只有 `qobject.rs:1604` 的 `map_or` 1 個，不在 diff 範圍（既有）；落在變更行的診斷是 0 個。(3) `cargo fmt --all -- --check`：exit 1，485 個 hunk、105 個檔案；`f0640d3` 的 worktree 也是 485 個 hunk、105 個檔案，逐檔的 hunk 數相同，`qobject.rs` 的 2 個 hunk 都不在 diff 範圍。三個 commit 沒有新增任何格式差異。**ferrokit 整體不是 rustfmt 乾淨的**（既有 485 個 hunk），CI 也沒有 clippy 或 fmt 門檻；沒有為此做無關的格式變更。
+- **編譯證據**：`Compile every target` 步驟的結論永遠是 success（`continue-on-error: true`），所以改從日誌確認：三個 job 各有 1 個 `Finished`、0 個 `error`、3 個 warning 加 2 行 `generated N warnings` 摘要（共 5 行含 `warning` 的輸出，原先寫成「5 個 warning」，RC-229 更正；來自 `ferrokit-widgets` 的 `test_layout_direction`、`test_widget_update_cross_thread`；`f0640d3` 的 run 也是這些，不在這次變更的檔案）。測試步驟本身會建置每個 test binary（165 個結果行），`Run doc tests` 也成功。
+- **本機門檻**（CI 沒有 clippy 與 rustfmt 步驟；Windows，`-j 1`，`a622ac2` 的樹，stable `rustc 1.98.1`）：(1) `cargo check --workspace --all-targets --keep-going`：exit 0，同樣的 3 個 warning。(2) `cargo clippy --workspace --all-targets`：exit 0（沒有 `-D warnings`），共 48 個診斷；這次變更涉及的 5 個檔案裡只有 `qobject.rs:1604` 的 `map_or` 1 個，不在 diff 範圍（既有）；落在變更行的診斷是 0 個。(3) `cargo fmt --all -- --check`：exit 1，485 個 hunk、105 個檔案；`f0640d3` 的 worktree 也是 485 個 hunk、105 個檔案，逐檔的 hunk 數相同，`qobject.rs` 的 2 個 hunk 都不在 diff 範圍。三個 commit 沒有新增任何格式差異。**ferrokit 整體不是 rustfmt 乾淨的**（既有 485 個 hunk），CI 也沒有 clippy 或 fmt 門檻；沒有為此做無關的格式變更。
 - **狀態**：G2.1.j：關閉條件（已推送後的 CI、交錯情況測試補齊）已滿足，依 RC-222 的規則關閉；已知限制（callback 裡的 `children()` 仍是舊清單，不等同 Qt）保留，R-00074 維持部分符合。G2.1.k：已修、已推送、CI 通過；依使用者的指示不標為完成，行為驗收待確認；R-00077 維持部分符合。G2.1.i：已實作、CI 通過；Miri 受限（RC-227），維持「已實作、待完整驗證」，不標為全面安全；R-00075 維持部分符合。
 - **Residual**：(1) CI 的成功不是 Miri 或 ASan 的證據。(2) Windows 是正式平台；Linux、macOS 是實驗性平台，只有 CI 的結果，沒有實機。(3) clippy 與 rustfmt 沒有 CI 門檻，本機結果只涵蓋這次執行的工具鏈版本。
 
@@ -4406,9 +4406,9 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   | 3. 登記改用指標 | `register_qobject(&mut dyn QObject)` 與 `register_pinned_qobject(Pin<&mut dyn QObject>)` 改成接受來源是 `NonNull` 或 `UnsafeCell` 的指標，擁有者經同一個指標存取；`Timer` 改持有代理 | B2 通過（D 的對照） | 處理 case D；對 156 處測試呼叫端與 `Timer` 影響最大；要新的 DV |
   | 4. 接受並記錄 | 不改程式；Contract 寫明 ferrokit 在 Stacked Borrows 與 Tree Borrows 下不通過，以及原因和位置 | 沒有 | 沒有改動；但這是目前別名模型下的 UB。我沒有檢查 release 組譯：`Box` 引數在 LLVM 會被標 `noalias`，是否真的產生錯誤的組譯不知道 `[INFERENCE]`，不能據此聲稱安全 |
 
-  - **建議的下一步**（需要使用者決定，這次沒做）：先做選項 1 的一次性 spike（只改 `add_owned_child`），看 Miri 預設模式能走多遠、哪些 case 仍失敗；長期的方向是選項 2 加 3，因為只有它們讓登記指標與擁有者的存取共用同一個來源。選項 2、3 會改公開 API，需要新的 DV 與核准。
+  - **建議的下一步**（需要使用者決定，這次沒做）：先做選項 1 的一次性 spike（只改 `add_owned_child`），看 Miri 預設模式能走多遠、哪些 case 仍失敗；長期的方向是選項 2 加 3，因為只有它們讓登記指標與擁有者的存取共用同一個來源。選項 2、3 會改公開 API，需要新的 DV 與核准。（後續：選項 1 的 spike 已在 RC-229 做完：只修 `add_owned_child` 一個位置，既有測試的結果不變；選項 2、3 的設計評估與新的 DV-14 也在 RC-229。）
 - **G2.7.d**：登記為新缺陷（見 C2.7），對應 R-00075；不是 Qt 行為差異。G2.1.i 在 Miri 的預設別名模型通過之前，不標為全面安全。
-- **nightly 工具鏈的移除**：上面的記錄寫完之後（2026-10-16），執行 `rustup toolchain uninstall nightly`：輸出 `toolchain nightly-x86_64-pc-windows-msvc uninstalled`；之後 `rustup toolchain list` 只剩 `stable-x86_64-pc-windows-gnu` 與 `stable-x86_64-pc-windows-msvc`（預設），`rustc -V`、`cargo -V` 仍是 1.98.1。沒有修改任何 repo 的程式碼或 commit。Miri 的 sysroot 快取（`%LOCALAPPDATA%\rust-lang\miri\cache`，約 93 MB）沒有被移除，因為指示只涵蓋工具鏈。要再跑 Miri 時，需要另外明確安排安裝 nightly 與 `miri`、`rust-src`。最小重現是在移除之前跑的（為了留下 Miri 的證據），它的暫存 crate 與目標目錄已刪除，原始碼在上面。
+- **nightly 工具鏈的移除**：上面的記錄寫完之後（2026-10-16），執行 `rustup toolchain uninstall nightly`：輸出 `toolchain nightly-x86_64-pc-windows-msvc uninstalled`；之後 `rustup toolchain list` 只剩 `stable-x86_64-pc-windows-gnu` 與 `stable-x86_64-pc-windows-msvc`（預設），`rustc -V`、`cargo -V` 仍是 1.98.1。沒有修改任何 repo 的程式碼或 commit。Miri 的 sysroot 快取（`%LOCALAPPDATA%\rust-lang\miri\cache`，約 93 MB）沒有被移除，因為指示只涵蓋工具鏈。（後續：2026-10-16 依指示在 RC-229 清除。）要再跑 Miri 時，需要另外明確安排安裝 nightly 與 `miri`、`rust-src`。最小重現是在移除之前跑的（為了留下 Miri 的證據），它的暫存 crate 與目標目錄已刪除，原始碼在上面。
 
 #### RC-228 G2.1.e 驗收條件的核對與關閉；Qt 行號註解與 NOTICE；行為變更紀錄；HUD 固定版本升到 `a622ac2`
 - **決定**（使用者 2026-10-16）：(1) G2.1.e 暫不關閉、不重跑所有測試；把明確的驗收條件逐條對照 `f0640d3` 的三平台 CI 與本機證據：只要求已滿足的行為測試與跨平台驗證則關閉；包含完整編譯、靜態檢查等未確認條件則維持開放。(2) 批准修改 Qt 原始碼行號的註解與 `NOTICE`：註解寫「行號依 Qt 版本而異；本文依 Qt 6.11.2 的 `qobject.cpp` 核對」，不得宣稱所有 Qt 6.11.x 都核對過（沒有驗證 6.11.3），`NOTICE` 要和實際核對的範圍一致，不複製或重寫 Qt 原始碼。(3) 變更紀錄保留「`add_owned_child` 在 parent 被借用時回傳 `Busy`」與「G2.1.k 引入的兩處超出原需求的行為變更」，這次推送不擴大修改範圍。(4) G2.1.i、G2.1.j、G2.1.k 依各自的驗收證據獨立管理，不合併標記完成。
@@ -4421,20 +4421,595 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
   | 3 | `reparent_owned`、`add_owned_child` 回 `Err(DifferentThread)`、樹不變、不印警告（DV-10、DV-11、R-00076） | 同一個 test binary，另有 `test_owned_child_ownership.rs`（9 passed，三個 OS） | 滿足 |
   | 4 | 三個 API 的差異寫進 rustdoc 與測試（使用者 2026-10-15 的要求） | `ReparentError::DifferentThread` 的 rustdoc 與上述測試；`Run doc tests` 三個 OS 成功（只證明範例可編譯，文字內容靠讀碼） | 滿足 |
   | 5 | ferrokit 已推送且 CI 驗證（RC-219、RC-222 的關閉條件） | run 38747604315：三個 job 成功；`Run test binaries` 164 個結果行，0 failed | 滿足 |
-  | 6 | 完整編譯 | 紀錄裡沒有列為關閉條件。證據：`Compile every target` 的日誌三個 job 各 1 個 `Finished`、0 個 `error`、5 個 warning（`ferrokit-widgets` 的測試，不在 G2.1.e 的檔案）；本機 `cargo check --workspace --all-targets --keep-going` 在 `a622ac2` exit 0 | 有證據 |
+  | 6 | 完整編譯 | 紀錄裡沒有列為關閉條件。證據：`Compile every target` 的日誌三個 job 各 1 個 `Finished`、0 個 `error`、3 個 warning 加 2 行摘要（`ferrokit-widgets` 的測試，不在 G2.1.e 的檔案）；本機 `cargo check --workspace --all-targets --keep-going` 在 `a622ac2` exit 0 | 有證據 |
   | 7 | 靜態檢查（clippy、rustfmt） | 紀錄裡沒有列為關閉條件，CI 沒有這兩步。本機在 `a622ac2`（含 `f0640d3` 的全部內容）：clippy 在變更行 0 個診斷，fmt 沒有新增差異（RC-226）；`f0640d3` 本身沒有單獨跑 clippy `[INFERENCE]` | 非條件；有本機證據 |
   | 8 | 使用者確認 | 2026-10-16 的條件式確認（見上） | 滿足（條件式） |
 
   - **結論**：紀錄裡的關閉條件只有 1 到 5 與使用者確認，全部滿足；沒有「完整編譯、靜態檢查」這類未確認的條件。G2.1.e 於 2026-10-16 關閉。R-00048 因此由部分符合改為已符合（有效契約：DV-09 已核准）：已符合 23、部分符合 9、待驗證 30、不符 14（共 76 條）。
   - **殘餘仍記錄、不擋關閉**：RC-215、RC-218、RC-219 的 Residual（警告走 `eprintln!`；`reparent_owned` 讀 registry 紀錄的 `thread_id`；`move_to_thread` 只移動 registry 找得到的後代，等）。Linux、macOS 只有 CI 結果（實驗性平台）；Windows 實機驗收仍暫停。
-- **Qt 行號註解與 NOTICE**：`qobject.cpp:2309-2345` 出現在 `set_parent` 的 rustdoc 與 `test_parent_thread_affinity.rs` 的檔頭；兩處都加上「line numbers differ between Qt versions; these were checked against Qt 6.11.2's `qobject.cpp`」（程式註解用英文，和其他註解一致）。依據：本機 `qtbase`（commit `44b6f67476c3…`，`.cmake.conf` 寫版本 6.11.3 與前置版本段 `alpha1`，沒有 tag，所以是 6.11 分支的快照，不是 6.11.3 正式版）與 GitHub 的 `v6.11.2` tag，這個範圍的行號都是 `:2309-2345`；`v6.12.0` 是 `:2321-2357`；`v6.11.3` 沒有查。`NOTICE` 原本寫「checked against qtbase 6.11.x」與「(checked against qtbase 6.11.3)」，和實際核對的範圍不一致；改成：指名那個 commit、說明它不是 6.11.3 正式版、行號隨 Qt 版本而異、只有 `qobject.cpp:2309-2345` 另外與 6.11.2 tag 比對過。沒有複製或重寫 Qt 原始碼。這是 ferrokit 的本機 commit，尚未推送，所以 HUD 固定版本不含它（它只改註解與 `NOTICE`）。
+- **Qt 行號註解與 NOTICE**：`qobject.cpp:2309-2345` 出現在 `set_parent` 的 rustdoc 與 `test_parent_thread_affinity.rs` 的檔頭；兩處都加上「line numbers differ between Qt versions; these were checked against Qt 6.11.2's `qobject.cpp`」（程式註解用英文，和其他註解一致）。依據：本機 `qtbase`（commit `44b6f67476c3…`，`.cmake.conf` 寫版本 6.11.3 與前置版本段 `alpha1`，沒有 tag，所以是 6.11 分支的快照，不是 6.11.3 正式版）與 GitHub 的 `v6.11.2` tag，這個範圍的行號都是 `:2309-2345`；`v6.12.0` 是 `:2321-2357`；`v6.11.3` 沒有查。`NOTICE` 原本寫「checked against qtbase 6.11.x」與「(checked against qtbase 6.11.3)」，和實際核對的範圍不一致；改成：指名那個 commit、說明它不是 6.11.3 正式版、行號隨 Qt 版本而異、只有 `qobject.cpp:2309-2345` 另外與 6.11.2 tag 比對過。沒有複製或重寫 Qt 原始碼。這是 ferrokit 的本機 commit，尚未推送，所以 HUD 固定版本不含它（它只改註解與 `NOTICE`）。（後續：已推送為 `2f2a96c`，CI run 38837817322 三個 OS 成功，HUD 固定版本仍是 `a622ac2`，見 RC-229。）
 - **行為變更紀錄**（保留；這次推送不擴大修改範圍）：
   1. **`add_owned_child` 在 parent 被借用時回傳 `Busy`**，並把 `Box` 交還呼叫端。這是既有、有測試（`test_owned_child_ownership.rs`）、有文件的行為。Qt 的建構子允許在 parent 自己的 callback 裡建立 child，所以這是與 Qt 的差異；沒有新開 DV，也沒有修改。
   2. **G2.1.k（RC-223）引入、超出原需求的兩處行為變更**（原需求是「sender 在 slot 裡被銷毀之後，同一次發射剩下的 slot 不再被呼叫」）：(a) owner 已經不存活時才開始的發射，不呼叫任何 slot，包含用 `connect` 接上的 slot（之前會呼叫）；(b) 已用 `unregister_qobject` 解除登記、但物件仍存在時，它的 signal 的 `connect` slot 不再被呼叫（之前會呼叫；`connect_object` 的 slot 本來就會被斷開）。兩者都來自「檢查是無條件的」。測試只釘住 (a) 的一部分（`a_signal_emitted_while_its_owner_is_being_destroyed_reaches_no_slot`：銷毀途中發射）；沒有專屬測試釘住 (b)，也沒有對照 Qt 或 PySide6 實測 (a)、(b) `[INFERENCE]`：Qt 對已刪除物件發射 signal 是未定義行為，沒有可比較的行為。
   3. **公開 API 變更**：`Signal::with_owner_parts(id, blocked, alive)` 多一個參數（owner 的 liveness token）。ferrokit 內只有 `ObjectData::new` 與 `with_thread` 呼叫它，HUD 不呼叫。
   4. 上述 2 之外，`ObjectData::drop` 的第一步就清除 liveness token（原本在通知 parent 與 `delete_children` 之後）是 G2.1.k 原需求「銷毀開始時失效」的一部分，不算額外變更；但它也使 child 的 `Drop` 在 parent 銷毀途中發射 parent 的 signal 時不會到達 slot。
 - **HUD 固定版本**：從 `f0640d3` 升到 `a622ac22a3cb08313134719e650ebdc36f591e4d`（`.github/workflows/ci.yml` 1 處、`rust/Cargo.toml` 4 處、`rust/Cargo.lock` 10 處，各檔的換行不變）。門檻：ferrokit CI（RC-226）三個 OS 成功；本機 `check`、`clippy`、`fmt` 的證據見 RC-226。HUD 程式沒有改（HUD 不呼叫 `set_parent`、`reparent_owned`、`add_owned_child`、`Signal::with_owner_parts`）。HUD 本機（Windows，`-j 1`）：`cargo check --all-features` exit 0；`cargo test --all-targets -- --skip real_windows` exit 0，8 個結果行，164 passed、0 failed、5 ignored；`cargo clippy -- -D warnings` exit 0；`cargo fmt --check` exit 0；Python 回歸測試（`QT_QPA_PLATFORM=offscreen`）55 項 OK。這個變更含 `.github/workflows/ci.yml`、`rust/Cargo.toml`、`rust/Cargo.lock`，路徑偵測的 `workflow` 與 `rust` 都成立，Python 與 Rust 的 job 都不會被跳過。HUD 的 CI 結果在推送之後才知道，這份文件沒有記錄它。
-- **Residual**：(1) 只改註解與 `NOTICE` 的 ferrokit 本機 commit 還沒推送。(2) G2.1.i、G2.1.k 沒有標為完成。(3) 第 03 章、Windows 實機驗收、正式發布維持暫停，不因 CI 全綠而恢復。
+- **Residual**：(1) 只改註解與 `NOTICE` 的 ferrokit 本機 commit 還沒推送（後續：已推送為 `2f2a96c`，CI run 38837817322 成功，見 RC-229）。(2) G2.1.i、G2.1.k 沒有標為完成。(3) 第 03 章、Windows 實機驗收、正式發布維持暫停，不因 CI 全綠而恢復。
+
+#### RC-229 推送 `2f2a96c`；registry 指標選項 1 的限時 spike 與 `!Unpin` 對照；設計評估與 DV-14（候選）；Miri 快取清除；三類證據分開記錄（G2.7.d；G2.1.i、G2.1.j；R-00074、R-00075）
+- **決定**（使用者 2026-10-16 第四輪）：(1) 核准推送 ferrokit `2f2a96c`（只有註解與 `NOTICE`）：推送前確認父 commit 是 `a622ac2`、變更只限預期的註解與 `NOTICE`、`NOTICE` 區分 6.11 分支快照 `44b6f67` 與正式版 6.11.2 的查證範圍；推送後跑 CI，若因路徑過濾而跳過測試要如實記錄，不為觸發測試而改程式碼；HUD 暫不為此更新固定版本。(2) 執行 registry 選項 1 的限時 spike：只是實驗，不合併、不改公開 API；保留失敗的最小重現；實作「先把 `Box` 放進最終 `owned_children` 位置，再取指標登記」；在預設別名模型與 Tree Borrows 下重跑，不得以關閉 Stacked Borrows 的通過當安全依據；同時驗證 `register_boxed_qobject`、`Timer` 的 case D 與既有註冊模式，記錄已解決、仍失敗、僅轉移失敗位置的情況；無法涵蓋整體問題時，對選項 2（所有權代理）與選項 3（登記改收指標）提出設計評估（公開 API 相容性、`Timer` 遷移、測試呼叫端、安全不變量）並建立新 DV 待核准。(3) 清除 Miri 的 93 MB sysroot 快取：先保留命令、結果與環境紀錄，確認路徑與用途後才清。(4) G2.1.j 維持關閉，關閉紀錄註明限制，R-00074 維持部分符合。(5) 不做全庫 `rustfmt` 整理。(6) 「測試通過」「符合 Qt 行為」「Rust 別名模型下的安全性」分開記錄；G2.1.i 與 registry 指標問題不因三平台 CI 全綠標為全面安全。第 03 章、Windows 實機驗收、正式發布繼續暫停。
+- **`2f2a96c` 的推送與 CI**：推送前確認：`origin/main` 是 `a622ac2`、`HEAD~1` 是 `a622ac2`、`git merge-base --is-ancestor` 成立；`git diff --stat a622ac2 HEAD` 是 3 個檔案（`NOTICE`、`qobject.rs`、`test_parent_thread_affinity.rs`）；`.rs` 檔裡被改的行全是註解（用腳本逐行確認：非註解的增刪行是 0 行）；`git diff --check` 通過；對 diff 掃描禁用字串與開發期編號（RC、DV、G 編號）沒有命中；`NOTICE` 寫的是 qtbase commit `44b6f67476c34716061e9eddcbffcbfcb4cb7842`（`.cmake.conf` 的版本是 6.11.3 並帶 `alpha1` 前置段，不是 6.11.3 正式版），行號依 Qt 版本而異，只有 `qobject.cpp:2309-2345` 另外與 6.11.2 tag 比對過。推送 `a622ac2..2f2a96c` 到 `origin/main`。CI run 38837817322：三個 `Workspace Test` job 成功；每個 job 165 個結果行、0 failed：Windows 1143 passed、4 ignored，ubuntu 877 passed、2 ignored，macOS 872 passed、2 ignored，與 `a622ac2` 的 run 完全相同。ferrokit 的工作流程沒有路徑過濾，所以這個只改註解的 commit 也跑了全部測試（HUD 的 CI 才有路徑過濾）。`Compile every target`（`continue-on-error`）的日誌：三個 job 各 1 個 `Finished`、0 個 `error`、3 個 warning 加 2 行 `generated N warnings` 摘要，與 `a622ac2` 的 run 相同。HUD 的固定版本維持 `a622ac2`，這個 commit 只改註解與 `NOTICE`，行為不變。
+- **Miri 環境（這一輪）**：RC-227 結尾依指示移除了 nightly；這個 spike 需要 Miri，所以我重新安裝（`rustup toolchain install nightly --profile minimal -c miri -c rust-src`），得到 `rustc 1.101.0-nightly (4ebd25825 2026-10-15)`、LLVM 23.1.4、`miri 0.1.0 (4ebd258257 2026-10-15)`，比 RC-227 用的 `7df81381d 2026-10-14` 新一天，host `x86_64-pc-windows-msvc`，Windows 11。因為 Miri 版本不同，最小重現先在這個版本重跑：RC-227 的 case 結果完全相同（A、A3、D 在兩種模型下 UB，其餘通過）。其他一切（ferrokit 與 HUD 的建置與測試）仍用 stable `rustc 1.98.1`。`cargo +nightly miri setup` 重建了 sysroot 快取（35.88 秒）。
+- **spike 的做法**：在 `2f2a96c` 的獨立 worktree 與本機分支（沒有推送，做完刪除）裡實驗，ferrokit 的 `main` 與遠端沒有改動。每個測試各自執行：`cargo +nightly miri test -j 1 -p ferrokit-core --test <binary> -- --exact <test> --test-threads=1`，預設旗標是 Stacked Borrows（SB），`MIRIFLAGS=-Zmiri-tree-borrows` 是 Tree Borrows（TB）；沒有用 `-Zmiri-disable-stacked-borrows`。範圍：RC-227 的 5 個 test binary 共 45 項，加上新的場景檔 `spike_registry_pointer.rs` 的 10 項（原始碼在下面）。三種狀態：**baseline**（`2f2a96c` 加場景檔）、**選項 1**（baseline 加上 `add_owned_child` 的修改）、**`!Unpin` 對照**（baseline 加上 `ObjectData` 的一個 `PhantomPinned` 欄位，沒有選項 1）。前三輪掃描是 54 項（還沒有 b2）；b2 之後在三種狀態各跑一次。
+- **選項 1 的修改**（只有 `add_owned_child`，沒有改簽名，沒有合併）與 **`!Unpin` 對照的修改**：
+
+  <details><summary>兩個實驗的 diff（選項 1：+6／−2 行；<code>!Unpin</code> 對照：3 處各 1 行）</summary>
+
+  ```diff
+  diff --git a/crates/ferrokit-core/src/object/qobject.rs b/crates/ferrokit-core/src/object/qobject.rs
+  index 75c3c05..bd8dcc0 100644
+  --- a/crates/ferrokit-core/src/object/qobject.rs
+  +++ b/crates/ferrokit-core/src/object/qobject.rs
+  @@ -1285,12 +1285,16 @@ pub unsafe fn add_owned_child<T: QObject + 'static>(
+               data.owned_by_parent = true;
+           }
+           parent.object_data_mut().add_child(child_id);
+  +        // Registered once the Box is in its final place: the registry's pointer is taken from
+  +        // there, so what moves the Box before that does not leave a stale pointer.
+  +        let owned = &mut parent.object_data_mut().owned_children;
+  +        owned.push(child);
+  +        let placed = owned.last_mut().expect("the Box was just pushed");
+           // SAFETY: delegated to this function's caller contract.
+  -        unsafe { register_qobject(&mut *child) };
+  +        unsafe { register_qobject(&mut **placed) };
+           // The registry's list is what still reaches the child while a running callback of the
+           // parent hides it from the parent's own `children`.
+           list_in_registry(parent_id, child_id);
+  -        parent.object_data_mut().owned_children.push(child);
+       });
+       match attached {
+           Some(()) => {
+  ```
+
+  ```diff
+  diff --git a/crates/ferrokit-core/src/object/qobject.rs b/crates/ferrokit-core/src/object/qobject.rs
+  index 75c3c05..0c8928a 100644
+  --- a/crates/ferrokit-core/src/object/qobject.rs
+  +++ b/crates/ferrokit-core/src/object/qobject.rs
+  @@ -568,6 +568,7 @@ pub struct ObjectData {
+       /// another thread. A token whose id differs from `parent` is stale and ignored, because
+       /// `parent` is a public field that can be assigned directly.
+       parent_liveness: Option<(ObjectId, Arc<AtomicBool>)>,
+  +    _pinned: std::marker::PhantomPinned,
+   }
+
+   impl fmt::Debug for ObjectData {
+  @@ -621,6 +622,7 @@ impl ObjectData {
+               timers: Vec::new(),
+               owned_by_parent: false,
+               parent_liveness: None,
+  +            _pinned: std::marker::PhantomPinned,
+           }
+       }
+       /// Creates a new ObjectData with a unique auto-generated ObjectId.
+  @@ -653,6 +655,7 @@ impl ObjectData {
+               timers: Vec::new(),
+               owned_by_parent: false,
+               parent_liveness: None,
+  +            _pinned: std::marker::PhantomPinned,
+           }
+       }
+
+  ```
+
+  </details>
+
+- **場景結果**（Miri `4ebd25825`；每格是 SB／TB；「通過」是 Miri 沒有報錯，不是程式正確的證明）：
+
+  | 場景 | 做了什麼 | baseline | 選項 1 | `!Unpin` 對照 |
+  |---|---|---|---|---|
+  | a1 | parent 在最終位置登記；`add_owned_child` 加一個 child；經 registry 對 child 呼叫 callback | UB／UB | 通過／通過 | 通過／通過 |
+  | a2 | 三層：孫輩經 child 的 registry 指標加入 | UB／UB | 通過／通過 | 通過／通過 |
+  | a3 | `reparent_owned` 把 child 從一個 parent 搬到另一個，再 callback | UB／UB | 通過／通過 | 通過／通過 |
+  | b1 | `register_boxed_qobject` 之後經 registry 讀取 | UB／通過 | UB／通過 | 通過／通過 |
+  | b2 | 同 b1，但 callback 寫入 | UB／UB | UB／UB | 通過／通過 |
+  | c1 | 登記的 `Box<Node>`，擁有者在兩次 callback 之間直接呼叫 `&mut self` 方法 | UB／UB | UB／UB | 通過／通過 |
+  | c2 | `!Unpin` 型別（`PhantomPinned`）、`register_pinned_qobject`、直接呼叫 `&mut self` 方法 | 通過／通過 | 通過／通過 | 通過／通過 |
+  | c3 | `Unpin` 型別放在 `Pin<Box<_>>` 裡，其餘同 c2 | UB／UB | UB／UB | 通過／通過 |
+  | c4 | `Timer` 的形狀（`!Unpin`、`&self` 方法、`Cell` 狀態），登記兩次 | 通過／通過 | 通過／通過 | 通過／通過 |
+  | c5 | 真的 `Timer`：`set_interval`、`start`、直接查詢、經 registry 讀取、`stop`、再 `start` | 通過／通過 | 通過／通過 | 通過／通過 |
+
+  c3 在「`!Unpin` 對照」狀態下，`ObjectData` 已讓 `UnpinPinned` 不再是 `Unpin`，所以 `get_mut()` 不能編譯，那一行改成 `get_unchecked_mut()`（下面的原始碼是 baseline 與選項 1 用的版本）。
+
+  <details><summary>場景檔 <code>spike_registry_pointer.rs</code>（<code>crates/ferrokit-core/tests/</code>，287 行，不合併）</summary>
+
+  ```rust
+  // SPDX-License-Identifier: LGPL-3.0-only
+  //! Throwaway scenarios for how the registry's raw pointer relates to the owner's own path to the
+  //! object. Each test is its own scenario; run each on its own under Miri (default Stacked Borrows
+  //! and `-Zmiri-tree-borrows`). Not meant to be merged.
+
+  use std::cell::Cell;
+  use std::marker::PhantomPinned;
+  use std::pin::Pin;
+
+  use ferrokit_core::event::{Event, EventKind};
+  use ferrokit_core::object::{
+      add_owned_child, register_boxed_qobject, register_pinned_qobject, register_qobject,
+      reparent_owned, unregister_qobject, with_object, with_object_mut, ObjectData, ObjectId,
+      QObject,
+  };
+  use ferrokit_core::timer::Timer;
+
+  /// Ordinary object: `Unpin`, `&mut self` methods.
+  struct Node {
+      data: ObjectData,
+      n: u32,
+  }
+
+  impl Node {
+      fn new() -> Self {
+          Self {
+              data: ObjectData::new(ObjectId::next()),
+              n: 0,
+          }
+      }
+      fn bump(&mut self) -> u32 {
+          self.n += 1;
+          self.n
+      }
+  }
+
+  impl QObject for Node {
+      fn object_data(&self) -> &ObjectData {
+          &self.data
+      }
+      fn object_data_mut(&mut self) -> &mut ObjectData {
+          &mut self.data
+      }
+      fn event(&mut self, _event: &mut Event) -> bool {
+          self.n += 1;
+          false
+      }
+  }
+
+  /// `!Unpin` object with `&mut self` methods.
+  struct PinnedMut {
+      data: ObjectData,
+      n: u32,
+      _pinned: PhantomPinned,
+  }
+
+  impl PinnedMut {
+      fn new() -> Self {
+          Self {
+              data: ObjectData::new(ObjectId::next()),
+              n: 0,
+              _pinned: PhantomPinned,
+          }
+      }
+      fn bump(&mut self) -> u32 {
+          self.n += 1;
+          self.n
+      }
+  }
+
+  impl QObject for PinnedMut {
+      fn object_data(&self) -> &ObjectData {
+          &self.data
+      }
+      fn object_data_mut(&mut self) -> &mut ObjectData {
+          &mut self.data
+      }
+  }
+
+  /// `!Unpin` object with `&self` methods and `Cell` state: the shape of `Timer`.
+  struct PinnedCell {
+      data: ObjectData,
+      n: Cell<u32>,
+      _pinned: PhantomPinned,
+  }
+
+  impl PinnedCell {
+      fn new() -> Self {
+          Self {
+              data: ObjectData::new(ObjectId::next()),
+              n: Cell::new(0),
+              _pinned: PhantomPinned,
+          }
+      }
+      fn bump(&self) -> u32 {
+          self.n.set(self.n.get() + 1);
+          self.n.get()
+      }
+  }
+
+  impl QObject for PinnedCell {
+      fn object_data(&self) -> &ObjectData {
+          &self.data
+      }
+      fn object_data_mut(&mut self) -> &mut ObjectData {
+          &mut self.data
+      }
+  }
+
+  /// `Unpin` object kept in a `Pin<Box<_>>` anyway.
+  struct UnpinPinned {
+      data: ObjectData,
+      n: u32,
+  }
+
+  impl UnpinPinned {
+      fn bump(&mut self) -> u32 {
+          self.n += 1;
+          self.n
+      }
+  }
+
+  impl QObject for UnpinPinned {
+      fn object_data(&self) -> &ObjectData {
+          &self.data
+      }
+      fn object_data_mut(&mut self) -> &mut ObjectData {
+          &mut self.data
+      }
+  }
+
+  fn touch(id: ObjectId) -> ObjectId {
+      with_object_mut(id, |o| {
+          let mut ev = Event::new(EventKind::ChildAdded {
+              child_id: ObjectId(0),
+          });
+          o.event(&mut ev);
+          o.object_data().id
+      })
+      .expect("registered")
+  }
+
+  fn read(id: ObjectId) -> ObjectId {
+      with_object(id, |o| o.object_data().id).expect("registered")
+  }
+
+  /// A1. The parent was registered where it lives; a child is added and called through the registry.
+  #[test]
+  fn a1_owned_child_added_then_called() {
+      let mut parent = Box::new(Node::new());
+      let pid = parent.data.id;
+      unsafe { register_qobject(&mut *parent) };
+      let child = Box::new(Node::new());
+      let cid = child.data.id;
+      let got = unsafe { add_owned_child(pid, child) }.unwrap_or_else(|(e, _)| panic!("{e:?}"));
+      assert_eq!(got, cid);
+      assert_eq!(touch(cid), cid);
+      drop(parent);
+      unsafe { unregister_qobject(pid) };
+  }
+
+  /// A2. Three levels: the grandchild is added through the child's registry pointer.
+  #[test]
+  fn a2_grandchild_added_through_child_pointer() {
+      let mut parent = Box::new(Node::new());
+      let pid = parent.data.id;
+      unsafe { register_qobject(&mut *parent) };
+      let child = Box::new(Node::new());
+      let cid = child.data.id;
+      unsafe { add_owned_child(pid, child) }.unwrap_or_else(|(e, _)| panic!("{e:?}"));
+      let grandchild = Box::new(Node::new());
+      let gid = grandchild.data.id;
+      unsafe { add_owned_child(cid, grandchild) }.unwrap_or_else(|(e, _)| panic!("{e:?}"));
+      assert_eq!(touch(gid), gid);
+      assert_eq!(touch(cid), cid);
+      drop(parent);
+      unsafe { unregister_qobject(pid) };
+  }
+
+  /// A3. An owned child moves from one parent to another (`reparent_owned`), then is called.
+  #[test]
+  fn a3_owned_child_reparented_then_called() {
+      let mut p1 = Box::new(Node::new());
+      let mut p2 = Box::new(Node::new());
+      let (id1, id2) = (p1.data.id, p2.data.id);
+      unsafe { register_qobject(&mut *p1) };
+      unsafe { register_qobject(&mut *p2) };
+      let child = Box::new(Node::new());
+      let cid = child.data.id;
+      unsafe { add_owned_child(id1, child) }.unwrap_or_else(|(e, _)| panic!("{e:?}"));
+      assert!(reparent_owned(cid, Some(id2)).is_ok());
+      assert_eq!(touch(cid), cid);
+      drop(p1);
+      drop(p2);
+      unsafe { unregister_qobject(id1) };
+      unsafe { unregister_qobject(id2) };
+  }
+
+  /// B1. `register_boxed_qobject` returns the Box it registered; the object is then called.
+  #[test]
+  fn b1_register_boxed_qobject_then_called() {
+      let (id, boxed) = unsafe { register_boxed_qobject(Box::new(Node::new())) };
+      assert_eq!(read(id), id);
+      drop(boxed);
+      unsafe { unregister_qobject(id) };
+  }
+
+  /// B2. As B1, but the callback writes through the registry pointer.
+  #[test]
+  fn b2_register_boxed_qobject_then_written_through_registry() {
+      let (id, boxed) = unsafe { register_boxed_qobject(Box::new(Node::new())) };
+      assert_eq!(touch(id), id);
+      drop(boxed);
+      unsafe { unregister_qobject(id) };
+  }
+
+  /// C1. A registered boxed `Unpin` object is written through its own path between callbacks.
+  #[test]
+  fn c1_direct_write_between_callbacks_box() {
+      let mut node = Box::new(Node::new());
+      let id = node.data.id;
+      unsafe { register_qobject(&mut *node) };
+      node.bump();
+      assert_eq!(read(id), id);
+      drop(node);
+      unsafe { unregister_qobject(id) };
+  }
+
+  /// C2. As C1 for a `!Unpin` object registered with `register_pinned_qobject`, `&mut self` method.
+  #[test]
+  fn c2_direct_write_between_callbacks_pinned_not_unpin_mut() {
+      let mut node = Box::pin(PinnedMut::new());
+      let id = node.data.id;
+      unsafe { register_pinned_qobject(node.as_mut()) };
+      // SAFETY: only `n` changes, nothing moves.
+      unsafe { node.as_mut().get_unchecked_mut() }.bump();
+      assert_eq!(read(id), id);
+      drop(node);
+      unsafe { unregister_qobject(id) };
+  }
+
+  /// C3. As C2, but the object is `Unpin` (it only sits in a `Pin<Box<_>>`).
+  #[test]
+  fn c3_direct_write_between_callbacks_pinned_unpin() {
+      let mut node = Box::pin(UnpinPinned {
+          data: ObjectData::new(ObjectId::next()),
+          n: 0,
+      });
+      let id = node.data.id;
+      unsafe { register_pinned_qobject(node.as_mut()) };
+      node.as_mut().get_mut().bump();
+      assert_eq!(read(id), id);
+      drop(node);
+      unsafe { unregister_qobject(id) };
+  }
+
+  /// C4. `Timer` shape: `!Unpin`, `&self` methods, `Cell` state, re-registered through `Pin<&mut>`.
+  #[test]
+  fn c4_timer_shape_pinned_cell() {
+      let mut node = Box::pin(PinnedCell::new());
+      let id = node.data.id;
+      unsafe { register_pinned_qobject(node.as_mut()) };
+      node.bump();
+      assert_eq!(read(id), id);
+      node.bump();
+      unsafe { register_pinned_qobject(node.as_mut()) };
+      assert_eq!(read(id), id);
+      drop(node);
+      unsafe { unregister_qobject(id) };
+  }
+
+  /// C5. The real `Timer`: start, query and configure it directly, call it through the registry,
+  /// restart it (registers again).
+  #[test]
+  fn c5_real_timer() {
+      let mut t: Pin<Box<Timer>> = Timer::new();
+      let id = t.object_data().id;
+      t.set_interval(10);
+      t.as_mut().start();
+      assert_eq!(t.interval(), 10);
+      assert_eq!(read(id), id);
+      t.stop();
+      t.as_mut().start();
+      assert_eq!(read(id), id);
+      t.stop();
+      drop(t);
+  }
+  ```
+
+  </details>
+
+- **既有的 45 項測試**（5 個 test binary，每項各自跑）：
+
+  | 狀態 | SB | TB |
+  |---|---|---|
+  | baseline | 1 通過、44 UB | 2 通過、43 UB |
+  | 選項 1 | 1 通過、44 UB | 2 通過、43 UB |
+  | `!Unpin` 對照 | 45 通過 | 45 通過 |
+
+  選項 1 與 baseline 比較：兩種模型下 87 個 UB 的「錯誤位置、標籤建立位置、失效位置」三元組逐項完全相同，沒有任何一項移動或改善。失敗的位置：SB 的 44 項都是 `ObjectBorrowGuard::deref_mut`（`qobject.rs:81`）用到的標籤，建立在 `register_qobject`（`qobject.rs:402`），在測試輔助函式 `registered()` 回傳 `Box` 的那一行（各檔的 `n`、`node`、`p`）失效，也就是 case A3 發生在測試端，不是 ferrokit 的程式；TB 的 43 項裡，回傳的 `Box` 的標籤（建立在輔助函式）被經 registry 指標的寫入（33 項在 `qobject.rs:684`，`ObjectData::add_child`；`qobject.rs:1120` 4 項；`event_filter.rs:48` 1 項；5 項日誌沒有列出位置）變成 Disabled，之後測試自己用到那個 `Box`（例如 `finish(parent)`）時報錯。通過的 3 項（SB 1、TB 2）沒有經過這個模式：`an_object_cannot_be_its_own_parent`，以及 TB 的 `add_owned_child_fails_visibly_when_parent_is_borrowed`。
+- **最小重現的補充**（用同一個 Miri 版本，只加 case，原始碼是對 RC-227 版本的 diff）：
+
+  | case | 做了什麼 | SB | TB |
+  |---|---|---|---|
+  | A3b | A3，但 `Box<dyn Obj>` 進、`Box<dyn Obj>` 出 | 通過 | 通過 |
+  | E1 | D，但物件是 `!Unpin`（`PhantomPinned` 欄位） | 通過 | 通過 |
+  | E2 | A，但物件是 `!Unpin` | 通過 | 通過 |
+  | E3 | A3，但物件是 `!Unpin` | 通過 | 通過 |
+  | F1 | A，但指標用 `&raw mut *child` 取得（沒有先建立 `&mut W`） | UB | UB |
+  | F2 | A3，但指標用 `&raw mut *boxed` 取得 | UB | UB |
+  | F3 | D，但指標用 `&raw mut w` 取得（堆疊上的物件） | 通過 | 通過 |
+  | F4 | F2，之後擁有者經 `Box` 寫入，再呼叫 callback | UB | UB |
+
+  <details><summary>最小重現的原始碼差異（相對 RC-227 的 <code>src/main.rs</code>）</summary>
+
+  ```diff
+  @@ -1,6 +1,7 @@
+   //! Minimal reproduction: a registry that keeps a raw pointer to an object whose owner also moves
+   //! or touches it. `register` / `with_registered` stand for `register_qobject` / `with_object_mut`.
+   use std::cell::Cell;
+  +use std::marker::PhantomPinned;
+   use std::ptr::NonNull;
+
+   trait Obj {
+  @@ -14,6 +15,15 @@
+       }
+   }
+
+  +/// A type that is `!Unpin`, like `Timer` (`PhantomPinned` field).
+  +struct P(u32, PhantomPinned);
+  +impl Obj for P {
+  +    fn bump(&mut self) -> u32 {
+  +        self.0 += 1;
+  +        self.0
+  +    }
+  +}
+  +
+   thread_local! {
+       static REGISTERED: Cell<Option<*mut dyn Obj>> = const { Cell::new(None) };
+   }
+  @@ -132,6 +142,90 @@
+       with_registered(|o| o.bump())
+   }
+
+  +/// A3b. As A3, but the Box is a `Box<dyn Obj>` going in and coming out.
+  +fn register_and_return_dyn(mut boxed: Box<dyn Obj>) -> Box<dyn Obj> {
+  +    let ptr: *mut dyn Obj = &mut *boxed;
+  +    register(ptr);
+  +    boxed
+  +}
+  +fn a3b_dyn_box_returned_after_registration() -> u32 {
+  +    let boxed = register_and_return_dyn(Box::new(W(0)));
+  +    let n = with_registered(|o| o.bump());
+  +    drop(boxed);
+  +    n
+  +}
+  +
+  +/// E1. As D, but the object is `!Unpin` (a `PhantomPinned` field).
+  +fn e1_direct_access_not_unpin() -> u32 {
+  +    let mut p = P(0, PhantomPinned);
+  +    register(&mut p as *mut dyn Obj);
+  +    p.bump();
+  +    with_registered(|o| o.bump())
+  +}
+  +
+  +/// E2. As A, but the object is `!Unpin`.
+  +fn e2_box_moved_after_registration_not_unpin() -> u32 {
+  +    let mut child = Box::new(P(0, PhantomPinned));
+  +    let ptr: *mut dyn Obj = &mut *child;
+  +    register(ptr);
+  +    let mut owned: Vec<Box<dyn Obj>> = Vec::new();
+  +    owned.push(child);
+  +    with_registered(|o| o.bump())
+  +}
+  +
+  +/// E3. As A3, but the object is `!Unpin`.
+  +fn register_and_return_p(mut boxed: Box<P>) -> Box<P> {
+  +    let ptr: *mut dyn Obj = &mut *boxed;
+  +    register(ptr);
+  +    boxed
+  +}
+  +fn e3_box_returned_after_registration_not_unpin() -> u32 {
+  +    let boxed = register_and_return_p(Box::new(P(0, PhantomPinned)));
+  +    let n = with_registered(|o| o.bump());
+  +    drop(boxed);
+  +    n
+  +}
+  +
+  +/// F1. As A, but the pointer comes from `&raw mut *child`, so no `&mut W` is created first.
+  +fn f1_raw_pointer_then_box_moved() -> u32 {
+  +    let mut child = Box::new(W(0));
+  +    let ptr: *mut dyn Obj = &raw mut *child;
+  +    register(ptr);
+  +    let mut owned: Vec<Box<dyn Obj>> = Vec::new();
+  +    owned.push(child);
+  +    with_registered(|o| o.bump())
+  +}
+  +
+  +/// F2. As A3, but the pointer comes from `&raw mut *boxed`.
+  +fn register_raw_and_return(mut boxed: Box<W>) -> Box<W> {
+  +    let ptr: *mut dyn Obj = &raw mut *boxed;
+  +    register(ptr);
+  +    boxed
+  +}
+  +fn f2_raw_pointer_then_box_returned() -> u32 {
+  +    let boxed = register_raw_and_return(Box::new(W(0)));
+  +    let n = with_registered(|o| o.bump());
+  +    drop(boxed);
+  +    n
+  +}
+  +
+  +/// F3. As D, but the pointer comes from `&raw mut w`.
+  +fn f3_raw_pointer_then_direct_access() -> u32 {
+  +    let mut w = W(0);
+  +    register(&raw mut w);
+  +    w.bump();
+  +    with_registered(|o| o.bump())
+  +}
+  +
+  +/// F4. As F2, then the owner writes through the Box before the next callback.
+  +fn f4_raw_pointer_then_box_returned_then_written() -> u32 {
+  +    let mut boxed = register_raw_and_return(Box::new(W(0)));
+  +    boxed.bump();
+  +    let n = with_registered(|o| o.bump());
+  +    drop(boxed);
+  +    n
+  +}
+  +
+   fn main() {
+       let which = std::env::args().nth(1).unwrap_or_default();
+       let n = match which.as_str() {
+  @@ -144,6 +238,14 @@
+           "C3" => c3_registered_after_placement_then_handed_over(),
+           "B2" => b2_direct_access_through_the_handle(),
+           "D" => d_direct_access_between_callbacks(),
+  +        "A3b" => a3b_dyn_box_returned_after_registration(),
+  +        "F1" => f1_raw_pointer_then_box_moved(),
+  +        "F2" => f2_raw_pointer_then_box_returned(),
+  +        "F3" => f3_raw_pointer_then_direct_access(),
+  +        "F4" => f4_raw_pointer_then_box_returned_then_written(),
+  +        "E1" => e1_direct_access_not_unpin(),
+  +        "E2" => e2_box_moved_after_registration_not_unpin(),
+  +        "E3" => e3_box_returned_after_registration_not_unpin(),
+           other => panic!("unknown case {other:?}"),
+       };
+       println!("{which}: callback returned {n}");
+  ```
+
+  </details>
+
+- **讀法**（機制是從結果推的 `[INFERENCE]`，沒有讀 Miri 的實作）：
+  1. **選項 1 只解決一個位置。** `add_owned_child` 自己的 `register_qobject(&mut *child)` 發生在 `push` 之前（case A）；改成 `push` 之後從最終位置取指標，a1 到 a3 在兩種模型下由 UB 變成通過。它不改變 45 項既有測試的結果與失敗位置（87／87 相同），也不改變 b1、b2、c1、c3。沒有觀察到「失敗位置被移到別處」的情況：未解決的項目失敗在原本的位置。
+  2. **`register_boxed_qobject` 不能靠取指標的時機修**：它要回傳 `Box<T>`，回傳那一刻的 `Box` 重新標記會使剛取的指標失效（SB 的 b1、b2；A3）。TB 的 b1 通過只因為 callback 只讀；b2（callback 寫入）在 TB 也是 UB。A3b 與 F2 顯示：換成 `Box<dyn …>` 進出就通過，但改用 `&raw mut` 取指標沒有幫助；所以問題出在具體 `Unpin` 型別的 `Box<T>` 在回傳時被重新標記，不是取指標的寫法。
+  3. **`Timer` 的 case D 通過，原因是 `PhantomPinned`，不是登記方式正確。** 真的 `Timer`（c5）、`Timer` 形狀的 c4 與 `!Unpin` 的 c2 在 baseline 就通過；同樣的形狀改成 `Unpin` 型別（c3）就是 UB。c5 沒有事件迴圈（`THREAD_TIMER_CONTEXT` 是空的，`arm_in_context` 回 `INVALID`），涵蓋的是登記、重新登記、直接查詢與經 registry 的 callback，不涵蓋 dispatcher 的路徑；`Timer` 的單元測試與 Miri 仍不相容（`timeBeginPeriod`）。
+  4. **直接存取（case D）對 `Unpin` 型別仍是 UB**（c1、c3）。F3 顯示：堆疊上的物件若用 `&raw mut` 取指標，擁有者之後呼叫 `&mut self` 方法不會使它失效；F1、F2、F4 顯示 `Box` 持有的物件即使用 `&raw mut` 也會失效。
+  5. **`!Unpin` 對照**：`ObjectData` 加一個 `PhantomPinned`（所有含 `ObjectData` 的型別因此不再是 `Unpin`），不改任何簽名，baseline 的程式在 54 項（加 b2 共 55 項）兩種模型下全部通過。**這不是「別名正確」的證據**：Miri 對 `!Unpin` 的型別不做 `&mut` 的唯一性檢查（Rust RFC 3467：「Miri treats `Unpin` as magic」，那不是 `Unpin` 原本的設計；RFC 也說用 `!Unpin` 來退出別名保證是「從未被明確支援」的行為，Rust 有權把它宣告為 unsound），所以這個通過比沒有豁免的通過弱。正規的工具是 `UnsafePinned`，目前不穩定：在 stable `rustc 1.98.1` 上 `use std::pin::UnsafePinned;` 得到 E0658（追蹤 issue 125735），ferrokit 不能用。另一個效果：所有含 `ObjectData` 的型別不再實作 `Unpin`，`Pin::new`、`Pin::get_mut`、`Pin::into_inner` 不能用在它們身上；spike 上 `cargo check --workspace --all-targets --keep-going`（stable）exit 0，只有我自己的 c3 要改；HUD 的 `rust/src` 與測試沒有任何 `Pin`、`Unpin` 的用法（`git grep`），但 HUD 沒有對這個 spike 編譯過。
+- **設計評估（只評估，ferrokit 沒有改）**：
+
+  | 選項 | 內容與公開 API | `Timer` 與測試呼叫端 | 安全不變量 | 證據 |
+  |---|---|---|---|---|
+  | 1. 取指標的時機 | `add_owned_child` 改成 `push` 之後登記；沒有簽名變動 | 不動；`register_boxed_qobject` 與 case D 不受影響 | 登記時 `Box` 已在最終位置 | spike：只修 a1–a3，既有 45 項不變 |
+  | 2. 所有權代理 | `owned_children` 改成持有 `NonNull<dyn QObject>` 的代理（`Box::into_raw`，`Drop` 時 `Box::from_raw`）；`reparent_owned` 現在回 `Option<Box<dyn QObject>>`、`register_boxed_qobject` 回 `Box<T>`，兩者的回傳型別會變；`add_owned_child` 仍可收 `Box<T>`，失敗時經 `from_raw` 還回去；`PARKED_CHILDREN`、`destroy_when_released`、`free_parked_children`、`delete_children` 都要遷移 | `Timer` 以 `Pin<Box<Timer>>` 持有，不經 `owned_children`（讀碼 `[INFERENCE]`）；測試端要改持有代理的地方（`register_boxed_qobject` 的 5 個檔案共 7 處呼叫） | 代理是唯一擁有者；`into_raw` 的指標是唯一的來源，registry 與代理共用；每次存取由裸指標重新衍生 `&mut`；`Drop` 只釋放一次 | 最小重現 B、B2 通過；沒有在 ferrokit 裡試過；對堆疊與 `Pin` 的物件（case D）沒有幫助 |
+  | 3. 以指標登記 | `register_qobject(&mut dyn QObject)`、`register_pinned_qobject(Pin<&mut dyn QObject>)` 改收 `*mut dyn QObject`（或 `NonNull`），呼叫端用 `&raw mut` 取指標；簽名變 | `Timer` 的 3 處、測試端約 156 處 `register_qobject(&mut …)` 都要改；文件的 Safety 要寫明「指標不得經由中間的 `&mut` 取得」，安全 Rust 無法強制 | 呼叫端負責指標的來源；擁有者之後經同一個來源存取 | F3 通過（堆疊物件）；F1、F2、F4 仍 UB（`Box` 持有的物件）：單獨做不夠，要搭配選項 2 |
+  | 5. `!Unpin`（對照，不是使用者列的選項） | `ObjectData` 加 `PhantomPinned`；簽名不變；所有含 `ObjectData` 的型別不再是 `Unpin` | `Timer` 已經是 `!Unpin`；測試端 0 處要改（55 項全通過） | 不變量沒有改善，只是 Miri 不再檢查這些型別的 `&mut` 唯一性；依賴 rustc 與 Miri 未保證的行為 | 55 項兩種模型都通過；`UnsafePinned` 在 stable 上不可用 |
+  | 4. 接受並文件化 | 不改程式；Contract 寫明在 SB 與 TB 下不通過，以及原因和位置 | 不動 | 沒有 | RC-227 |
+
+  **沒有決定。** 如果只要最小、可回退的作法：選項 5 當過渡（需要 DV-14 核准），等 `UnsafePinned` 進 stable 再換掉；如果要 Miri 不靠 `!Unpin` 豁免就通過：選項 2 加 3（API 變更大、需要 DV-14 與遷移計畫）。選項 1 單獨不夠，但可以和 5 或 2 加 3 一起做。這是我的判斷，不是核准。
+- **DV-14**（新增，候選，待核准；見 spec 01.6）：登記物件的別名契約。候選的處理列在上面的表。核准以前視同缺陷（01.6），G2.7.d 因此保持開放。
+- **清除 Miri 快取**：路徑與用途：`%LOCALAPPDATA%\rust-lang\miri\cache`，約 93 MB，裡面只有 `lib/`，是 `cargo +nightly miri setup` 為 Miri 建的自訂 sysroot（標準函式庫的 Miri 版本）；`rust-lang\miri` 底下只有 `cache`，`rust-lang` 底下只有 `miri`，沒有別的工具鏈資料。要用時 `cargo miri setup` 會重建（這一輪重建花 35.88 秒）。清除前確認 `cache` 裡只有 `lib` 一個項目，只刪除 `cache` 這個目錄；沒有碰 `.rustup`、`.cargo`，也沒有碰 ferrokit 與 HUD 的任何檔案；`rust-lang\miri` 與 `rust-lang` 兩個空目錄留著。清除之後再次執行 `rustup toolchain uninstall nightly`（輸出 `toolchain nightly-x86_64-pc-windows-msvc uninstalled`）：`rustup toolchain list` 只剩 `stable-x86_64-pc-windows-gnu` 與 `stable-x86_64-pc-windows-msvc`（預設），`rustc -V`、`cargo -V` 仍是 1.98.1；這是 RC-227 已核准的「記錄之後移除 nightly」的延續，這一輪沒有另外被要求，要再跑 Miri 得重新安裝。`target/miri`（ferrokit 的建置輸出目錄，約 80 MB，被 `.gitignore` 的 `target/` 涵蓋）是上一輪 Miri 在專案內留下的建置輸出，不是這個快取，沒有清。worktree、本機分支 `spike-registry-pointer-opt1`、暫存目錄下的最小重現 crate、目標目錄與掃描輸出都已刪除；spike 的程式只留在上面的 diff 與場景檔裡。
+- **三類證據分開記錄**（「測試通過」「符合 Qt 行為」「Rust 別名模型下的安全性」互不替代）：
+
+  | 項目 | 測試通過 | 符合 Qt 行為 | Rust 別名模型下的安全性 |
+  |---|---|---|---|
+  | ferrokit `04f67f8`、`d3bb289`、`a622ac2` | 已推送；CI run 38835938926 三個 OS 成功 | G2.1.k 行為驗收待確認；G2.1.j 有已知限制；G2.1.i 靠 DV-13（有條件核准，釋放延後） | 預設 SB 與 TB 不通過（G2.7.d）；只有 `-Zmiri-disable-stacked-borrows` 的 45 項通過（RC-227） |
+  | ferrokit `2f2a96c`（註解與 `NOTICE`） | 已推送；CI run 38837817322 三個 OS 成功（全部測試有跑） | 不涉及（沒有改行為） | 不涉及 |
+  | HUD 固定到 `a622ac2`（`84c2f21`，文件 `2fa30a9`） | 已推送；HUD CI run 38837155760 成功：Rust Test windows 164、macOS 102、ubuntu 102 passed（各 5 ignored，clippy 與 rustfmt 步驟都過）；Python Test windows 與 macos-14 各 55 項 | 沒有改 HUD 行為 | HUD 不直接呼叫登記函式，但用 `Timer`（c5 在 baseline 通過，原因見上）`[INFERENCE]` |
+  | HUD 文件更正 `725f7f5` | 已推送；CI run 38835888573 因路徑過濾（只有 Markdown）跳過 `Python Test`、`Rust Test`，**沒有跑任何測試**，不能記為通過完整測試 | 不涉及 | 不涉及 |
+  | G2.1.e | 已關閉（RC-228），保留 `f0640d3` 的原始驗收依據 | DV-09、DV-10、DV-11 已核准 | 同 G2.1.i |
+  | G2.1.k | 修復已推送，CI 通過 | **待行為驗收**；額外的兩處行為變更（RC-228）沒有對照 Qt 或 PySide6 | 同 G2.1.i |
+  | G2.1.i 與 registry 指標問題（G2.7.d） | 實作已推送，CI 通過 | DV-13 有條件核准 | **未解決**：獨立的設計工作；spike 沒有合併；不因三平台 CI 全綠而標為全面安全 |
+  | 第 03 章、Windows 實機驗收、正式發布 | 暫停 | 暫停 | 暫停 |
+
+- **G2.1.j 的關閉紀錄**：維持關閉。限制寫在關閉紀錄裡：`children()` 在 callback 中仍回傳舊清單（尚未達完整 Qt 等價行為），關閉只代表約定的交錯情境（RC-220、RC-224 的測試）完成驗收；R-00074 維持部分符合；日後若要在 callback 中立即反映變更，須另立驗收條件。
+- **`rustfmt`**：沒有做格式整理的 commit。`f0640d3` 的基底有 485 個 hunk、105 個檔案不符合 `rustfmt`；`cargo fmt --all -- --check` 在 `2f2a96c`（含這次的註解 commit）仍是 485 個 hunk、105 個檔案，所以相對基底沒有新增格式差異。CI 沒有 rustfmt 或 clippy 的步驟。
+- **更正**：RC-226 與 RC-228 先前把 `Compile every target` 的結果寫成「5 個 warning」；重新用同一個計法數 `a622ac2` 與 `2f2a96c` 兩個 run 的日誌，是 3 個 warning 加 2 行 `generated N warnings` 摘要（共 5 行含 `warning` 的輸出），內容相同。已就地改正。
+- **Residual**：(1) DV-14 待核准；G2.7.d 與 G2.1.i 維持開放。(2) spike 沒有合併，也沒有在 stable 上跑 ferrokit 的完整測試（只有 `!Unpin` 對照做過 `cargo check --workspace --all-targets --keep-going`）；選項 1 的改動只用 Miri 的子集驗證。(3) Miri 只跑了 Windows host 與 ferrokit-core 的 54 項（加 b2）整合測試；lib 單元測試（`timeBeginPeriod`）、`ferrokit-widgets`、其他整合測試、HUD 都沒跑；沒有 ASan；Stacked Borrows 與 Tree Borrows 仍是實驗性的模型，結果可能隨版本改變。(4) `Timer` 的 c5 沒有事件迴圈。(5) 選項 5 依賴未保證的行為。(6) 第 03 章、Windows 實機驗收、正式發布繼續暫停。
 
 ---
 
@@ -4485,7 +5060,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - DV-10 的決定（2026-10-15）：使用者核准 affinity 限制與錯誤類型，拒絕沒有證據的舊 parent 移除語義；Qt 實測顯示 Qt 會移除，詳見 RC-218。DV-10 已核准；`reparent_owned` 不移除與不印警告另立 DV-11（候選，待核准）。
 - DV-11 的決定（2026-10-15）：使用者核准選項一（`reparent_owned` 失敗時樹不變，不採用返還 `Box` 或移除的方案），並要求三個 API 的差異寫進 Contract、rustdoc 與測試（RC-219；ferrokit `f0640d3`，本機 commit）。G2.1.e：三個部分都已實作並有測試與規格；ferrokit 已推送且 CI 通過；2026-10-16 依使用者的條件逐條核對後關閉（RC-228）。
 - G2.1.i、G2.1.j 的處理（2026-10-15，使用者列為 P1）：G2.1.j 已修（ferrokit `ec43dae`，RC-220）；G2.1.i 以延後釋放處理，不只靠文件警告（ferrokit `276b6e7`，RC-221）。三個 ferrokit commit（`ec43dae`、`276b6e7`、`f0640d3`）已推送，CI run 38747604315 三個 OS 成功（RC-222）；HUD 的固定版本先升到 `f0640d3`（RC-225），再升到 `a622ac2`（RC-228）。DV-12、DV-13 有條件核准（RC-222）：G2.1.j 的關閉條件（已推送後的 CI、補齊交錯測試）已滿足，已知限制記錄在案（ferrokit `a622ac2`，CI run 38835938926，RC-226）；G2.1.i 維持「已實作、待完整驗證」，不標為全面安全（RC-226、RC-227）。
-- 開放項目（2026-10-16）：G2.1.i 已實作、待完整驗證（不標為全面安全）；G2.1.k／R-00077 已修復並推送、CI 通過，行為驗收待確認（不標為完成）；Miri 在預設別名模型下被既有的 registry 指標來源擋住，另開設計工作（RC-227，G2.7.d）；ferrokit 另有一個只改註解與 `NOTICE` 的本機 commit，尚未推送（RC-228）。
+- 開放項目（2026-10-16）：G2.1.i 已實作、待完整驗證（不標為全面安全）；G2.1.k／R-00077 已修復並推送、CI 通過，行為驗收待確認（不標為完成）；Miri 在預設別名模型下被既有的 registry 指標來源擋住，另開設計工作（RC-227，G2.7.d）；ferrokit 只改註解與 `NOTICE` 的 `2f2a96c` 已推送，CI 通過（RC-228、RC-229）；registry 指標選項 1 的 spike 已做、沒有合併，結果與新的 DV-14（候選，待核准）見 RC-229。
 - Windows 實機驗收與正式發布維持暫停（使用者 2026-10-15 指示）；規格證據補齊不代表可發布。
 - Chapter 03 spec 整合：暫緩（使用者 2026-10-15 指示）。進入條件：(1) chapter 02 的方法定稿；(2) 父子關係、ownership 與生命週期的契約清楚；(3) 已知殘餘各有明確狀態與追蹤紀錄；(4) 第 03 章不重新定義第 02 章未決的語意；(5) `spec03_drafts` 只當待整合的來源，不是已核准的規格。現況：(1) 使用者尚未確認；(2) 使用者的恢復條件改為「DV-13 驗收達標」：驗收項目都有測試且通過，Miri 在別名檢查關閉時通過，但別名模型下的檢查被既有的 registry 指標來源擋住（RC-224），補測的兩處缺口修復也還沒推送與 CI，所以仍暫停，等使用者判斷；(3) 目前的殘餘已記在 RC-213 至 RC-225、G2.1.i、G2.1.j、G2.1.k、DV-12、DV-13；(4)(5) 維持。草稿 5 份（events、loop、signals、threads、timers）依使用者決定放在 repo 之外的本機資料夾，不進 repo；對應的 5 支探針 `rust/tools/pyside_probes/spec03_*.py` 仍是未追蹤檔案。
 
