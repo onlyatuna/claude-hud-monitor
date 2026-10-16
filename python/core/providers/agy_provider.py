@@ -15,17 +15,12 @@ from core.logger import logger
 class AgyProvider(BaseProvider):
     provider_id = "agy"
     display_name = "AGY"
-    API_URLS = (
-        "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-        "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-    )
-    API_URL = API_URLS[0]
+    SUMMARY_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"
+    QUOTA_URL = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota"
     HTTP_TIMEOUT = 8
 
     def __init__(self, timeout=30):
         self.timeout = timeout
-        self._agy_binary = None
-        self._agy_binary_checked = False
 
     def _get_access_token(self) -> Optional[str]:
         # 1. Windows Credential Manager (Keyring: 'gemini:antigravity')
@@ -89,152 +84,86 @@ class AgyProvider(BaseProvider):
 
         return None
 
-    def _fetch_via_http(self, token: str, now_str: str) -> Optional[UsageMetrics]:
+    def _fetch_via_http(self, token: str, now_str: str) -> UsageMetrics:
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
             "User-Agent": "antigravity/1.2.4"
         }
-        for url in self.API_URLS:
-            req = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
-            try:
-                with urllib.request.urlopen(req, timeout=self.HTTP_TIMEOUT) as resp:
-                    if resp.status != 200:
-                        logger.debug(f"[AgyProvider] {url} returned HTTP {resp.status}")
-                        continue
-                    result = self._parse_agy_json(json.loads(resp.read().decode("utf-8")), now_str)
-                    if not result.error:
-                        return result
-                    logger.debug(f"[AgyProvider] {url} returned no usable quota data")
-            except urllib.error.HTTPError as e:
-                logger.debug(f"[AgyProvider] {url} returned HTTP {e.code}")
-                if e.code == 401:
-                    return None
-            except Exception as e:
-                logger.debug(f"[AgyProvider] {url} HTTP fetch error: {e}")
-        return None
 
-    def _find_agy_binary(self) -> Optional[str]:
-        if self._agy_binary_checked:
-            return self._agy_binary
+        summary_metrics: Optional[UsageMetrics] = None
+        req_a = urllib.request.Request(self.SUMMARY_URL, data=b"{}", headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req_a, timeout=self.HTTP_TIMEOUT) as resp:
+                if resp.status == 401:
+                    return self._failure(now_str, "auth", "登入憑證已失效，請使用原 CLI 重新登入")
+                if resp.status == 200:
+                    parsed = self._parse_agy_json(json.loads(resp.read().decode("utf-8")), now_str)
+                    if not parsed.error:
+                        summary_metrics = parsed
+                    else:
+                        logger.debug(f"[AgyProvider] {self.SUMMARY_URL} returned no usable quota data")
+                else:
+                    logger.debug(f"[AgyProvider] {self.SUMMARY_URL} returned HTTP {resp.status}")
+        except urllib.error.HTTPError as e:
+            logger.debug(f"[AgyProvider] {self.SUMMARY_URL} returned HTTP {e.code}")
+            if e.code == 401:
+                return self._failure(now_str, "auth", "登入憑證已失效，請使用原 CLI 重新登入")
+        except Exception as e:
+            logger.debug(f"[AgyProvider] {self.SUMMARY_URL} HTTP fetch error: {e}")
 
-        if sys.platform == "win32":
-            local_app = os.environ.get("LOCALAPPDATA", "")
-            candidates = [
-                os.path.join(local_app, "agy", "bin", "agy.exe"),
-                os.path.join(local_app, "agy", "bin", "agy.cmd"),
-                os.path.join(local_app, "agy", "bin", "agy.bat"),
-            ]
-            for cand in candidates:
-                if os.path.isfile(cand):
-                    self._agy_binary = cand
-                    break
-        else:
-            candidates = [
-                os.path.expanduser("~/.local/bin/agy"),
-                "/usr/local/bin/agy",
-                os.path.expanduser("~/bin/agy")
-            ]
-            for cand in candidates:
-                if os.path.isfile(cand):
-                    self._agy_binary = cand
-                    break
+        quota_metrics: Optional[UsageMetrics] = None
+        req_b = urllib.request.Request(self.QUOTA_URL, data=b"{}", headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req_b, timeout=self.HTTP_TIMEOUT) as resp:
+                if resp.status == 401:
+                    return self._failure(now_str, "auth", "登入憑證已失效，請使用原 CLI 重新登入")
+                if resp.status == 200:
+                    parsed = self._parse_model_buckets(json.loads(resp.read().decode("utf-8")), now_str)
+                    if not parsed.error:
+                        quota_metrics = parsed
+                    else:
+                        logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned no usable quota data")
+                else:
+                    logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned HTTP {resp.status}")
+        except urllib.error.HTTPError as e:
+            logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned HTTP {e.code}")
+            if e.code == 401:
+                return self._failure(now_str, "auth", "登入憑證已失效，請使用原 CLI 重新登入")
+        except Exception as e:
+            logger.debug(f"[AgyProvider] {self.QUOTA_URL} HTTP fetch error: {e}")
 
-        if self._agy_binary is None:
-            for directory in os.get_exec_path():
-                names = ("agy.exe", "agy.cmd", "agy.bat") if sys.platform == "win32" else ("agy",)
-                for name in names:
-                    cand = os.path.join(directory, name)
-                    if os.path.isfile(cand):
-                        self._agy_binary = cand
-                        break
-                if self._agy_binary is not None:
-                    break
+        m1_val = quota_metrics.metric1_val if quota_metrics else None
+        m1_reset = quota_metrics.metric1_reset if quota_metrics else None
+        badge1 = summary_metrics.badge1_text if summary_metrics and summary_metrics.badge1_text else f"C/G 剩餘: {percent_text(None)}"
+        has_cg = badge1 != f"C/G 剩餘: {percent_text(None)}"
+        has_error = m1_val is None and not has_cg
 
-        self._agy_binary_checked = True
-        return self._agy_binary
+        return UsageMetrics(
+            provider_name="Antigravity",
+            provider_id=self.provider_id,
+            metric1_title="SESSION 5H",
+            metric1_val=m1_val,
+            metric1_text=percent_text(m1_val),
+            metric1_reset=m1_reset,
+            metric2_title="WEEKLY 7D",
+            metric2_val=None,
+            metric2_text="--",
+            metric2_reset=None,
+            metric2_subtext="Gemini 週額度來源未知",
+            badge1_text=badge1,
+            badge2_text="Gemini Models",
+            last_updated_time=now_str,
+            error="未取得有效配額資料" if has_error else None,
+            error_code="schema" if has_error else "",
+        )
 
     def fetch_usage(self) -> UsageMetrics:
         now_str = datetime.now().strftime("%H:%M:%S")
-
-        # 1. Primary: Direct in-memory HTTP API (instant, no subprocess, zero window flash)
         token = self._get_access_token()
-        if token:
-            res = self._fetch_via_http(token, now_str)
-            if res and not res.error:
-                return res
-
-        # 2. Fallback: CLI execution
-        return self._fetch_via_cli(now_str)
-
-    def _fetch_via_cli(self, now_str: str) -> UsageMetrics:
-        agy_bin = self._find_agy_binary()
-        if not agy_bin:
-            logger.warning("[AgyProvider] Antigravity CLI binary not found")
-            return UsageMetrics(
-                provider_name="Antigravity",
-                provider_id=self.provider_id,
-                last_updated_time=now_str,
-                error="未找到 agy 指令\n請確認已安裝 Antigravity CLI",
-                error_code="cli_not_found"
-            )
-
-        started = time.monotonic()
-        try:
-            kwargs = {
-                "timeout": self.timeout,
-                "text": True,
-                "encoding": "utf-8",
-                "errors": "replace",
-                "capture_output": True,
-                "stdin": subprocess.DEVNULL
-            }
-            if sys.platform == "win32":
-                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-                si = subprocess.STARTUPINFO()
-                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                si.wShowWindow = subprocess.SW_HIDE
-                kwargs["startupinfo"] = si
-                if agy_bin.lower().endswith((".cmd", ".bat")):
-                    inner_cmd = subprocess.list2cmdline([agy_bin, "--output-format", "json", "--print", "/quota"])
-                    cmd = f'cmd.exe /c "{inner_cmd}"'
-                else:
-                    cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
-            else:
-                cmd = [agy_bin, "--output-format", "json", "--print", "/quota"]
-
-            result = subprocess.run(cmd, **kwargs)
-            if result.returncode:
-                return self._failure(now_str, "cli_exit", f"agy 查詢失敗 (exit {result.returncode})")
-
-            raw = None
-            out = result.stdout or ""
-            out_trimmed = out.strip()
-            if out_trimmed.startswith("{") and out_trimmed.endswith("}"):
-                try:
-                    raw = json.loads(out_trimmed)
-                except Exception:
-                    pass
-            if raw is None:
-                start_idx = out.find("{")
-                end_idx = out.rfind("}")
-                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                    json_str = out[start_idx:end_idx + 1]
-                    try:
-                        raw = json.loads(json_str)
-                    except Exception:
-                        pass
-            if raw is None:
-                try:
-                    raw = json.loads(out)
-                except (ValueError, TypeError, AttributeError, KeyError, OverflowError):
-                    return self._failure(now_str, "schema", "agy 配額格式不相容，請查看相容性文件")
-
-            return self._parse_agy_json(raw, now_str)
-        except subprocess.TimeoutExpired:
-            return self._failure(now_str, "timeout", f"agy 配額查詢超時 ({self.timeout}s)")
-        except OSError:
-            return self._failure(now_str, "cli_start", "無法啟動 agy，請確認安裝與執行權限")
+        if not token:
+            return self._failure(now_str, "no_token", "未找到 Antigravity 登入憑證\n請先登入 Antigravity")
+        return self._fetch_via_http(token, now_str)
 
     def _failure(self, now_str, code, message):
         return UsageMetrics(
@@ -243,6 +172,57 @@ class AgyProvider(BaseProvider):
             last_updated_time=now_str,
             error=message,
             error_code=code
+        )
+
+    @safe_parse
+    def _parse_model_buckets(self, raw: dict, now_str: str) -> UsageMetrics:
+        if not isinstance(raw, dict):
+            return self._failure(now_str, "schema", "配額格式不相容")
+
+        buckets = raw.get("buckets", [])
+        if not isinstance(buckets, list):
+            raise TypeError("expected list")
+
+        m1_used_pct = None
+        m1_reset_dt = None
+
+        for b in buckets:
+            model_id = (b.get("modelId") or b.get("model_id") or "").lower()
+            if "gemini" not in model_id:
+                continue
+            rem_frac = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
+            if rem_frac is None:
+                continue
+            used_pct = max(0.0, min(100.0, (1.0 - rem_frac) * 100.0))
+
+            reset_str = b.get("reset_time") or b.get("resetTime")
+            reset_dt = None
+            if reset_str:
+                try:
+                    reset_dt = datetime.fromisoformat(reset_str.replace("Z", "+00:00"))
+                except Exception:
+                    pass
+
+            if m1_used_pct is None or used_pct > m1_used_pct:
+                m1_used_pct = used_pct
+                m1_reset_dt = reset_dt
+
+        return UsageMetrics(
+            provider_name="Antigravity",
+            provider_id=self.provider_id,
+            metric1_title="SESSION 5H",
+            metric1_val=m1_used_pct,
+            metric1_text=percent_text(m1_used_pct),
+            metric1_reset=m1_reset_dt,
+            metric2_title="WEEKLY 7D",
+            metric2_val=None,
+            metric2_text="--",
+            metric2_reset=None,
+            metric2_subtext="Gemini 週額度來源未知",
+            badge2_text="Gemini Models",
+            last_updated_time=now_str,
+            error="未取得有效配額資料" if m1_used_pct is None else None,
+            error_code="schema" if m1_used_pct is None else "",
         )
 
     @safe_parse
@@ -262,6 +242,7 @@ class AgyProvider(BaseProvider):
                 metric1_text="--",
                 metric2_val=None,
                 metric2_text="--",
+                metric2_subtext="Gemini 週額度來源未知",
                 last_updated_time=now_str,
                 error="未取得有效配額資料",
                 error_code="schema"
@@ -274,8 +255,9 @@ class AgyProvider(BaseProvider):
         third_party_rem_pct = None
 
         for g in groups:
-            g_name = (g.get("name") or g.get("displayName") or "").lower()
-            if "gemini" in g_name:
+            name = g.get("name") or g.get("displayName") or ""
+            g_name = name.lower()
+            if "gemini" in g_name and "argon" not in g_name:
                 for b in g.get("buckets", []):
                     b_id = (b.get("id") or b.get("bucketId") or "").lower()
                     b_window = (b.get("window") or "").lower()
@@ -299,7 +281,7 @@ class AgyProvider(BaseProvider):
                         m2_used_pct = used_pct
                         m2_reset_dt = reset_dt
 
-            elif "claude" in g_name or "gpt" in g_name:
+            elif ("claude" in g_name or "gpt" in g_name) and "argon" not in g_name:
                 for b in g.get("buckets", []):
                     b_id = (b.get("id") or b.get("bucketId") or "").lower()
                     if "week" in b_id:
@@ -308,11 +290,14 @@ class AgyProvider(BaseProvider):
                             continue
                         remaining = rem_frac * 100.0
                         third_party_rem_pct = remaining if third_party_rem_pct is None else min(third_party_rem_pct, remaining)
+            else:
+                logger.info(f"[AgyProvider] unknown quota group: {name}")
 
         m1_text = percent_text(m1_used_pct)
         m2_text = percent_text(m2_used_pct)
         badge1 = f"C/G 剩餘: {percent_text(third_party_rem_pct)}"
         badge2 = "Gemini Models"
+        has_error = m1_used_pct is None and third_party_rem_pct is None
 
         return UsageMetrics(
             provider_name="Antigravity",
@@ -325,8 +310,10 @@ class AgyProvider(BaseProvider):
             metric2_val=m2_used_pct,
             metric2_text=m2_text,
             metric2_reset=m2_reset_dt,
+            metric2_subtext="Gemini 週額度來源未知" if m2_used_pct is None else "",
             badge1_text=badge1,
             badge2_text=badge2,
             last_updated_time=now_str,
-            error="未取得有效配額資料" if m1_used_pct is None and m2_used_pct is None else None
+            error="未取得有效配額資料" if has_error else None,
+            error_code="schema" if has_error else "",
         )
