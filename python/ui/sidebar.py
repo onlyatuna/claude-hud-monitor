@@ -14,6 +14,7 @@ from core.pace import scale_level, short_window, reset_stamp
 from core.providers.base import BaseProvider
 from ui.provider_card import PROVIDER_THEMES
 from ui.brand import BRAND, brand_color
+from ui import gauge
 from ui.styles import THEMES, get_cards_stylesheet
 
 SIDEBAR_TOKENS = {
@@ -261,35 +262,17 @@ class _Button(QPushButton):
         """The row colour, nudged lighter (dark theme) or darker (light theme) only as far as needed to read on the
         tile. The bar and the number share this one colour, so they can never disagree."""
         t = self.owner.tokens
-        backgrounds = (t['background'], t['hover'], t['pressed'])
-        if all(self.contrast(color,bg) >= 3 for bg in backgrounds):
-            return color
-        base = QColor(color)
-        hue, sat, light, _alpha = base.getHslF()
-        direction = 1 if self.owner.dark else -1
-        for _ in range(40):
-            light = min(1.0, max(0.0, light + 0.025*direction))
-            candidate = QColor.fromHslF(max(0.0, hue), sat, light).name()
-            if all(self.contrast(candidate,bg) >= 3 for bg in backgrounds):
-                return candidate
-        return t['text']
+        return gauge.readable(color, self.owner.dark, (t['background'], t['hover'], t['pressed']))
 
     def ramp_stops(self):
         """Status colours at their band starts, each made readable on the tile."""
-        theme = THEMES['dark' if self.owner.dark else 'light']['scale']
-        return [(pos, self.text_color(theme[name])) for pos, name in RAMP_STOPS]
+        t = self.owner.tokens
+        return gauge.ramp_stops(self.owner.dark, (t['background'], t['hover'], t['pressed']))
 
     def ramp(self, value):
         """Colour of the gauge at `value` (%): a smooth blend of the readable stops."""
-        stops = self.ramp_stops()
-        value = max(0.0, min(100.0, float(value)))
-        for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
-            if value <= p1:
-                f = (value - p0) / (p1 - p0) if p1 > p0 else 0.0
-                a, b = QColor(c0), QColor(c1)
-                return QColor(round(a.red()+(b.red()-a.red())*f), round(a.green()+(b.green()-a.green())*f),
-                              round(a.blue()+(b.blue()-a.blue())*f)).name()
-        return QColor(stops[-1][1]).name()
+        t = self.owner.tokens
+        return gauge.ramp_color(value, self.owner.dark, (t['background'], t['hover'], t['pressed']))
 
     def row_color(self, index):
         """One colour per row, shared by the bar's leading edge and the number."""

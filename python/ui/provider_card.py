@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QRect
 
 from core.providers.base import UsageMetrics, BaseProvider
-from ui.styles import get_progress_color
+from ui.gauge import GaugeBar, ramp_color
 from ui.brand import brand_color
 from core.pace import reset_stamp
 
@@ -75,10 +75,9 @@ class ProviderCardWidget(QWidget):
         m1_hdr.addWidget(self.m1_val)
         m1_box.addLayout(m1_hdr)
 
-        self.m1_bar = QProgressBar()
+        self.m1_bar = GaugeBar()
         self.m1_bar.setRange(0, 100)
         self.m1_bar.setValue(0)
-        self.m1_bar.setTextVisible(False)
         m1_box.addWidget(self.m1_bar)
 
         self.m1_sub = QLabel("重設於: --")
@@ -103,10 +102,9 @@ class ProviderCardWidget(QWidget):
         m2_hdr.addWidget(self.m2_val)
         m2_box.addLayout(m2_hdr)
 
-        self.m2_bar = QProgressBar()
+        self.m2_bar = GaugeBar()
         self.m2_bar.setRange(0, 100)
         self.m2_bar.setValue(0)
-        self.m2_bar.setTextVisible(False)
         m2_box.addWidget(self.m2_bar)
 
         self.m2_sub = QLabel("重設於: --")
@@ -163,9 +161,8 @@ class ProviderCardWidget(QWidget):
         header.addStretch()
         header.addWidget(value)
         box.addLayout(header)
-        bar = QProgressBar()
+        bar = GaugeBar()
         bar.setRange(0, 100)
-        bar.setTextVisible(False)
         box.addWidget(bar)
         sub = QLabel()
         sub.setObjectName("SubDetail")
@@ -189,10 +186,10 @@ class ProviderCardWidget(QWidget):
             metric = metrics[index]
             title.setText(metric.title)
             value.setText(metric.text)
-            color = get_progress_color(metric.val, self.dark) if metric.val is not None else "#64748b"
+            color = ramp_color(metric.val, self.dark) if metric.val is not None else "#64748b"
             value.setStyleSheet(f"color: {color}; font-size: 14px;")
-            bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {color}; }}")
-            bar.setValue(int(min(100, max(0, metric.val or 0))))
+            bar.set_dark(self.dark)
+            bar.setValue(min(100, max(0, metric.val or 0)))
             sub.setStyleSheet("color: #64748b;")
             sub.setText(self._reset_text(metric.reset, metric.title, metric.subtext))
 
@@ -330,18 +327,18 @@ class ProviderCardWidget(QWidget):
         # Metric 1
         self.m1_label.setText(data.metric1_title)
         self.m1_val.setText(data.metric1_text)
-        c1 = get_progress_color(data.metric1_val, self.dark) if data.metric1_val is not None else "#64748b"
+        c1 = ramp_color(data.metric1_val, self.dark) if data.metric1_val is not None else "#64748b"
         self.m1_val.setStyleSheet(f"color: {c1}; font-size: 14px;")
-        self.m1_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c1}; }}")
-        self.m1_bar.setValue(int(min(100, max(0, data.metric1_val or 0))))
+        self.m1_bar.set_dark(self.dark)
+        self.m1_bar.setValue(min(100, max(0, data.metric1_val or 0)))
 
         # Metric 2
         self.m2_label.setText(data.metric2_title)
         self.m2_val.setText(data.metric2_text)
-        c2 = get_progress_color(data.metric2_val, self.dark) if data.metric2_val is not None else "#64748b"
+        c2 = ramp_color(data.metric2_val, self.dark) if data.metric2_val is not None else "#64748b"
         self.m2_val.setStyleSheet(f"color: {c2}; font-size: 14px;")
-        self.m2_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c2}; }}")
-        self.m2_bar.setValue(int(min(100, max(0, data.metric2_val or 0))))
+        self.m2_bar.set_dark(self.dark)
+        self.m2_bar.setValue(min(100, max(0, data.metric2_val or 0)))
 
         # Badges (compact formatting to prevent squeezing title)
         b1 = (data.badge1_text or "").replace(" 剩餘:", ":").replace("剩餘:", ":")
