@@ -288,7 +288,7 @@ class HUDWindow(QWidget):
             vibrancy.clear(self)
             dark = t is THEMES["dark"]
             self.setStyleSheet(get_cards_stylesheet(dark=dark))
-            self.sidebar.set_appearance(dark, self.color_scheme())
+            self.sidebar.set_appearance(dark, 'scale')   # status colours only; the duo scheme is for the table
             for card in self.sidebar_cards.values():
                 card.set_appearance(dark)
         else:

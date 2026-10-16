@@ -8,7 +8,7 @@ import math
 import re
 import sys
 from PySide6.QtCore import Qt, Signal, QSize, QRect, QRectF, QPoint, QPointF, QTimer, QEvent, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QPainter, QColor, QPen, QFont, QGuiApplication, QCursor, QPolygonF
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QGuiApplication, QCursor, QPolygonF, QLinearGradient
 from PySide6.QtWidgets import QWidget, QPushButton, QBoxLayout, QVBoxLayout, QFrame, QSizePolicy
 from core.pace import scale_level, short_window, reset_stamp
 from core.providers.base import BaseProvider
@@ -25,6 +25,7 @@ BASE_PANEL_W = 220
 _NAMES = {'claude':'Claude', 'agy':'AGY', 'codex':'Codex'}
 DEFAULT_ORDER = ('claude', 'agy', 'codex')
 HOLD_MS = 350
+RAMP_STOPS = ((0, 'green'), (50, 'yellow'), (75, 'orange'), (90, 'red'))   # same bands as the status scale
 ALERT_PCT = 90          # a row at or above this used % marks the tile
 FLASH_MS = 1800         # how long a tile glows after one of its windows reset
 FLASH_STEP_MS = 60
@@ -236,7 +237,15 @@ class _Button(QPushButton):
             if value is not None and not self.offline:
                 fill = QRectF(track)
                 fill.setWidth(track.width()*max(0,min(100,value))/100)
-                p.setBrush(QColor(shown))
+                if self.owner.scheme == 'duo':
+                    p.setBrush(QColor(shown))
+                else:
+                    # a fixed green -> amber -> red gauge revealed up to the value: the leading edge always
+                    # carries the same colour as the number, and the position on the scale reads at a glance
+                    gradient = QLinearGradient(track.left(), 0, track.right(), 0)
+                    for pos, stop_color in self.ramp_stops():
+                        gradient.setColorAt(pos/100, QColor(stop_color))
+                    p.setBrush(gradient)
                 p.drawRoundedRect(fill,2*scale,2*scale)
 
     @staticmethod
@@ -265,8 +274,29 @@ class _Button(QPushButton):
                 return candidate
         return t['text']
 
+    def ramp_stops(self):
+        """Status colours at their band starts, each made readable on the tile."""
+        theme = THEMES['dark' if self.owner.dark else 'light']['scale']
+        return [(pos, self.text_color(theme[name])) for pos, name in RAMP_STOPS]
+
+    def ramp(self, value):
+        """Colour of the gauge at `value` (%): a smooth blend of the readable stops."""
+        stops = self.ramp_stops()
+        value = max(0.0, min(100.0, float(value)))
+        for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+            if value <= p1:
+                f = (value - p0) / (p1 - p0) if p1 > p0 else 0.0
+                a, b = QColor(c0), QColor(c1)
+                return QColor(round(a.red()+(b.red()-a.red())*f), round(a.green()+(b.green()-a.green())*f),
+                              round(a.blue()+(b.blue()-a.blue())*f)).name()
+        return QColor(stops[-1][1]).name()
+
     def row_color(self, index):
-        return self.text_color(self.rows[index][2])
+        """One colour per row, shared by the bar's leading edge and the number."""
+        value = self.rows[index][1]
+        if value is None or self.owner.scheme == 'duo':
+            return self.text_color(self.rows[index][2])
+        return self.ramp(value)
 
 
 

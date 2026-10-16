@@ -347,11 +347,30 @@ class SidebarTests(unittest.TestCase):
                         shown = button.row_color(index)
                         for state in ('background', 'hover', 'pressed'):
                             self.assertGreaterEqual(button.contrast(shown, self.sidebar.tokens[state]), 3)
-                        raw = QColor(button.rows[index][2])
-                        adjusted = QColor(shown)
-                        hue_gap = abs(raw.hslHueF() - adjusted.hslHueF())
-                        if raw.name() != adjusted.name() and raw.hslSaturationF() > 0.1:
-                            self.assertLess(min(hue_gap, 1 - hue_gap), 0.04)   # same hue, only lightness moved
+                        if scheme == 'scale':
+                            self.assertEqual(shown, button.ramp(value))     # the number is the gauge colour at that value
+                        else:
+                            raw, adjusted = QColor(button.rows[index][2]), QColor(shown)
+                            gap = abs(raw.hslHueF() - adjusted.hslHueF())
+                            if raw.name() != adjusted.name() and raw.hslSaturationF() > 0.1:
+                                self.assertLess(min(gap, 1 - gap), 0.04)    # same hue, only lightness moved
+
+    def test_scale_bars_are_a_green_to_red_gauge(self):
+        theme = THEMES['dark']['scale']
+        self.sidebar.set_appearance(True, 'scale')
+        self.sidebar.update_metrics(UsageMetrics(provider_id='codex', metric1_val=10, metric2_val=10))
+        button = self.sidebar.buttons['codex']
+        stops = button.ramp_stops()
+        self.assertEqual([p for p, _c in stops], [0, 50, 75, 90])
+        self.assertEqual(button.ramp(0), QColor(stops[0][1]).name())
+        self.assertEqual(button.ramp(100), QColor(stops[-1][1]).name())
+        mid = QColor(button.ramp(25))                   # between green and yellow: not either end
+        self.assertNotIn(mid.name(), (QColor(stops[0][1]).name(), QColor(stops[1][1]).name()))
+        reds = [QColor(button.ramp(v)).red() for v in (0, 40, 80, 95)]
+        greens = [QColor(button.ramp(v)).green() for v in (0, 40, 80, 95)]
+        self.assertGreater(reds[-1], reds[0])           # warmer as the value rises
+        self.assertLess(greens[-1], greens[0])
+        self.assertFalse(button.grab().isNull())        # painting the gradient must not raise
 
 
 if __name__=='__main__': unittest.main()

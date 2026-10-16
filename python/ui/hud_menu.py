@@ -76,7 +76,7 @@ def _build_appearance(hud, menu):
     current = hud.config.get("appearance", "auto")
     for value in APPEARANCES:
         _check(sub, APPEARANCE_LABELS[value], value == current, lambda v=value: hud.set_appearance(v))
-    if mode in ("table", "sidebar"):
+    if mode == "table":
         sub.addSeparator()
         for value in SCHEMES:
             _check(sub, f"{SCHEME_LABELS[value]}", value == hud.color_scheme(), lambda v=value: hud.set_color_scheme(v))
