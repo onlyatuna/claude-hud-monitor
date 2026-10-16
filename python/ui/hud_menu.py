@@ -11,6 +11,8 @@ from core.autostart import is_autostart_enabled
 from core.logger import open_log_dir
 
 SIDEBAR_SCALES = (60, 80, 100, 125, 150, 200)
+IDLE_LEVELS = (80, 60, 40, 25)
+IDLE_DELAYS_MS = (500, 900, 2000, 5000)
 OPACITIES = (100, 90, 80, 70, 50, 30)
 INTERVALS = (30, 60, 120, 300)
 UI_MODES = (("cards", "傳統卡片 (Classic Cards)"),
@@ -87,12 +89,28 @@ def _build_appearance(hud, menu):
         _check(opacity_menu, f"{pct}%", abs(opacity - pct / 100.0) < 0.05, lambda p=pct: hud._set_opacity(p / 100.0))
 
 
+def _build_idle_fade(hud, menu):
+    sub = menu.addMenu("閒置時淡化 (Idle fade)")
+    _check(sub, "啟用", hud.config.get("sidebar_idle_fade", True), hud.toggle_idle_fade)
+    sub.addSeparator()
+    level = round(hud.idle_fade_level() * 100)
+    level_menu = sub.addMenu("淡化到 (Dim to)")
+    levels = sorted(set(IDLE_LEVELS) | {level}, reverse=True)
+    for pct in levels:
+        _check(level_menu, f"{pct}%", pct == level, lambda p=pct: hud.set_idle_fade_level(p))
+    delay = hud.idle_fade_delay()
+    delay_menu = sub.addMenu("多久後淡化 (Delay)")
+    delays = sorted(set(IDLE_DELAYS_MS) | {delay})
+    for ms in delays:
+        _check(delay_menu, f"{ms / 1000:g} 秒", ms == delay, lambda m=ms: hud.set_idle_fade_delay(m))
+
+
 def _build_behaviour(hud, menu):
     sub = menu.addMenu("行為 (Behaviour)")
     _check(sub, "滑鼠點擊穿透 (Alt+Shift+C)", hud.config.get("click_through", False), hud.toggle_click_through)
     _check(sub, "視窗永遠置頂 (Always on Top)", hud.config.get("always_on_top", True), hud._toggle_always_on_top)
     _check(sub, "鎖定視窗位置 (Lock Drag)", hud.config.get("locked", False), hud._toggle_lock)
-    _check(sub, "閒置時淡化 (Idle fade)", hud.config.get("sidebar_idle_fade", True), hud.toggle_idle_fade)
+    _build_idle_fade(hud, sub)
     _check(sub, "開機自動啟動 (Start on Boot)", is_autostart_enabled(), hud._toggle_autostart)
     sub.addSeparator()
     interval_menu = sub.addMenu("⏱️ 更新頻率 (Interval)")

@@ -653,3 +653,55 @@ class HudTests(unittest.TestCase):
                 self.assertTrue(any('Idle fade' in a.text() for a in behaviour.actions()))
             finally:
                 self._close(hud)
+
+    def test_idle_fade_level_and_delay_are_customisable(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', opacity=1.0)
+            try:
+                hud._fade_timer.stop()
+                with patch.object(type(hud), 'underMouse', lambda self: False):
+                    hud.set_idle_fade_level(40)
+                    self.assertAlmostEqual(hud.windowOpacity(), 0.4, delta=0.02)
+                    hud.set_idle_fade_level(5)                       # clamped to 20 %
+                    self.assertAlmostEqual(hud.idle_fade_level(), 0.2)
+                    hud.set_idle_fade_level(99)                      # clamped to 95 %
+                    self.assertAlmostEqual(hud.idle_fade_level(), 0.95)
+                hud.set_idle_fade_delay(2000)
+                self.assertEqual(hud.idle_fade_delay(), 2000)
+                self.assertEqual(ConfigManager(config.path).get('sidebar_idle_delay_ms'), 2000)
+                hud.set_idle_fade_delay(5)                           # clamped to 200 ms
+                self.assertEqual(hud.idle_fade_delay(), 200)
+                config.set('sidebar_idle_level', 'junk')
+                self.assertAlmostEqual(hud.idle_fade_level(), 0.6)   # bad values fall back
+                from PySide6.QtCore import QEvent
+                hud.leaveEvent(QEvent(QEvent.Type.Leave))                                 # uses the configured delay
+                self.assertEqual(hud._fade_timer.interval(), 200)
+            finally:
+                self._close(hud)
+
+    def test_idle_fade_submenu_lists_levels_and_delays(self):
+        from PySide6.QtWidgets import QMenu
+        captured = []
+
+        class RecordingMenu(QMenu):
+            def exec(self, *args):
+                captured.append(self)
+
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                patch('ui.hud_menu.QMenu', RecordingMenu):
+            _, hud = self._hud(directory, ui_mode='sidebar', sidebar_idle_level=0.5)
+            try:
+                from PySide6.QtGui import QContextMenuEvent
+                from PySide6.QtCore import QPoint
+                hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
+                behaviour = next(a.menu() for a in captured[0].actions() if a.menu() and 'Behaviour' in a.text())
+                fade = next(a.menu() for a in behaviour.actions() if a.menu() and 'Idle fade' in a.text())
+                level = next(a.menu() for a in fade.actions() if a.menu() and 'Dim to' in a.text())
+                delay = next(a.menu() for a in fade.actions() if a.menu() and 'Delay' in a.text())
+                self.assertEqual([a.text() for a in level.actions()], ['80%', '60%', '50%', '40%', '25%'])
+                self.assertEqual([a.text() for a in level.actions() if a.isChecked()], ['50%'])   # custom value shows up
+                self.assertEqual(len(delay.actions()), 4)
+                level.actions()[3].trigger()
+                self.assertAlmostEqual(hud.idle_fade_level(), 0.4)
+            finally:
+                self._close(hud)

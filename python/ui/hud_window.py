@@ -44,6 +44,8 @@ SIDEBAR_SNAP_PX = 24
 RESIZE_GRIP_PX = 7
 IDLE_FADE_FACTOR = 0.6
 IDLE_FADE_DELAY_MS = 900
+IDLE_LEVELS = (80, 60, 40, 25)       # % of the chosen opacity the idle bar dims to
+IDLE_DELAYS_MS = (500, 900, 2000, 5000)
 
 if sys.platform == "win32":
     import ctypes
@@ -1083,11 +1085,31 @@ class HUDWindow(QWidget):
     def _apply_opacity(self):
         """Window opacity = the user's setting, dimmed while the sidebar is idle (no hover, no open detail page)."""
         base = float(self.config.get("opacity", 0.88))
-        self.setWindowOpacity(base * IDLE_FADE_FACTOR if self._idle_fade_active() else base)
+        self.setWindowOpacity(base * self.idle_fade_level() if self._idle_fade_active() else base)
+
+    def idle_fade_level(self) -> float:
+        """Fraction of the chosen opacity the idle sidebar dims to (0.2 - 0.95)."""
+        try:
+            return max(0.2, min(0.95, float(self.config.get("sidebar_idle_level", IDLE_FADE_FACTOR))))
+        except (TypeError, ValueError):
+            return IDLE_FADE_FACTOR
+
+    def idle_fade_delay(self) -> int:
+        try:
+            return max(200, min(30000, int(self.config.get("sidebar_idle_delay_ms", IDLE_FADE_DELAY_MS))))
+        except (TypeError, ValueError):
+            return IDLE_FADE_DELAY_MS
 
     def toggle_idle_fade(self):
         self.config.set("sidebar_idle_fade", not self.config.get("sidebar_idle_fade", True))
         self._apply_opacity()
+
+    def set_idle_fade_level(self, percent: int):
+        self.config.set("sidebar_idle_level", max(20, min(95, int(percent))) / 100)
+        self._apply_opacity()
+
+    def set_idle_fade_delay(self, milliseconds: int):
+        self.config.set("sidebar_idle_delay_ms", max(200, min(30000, int(milliseconds))))
 
     def enterEvent(self, event):
         super().enterEvent(event)
@@ -1096,7 +1118,7 @@ class HUDWindow(QWidget):
 
     def leaveEvent(self, event):
         super().leaveEvent(event)
-        self._fade_timer.start(IDLE_FADE_DELAY_MS)
+        self._fade_timer.start(self.idle_fade_delay())
 
     def _set_interval(self, seconds: int):
         self.config.set("refresh_interval_sec", seconds)

@@ -16,7 +16,9 @@ DEFAULT_CONFIG = {
     "sidebar_offset": None,  # distance along the edge from its start; None = bottom/right default
     "sidebar_x": None,  # free position, used when sidebar_edge is "none"
     "sidebar_y": None,
-    "sidebar_idle_fade": True,  # dim the bar to ~60% while idle (no hover, no open detail page)
+    "sidebar_idle_fade": True,  # dim the bar while idle (no hover, no open detail page)
+    "sidebar_idle_level": 0.6,  # fraction of the chosen opacity it dims to (0.2 - 0.95)
+    "sidebar_idle_delay_ms": 900,  # how long after the mouse leaves before dimming
     "sidebar_scale": 1.0,  # 0.6 - 2.0, Ctrl+wheel or drag any edge/corner of the bar
     "row_order": {},  # per provider: row titles in the order dragged in the detail page (agy uses agy_order)
     "agy_order": ["C/G 5H", "ARGON 7D", "GEMINI 5H", "GEMINI 7D", "C/G 7D"],  # agy row order; the first two are the main pair
