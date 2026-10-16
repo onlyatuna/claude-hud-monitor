@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt
 
 from core.autostart import is_autostart_enabled, set_autostart
 from core.logger import open_log_dir
+from ui.hud_menu import build_hud_menu
 
 def get_app_icon() -> QIcon:
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
@@ -53,89 +54,16 @@ class HUDTrayIcon(QSystemTrayIcon):
 
     def _init_menu(self):
         self.menu = QMenu(self.hud_window)
-
-        toggle_act = self.menu.addAction("👁️ 顯示 / 隱藏 HUD (Alt+C)")
-        toggle_act.triggered.connect(self.hud_window.toggle_visibility)
-
-        refresh_act = self.menu.addAction("🔄 立即重新整理所有 AI (Refresh All)")
-        refresh_act.triggered.connect(self.hud_window.trigger_async_refresh)
-
-        self.menu.addSeparator()
-
-        # UI Style Submenu (Dual Mode)
-        self.ui_style_menu = self.menu.addMenu("🎭 介面風格 (UI Style)")
-        cur_ui_mode = self.hud_window.config.get("ui_mode", "cards")
-
-        self.cards_mode_act = self.ui_style_menu.addAction("🗂️ 傳統卡片 (Classic Cards)")
-        self.cards_mode_act.setCheckable(True)
-        self.cards_mode_act.setChecked(cur_ui_mode == "cards")
-        self.cards_mode_act.triggered.connect(lambda: self.hud_window._apply_ui_mode("cards"))
-
-        self.table_mode_act = self.ui_style_menu.addAction("📊 儀表表格 (Modern Table)")
-        self.table_mode_act.setCheckable(True)
-        self.table_mode_act.setChecked(cur_ui_mode == "table")
-        self.table_mode_act.triggered.connect(lambda: self.hud_window._apply_ui_mode("table"))
-
-        # Layout submenu (for Cards mode)
-        self.layout_menu = self.menu.addMenu("📐 顯示佈局 (Layout)")
-        cur_layout = self.hud_window.config.get("layout_mode", "horizontal")
-        self.horiz_act = self.layout_menu.addAction("💻 橫向三欄並排 (Horizontal Triple)")
-        self.horiz_act.setCheckable(True)
-        self.horiz_act.setChecked(cur_layout == "horizontal")
-        self.horiz_act.triggered.connect(lambda: self.hud_window._apply_cards_layout_mode("horizontal"))
-
-        self.vert_act = self.layout_menu.addAction("📱 直立三層堆疊 (Vertical Stack)")
-        self.vert_act.setCheckable(True)
-        self.vert_act.setChecked(cur_layout == "vertical")
-        self.vert_act.triggered.connect(lambda: self.hud_window._apply_cards_layout_mode("vertical"))
-
-        # Shared appearance and table color submenus
-        self.hud_window.add_theme_menus(self.menu)
-
-        # Click-through toggle
-        self.clickthrough_act = self.menu.addAction("👻 滑鼠點擊穿透 (Alt+Shift+C)")
-        self.clickthrough_act.setCheckable(True)
-        self.clickthrough_act.setChecked(self.hud_window.config.get("click_through", False))
-        self.clickthrough_act.triggered.connect(self.hud_window.toggle_click_through)
-
-        # Always on top
-        self.aot_act = self.menu.addAction("📌 視窗永遠置頂")
-        self.aot_act.setCheckable(True)
-        self.aot_act.setChecked(self.hud_window.config.get("always_on_top", True))
-        self.aot_act.triggered.connect(self.hud_window._toggle_always_on_top)
-
-        # Autostart (Both Windows & macOS supported!)
-        self.autostart_act = self.menu.addAction("🚀 開機自動啟動")
-        self.autostart_act.setCheckable(True)
-        self.autostart_act.setChecked(is_autostart_enabled())
-        self.autostart_act.triggered.connect(self._toggle_autostart)
-
-        # Open Logs
-        self.logs_act = self.menu.addAction("📂 開啟記錄檔目錄 (Open Logs)")
-        self.logs_act.triggered.connect(open_log_dir)
-
-        self.menu.addSeparator()
-
-        exit_act = self.menu.addAction("❌ 結束程式 (Exit)")
-        exit_act.triggered.connect(self.hud_window.close_application)
-
+        self.menu.aboutToShow.connect(self._rebuild_menu)
+        self._rebuild_menu()
         self.setContextMenu(self.menu)
 
+    def _rebuild_menu(self):
+        self.menu.clear()
+        build_hud_menu(self.hud_window, tray=True, menu=self.menu)
+
     def update_menu_state(self):
-        cur_ui_mode = self.hud_window.config.get("ui_mode", "cards")
-        self.cards_mode_act.setChecked(cur_ui_mode == "cards")
-        self.table_mode_act.setChecked(cur_ui_mode == "table")
-
-        cur_layout = self.hud_window.config.get("layout_mode", "horizontal")
-        self.horiz_act.setChecked(cur_layout == "horizontal")
-        self.vert_act.setChecked(cur_layout == "vertical")
-
-        # Hide or show cards layout menu depending on current UI mode
-        self.layout_menu.menuAction().setVisible(cur_ui_mode == "cards")
-
-        self.clickthrough_act.setChecked(self.hud_window.config.get("click_through", False))
-        self.aot_act.setChecked(self.hud_window.config.get("always_on_top", True))
-        self.autostart_act.setChecked(is_autostart_enabled())
+        """The menu is rebuilt every time it opens, so there is no state to sync."""
 
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:

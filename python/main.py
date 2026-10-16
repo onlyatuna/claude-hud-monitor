@@ -29,6 +29,10 @@ def qt_message_handler(mode, context, message):
         logger.critical(f"[Qt] {message}")
 
 def main():
+    from core.agy_statusline import cli as agy_statusline_cli
+    code = agy_statusline_cli(sys.argv[1:])
+    if code is not None:
+        sys.exit(code)
     setup_logging()
     logger.info("=== Claude HUD Monitor starting ===")
     logger.info(f"Python version: {sys.version}, Platform: {sys.platform}")

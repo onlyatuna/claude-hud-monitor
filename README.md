@@ -1,7 +1,7 @@
 # ClaudeHUD Monitor
 
 桌面 AI 額度監控 HUD，支援 Claude Code、Antigravity CLI (AGY) 與 OpenAI Codex。
-支援「傳統卡片 (Classic Cards)」與「儀表表格 (Modern Table)」雙風格切換、水平橫排／垂直直排切換、主題配色切換、視窗置頂、透明度設定、系統匣常駐、額度重置倒數與滑鼠穿透。
+支援「傳統卡片 (Classic Cards)」、「儀表表格 (Modern Table)」與「側邊欄 (Sidebar)」三種風格切換、水平橫排／垂直直排切換、主題配色切換、視窗置頂、透明度設定、系統匣常駐、額度重置倒數與滑鼠穿透。
 
 本專案採 Monorepo 架構維護，包含 Rust 實作 (`rust/`) 與 Python 實作 (`python/`)。兩者產生的執行檔名稱統一為 `ClaudeHUD`。
 
@@ -100,10 +100,28 @@ Windows 環境可使用 `python/build_exe.bat` 產出 `dist/ClaudeHUD.exe`；mac
 | :--- | :--- | :--- |
 | **Claude** | 本機 OAuth → `/api/oauth/usage` | `~/.claude/.credentials.json` 包含有效 access token (支援多帳號切換) |
 | **Codex** | 本機 OAuth → `/backend-api/wham/usage` | `~/.codex/auth.json` 包含有效 access token |
-| **AGY** | 本地 API / IPC 查詢 | 已安裝且登入的 Antigravity CLI |
+| **AGY** | Google 端點 `daily-cloudcode-pa` 的額度查詢（5 小時、C/G）＋ agy statusLine 快取（Gemini 週額度、Argon 週額度） | 已安裝且登入的 Antigravity CLI；週額度與 Argon 需啟用 statusLine，見下方 |
 
 * 數值顯示為已使用額度百分比。
-* AGY 的 `C/G 剩餘` 顯示第三方群組可用餘額。
+* AGY 的 `C/G 剩餘` 顯示 Claude/GPT 群組的每週剩餘；`Argon` 顯示 Gemini 4 Argon（Pro 方案獨立額度）的每週剩餘。
+
+### 啟用 AGY 週額度與 Argon（一次性設定）
+
+Gemini 週額度與 Argon 週額度沒有公開 API，agy 只會在互動模式把它們推給 `statusLine` 指令。HUD 提供一支只寫入額度的 hook：
+
+```
+cd python
+python main.py --install-agy-statusline      # 先備份 ~/.gemini/antigravity-cli/settings.json 再寫入
+python main.py --uninstall-agy-statusline    # 移除
+```
+
+安裝後重開 agy 互動模式即可。注意：
+
+* 需要 `python`（Windows）或 `python3` 在 PATH 上，agy 會用它執行 hook。
+* 只有 agy 互動模式開著時才會更新；agy 沒開時沿用最後一次的值，已過重置時間的項目會顯示 `--`。
+* 已設定其他 statusLine 時不會覆蓋；設定資料夾路徑含空白時無法安裝。
+* hook 只保存各項額度的剩餘比例與重置時間，不保存 email、路徑或 token。
+* 未啟用時，Weekly 與 Argon 顯示 `--`，其餘（5 小時、C/G）不受影響。
 * 預設更新週期為 60 秒。若請求失敗，採指數退避重試，若標頭含 `Retry-After` 則優先採用。
 
 ---
@@ -115,7 +133,8 @@ Windows 環境可使用 `python/build_exe.bat` 產出 `dist/ClaudeHUD.exe`；mac
 | **Alt + C** (macOS: Option + C) | 顯示／隱藏視窗 |
 | **Alt + Shift + C** | 開關滑鼠穿透模式（亦可從系統匣圖示切換） |
 | **標題列 ⇄** (卡片模式) | 切換水平橫排與垂直直排 |
-| **右鍵選單 → 介面風格** | 在「傳統卡片 (Classic Cards)」與「儀表表格 (Modern Table)」之間切換 |
+| **系統匣選單 → 介面風格** | 在「傳統卡片」、「儀表表格」與「側邊欄」之間切換 |
+| **側邊欄** | 貼在螢幕右緣的懸浮窄條（不保留螢幕空間，可半透明、滑鼠穿透）。細條 92 px：點或停留在服務圖示會向左彈出完整卡片，再點可釘住；頂端按鈕切換成 220 px 固定窄欄；可自由拖曳並吸附到螢幕任一邊（貼上下邊變橫條），Ctrl＋滾輪或拖拉邊角縮放，按住磚再拖曳可換服務順序；所有服務的詳細頁面都能直接拖拉整條換順序（前兩條為磚上顯示的主要兩條）；用量 ≥ 90% 時磚上出現警示三角，視窗重設時磚會短暫亮一下，閒置時自動淡化（可在「行為」關閉） |
 | **右鍵選單 → 配色 / 外觀** (表格模式) | 切換色階／雙色配色，以及淺色／深色／跟隨系統外觀 |
 | **雙擊空白處** | 立即手動刷新各 Provider 額度 |
 | **拖曳空白處 / 邊框** | 移動視窗 / 調整視窗尺寸 |
