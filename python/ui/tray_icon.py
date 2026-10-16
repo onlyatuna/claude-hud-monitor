@@ -76,6 +76,11 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.table_mode_act.setChecked(cur_ui_mode == "table")
         self.table_mode_act.triggered.connect(lambda: self.hud_window._apply_ui_mode("table"))
 
+        self.sidebar_mode_act = self.ui_style_menu.addAction("📌 側邊欄 (Sidebar)")
+        self.sidebar_mode_act.setCheckable(True)
+        self.sidebar_mode_act.setChecked(cur_ui_mode == "sidebar")
+        self.sidebar_mode_act.triggered.connect(lambda: self.hud_window._apply_ui_mode("sidebar"))
+
         # Layout submenu (for Cards mode)
         self.layout_menu = self.menu.addMenu("📐 顯示佈局 (Layout)")
         cur_layout = self.hud_window.config.get("layout_mode", "horizontal")
@@ -125,6 +130,7 @@ class HUDTrayIcon(QSystemTrayIcon):
         cur_ui_mode = self.hud_window.config.get("ui_mode", "cards")
         self.cards_mode_act.setChecked(cur_ui_mode == "cards")
         self.table_mode_act.setChecked(cur_ui_mode == "table")
+        self.sidebar_mode_act.setChecked(cur_ui_mode == "sidebar")
 
         cur_layout = self.hud_window.config.get("layout_mode", "horizontal")
         self.horiz_act.setChecked(cur_layout == "horizontal")

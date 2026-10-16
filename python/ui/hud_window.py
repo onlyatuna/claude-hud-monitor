@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication
 )
-from PySide6.QtGui import QCursor, QGuiApplication, QIcon
+from PySide6.QtGui import QContextMenuEvent, QCursor, QGuiApplication, QIcon
 
 from core.providers import PROVIDERS, UsageMetrics
 from core.config_manager import ConfigManager
@@ -19,6 +19,8 @@ from ui.styles import (
 )
 from ui.provider_card import ProviderCardWidget
 from ui.usage_table import UsageTable
+from ui.sidebar import SidebarWidget
+from ui.dock_geometry import dock_rect, constrain_to_edge, bottom_offset_from_rect, pick_work_area
 from ui import vibrancy
 from system.memory import trim_memory
 
@@ -33,6 +35,9 @@ DEF_HORIZ_W, DEF_HORIZ_H = 690, 145
 
 MIN_VERT_W, MIN_VERT_H = 250, 320
 DEF_VERT_W, DEF_VERT_H = 280, 410
+
+QWIDGETSIZE_MAX = 16777215
+SIDEBAR_BOTTOM_OFFSET = 12
 
 if sys.platform == "win32":
     import ctypes
@@ -96,6 +101,14 @@ class HUDWindow(QWidget):
 
         # Usage Table (Modern Table UI)
         self.table = UsageTable(self.theme(), self.color_scheme(), parent=self)
+
+        # Sidebar (docked strip/panel); owns its own card instances so the other modes are untouched
+        self.sidebar_cards = {pid: ProviderCardWidget(pid) for pid in ("claude", "agy", "codex")}
+        self.sidebar = SidebarWidget(self.sidebar_cards, parent=self)
+        self.sidebar.hide()
+        self.sidebar.stateChangeRequested.connect(self.set_sidebar_state)
+        self.sidebar.settingsRequested.connect(self._show_sidebar_menu)
+        self._docking = False
 
         self._init_window_flags()
         self._init_ui_skeleton()
@@ -178,6 +191,7 @@ class HUDWindow(QWidget):
             getattr(self, "time_label", None),
             getattr(self, "cards_container", None),
             getattr(self, "table", None),
+            getattr(self, "sidebar", None),
             *getattr(self, "cards", {}).values()
         }
         while layout.count():
@@ -244,6 +258,13 @@ class HUDWindow(QWidget):
             dark = (t is THEMES["dark"])
             vibrant = bool(self.isVisible() and vibrancy.apply(self, dark, t["radius"]))
             self.setStyleSheet(get_hud_stylesheet(t, vibrant))
+        elif ui_mode == "sidebar":
+            vibrancy.clear(self)
+            dark = t is THEMES["dark"]
+            self.setStyleSheet(get_cards_stylesheet(dark=dark))
+            self.sidebar.set_appearance(dark)
+            for card in self.sidebar_cards.values():
+                card.set_appearance(dark)
         else:
             vibrancy.clear(self)
             dark = t is THEMES["dark"]
@@ -275,6 +296,20 @@ class HUDWindow(QWidget):
 
         self._restoring_geometry = True
         self._clear_layout(self.inner_layout)
+        self.sidebar.close_flyout()
+        self.sidebar.hide()
+        self.table.hide()
+        self.cards_container.hide()
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX)
+        self.inner_layout.setContentsMargins(12, 8, 12, 10)
+        self.inner_layout.setSpacing(6)
+
+        if mode == "sidebar":
+            self._apply_sidebar_mode()
+            self._restoring_geometry = False
+            self._save_geometry()
+            return
 
         # Header Bar
         header_layout = QHBoxLayout()
@@ -292,6 +327,7 @@ class HUDWindow(QWidget):
             self.layout_toggle_btn.setVisible(False)
             self._apply_theme()
             self.inner_layout.addWidget(self.table)
+            self.table.show()
 
             self.setMinimumSize(MIN_TABLE_W, MIN_TABLE_H)
             w = self.config.get("table_width", DEF_TABLE_W)
@@ -306,6 +342,7 @@ class HUDWindow(QWidget):
             self.layout_toggle_btn.setVisible(True)
             self._apply_theme()
             self.inner_layout.addWidget(self.cards_container)
+            self.cards_container.show()
             card_layout_mode = self.config.get("layout_mode", "horizontal")
             w, h = self._apply_cards_layout(card_layout_mode)
 
@@ -318,6 +355,55 @@ class HUDWindow(QWidget):
 
         self._restoring_geometry = False
         self._save_geometry()
+
+    # ================= Sidebar mode =================
+    def _apply_sidebar_mode(self):
+        self.inner_layout.setContentsMargins(0, 0, 0, 0)
+        self.inner_layout.setSpacing(0)
+        state = self.config.get("sidebar_state", "strip")
+        self._apply_theme()
+        self.inner_layout.addWidget(self.sidebar)
+        self.sidebar.show()
+        self.sidebar.set_state(state if state in ("strip", "panel") else "strip")
+        self._dock_sidebar()
+
+    def _sidebar_work_area(self):
+        areas = [(g.x(), g.y(), g.width(), g.height())
+                 for g in (s.availableGeometry() for s in QGuiApplication.screens())]
+        if not areas:
+            return None
+        center = self.geometry().center()
+        return pick_work_area((center.x(), center.y()), areas)
+
+    def _dock_sidebar(self):
+        """Snap to the right edge of the current screen, keeping the saved distance from the bottom."""
+        work = self._sidebar_work_area()
+        if work is None:
+            return
+        size = self.sidebar.preferred_size()
+        offset = self.config.get("sidebar_bottom_offset", SIDEBAR_BOTTOM_OFFSET)
+        if not isinstance(offset, int):
+            offset = SIDEBAR_BOTTOM_OFFSET
+        x, y, w, h = dock_rect(work, size.width(), size.height(), offset)
+        self._docking = True
+        try:
+            self.setFixedSize(w, h)
+            self.setGeometry(x, y, w, h)
+        finally:
+            self._docking = False
+
+    def set_sidebar_state(self, state: str):
+        if state not in ("strip", "panel") or self.config.get("ui_mode") != "sidebar":
+            return
+        self._persist_geometry()
+        self.config.set("sidebar_state", state)
+        self.sidebar.set_state(state)
+        self._dock_sidebar()
+
+    def _show_sidebar_menu(self):
+        button = self.sidebar.settings_button
+        pos = button.mapToGlobal(QPoint(0, button.height()))
+        self.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, self.mapFromGlobal(pos), pos))
 
     def _apply_cards_layout(self, mode: str) -> tuple[int, int]:
         self._clear_layout(self.cards_layout)
@@ -448,6 +534,9 @@ class HUDWindow(QWidget):
         self._latest_metrics[metrics.provider_id] = metrics
         if metrics.provider_id in self.cards:
             self.cards[metrics.provider_id].update_metrics(metrics)
+        if metrics.provider_id in self.sidebar_cards:
+            self.sidebar_cards[metrics.provider_id].update_metrics(metrics)
+        self.sidebar.update_metrics(metrics)
         self.table.update_metrics(metrics)
         self._provider_errors[metrics.provider_id] = bool(metrics.error)
         self.time_label.setText(datetime.now().strftime("%H:%M:%S"))
@@ -468,6 +557,9 @@ class HUDWindow(QWidget):
 
         for card in self.cards.values():
             card.update_countdown()
+        for card in self.sidebar_cards.values():
+            card.update_countdown()
+        self.sidebar.update_countdown()
         self.table.update_countdowns()
 
     # ================= Click-Through Mode =================
@@ -537,7 +629,7 @@ class HUDWindow(QWidget):
 
     # ================= Resizing & Dragging Engine =================
     def _calc_edge(self, pos: QPoint):
-        if self.config.get("locked", False):
+        if self.config.get("locked", False) or self.config.get("ui_mode") == "sidebar":
             return None
 
         w, h = self.width(), self.height()
@@ -602,7 +694,22 @@ class HUDWindow(QWidget):
 
     def moveEvent(self, event):
         super().moveEvent(event)
+        if self.config.get("ui_mode") == "sidebar" and not self._docking and not self._restoring_geometry:
+            self._constrain_sidebar()
         self._save_geometry()
+
+    def _constrain_sidebar(self):
+        work = self._sidebar_work_area()
+        if work is None:
+            return
+        g = self.geometry()
+        x, y, w, h = constrain_to_edge((g.x(), g.y(), g.width(), g.height()), work)
+        if (x, y) != (g.x(), g.y()):
+            self._docking = True
+            try:
+                self.move(x, y)
+            finally:
+                self._docking = False
 
     def closeEvent(self, event):
         self._persist_geometry()
@@ -631,6 +738,13 @@ class HUDWindow(QWidget):
         self.geometry_timer.stop()
         pos, size = self.pos(), self.size()
         ui_mode = self.config.get("ui_mode", "cards")
+        if ui_mode == "sidebar":
+            work = self._sidebar_work_area()
+            if work is not None:
+                g = self.geometry()
+                self.config.set("sidebar_bottom_offset",
+                                bottom_offset_from_rect((g.x(), g.y(), g.width(), g.height()), work))
+            return
         updates = {
             "window_x": pos.x(),
             "window_y": pos.y(),

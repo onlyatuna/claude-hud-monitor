@@ -9,7 +9,9 @@ from core.logger import logger
 DEFAULT_CONFIG = {
     "window_x": None,
     "window_y": None,
-    "ui_mode": "cards",  # "cards" (Classic Cards) or "table" (Modern Table)
+    "ui_mode": "cards",  # "cards" (Classic Cards), "table" (Modern Table) or "sidebar" (docked right-edge strip)
+    "sidebar_state": "strip",  # "strip" (92px icon strip) or "panel" (220px column)
+    "sidebar_bottom_offset": 12,  # distance from the work-area bottom, updated when dragged
     "layout_mode": "vertical",  # "vertical" or "horizontal" (for cards mode)
     "vertical_width": 280,
     "vertical_height": 410,

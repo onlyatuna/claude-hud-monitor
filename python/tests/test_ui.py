@@ -245,3 +245,49 @@ class HudTests(unittest.TestCase):
             _, hud = self._hud(directory, ui_mode='table', table_width=50, table_height=50)
             self.assertEqual((hud.width(), hud.height()), (450, 350))
             self._close(hud)
+
+    def test_sidebar_mode_docks_right_edge_and_switches_state(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_bottom_offset=40)
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                self.assertEqual(hud.width(), 92)
+                self.assertEqual(hud.geometry().right() + 1, work.x() + work.width())
+                self.assertEqual(hud.geometry().bottom() + 1, work.y() + work.height() - 40)
+                hud._on_data_fetched(UsageMetrics(provider_id='agy', metric1_val=3, metric1_text='3%', metric2_val=1,
+                                                  metric2_text='1%'))
+                self.assertEqual(hud.sidebar.buttons['agy'].display_text, '3%')
+                self.assertEqual(hud.sidebar_cards['agy'].m1_val.text(), '3%')
+                hud.set_sidebar_state('panel')
+                self.assertEqual(hud.width(), 220)
+                self.assertEqual(hud.geometry().right() + 1, work.x() + work.width())
+                self.assertEqual(ConfigManager(config.path).get('sidebar_state'), 'panel')
+                hud.set_sidebar_state('bogus')
+                self.assertEqual(hud.width(), 220)
+            finally:
+                self._close(hud)
+
+    def test_sidebar_does_not_overwrite_card_geometry_and_can_switch_back(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='cards', window_x=120, window_y=130)
+            try:
+                hud._apply_ui_mode('sidebar')
+                hud._persist_geometry()
+                self.assertEqual((config.get('window_x'), config.get('window_y')), (120, 130))
+                self.assertIsNotNone(config.get('sidebar_bottom_offset'))
+                hud._apply_ui_mode('cards')
+                self.assertTrue(hud.cards['claude'].isVisibleTo(hud))
+                self.assertGreaterEqual(hud.width(), 250)
+                self.assertFalse(hud.sidebar.isVisible())
+            finally:
+                self._close(hud)
+
+    def test_sidebar_ignores_edge_resize(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='sidebar')
+            try:
+                from PySide6.QtCore import QPoint
+                self.assertIsNone(hud._calc_edge(QPoint(0, 0)))
+            finally:
+                self._close(hud)
