@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon
 
 from core.providers import PROVIDERS, UsageMetrics
-from core.agy_rows import arrange_agy, normalize_order, DEFAULT_ORDER as AGY_DEFAULT_ORDER
+from core.agy_rows import arrange_agy, arrange_by_order, normalize_order, DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.config_manager import ConfigManager
 from core.refresh_controller import RefreshController
 from core.autostart import is_autostart_enabled, set_autostart
@@ -116,8 +116,9 @@ class HUDWindow(QWidget):
         self.sidebar.scaleStepRequested.connect(self._on_sidebar_scale_step)
         self.sidebar.dragRequested.connect(self._start_sidebar_drag)
         self.sidebar.orderChanged.connect(self.set_provider_order)
-        for card in (self.cards["agy"], self.sidebar_cards["agy"]):
-            card.rowOrderChanged.connect(self.set_agy_order)
+        for group in (self.cards, self.sidebar_cards):
+            for pid, card in group.items():
+                card.rowOrderChanged.connect(lambda titles, pid=pid: self.set_row_order(pid, titles))
         self.sidebar.set_order(self.provider_order())
         self._resize = None
         self._grip_cursor = False
@@ -329,6 +330,7 @@ class HUDWindow(QWidget):
             self._apply_sidebar_mode()
             self._restoring_geometry = False
             self._save_geometry()
+            self._republish_all()
             return
 
         # Header Bar
@@ -375,6 +377,7 @@ class HUDWindow(QWidget):
 
         self._restoring_geometry = False
         self._save_geometry()
+        self._republish_all()
 
     # ================= Sidebar mode =================
     def _apply_sidebar_mode(self):
@@ -762,6 +765,24 @@ class HUDWindow(QWidget):
         if raw is not None:
             self._publish(self._arranged(raw))
 
+    def set_row_order(self, provider_id: str, titles):
+        if provider_id == "agy":
+            self.set_agy_order(titles)
+            return
+        titles = [str(t) for t in titles]
+        orders = dict(self.config.get("row_order", {}) or {})
+        if orders.get(provider_id) == titles:
+            return
+        orders[provider_id] = titles
+        self.config.set("row_order", orders)
+        raw = self._raw_metrics.get(provider_id)
+        if raw is not None:
+            self._publish(self._arranged(raw))
+
+    def _republish_all(self):
+        for raw in list(self._raw_metrics.values()):
+            self._publish(self._arranged(raw))
+
     def reset_agy_order(self):
         self.set_agy_order(AGY_DEFAULT_ORDER)
 
@@ -772,6 +793,10 @@ class HUDWindow(QWidget):
     def _arranged(self, metrics: UsageMetrics) -> UsageMetrics:
         if metrics.provider_id == "agy":
             return arrange_agy(metrics, self.agy_order())
+        order = (self.config.get("row_order", {}) or {}).get(metrics.provider_id)
+        # the table's dial is fixed (inner = 5 h, outer = week), so custom row order only applies elsewhere
+        if order and self.config.get("ui_mode", "cards") != "table":
+            return arrange_by_order(metrics, order)
         return metrics
 
     def _publish(self, metrics: UsageMetrics):

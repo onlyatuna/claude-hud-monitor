@@ -24,8 +24,8 @@ class ProviderCardWidget(QWidget):
         self._init_ui()
         self._row_drag = None
         self._drop_line = None
-        for label in (self.m1_label, self.m2_label):
-            label.installEventFilter(self)
+        for cell in (self.m1_cell, self.m2_cell):
+            self._arm_cell(cell)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -83,7 +83,8 @@ class ProviderCardWidget(QWidget):
         self.m1_sub.setObjectName("SubDetail")
         m1_box.addWidget(self.m1_sub)
 
-        layout.addLayout(m1_box)
+        self.m1_cell = self._make_cell(m1_box)
+        layout.addWidget(self.m1_cell)
 
         # 3. Metric 2 (Weekly 7D or Credits)
         m2_box = QVBoxLayout()
@@ -110,9 +111,26 @@ class ProviderCardWidget(QWidget):
         self.m2_sub.setObjectName("SubDetail")
         m2_box.addWidget(self.m2_sub)
 
-        layout.addLayout(m2_box)
+        self.m2_cell = self._make_cell(m2_box)
+        layout.addWidget(self.m2_cell)
         self.extra_rows = []
         self.extra_container = None
+
+    @staticmethod
+    def _make_cell(box):
+        """A metric block as one hoverable, draggable cell."""
+        cell = QWidget()
+        cell.setObjectName("RowCell")
+        cell.setStyleSheet("QWidget#RowCell {background: transparent; border-radius: 6px;} QWidget#RowCell:hover {background: rgba(127, 127, 127, 0.16);}")
+        box.setContentsMargins(4, 2, 4, 2)
+        cell.setLayout(box)
+        return cell
+
+    def _arm_cell(self, cell):
+        cell.setCursor(Qt.CursorShape.OpenHandCursor)
+        cell.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        for widget in [cell] + cell.findChildren(QWidget):
+            widget.installEventFilter(self)
 
     def _create_extra_row(self):
         if self.extra_container is None:
@@ -121,16 +139,13 @@ class ProviderCardWidget(QWidget):
             extra_layout.setContentsMargins(0, 0, 0, 0)
             extra_layout.setSpacing(1)
             self.layout().addWidget(self.extra_container)
-        widget = QWidget()
-        box = QVBoxLayout(widget)
-        box.setContentsMargins(0, 0, 0, 0)
+        box = QVBoxLayout()
         box.setSpacing(0)
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(1)
         title = QLabel()
         title.setObjectName("MetricTitle")
-        title.installEventFilter(self)
         value = QLabel()
         value.setObjectName("MetricValue")
         header.addWidget(title)
@@ -144,6 +159,8 @@ class ProviderCardWidget(QWidget):
         sub = QLabel()
         sub.setObjectName("SubDetail")
         box.addWidget(sub)
+        widget = self._make_cell(box)
+        self._arm_cell(widget)
         self.extra_container.layout().addWidget(widget)
         row = (widget, title, value, bar, sub)
         self.extra_rows.append(row)
@@ -168,26 +185,32 @@ class ProviderCardWidget(QWidget):
             sub.setStyleSheet("color: #64748b;")
             sub.setText(f"重設於: {BaseProvider.format_countdown(metric.reset)}" if metric.reset else (metric.subtext or "重設於: --"))
 
-    # ---- agy: drag a row by its title to reorder (the top two rows are the main pair)
+    # ---- drag any metric block to reorder (the first two rows are the main pair)
     def _drag_rows(self):
-        """[(title, QRect in card coordinates, title label)] in display order, or [] when not draggable."""
-        if self.provider_id != "agy" or len(self.current_metrics.extra_metrics) != 3 or self.current_metrics.error:
+        """[(title, QRect in card coordinates, cell widget)] in display order; [] when there is nothing to reorder."""
+        data = self.current_metrics
+        if (data.error and not data.stale) or not self.m1_label.text():
             return []
 
-        def rect(top_widget, bottom_widget):
-            top = top_widget.mapTo(self, QPoint(0, 0)).y()
-            bottom = bottom_widget.mapTo(self, QPoint(0, bottom_widget.height())).y()
-            return QRect(0, top, self.width(), max(1, bottom - top))
+        def rect(cell):
+            top = cell.mapTo(self, QPoint(0, 0)).y()
+            return QRect(0, top, self.width(), max(1, cell.height()))
 
-        rows = [(self.m1_label.text(), rect(self.m1_label, self.m1_sub), self.m1_label),
-                (self.m2_label.text(), rect(self.m2_label, self.m2_sub), self.m2_label)]
-        for widget, title, _value, _bar, _sub in self.extra_rows[:3]:
-            rows.append((title.text(), rect(widget, widget), title))
+        rows = [(self.m1_label.text(), rect(self.m1_cell), self.m1_cell),
+                (self.m2_label.text(), rect(self.m2_cell), self.m2_cell)]
+        for widget, title, _value, _bar, _sub in self.extra_rows[:len(data.extra_metrics)]:
+            rows.append((title.text(), rect(widget), widget))
         return rows
+
+    def _cell_of(self, obj):
+        cells = {id(self.m1_cell), id(self.m2_cell)} | {id(row[0]) for row in self.extra_rows}
+        while obj is not None and id(obj) not in cells:
+            obj = obj.parentWidget()
+        return obj
 
     def _drop_index(self, rows, source, y):
         others = [row for i, row in enumerate(rows) if i != source]
-        index = sum(1 for _t, r, _l in others if y > r.center().y())
+        index = sum(1 for _t, r, _c in others if y > r.center().y())
         return others, index
 
     def _show_drop_line(self, others, index):
@@ -196,10 +219,7 @@ class ProviderCardWidget(QWidget):
             self._drop_line.setFixedHeight(3)
             self._drop_line.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._drop_line.setStyleSheet(f"background: {self.theme['color']}; border-radius: 1px;")
-        if index == 0:
-            y = others[0][1].top() - 2
-        else:
-            y = others[index - 1][1].bottom() + 1
+        y = others[0][1].top() - 2 if index == 0 else others[index - 1][1].bottom() + 1
         self._drop_line.setGeometry(4, y, max(10, self.width() - 8), 3)
         self._drop_line.show()
         self._drop_line.raise_()
@@ -207,7 +227,7 @@ class ProviderCardWidget(QWidget):
     def eventFilter(self, obj, event):
         kind = event.type()
         drag = self._row_drag
-        if drag is not None and obj is drag["label"]:
+        if drag is not None and obj is drag["cell"]:
             if kind == QEvent.Type.MouseMove:
                 pos = event.globalPosition().toPoint()
                 if not drag["active"] and (pos - drag["start"]).manhattanLength() > 6:
@@ -216,33 +236,33 @@ class ProviderCardWidget(QWidget):
                 if drag["active"]:
                     rows = self._drag_rows()
                     if rows:
-                        y = self.mapFromGlobal(pos).y()
-                        others, index = self._drop_index(rows, drag["source"], y)
+                        others, index = self._drop_index(rows, drag["source"], self.mapFromGlobal(pos).y())
                         drag["target"] = index
                         self._show_drop_line(others, index)
                 return True
             if kind == QEvent.Type.MouseButtonRelease:
                 obj.releaseMouse()
-                obj.unsetCursor()
+                obj.setCursor(Qt.CursorShape.OpenHandCursor)
                 if self._drop_line is not None:
                     self._drop_line.hide()
                 self._row_drag = None
                 if drag["active"] and drag.get("target") is not None:
                     rows = self._drag_rows()
                     if rows:
-                        titles = [t for t, _r, _l in rows]
+                        titles = [t for t, _r, _c in rows]
                         moved = titles.pop(drag["source"])
                         titles.insert(drag["target"], moved)
-                        if titles != [t for t, _r, _l in rows]:
+                        if titles != [t for t, _r, _c in rows]:
                             self.rowOrderChanged.emit(titles)
                 return True
         elif kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-            rows = self._drag_rows()
-            for index, (_title, _rect, label) in enumerate(rows):
-                if label is obj:
-                    self._row_drag = {"label": obj, "source": index, "active": False, "target": None,
+            cell = self._cell_of(obj)
+            rows = self._drag_rows() if cell is not None else []
+            for index, (_title, _rect, row_cell) in enumerate(rows):
+                if row_cell is cell:
+                    self._row_drag = {"cell": cell, "source": index, "active": False, "target": None,
                                       "start": event.globalPosition().toPoint()}
-                    obj.grabMouse()
+                    cell.grabMouse()
                     return True
         return super().eventFilter(obj, event)
 

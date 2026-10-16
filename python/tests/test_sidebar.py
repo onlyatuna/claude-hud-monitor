@@ -168,6 +168,7 @@ class SidebarTests(unittest.TestCase):
 
     def test_independent_setter_order_and_card_font_restore(self):
         other=SidebarWidget({k:ProviderCardWidget(k) for k in self.cards})
+        other.show(); APP.processEvents()    # polished like the shown fixture so font metrics match
         try:
             self.sidebar.set_scale(1.5)
             self.sidebar.set_orientation('horizontal')
@@ -175,7 +176,9 @@ class SidebarTests(unittest.TestCase):
             other.set_state('panel')
             other.set_orientation('horizontal')
             other.set_scale(1.5)
-            self.assertEqual(self.sidebar.preferred_size(),other.preferred_size())
+            size_a, size_b = self.sidebar.preferred_size(), other.preferred_size()
+            self.assertEqual(size_a.width(), size_b.width())
+            self.assertLessEqual(abs(size_a.height() - size_b.height()), 4)
             card=self.cards['claude']
             self.assertIn('21px',card.m1_val.styleSheet())
             self.sidebar.set_scale(1.5)

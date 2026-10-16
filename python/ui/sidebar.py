@@ -475,6 +475,8 @@ class SidebarWidget(QWidget):
                 self._scale_card_style(card)
                 card.setFixedWidth(round(BASE_PANEL_W*s)-2*padding if vertical else round(BASE_PANEL_W*s))
                 card.ensurePolished()
+                for child in card.findChildren(QWidget):
+                    child.ensurePolished()
                 card.layout().activate()
             else:
                 card.setMinimumWidth(0)

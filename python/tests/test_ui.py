@@ -529,3 +529,40 @@ class HudTests(unittest.TestCase):
                 self.assertEqual(card.m1_label.text(), 'C/G 7D')
             finally:
                 self._close(hud)
+
+    def test_any_provider_rows_can_be_reordered_except_in_table_mode(self):
+        from datetime import timedelta
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='cards', layout_mode='vertical')
+            try:
+                reset = datetime.now(timezone.utc) + timedelta(hours=3)
+                hud._on_data_fetched(UsageMetrics(
+                    provider_id='claude', metric1_title='SESSION 5H', metric1_val=27, metric1_text='27%', metric1_reset=reset,
+                    metric2_title='WEEKLY 7D', metric2_val=9, metric2_text='9%', metric2_reset=reset))
+                card = hud.cards['claude']
+                self.assertEqual(card.m1_label.text(), 'SESSION 5H')
+                hud.set_row_order('claude', ['WEEKLY 7D', 'SESSION 5H'])
+                self.assertEqual((card.m1_label.text(), card.m1_val.text()), ('WEEKLY 7D', '9%'))
+                self.assertEqual(ConfigManager(config.path).get('row_order'), {'claude': ['WEEKLY 7D', 'SESSION 5H']})
+                self.assertEqual(hud.sidebar_cards['claude'].m1_label.text(), 'WEEKLY 7D')
+                hud._apply_ui_mode('table')             # the dial keeps 5 h inside / week outside
+                self.assertEqual(hud._latest_metrics['claude'].metric1_title, 'SESSION 5H')
+                hud._apply_ui_mode('cards')
+                self.assertEqual(hud._latest_metrics['claude'].metric1_title, 'WEEKLY 7D')
+            finally:
+                self._close(hud)
+
+    def test_rows_are_hoverable_draggable_cells(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='cards')
+            try:
+                card = hud.cards['claude']
+                hud._on_data_fetched(UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric1_val=1,
+                                                  metric2_title='WEEKLY 7D', metric2_val=2))
+                for cell in (card.m1_cell, card.m2_cell):
+                    self.assertEqual(cell.objectName(), 'RowCell')
+                    self.assertIn(':hover', cell.styleSheet())
+                self.assertEqual([t for t, _r, _c in card._drag_rows()], ['SESSION 5H', 'WEEKLY 7D'])
+                self.assertEqual(card._cell_of(card.m1_val), card.m1_cell)
+            finally:
+                self._close(hud)

@@ -87,3 +87,29 @@ def arrange_agy(metrics: UsageMetrics, primary) -> UsageMetrics:
         metric2_title=b.title, metric2_val=b.val, metric2_text=b.text, metric2_reset=b.reset, metric2_subtext=b.subtext,
         extra_metrics=others,
     )
+
+
+def arrange_by_order(metrics: UsageMetrics, order) -> UsageMetrics:
+    """Generic row ordering for any provider: rows named in `order` come first in that order, the rest keep
+    their natural position after them; the first two become metric1/metric2, the others extras."""
+    rows = [MetricRow(metrics.metric1_title, metrics.metric1_val, metrics.metric1_text, metrics.metric1_reset,
+                      metrics.metric1_subtext),
+            MetricRow(metrics.metric2_title, metrics.metric2_val, metrics.metric2_text, metrics.metric2_reset,
+                      metrics.metric2_subtext)] + list(metrics.extra_metrics)
+    if not isinstance(order, (list, tuple)) or len(rows) < 2:
+        return metrics
+    wanted = [str(t).upper() for t in order]
+    ranked = sorted(enumerate(rows), key=lambda item: (wanted.index((item[1].title or "").upper())
+                                                       if (item[1].title or "").upper() in wanted else len(wanted),
+                                                       item[0]))
+    rows = [row for _i, row in ranked]
+    if [r.title for r in rows[:2]] == [metrics.metric1_title, metrics.metric2_title] and \
+            [r.title for r in rows[2:]] == [r.title for r in metrics.extra_metrics]:
+        return metrics
+    a, b = rows[0], rows[1]
+    return replace(
+        metrics,
+        metric1_title=a.title, metric1_val=a.val, metric1_text=a.text, metric1_reset=a.reset, metric1_subtext=a.subtext,
+        metric2_title=b.title, metric2_val=b.val, metric2_text=b.text, metric2_reset=b.reset, metric2_subtext=b.subtext,
+        extra_metrics=rows[2:],
+    )

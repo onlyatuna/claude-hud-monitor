@@ -74,6 +74,17 @@ class AgyOrderTests(unittest.TestCase):
         self.assertEqual((result.metric1_title, result.metric2_title), ('GEMINI 7D', 'C/G 7D'))
         self.assertEqual([r.title for r in result.extra_metrics], ['ARGON 7D', 'C/G 5H', 'GEMINI 5H'])
 
+class GenericOrderTests(unittest.TestCase):
+    def test_arrange_by_order_for_two_row_providers(self):
+        from core.agy_rows import arrange_by_order
+        data = UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric1_val=27,
+                            metric2_title='WEEKLY 7D', metric2_val=9)
+        swapped = arrange_by_order(data, ['WEEKLY 7D', 'SESSION 5H'])
+        self.assertEqual((swapped.metric1_title, swapped.metric1_val, swapped.metric2_title), ('WEEKLY 7D', 9, 'SESSION 5H'))
+        self.assertIs(arrange_by_order(data, ['SESSION 5H', 'WEEKLY 7D']), data)
+        self.assertIs(arrange_by_order(data, None), data)
+        self.assertEqual(arrange_by_order(data, ['unknown']).metric1_title, 'SESSION 5H')
+
 
 if __name__ == '__main__':
     unittest.main()
