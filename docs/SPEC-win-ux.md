@@ -1,6 +1,6 @@
 # 規格：Windows 版 UX 整理（兩種風格、表格收合、圓角）
 
-狀態：草案，待審。分支 `cloud/win-ux`。範圍只有 `python/` 的 Windows 版；Rust 與 mac 凍結（不刪、不維護、不改其 README 段落）。
+狀態：五個決定已確認（§8），待使用者確認規格後才實作。分支 `cloud/win-ux`。範圍只有 `python/` 的 Windows 版；Rust 與 mac 凍結（不刪、不維護、不改其 README 段落）。
 本文件只描述做法，**尚未實作**。標「未驗證」的項目在 Linux 虛擬機無法確認，必須由使用者在 Windows 實機驗收。
 
 ## 0. 先釐清的事實（讀程式碼的結果）
@@ -37,10 +37,10 @@
 | `layout_mode = "horizontal"` | `sidebar_orientation = "horizontal"` |
 | `layout_mode = "vertical"` | `sidebar_orientation = "vertical"` |
 | `window_x`／`window_y`（卡片的自由位置） | `sidebar_edge = "none"`、`sidebar_x`／`sidebar_y` = 原值（保留使用者放的位置，之後仍可拖到邊緣吸附） |
-| 不認得的 `ui_mode`（手改壞掉） | `"table"` |
+| 不認得的 `ui_mode`（手改壞掉） | `"sidebar"`＋`sidebar_state = "panel"`（預設值） |
 
 - 舊鍵（`layout_mode`、`vertical_*`、`horizontal_*`）保留在檔案裡不刪，只是不再讀（降版時不會壞）；`DEFAULT_CONFIG` 移除這些鍵與 `"cards"` 註解。
-- `DEFAULT_CONFIG["ui_mode"]` 新預設值：見 §8 問題 2（建議 `"table"`）。
+- `DEFAULT_CONFIG["ui_mode"]` 新預設值：`"sidebar"`，並將 `sidebar_state` 預設改為 `"panel"`（固定窄欄）。設定檔壞掉時同樣回到此預設（§8-2）。
 - 位置若落在螢幕外，沿用側邊欄既有的拉回邏輯。
 
 ### 2.3 受影響檔案
@@ -146,10 +146,10 @@ Acrylic 的模糊區域是整個視窗矩形，Qt 只用 QSS `border-radius` 把
 5. 側邊欄、飛出面板與卡片的字型寫死 `Segoe UI`／`Consolas`（Windows 沒問題，但不是平台中立；mac 已凍結，僅記錄）。
 6. 全域快捷鍵註冊失敗時只在系統匣提示，沒有備援入口（例如選單內顯示目前快捷鍵與重新註冊）。
 
-## 8. 待使用者決定的問題（一次一題）
+## 8. 已確認的決定
 
-1. 表格收合的行為與你在 mac 上看到的是否一致？（repo 裡沒有這個實作，§0-1）
-2. 移除卡片後，新預設風格要是表格還是側邊欄窄欄？
-3. 從 `cards` 遷移時，要保留原位置（自由位置）還是直接吸附到右邊緣？
-4. 圓角採做法 A（遮罩）加 `table_blur` 開關，還是你希望直接用做法 C（不要模糊）？
-5. 收合門檻：沿用 380×280，還是要更小／可調？
+1. 表格收合：照 §3 的設計（依視窗大小自動收合，不加按鈕）。
+2. 預設風格：側邊欄固定窄欄（新安裝與設定壞掉時）。
+3. 從 `cards` 遷移：保留原自由位置（`sidebar_edge = "none"`），之後可拖到邊緣吸附。
+4. 圓角：做法 A（視窗遮罩）加 `table_blur` 開關；不做 DWM 圓角（做法 B）。
+5. 收合門檻：沿用 380×280，不開放調整（不新增門檻設定鍵；仍新增 `table_compact_width/height` 記錄收合狀態的視窗尺寸）。
