@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 from core.config_manager import ConfigManager
 from core.providers.base import UsageMetrics, MetricRow
@@ -134,6 +135,96 @@ class TableTests(unittest.TestCase):
         self.assertEqual(duo.columns['claude'].dial.outer[2], dark['duo']['outer'])
 
 
+class CompactTableTests(unittest.TestCase):
+    def _shown(self, scheme='scale', appearance='dark'):
+        table = make_table(scheme, appearance)
+        table.resize(450, 300)
+        table.show()
+        APP.processEvents()
+        return table
+
+    def test_compact_keeps_only_the_dials_in_provider_order(self):
+        table = UsageTable(THEMES['dark'], 'scale', provider_ids=['codex', 'claude', 'agy'])
+        table.resize(450, 300)
+        table.show()
+        APP.processEvents()
+        self.assertFalse(table.is_compact())
+        table.set_compact(True)
+        APP.processEvents()
+        self.assertTrue(table.is_compact())
+        self.assertFalse(table.full_view.isVisibleTo(table))
+        self.assertTrue(table.compact_view.isVisibleTo(table))
+        dials = table.compact_dials()
+        self.assertEqual(len(dials), 3)
+        self.assertEqual([d.provider_id for d in dials], ['codex', 'claude', 'agy'])
+        table.set_compact(False)
+        APP.processEvents()
+        self.assertTrue(table.full_view.isVisibleTo(table))
+        self.assertFalse(table.compact_view.isVisibleTo(table))
+
+    def test_compact_dials_follow_the_data(self):
+        table = self._shown()
+        reset = datetime.now(timezone.utc) + timedelta(hours=2)
+        table.update_metrics(UsageMetrics(provider_id='claude', metric1_val=42, metric1_text='42%', metric1_reset=reset,
+                                          metric2_val=71, metric2_text='71%',
+                                          metric2_reset=datetime.now(timezone.utc) + timedelta(days=3)))
+        full = table.columns['claude'].dial
+        small = next(d for d in table.compact_dials() if d.provider_id == 'claude')
+        self.assertEqual(small.inner_text, '42%')
+        self.assertEqual(small.inner[0], full.inner[0])
+        self.assertEqual(small.outer[0], full.outer[0])
+        self.assertEqual(small.inner[2], full.inner[2])
+
+    def test_compact_dials_have_no_caption_and_a_smaller_minimum(self):
+        table = self._shown()
+        table.update_metrics(UsageMetrics(provider_id='codex', metric1_title='WINDOW 1D', metric1_val=5, metric1_text='5%',
+                                          metric2_title='WINDOW 30D', metric2_val=10, metric2_text='10%'))
+        full = table.columns['codex'].dial
+        small = next(d for d in table.compact_dials() if d.provider_id == 'codex')
+        self.assertEqual(full.caption, '1D')
+        self.assertEqual(small.caption, '')
+        self.assertLess(small.minimumWidth(), full.minimumWidth())
+        self.assertEqual(small.minimumWidth(), 48)
+
+    def test_compact_tooltip_carries_what_the_screen_no_longer_shows(self):
+        table = self._shown()
+        reset = datetime.now(timezone.utc) + timedelta(hours=2)
+        table.update_metrics(UsageMetrics(provider_id='agy', metric1_val=30, metric1_text='30%', metric1_reset=reset,
+                                          metric2_val=60, metric2_text='60%',
+                                          metric2_reset=datetime.now(timezone.utc) + timedelta(days=2)))
+        small = next(d for d in table.compact_dials() if d.provider_id == 'agy')
+        tip = small.toolTip()
+        self.assertIn('Antigravity', tip)
+        self.assertIn('30%', tip)
+        self.assertIn('60%', tip)
+        self.assertIn('5 小時', tip)
+        self.assertIn('1 週', tip)
+
+    def test_offline_and_stale_states_reach_the_compact_dials(self):
+        table = self._shown()
+        table.update_metrics(UsageMetrics(provider_id='agy', error='timeout'))
+        small = next(d for d in table.compact_dials() if d.provider_id == 'agy')
+        self.assertTrue(small.muted)
+        self.assertEqual(small.inner_text, 'ERR')
+        self.assertIn('timeout', small.toolTip())
+        table.update_metrics(UsageMetrics(provider_id='agy', metric1_val=25, metric1_text='25%', metric2_val=10,
+                                          metric2_text='10%', error='timeout', stale=True,
+                                          last_success=datetime.now(timezone.utc)))
+        self.assertFalse(small.muted)
+        self.assertEqual(small.inner_text, '25%')
+        self.assertIn('STALE', small.toolTip())
+
+    def test_compact_row_gives_each_dial_a_square_to_draw_in(self):
+        table = UsageTable(THEMES['dark'], 'scale')
+        table.set_compact(True)
+        table.resize(240, 90)
+        table.show()
+        APP.processEvents()
+        widths = [d.width() for d in table.compact_dials()]
+        self.assertTrue(all(w >= 48 for w in widths))
+        self.assertLessEqual(max(widths) - min(widths), 1)
+
+
 class HudTests(unittest.TestCase):
     def _hud(self, directory, **settings):
         from ui.hud_window import HUDWindow
@@ -147,74 +238,55 @@ class HudTests(unittest.TestCase):
         hud.geometry_timer.stop()
         hud.close()
 
-    def test_cards_appearance_menu_persists_and_keeps_data(self):
-        from PySide6.QtWidgets import QMenu
+    def test_panel_appearance_persists_and_keeps_data(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='cards', appearance='dark')
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel', appearance='dark')
             try:
                 hud._on_data_fetched(UsageMetrics(provider_id='claude', metric1_val=42, metric1_text='42%'))
-                menu = QMenu(hud)
-                hud.add_theme_menus(menu)
-                colors, appearance = [action.menu() for action in menu.actions()]
-                self.assertFalse(colors.menuAction().isVisible())
-                light = next(action for action in appearance.actions() if action.data() == 'light')
-                light.trigger()
-                appearance.aboutToShow.emit()
-                self.assertTrue(light.isChecked())
+                hud.set_appearance('light')
                 self.assertIn('rgba(248, 250, 252, 0.94)', hud.styleSheet())
-                self.assertIn('#B4532F', hud.cards['claude'].title.styleSheet())
-                self.assertEqual(hud.cards['claude'].m1_val.text(), '42%')
+                self.assertIn('#B4532F', hud.sidebar_cards['claude'].title.styleSheet())
+                self.assertEqual(hud.sidebar_cards['claude'].m1_val.text(), '42%')
                 self.assertEqual(ConfigManager(config.path).get('appearance'), 'light')
-                hud.cards['claude'].update_metrics(UsageMetrics(provider_id='claude', error='offline'))
+                hud.sidebar_cards['claude'].update_metrics(UsageMetrics(provider_id='claude', error='offline'))
                 hud.set_appearance('dark')
-                self.assertEqual(hud.cards['claude'].badge.text(), 'OFFLINE')
-                self.assertIn('#ef4444', hud.cards['claude'].m1_val.styleSheet())
+                self.assertEqual(hud.sidebar_cards['claude'].badge.text(), 'OFFLINE')
+                self.assertIn('#ef4444', hud.sidebar_cards['claude'].m1_val.styleSheet())
                 self.assertIn('rgba(14, 17, 23, 0.94)', hud.styleSheet())
             finally:
                 self._close(hud)
 
-    def test_cards_follow_system_only_in_auto_mode(self):
+
+    def test_panel_follow_system_only_in_auto_mode(self):
         from PySide6.QtCore import Qt
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='cards', appearance='auto')
+            config, hud = self._hud(directory, ui_mode='sidebar', appearance='auto')
             try:
                 with patch.object(hud, '_system_is_dark', return_value=False):
                     APP.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Light)
                     APP.processEvents()
-                    self.assertFalse(hud.cards['claude'].dark)
+                    self.assertFalse(hud.sidebar_cards['claude'].dark)
                 with patch.object(hud, '_system_is_dark', return_value=True):
                     APP.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Dark)
                     APP.processEvents()
-                    self.assertTrue(hud.cards['claude'].dark)
+                    self.assertTrue(hud.sidebar_cards['claude'].dark)
                 self.assertEqual(config.get('appearance'), 'auto')
                 hud.set_appearance('light')
                 with patch.object(hud, '_system_is_dark', return_value=True):
                     APP.styleHints().colorSchemeChanged.emit(Qt.ColorScheme.Dark)
                     APP.processEvents()
-                    self.assertFalse(hud.cards['claude'].dark)
+                    self.assertFalse(hud.sidebar_cards['claude'].dark)
             finally:
                 self._close(hud)
 
-    def test_hud_preserves_independent_cards_layout_sizes(self):
-        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='cards', layout_mode='vertical',
-                                    vertical_width=350, vertical_height=520,
-                                    horizontal_width=850, horizontal_height=200)
-            hud.toggle_layout_mode()
-            self.assertEqual(hud.width(), 850)
-            hud.toggle_layout_mode()
-            self.assertEqual(hud.width(), 350)
-            self.assertEqual(hud.height(), 520)
-            self._close(hud)
-
     def test_hud_dual_mode_toggle(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='cards')
-            self.assertEqual(hud.config.get('ui_mode'), 'cards')
+            config, hud = self._hud(directory, ui_mode='sidebar')
+            self.assertEqual(hud.config.get('ui_mode'), 'sidebar')
             hud.toggle_ui_mode()
             self.assertEqual(hud.config.get('ui_mode'), 'table')
             hud.toggle_ui_mode()
-            self.assertEqual(hud.config.get('ui_mode'), 'cards')
+            self.assertEqual(hud.config.get('ui_mode'), 'sidebar')
             self._close(hud)
 
     def test_theme_switch_keeps_latest_data_and_persists(self):
@@ -249,7 +321,7 @@ class HudTests(unittest.TestCase):
     def test_sidebar_mode_docks_right_edge_and_switches_state(self):
         from PySide6.QtGui import QGuiApplication
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_edge='right', sidebar_offset=40)
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right', sidebar_offset=40)
             try:
                 work = QGuiApplication.primaryScreen().availableGeometry()
                 self.assertEqual(hud.width(), hud.sidebar.preferred_size().width())
@@ -271,7 +343,7 @@ class HudTests(unittest.TestCase):
     def test_sidebar_drag_snaps_to_any_edge_and_switches_orientation(self):
         from PySide6.QtGui import QGuiApplication
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='sidebar')
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip')
             try:
                 work = QGuiApplication.primaryScreen().availableGeometry()
                 vertical = hud.size()
@@ -312,16 +384,16 @@ class HudTests(unittest.TestCase):
             finally:
                 self._close(hud)
 
-    def test_sidebar_does_not_overwrite_card_geometry_and_can_switch_back(self):
+    def test_sidebar_does_not_overwrite_table_geometry_and_can_switch_back(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='cards', window_x=120, window_y=130)
+            config, hud = self._hud(directory, ui_mode='table', window_x=120, window_y=130)
             try:
                 hud._apply_ui_mode('sidebar')
                 hud._persist_geometry()
                 self.assertEqual((config.get('window_x'), config.get('window_y')), (120, 130))
-                hud._apply_ui_mode('cards')
-                self.assertTrue(hud.cards['claude'].isVisibleTo(hud))
-                self.assertGreaterEqual(hud.width(), 250)
+                hud._apply_ui_mode('table')
+                self.assertTrue(hud.table.isVisibleTo(hud))
+                self.assertGreaterEqual(hud.width(), 380)
                 self.assertFalse(hud.sidebar.isVisible())
             finally:
                 self._close(hud)
@@ -335,29 +407,7 @@ class HudTests(unittest.TestCase):
             finally:
                 self._close(hud)
 
-    def test_cards_window_grows_for_agy_extra_bars(self):
-        from datetime import timedelta
-        from core.providers.base import MetricRow
-        for layout in ('horizontal', 'vertical'):
-            with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-                _, hud = self._hud(directory, ui_mode='cards', layout_mode=layout)
-                try:
-                    hud.show()
-                    before = hud.height()
-                    reset = datetime.now(timezone.utc) + timedelta(hours=3)
-                    hud._on_data_fetched(UsageMetrics(
-                        provider_id='agy', metric1_val=1, metric1_text='1%', metric2_val=2, metric2_text='2%',
-                        extra_metrics=[MetricRow('C/G 5H', 3, '3%', reset), MetricRow('C/G 7D', 4, '4%', reset),
-                                       MetricRow('ARGON 7D', 5, '5%', reset)]))
-                    QApplication.processEvents()
-                    card = hud.cards['agy']
-                    self.assertGreaterEqual(hud.height(), before)
-                    self.assertGreaterEqual(card.height(), card.minimumSizeHint().height())
-                    self.assertGreaterEqual(hud.minimumHeight(), card.minimumSizeHint().height())
-                finally:
-                    self._close(hud)
-
-    def test_context_menu_lists_sidebar_mode(self):
+    def test_context_menu_lists_only_table_and_sidebar_styles(self):
         from PySide6.QtWidgets import QMenu
         captured = []
 
@@ -366,7 +416,7 @@ class HudTests(unittest.TestCase):
                 captured.append(self)
 
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}),                 patch('ui.hud_menu.QMenu', RecordingMenu):
-            _, hud = self._hud(directory, ui_mode='cards')
+            _, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel')
             try:
                 from PySide6.QtGui import QContextMenuEvent
                 from PySide6.QtCore import QPoint
@@ -374,16 +424,331 @@ class HudTests(unittest.TestCase):
                 titles = [a.text() for a in captured[0].actions() if a.menu()]
                 self.assertEqual(len(titles), 4)   # 介面 / 外觀 / 行為 / 更多
                 style = next(a.menu() for a in captured[0].actions() if a.menu() and 'Interface' in a.text())
-                self.assertTrue(any('Sidebar' in a.text() for a in style.actions()))
+                styles = [a.text() for a in style.actions() if a.isCheckable() and 'Row' not in a.text()][:2]
+                self.assertEqual(len(styles), 2)
+                self.assertTrue(any('Table' in t for t in styles))
+                self.assertTrue(any('Sidebar' in t for t in styles))
+                self.assertFalse(any('Classic' in a.text() or 'Cards' in a.text() for a in style.actions()))
+                self.assertFalse(any('Vertical' in a.text() or 'Horizontal' in a.text() for a in style.actions()))
             finally:
                 self._close(hud)
 
+
+    def _shown_table(self, directory, **settings):
+        config, hud = self._hud(directory, ui_mode='table', **settings)
+        hud.show()
+        APP.processEvents()
+        return config, hud
+
+    def test_table_collapses_to_dials_when_shrunk_and_expands_when_enlarged(self):
+        from ui import table_layout as tl
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._shown_table(directory, table_width=450, table_height=350)
+            try:
+                self.assertFalse(hud.table.is_compact())
+                self.assertEqual(hud.minimumSize().width(), tl.compact_min_size(3)[0])   # free to shrink past the old 380x280
+                hud.resize(300, 200)
+                APP.processEvents()
+                self.assertTrue(hud.table.is_compact())
+                self.assertTrue(hud.title_label.isHidden())
+                self.assertTrue(hud.time_label.isHidden())
+                self.assertTrue(hud.status_dot.isHidden())
+                hud.resize(380 + tl.HYSTERESIS - 1, 300)        # inside the hysteresis band: stays compact
+                APP.processEvents()
+                self.assertTrue(hud.table.is_compact())
+                hud.resize(420, 320)
+                APP.processEvents()
+                self.assertFalse(hud.table.is_compact())
+                self.assertFalse(hud.title_label.isHidden())
+                self.assertFalse(hud.time_label.isHidden())
+            finally:
+                self._close(hud)
+
+    def test_table_can_be_dragged_down_to_the_compact_minimum(self):
+        from ui import table_layout as tl
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._shown_table(directory)
+            try:
+                hud.resize(10, 10)
+                APP.processEvents()
+                self.assertTrue(hud.table.is_compact())
+                self.assertEqual((hud.width(), hud.height()), tl.compact_min_size(3))
+                self.assertEqual(hud.minimumSize().width(), tl.compact_min_size(3)[0])
+                for dial in hud.table.compact_dials():
+                    self.assertGreaterEqual(dial.width(), tl.COMPACT_DIAL_MIN)
+                    self.assertGreaterEqual(dial.height(), tl.COMPACT_DIAL_MIN)
+            finally:
+                self._close(hud)
+
+    def test_compact_and_full_sizes_are_remembered_separately(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._shown_table(directory, table_width=520, table_height=410)
+            try:
+                hud.resize(260, 100)
+                APP.processEvents()
+                hud._persist_geometry()
+                saved = ConfigManager(config.path)
+                self.assertTrue(saved.get('table_compact'))
+                self.assertEqual((saved.get('table_compact_width'), saved.get('table_compact_height')), (260, 100))
+                self.assertEqual((saved.get('table_width'), saved.get('table_height')), (520, 410))
+                hud.resize(600, 420)
+                APP.processEvents()
+                hud._persist_geometry()
+                saved = ConfigManager(config.path)
+                self.assertFalse(saved.get('table_compact'))
+                self.assertEqual((saved.get('table_width'), saved.get('table_height')), (600, 420))
+                self.assertEqual((saved.get('table_compact_width'), saved.get('table_compact_height')), (260, 100))
+            finally:
+                self._close(hud)
+
+    def test_compact_table_is_restored_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='table', table_compact=True,
+                               table_compact_width=260, table_compact_height=100)
+            try:
+                self.assertTrue(hud.table.is_compact())
+                self.assertEqual((hud.width(), hud.height()), (260, 100))
+                self.assertTrue(hud.title_label.isHidden())
+            finally:
+                self._close(hud)
+
+    def test_compact_table_survives_a_style_round_trip_and_theme_change(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='table', table_compact=True,
+                               table_compact_width=260, table_compact_height=100)
+            try:
+                hud._on_data_fetched(UsageMetrics(provider_id='claude', metric1_val=42, metric1_text='42%'))
+                hud.set_appearance('light')           # rebuilds the table
+                self.assertTrue(hud.table.is_compact())
+                small = next(d for d in hud.table.compact_dials() if d.provider_id == 'claude')
+                self.assertEqual(small.inner_text, '42%')
+                hud._apply_ui_mode('sidebar')
+                hud._apply_ui_mode('table')
+                self.assertTrue(hud.table.is_compact())
+                self.assertEqual((hud.width(), hud.height()), (260, 100))
+            finally:
+                self._close(hud)
+
+    def test_reset_geometry_returns_the_table_to_its_full_default_size(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='table', table_compact=True,
+                                    table_compact_width=260, table_compact_height=100)
+            try:
+                hud._reset_geometry()
+                APP.processEvents()
+                self.assertFalse(hud.table.is_compact())
+                self.assertEqual((hud.width(), hud.height()), (450, 350))
+            finally:
+                self._close(hud)
+
+    def _table_with_native_blur(self, directory, **settings):
+        """A shown table window as it would be on Windows with Acrylic working."""
+        config, hud = self._hud(directory, ui_mode='table', **settings)
+        hud.show()
+        APP.processEvents()
+        return config, hud
+
+    def test_blur_is_on_by_default_and_can_be_switched_off_and_on(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._table_with_native_blur(directory)
+            try:
+                self.assertTrue(config.get('table_blur'))
+                with patch('ui.hud_window.vibrancy.apply', return_value=True) as apply, \
+                        patch('ui.hud_window.vibrancy.clear') as clear:
+                    hud.toggle_table_blur()
+                    self.assertFalse(ConfigManager(config.path).get('table_blur'))
+                    clear.assert_called()
+                    apply.assert_not_called()
+                    self.assertIn(THEMES['dark']['panel_solid'] if hud.theme() is THEMES['dark'] else hud.theme()['panel_solid'],
+                                  hud.styleSheet())
+                    hud.toggle_table_blur()
+                    self.assertTrue(ConfigManager(config.path).get('table_blur'))
+                    apply.assert_called()
+            finally:
+                self._close(hud)
+
+    def test_rounded_mask_follows_the_native_blur_and_the_window_size(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._table_with_native_blur(directory)
+            try:
+                self.assertTrue(hud.mask().isEmpty())               # offscreen: no Acrylic, so no mask
+                with patch('ui.hud_window.vibrancy.apply', return_value=True), \
+                        patch('ui.hud_window.vibrancy.mask_needed', side_effect=lambda applied, platform=None: bool(applied)):
+                    hud._apply_theme()
+                    mask = hud.mask()
+                    self.assertFalse(mask.isEmpty())
+                    self.assertEqual(mask.boundingRect().size(), hud.size())
+                    self.assertFalse(mask.contains(QPoint(0, 0)))
+                    self.assertTrue(mask.contains(QPoint(hud.width() // 2, 0)))
+                    self.assertTrue(mask.contains(QPoint(hud.width() // 2, hud.height() // 2)))
+                    hud.resize(520, 400)
+                    APP.processEvents()
+                    self.assertEqual(hud.mask().boundingRect().size(), hud.size())
+                    self.assertFalse(hud.mask().contains(QPoint(hud.width() - 1, hud.height() - 1)))
+                    hud.resize(240, 96)                             # collapsed dials get the same rounding
+                    APP.processEvents()
+                    self.assertEqual(hud.mask().boundingRect().size(), hud.size())
+                    hud.toggle_table_blur()                         # no blur: nothing to clip
+                    self.assertTrue(hud.mask().isEmpty())
+                    hud.toggle_table_blur()
+                    self.assertFalse(hud.mask().isEmpty())
+                    hud._apply_ui_mode('sidebar')
+                    self.assertTrue(hud.mask().isEmpty())
+            finally:
+                self._close(hud)
+
+    def test_blur_pauses_while_the_window_is_moved_or_resized_and_comes_back(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._table_with_native_blur(directory, appearance='dark')
+            try:
+                with patch('ui.hud_window.vibrancy.apply', return_value=True) as apply, \
+                        patch('ui.hud_window.vibrancy.suspend', return_value=True) as suspend:
+                    hud._apply_theme()
+                    apply.reset_mock()
+                    hud._suspend_blur()
+                    suspend.assert_called_once()
+                    self.assertTrue(hud._blur_resume_timer.isActive())
+                    hud._suspend_blur()                              # a second press does not stack suspends
+                    self.assertEqual(suspend.call_count, 1)
+                    hud.move(hud.x() + 5, hud.y() + 5)               # movement keeps the pause going
+                    APP.processEvents()
+                    self.assertTrue(hud._blur_resume_timer.isActive())
+                    apply.assert_not_called()
+                    hud._blur_resume_timer.timeout.emit()
+                    apply.assert_called_once()
+                    self.assertTrue(apply.call_args.args[1])         # dark theme
+                    hud._suspend_blur()
+                    self.assertEqual(suspend.call_count, 2)
+            finally:
+                self._close(hud)
+
+    def test_blur_is_never_suspended_without_native_blur_or_outside_the_table(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._table_with_native_blur(directory)
+            try:
+                with patch('ui.hud_window.vibrancy.suspend') as suspend:
+                    hud._suspend_blur()                              # offscreen: blur never applied
+                    suspend.assert_not_called()
+                    hud._apply_ui_mode('sidebar')
+                    hud._suspend_blur()
+                    suspend.assert_not_called()
+            finally:
+                self._close(hud)
+
+    def test_blur_switch_is_offered_for_the_table_only(self):
+        from PySide6.QtWidgets import QMenu
+        captured = []
+
+        class RecordingMenu(QMenu):
+            def exec(self, *args):
+                captured.append(self)
+
+        from PySide6.QtGui import QContextMenuEvent
+        for mode, expected in (('table', True), ('sidebar', False)):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory, \
+                    patch('ui.hud_window.PROVIDERS', {}), patch('ui.hud_menu.QMenu', RecordingMenu):
+                _, hud = self._hud(directory, ui_mode=mode)
+                try:
+                    captured.clear()
+                    hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
+                    look = next(a.menu() for a in captured[0].actions() if a.menu() and 'Appearance' in a.text())
+                    blur = [a for a in look.actions() if 'Blur' in a.text()]
+                    self.assertEqual(bool(blur), expected)
+                    if blur:
+                        self.assertTrue(blur[0].isChecked())
+                finally:
+                    self._close(hud)
+
+    def test_classic_cards_style_is_gone(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='table')
+            try:
+                for name in ('cards', 'cards_container', 'layout_toggle_btn', 'toggle_layout_mode'):
+                    self.assertFalse(hasattr(hud, name), name)
+                hud._apply_ui_mode('cards')               # a stale caller must not resurrect the style
+                self.assertIn(hud.config.get('ui_mode'), ('table', 'sidebar'))
+            finally:
+                self._close(hud)
+
+    def _agy_five_bars(self):
+        from datetime import timedelta
+        from core.providers.base import MetricRow
+        reset = datetime.now(timezone.utc) + timedelta(hours=3)
+        return UsageMetrics(
+            provider_id='agy', metric1_val=1, metric1_text='1%', metric2_val=2, metric2_text='2%',
+            extra_metrics=[MetricRow('C/G 5H', 3, '3%', reset), MetricRow('C/G 7D', 4, '4%', reset),
+                           MetricRow('ARGON 7D', 5, '5%', reset)])
+
+    def _assert_panel_fits(self, hud, work):
+        """Every card is fully inside the window, nothing is stretched, and the window is on screen."""
+        sb = hud.sidebar
+        self.assertEqual(hud.height(), sb.preferred_size().height())
+        self.assertEqual(hud.width(), sb.preferred_size().width())
+        for pid, card in sb.cards.items():
+            self.assertTrue(card.isVisibleTo(hud), pid)
+            bottom = card.mapTo(hud, card.rect().bottomLeft()).y()
+            self.assertLess(bottom, hud.height(), pid)
+            self.assertGreaterEqual(card.height(), card.minimumSizeHint().height(), pid)
+        g = hud.geometry()
+        self.assertGreaterEqual(g.y(), work.y())
+        self.assertLessEqual(g.bottom() + 1, work.y() + work.height())
+        self.assertGreaterEqual(g.x(), work.x())
+        self.assertLessEqual(g.right() + 1, work.x() + work.width())
+
+    def test_panel_fits_agy_five_bars_as_soon_as_the_data_arrives(self):
+        from PySide6.QtGui import QGuiApplication
+        work = QGuiApplication.primaryScreen().availableGeometry()
+        cases = (dict(sidebar_edge='right', sidebar_offset=None, sidebar_orientation='vertical'),
+                 dict(sidebar_edge='left', sidebar_offset=40, sidebar_orientation='vertical'),
+                 dict(sidebar_edge='right', sidebar_offset='end', sidebar_orientation='vertical'),
+                 dict(sidebar_edge='bottom', sidebar_offset=None, sidebar_orientation='horizontal'))
+        for case in cases:
+            with self.subTest(**case), tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+                _, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel', **case)
+                try:
+                    hud.show()
+                    APP.processEvents()
+                    before = hud.height()
+                    hud._on_data_fetched(self._agy_five_bars())
+                    # no event-loop turn yet: the window must already be big enough, not clipped
+                    if case['sidebar_orientation'] == 'vertical':
+                        self.assertGreater(hud.height(), before)
+                    self._assert_panel_fits(hud, work)
+                    APP.processEvents()      # polish settles the new rows' real height (they measure 2 px taller unstyled)
+                    self._assert_panel_fits(hud, work)
+                    settled = hud.geometry()
+                    hud._on_data_fetched(self._agy_five_bars())
+                    APP.processEvents()
+                    self.assertEqual(hud.geometry(), settled)   # republishing the same data does not move or resize
+                    if case['sidebar_edge'] == 'left':
+                        self.assertEqual(hud.geometry().y(), work.y() + 40)
+                    if case['sidebar_offset'] == 'end':
+                        self.assertEqual(hud.geometry().bottom() + 1, work.y() + work.height())
+                finally:
+                    self._close(hud)
+
+    def test_panel_shrinks_back_when_the_agy_extra_bars_disappear(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel')
+            try:
+                hud.show()
+                APP.processEvents()
+                base = hud.height()
+                hud._on_data_fetched(self._agy_five_bars())
+                APP.processEvents()
+                self.assertGreater(hud.height(), base)
+                hud._on_data_fetched(UsageMetrics(provider_id='agy', metric1_val=1, metric1_text='1%'))
+                APP.processEvents()
+                self.assertEqual(hud.height(), base)
+                self.assertEqual(hud.height(), hud.sidebar.preferred_size().height())
+            finally:
+                self._close(hud)
 
     def test_agy_main_rows_follow_the_setting_and_republish(self):
         from datetime import timedelta
         from core.providers.base import MetricRow
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='cards')
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel')
             try:
                 reset = datetime.now(timezone.utc) + timedelta(hours=3)
                 hud._on_data_fetched(UsageMetrics(
@@ -391,7 +756,7 @@ class HudTests(unittest.TestCase):
                     metric2_title='GEMINI 7D', metric2_val=1, metric2_text='1%',
                     extra_metrics=[MetricRow('C/G 5H', 3, '3%', reset), MetricRow('C/G 7D', 15, '15%', reset),
                                    MetricRow('ARGON 7D', 21, '21%', reset)]))
-                card = hud.cards['agy']
+                card = hud.sidebar_cards['agy']
                 self.assertEqual((card.m1_label.text(), card.m1_val.text()), ('C/G 5H', '3%'))
                 self.assertEqual((card.m2_label.text(), card.m2_val.text()), ('ARGON 7D', '21%'))
                 hud.set_agy_order(['GEMINI 5H', 'ARGON 7D', 'C/G 5H', 'C/G 7D', 'GEMINI 7D'])
@@ -413,7 +778,7 @@ class HudTests(unittest.TestCase):
                 self.assertEqual(hud.sidebar.order(), ['codex', 'claude', 'agy'])
                 hud.set_provider_order(['codex', 'claude'])
                 self.assertEqual(hud.provider_order(), ['codex', 'claude', 'agy'])
-                hud._apply_ui_mode('cards')
+                hud._apply_ui_mode('sidebar')
                 self.assertEqual(ConfigManager(config.path).get('provider_order'), ['codex', 'claude', 'agy'])
             finally:
                 self._close(hud)
@@ -451,7 +816,7 @@ class HudTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
                 patch('ui.hud_menu.QMenu', RecordingMenu):
-            _, hud = self._hud(directory, ui_mode='cards')
+            _, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel')
             try:
                 from PySide6.QtGui import QContextMenuEvent
                 from PySide6.QtCore import QPoint
@@ -500,7 +865,7 @@ class HudTests(unittest.TestCase):
         from PySide6.QtGui import QMouseEvent
         from core.providers.base import MetricRow
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='cards', layout_mode='vertical')
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel')
             try:
                 hud.show()
                 reset = datetime.now(timezone.utc) + timedelta(hours=3)
@@ -510,7 +875,7 @@ class HudTests(unittest.TestCase):
                     extra_metrics=[MetricRow('C/G 5H', 3, '3%', reset), MetricRow('C/G 7D', 15, '15%', reset),
                                    MetricRow('ARGON 7D', 21, '21%', reset)]))
                 APP.processEvents()
-                card = hud.cards['agy']
+                card = hud.sidebar_cards['agy']
                 rows = card._drag_rows()
                 self.assertEqual([t for t, _r, _l in rows], ['C/G 5H', 'ARGON 7D', 'GEMINI 5H', 'GEMINI 7D', 'C/G 7D'])
                 label = rows[4][2]                                   # drag the last row (C/G 7D) ...
@@ -533,13 +898,13 @@ class HudTests(unittest.TestCase):
     def test_any_provider_rows_can_be_reordered_except_in_table_mode(self):
         from datetime import timedelta
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='cards', layout_mode='vertical')
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel')
             try:
                 reset = datetime.now(timezone.utc) + timedelta(hours=3)
                 hud._on_data_fetched(UsageMetrics(
                     provider_id='claude', metric1_title='SESSION 5H', metric1_val=27, metric1_text='27%', metric1_reset=reset,
                     metric2_title='WEEKLY 7D', metric2_val=9, metric2_text='9%', metric2_reset=reset))
-                card = hud.cards['claude']
+                card = hud.sidebar_cards['claude']
                 self.assertEqual(card.m1_label.text(), 'SESSION 5H')
                 hud.set_row_order('claude', ['WEEKLY 7D', 'SESSION 5H'])
                 self.assertEqual((card.m1_label.text(), card.m1_val.text()), ('WEEKLY 7D', '9%'))
@@ -547,16 +912,16 @@ class HudTests(unittest.TestCase):
                 self.assertEqual(hud.sidebar_cards['claude'].m1_label.text(), 'WEEKLY 7D')
                 hud._apply_ui_mode('table')             # the dial keeps 5 h inside / week outside
                 self.assertEqual(hud._latest_metrics['claude'].metric1_title, 'SESSION 5H')
-                hud._apply_ui_mode('cards')
+                hud._apply_ui_mode('sidebar')
                 self.assertEqual(hud._latest_metrics['claude'].metric1_title, 'WEEKLY 7D')
             finally:
                 self._close(hud)
 
     def test_rows_are_hoverable_draggable_cells(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            _, hud = self._hud(directory, ui_mode='cards')
+            _, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel')
             try:
-                card = hud.cards['claude']
+                card = hud.sidebar_cards['claude']
                 hud._on_data_fetched(UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric1_val=1,
                                                   metric2_title='WEEKLY 7D', metric2_val=2))
                 for cell in (card.m1_cell, card.m2_cell):
@@ -570,14 +935,14 @@ class HudTests(unittest.TestCase):
     def test_weekly_rows_show_the_wall_clock_reset_time(self):
         from datetime import timedelta
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            _, hud = self._hud(directory, ui_mode='cards')
+            _, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='panel')
             try:
                 five = datetime.now(timezone.utc) + timedelta(hours=3)
                 week = datetime.now(timezone.utc) + timedelta(days=6, hours=5)
                 hud._on_data_fetched(UsageMetrics(provider_id='claude', metric1_title='SESSION 5H', metric1_val=1,
                                                   metric1_reset=five, metric2_title='WEEKLY 7D', metric2_val=2,
                                                   metric2_reset=week))
-                card = hud.cards['claude']
+                card = hud.sidebar_cards['claude']
                 self.assertNotIn('週', card.m1_sub.text())          # short windows: countdown only
                 self.assertIn('·', card.m2_sub.text())              # weekly: "週X HH:MM · countdown"
                 local = week.astimezone()
@@ -613,9 +978,9 @@ class HudTests(unittest.TestCase):
             finally:
                 self._close(hud)
 
-    def test_cards_mode_never_dims(self):
+    def test_table_mode_never_dims(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            _, hud = self._hud(directory, ui_mode='cards', opacity=0.9)
+            _, hud = self._hud(directory, ui_mode='table', opacity=0.9)
             try:
                 with patch.object(type(hud), 'underMouse', lambda self: False):
                     hud._apply_opacity()

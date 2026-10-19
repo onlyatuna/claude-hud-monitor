@@ -15,12 +15,9 @@ IDLE_LEVELS = (80, 60, 40, 25)
 IDLE_DELAYS_MS = (500, 900, 2000, 5000)
 OPACITIES = (100, 90, 80, 70, 50, 30)
 INTERVALS = (30, 60, 120, 300)
-UI_MODES = (("cards", "傳統卡片 (Classic Cards)"),
-            ("table", "儀表表格 (Modern Table)"),
+UI_MODES = (("table", "儀表表格 (Modern Table)"),
             ("sidebar", "側邊欄 (Sidebar)"))
 SIDEBAR_FORMS = (("strip", "細條 (Strip)"), ("panel", "固定窄欄 (Panel)"))
-LAYOUTS = (("horizontal", "橫向三欄並排 (Horizontal Triple)"),
-           ("vertical", "直立三層堆疊 (Vertical Stack)"))
 
 
 def _check(menu, label, checked, callback):
@@ -37,15 +34,12 @@ def _choices(menu, items, current, callback):
 
 
 def _build_interface(hud, menu):
-    mode = hud.config.get("ui_mode", "cards")
+    mode = hud.config.get("ui_mode", "sidebar")
     sub = menu.addMenu("介面 (Interface)")
     _choices(sub, UI_MODES, mode, hud._apply_ui_mode)
-    if mode == "cards":
+    if mode == "sidebar":
         sub.addSeparator()
-        _choices(sub, LAYOUTS, hud.config.get("layout_mode", "horizontal"), hud._apply_cards_layout_mode)
-    elif mode == "sidebar":
-        sub.addSeparator()
-        _choices(sub, SIDEBAR_FORMS, hud.config.get("sidebar_state", "strip"), hud.set_sidebar_state)
+        _choices(sub, SIDEBAR_FORMS, hud.config.get("sidebar_state", "panel"), hud.set_sidebar_state)
         sub.addSeparator()
         current = round(float(hud.config.get("sidebar_scale", 1.0)) * 100)
         size_menu = sub.addMenu("大小 (Ctrl＋滾輪)")
@@ -71,7 +65,7 @@ def _build_agy_rows(hud, menu):
 
 
 def _build_appearance(hud, menu):
-    mode = hud.config.get("ui_mode", "cards")
+    mode = hud.config.get("ui_mode", "sidebar")
     from ui.hud_window import APPEARANCE_LABELS, SCHEME_LABELS
     from ui.styles import APPEARANCES, SCHEMES
     sub = menu.addMenu("外觀 (Appearance)")
@@ -82,6 +76,7 @@ def _build_appearance(hud, menu):
         sub.addSeparator()
         for value in SCHEMES:
             _check(sub, f"{SCHEME_LABELS[value]}", value == hud.color_scheme(), lambda v=value: hud.set_color_scheme(v))
+        _check(sub, "毛玻璃模糊 (Blur)", hud.config.get("table_blur", True), hud.toggle_table_blur)
     sub.addSeparator()
     opacity = hud.config.get("opacity", 0.88)
     opacity_menu = sub.addMenu("視窗透明度 (Opacity)")

@@ -4,13 +4,13 @@ import time
 from datetime import datetime
 from PySide6.QtCore import Qt, QEvent, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QPushButton, QFrame, QApplication
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QApplication
 )
-from PySide6.QtGui import QCursor, QGuiApplication, QIcon
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon, QRegion
 
 from core.providers import PROVIDERS, UsageMetrics
 from core.agy_rows import arrange_agy, arrange_by_order, normalize_order, DEFAULT_ORDER as AGY_DEFAULT_ORDER
-from core.config_manager import ConfigManager
+from core.config_manager import ConfigManager, UI_MODES
 from core.refresh_controller import RefreshController
 from core.autostart import is_autostart_enabled, set_autostart
 from core.logger import logger, open_log_dir
@@ -24,20 +24,17 @@ from ui.sidebar import SidebarWidget, DEFAULT_ORDER
 from ui.dock_geometry import (EDGES, dock_to_edge, offset_along_edge, orientation_for_edge, pick_work_area,
                               snap_rect, snap_rect_corner, step_scale, clamp_scale)
 from ui.hud_menu import build_hud_menu
+from ui.table_layout import (FULL_MIN_W, FULL_MIN_H, DEF_COMPACT_W, DEF_COMPACT_H, COMPACT_MARGIN,
+                             compact_min_size, table_state)
 from ui import vibrancy
+from ui.round_mask import rounded_rects
 from system.memory import trim_memory
 
 SCHEME_LABELS = {"scale": "色階 (Scale)", "duo": "雙色 (Duo)"}
 APPEARANCE_LABELS = {"auto": "跟隨系統 (Auto)", "light": "淺色 (Light)", "dark": "深色 (Dark)"}
 
-MIN_TABLE_W, MIN_TABLE_H = 380, 280
+MIN_TABLE_W, MIN_TABLE_H = FULL_MIN_W, FULL_MIN_H   # below this the table collapses to dials (ui/table_layout.py)
 DEF_TABLE_W, DEF_TABLE_H = 450, 350
-
-MIN_HORIZ_W, MIN_HORIZ_H = 540, 125
-DEF_HORIZ_W, DEF_HORIZ_H = 690, 145
-
-MIN_VERT_W, MIN_VERT_H = 250, 320
-DEF_VERT_W, DEF_VERT_H = 280, 410
 
 QWIDGETSIZE_MAX = 16777215
 SIDEBAR_SNAP_PX = 24
@@ -89,6 +86,14 @@ class HUDWindow(QWidget):
         self.geometry_timer.timeout.connect(self._persist_geometry)
         self.current_edge = None
 
+        self._blur_active = False        # native blur is on behind the table
+        self._blur_suspended = False     # ... but paused while the window is moved or resized
+        self._mask_key = None
+        self._blur_resume_timer = QTimer(self)
+        self._blur_resume_timer.setSingleShot(True)
+        self._blur_resume_timer.setInterval(220)
+        self._blur_resume_timer.timeout.connect(self._resume_blur)
+
         self._latest_metrics = {}
         self._raw_metrics = {}
         self._provider_errors = {}
@@ -101,17 +106,10 @@ class HUDWindow(QWidget):
         self.refresh_controller.updated.connect(self._on_data_fetched)
         self.refresh_controller.busy_changed.connect(self._on_busy_changed)
 
-        # Provider Cards (Classic UI)
-        self.cards = {
-            "claude": ProviderCardWidget("claude"),
-            "agy": ProviderCardWidget("agy"),
-            "codex": ProviderCardWidget("codex")
-        }
-
         # Usage Table (Modern Table UI)
         self.table = UsageTable(self.theme(), self.color_scheme(), provider_ids=self.provider_order(), parent=self)
 
-        # Sidebar (docked strip/panel); owns its own card instances so the other modes are untouched
+        # Sidebar (docked strip/panel); its panel shows the full provider cards
         self.sidebar_cards = {pid: ProviderCardWidget(pid) for pid in ("claude", "agy", "codex")}
         self.sidebar = SidebarWidget(self.sidebar_cards, parent=self)
         self.sidebar.hide()
@@ -120,9 +118,8 @@ class HUDWindow(QWidget):
         self.sidebar.scaleStepRequested.connect(self._on_sidebar_scale_step)
         self.sidebar.dragRequested.connect(self._start_sidebar_drag)
         self.sidebar.orderChanged.connect(self.set_provider_order)
-        for group in (self.cards, self.sidebar_cards):
-            for pid, card in group.items():
-                card.rowOrderChanged.connect(lambda titles, pid=pid: self.set_row_order(pid, titles))
+        for pid, card in self.sidebar_cards.items():
+            card.rowOrderChanged.connect(lambda titles, pid=pid: self.set_row_order(pid, titles))
         self.sidebar.set_order(self.provider_order())
         self._resize = None
         self._grip_cursor = False
@@ -138,7 +135,7 @@ class HUDWindow(QWidget):
 
         self._init_window_flags()
         self._init_ui_skeleton()
-        self._apply_ui_mode(self.config.get("ui_mode", "cards"), initial=True)
+        self._apply_ui_mode(self.config.get("ui_mode", "sidebar"), initial=True)
         self._setup_timers()
         QGuiApplication.styleHints().colorSchemeChanged.connect(self._on_system_appearance_changed)
 
@@ -194,31 +191,19 @@ class HUDWindow(QWidget):
         self.ghost_label.setToolTip("滑鼠穿透中 (Alt+Shift+C 解除)")
         self.ghost_label.setVisible(False)
 
-        self.layout_toggle_btn = QPushButton("⇄")
-        self.layout_toggle_btn.setObjectName("LayoutToggleBtn")
-        self.layout_toggle_btn.setToolTip("切換 橫向並排 / 直式堆疊 佈局")
-        self.layout_toggle_btn.clicked.connect(self.toggle_layout_mode)
-
         self.time_label = QLabel("--:--:--")
         self.time_label.setObjectName("HeaderStatus")
 
-        # Container for Cards
-        self.cards_container = QWidget(self)
-        self.cards_layout = QVBoxLayout(self.cards_container)
-        self.cards_layout.setContentsMargins(0, 0, 0, 0)
-        self.cards_layout.setSpacing(6)
 
     def _clear_layout(self, layout):
         keep_widgets = {
             getattr(self, "status_dot", None),
             getattr(self, "title_label", None),
             getattr(self, "ghost_label", None),
-            getattr(self, "layout_toggle_btn", None),
             getattr(self, "time_label", None),
-            getattr(self, "cards_container", None),
             getattr(self, "table", None),
             getattr(self, "sidebar", None),
-            *getattr(self, "cards", {}).values()
+            *getattr(self, "sidebar_cards", {}).values()
         }
         while layout.count():
             item = layout.takeAt(0)
@@ -280,27 +265,63 @@ class HUDWindow(QWidget):
         return True
 
     def _apply_theme(self):
-        ui_mode = self.config.get("ui_mode", "cards")
+        ui_mode = self.config.get("ui_mode", "sidebar")
         t = self.theme()
         if ui_mode == "table":
             dark = (t is THEMES["dark"])
-            vibrant = bool(self.isVisible() and vibrancy.apply(self, dark, t["radius"]))
+            blur = bool(self.config.get("table_blur", True))
+            if not blur:
+                vibrancy.clear(self)
+            vibrant = bool(blur and self.isVisible() and vibrancy.apply(self, dark, t["radius"]))
+            self._blur_active, self._blur_suspended = vibrant, False
             self.setStyleSheet(get_hud_stylesheet(t, vibrant))
-        elif ui_mode == "sidebar":
+        else:
+            self._blur_active = False
             vibrancy.clear(self)
             dark = t is THEMES["dark"]
             self.setStyleSheet(get_cards_stylesheet(dark=dark))
             self.sidebar.set_appearance(dark, 'scale')   # status colours only; the duo scheme is for the table
             for card in self.sidebar_cards.values():
                 card.set_appearance(dark)
-        else:
-            vibrancy.clear(self)
-            dark = t is THEMES["dark"]
-            self.setStyleSheet(get_cards_stylesheet(dark=dark))
-            for card in self.cards.values():
-                card.set_appearance(dark)
+        self._refresh_mask()
+
+    def _refresh_mask(self):
+        """Clip the table window to rounded corners where native blur would otherwise show square corners."""
+        if self.config.get("ui_mode", "sidebar") == "table" and vibrancy.mask_needed(self._blur_active):
+            key = (self.width(), self.height(), self.theme()["radius"])
+            if key != self._mask_key:
+                region = QRegion()
+                for rect in rounded_rects(*key):
+                    region = region.united(QRegion(*rect))
+                self.setMask(region)
+                self._mask_key = key
+        elif self._mask_key is not None:
+            self.clearMask()
+            self._mask_key = None
+
+    def toggle_table_blur(self):
+        self.config.set("table_blur", not self.config.get("table_blur", True))
+        self._apply_theme()
+        if self.tray_icon:
+            self.tray_icon.update_menu_state()
+
+    def _suspend_blur(self):
+        """Acrylic makes dragging and resizing stutter: drop the blur until the movement stops."""
+        if not self._blur_active or self.config.get("ui_mode", "sidebar") != "table":
+            return
+        if not self._blur_suspended:
+            self._blur_suspended = bool(vibrancy.suspend(self, self.theme() is THEMES["dark"]))
+        if self._blur_suspended:
+            self._blur_resume_timer.start()
+
+    def _resume_blur(self):
+        if self._blur_suspended and self._blur_active:
+            vibrancy.apply(self, self.theme() is THEMES["dark"], self.theme()["radius"])
+        self._blur_suspended = False
 
     def _rebuild_table(self):
+        if self.config.get("ui_mode", "sidebar") == "table":
+            self._persist_geometry()
         t = self.theme()
         s = self.color_scheme()
         old_table = self.table
@@ -308,13 +329,14 @@ class HUDWindow(QWidget):
         for m in self._latest_metrics.values():
             self.table.update_metrics(m)
 
-        ui_mode = self.config.get("ui_mode", "cards")
-        if ui_mode == "table":
+        if self.config.get("ui_mode", "sidebar") == "table":
             self._apply_ui_mode("table")
         if old_table:
             old_table.deleteLater()
 
     def _apply_ui_mode(self, mode: str, initial=False):
+        if mode not in UI_MODES:
+            mode = "sidebar"      # the retired Classic Cards style now lives in the sidebar panel
         if not initial:
             if self.config.get("ui_mode") != mode:
                 self._persist_geometry()
@@ -327,7 +349,6 @@ class HUDWindow(QWidget):
         self.sidebar.close_flyout()
         self.sidebar.hide()
         self.table.hide()
-        self.cards_container.hide()
         self.setMinimumSize(0, 0)
         self.setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX)
         self.inner_layout.setContentsMargins(12, 8, 12, 10)
@@ -346,34 +367,19 @@ class HUDWindow(QWidget):
         header_layout.addWidget(self.status_dot)
         header_layout.addWidget(self.title_label)
         header_layout.addWidget(self.ghost_label)
-        header_layout.addWidget(self.layout_toggle_btn)
         header_layout.addStretch()
         header_layout.addWidget(self.time_label)
         self.inner_layout.addLayout(header_layout)
 
-        if mode == "table":
-            self.title_label.setText("AI AGENT HUD (TABLE)")
-            self.layout_toggle_btn.setVisible(False)
-            self._apply_theme()
-            self.inner_layout.addWidget(self.table)
-            self.table.show()
+        self.title_label.setText("AI AGENT HUD (TABLE)")
+        self._apply_theme()
+        self.inner_layout.addWidget(self.table)
+        self.table.show()
 
-            self.setMinimumSize(MIN_TABLE_W, MIN_TABLE_H)
-            w = self.config.get("table_width", DEF_TABLE_W)
-            h = self.config.get("table_height", DEF_TABLE_H)
-            if w < MIN_TABLE_W:
-                w = DEF_TABLE_W
-            if h < MIN_TABLE_H:
-                h = DEF_TABLE_H
-            self.resize(w, h)
-        else:
-            self.title_label.setText("AI AGENT HUD (3-IN-1)")
-            self.layout_toggle_btn.setVisible(True)
-            self._apply_theme()
-            self.inner_layout.addWidget(self.cards_container)
-            self.cards_container.show()
-            card_layout_mode = self.config.get("layout_mode", "horizontal")
-            w, h = self._apply_cards_layout(card_layout_mode)
+        compact = bool(self.config.get("table_compact", False))
+        self._set_table_compact(compact)
+        w, h = self._saved_table_size(compact)
+        self.resize(w, h)
 
         if initial:
             x = self.config.get("window_x")
@@ -386,11 +392,46 @@ class HUDWindow(QWidget):
         self._save_geometry()
         self._republish_all()
 
+    def _saved_table_size(self, compact: bool) -> tuple:
+        """The remembered window size for the collapsed or the full table (undersized values reset)."""
+        if compact:
+            min_w, min_h = compact_min_size(len(self.table.columns))
+            w = self.config.get("table_compact_width", DEF_COMPACT_W)
+            h = self.config.get("table_compact_height", DEF_COMPACT_H)
+            return (w if isinstance(w, int) and w >= min_w else DEF_COMPACT_W,
+                    h if isinstance(h, int) and h >= min_h else DEF_COMPACT_H)
+        w = self.config.get("table_width", DEF_TABLE_W)
+        h = self.config.get("table_height", DEF_TABLE_H)
+        return (w if isinstance(w, int) and w >= MIN_TABLE_W else DEF_TABLE_W,
+                h if isinstance(h, int) and h >= MIN_TABLE_H else DEF_TABLE_H)
+
+    def _set_table_compact(self, compact: bool):
+        """Collapse the table to one dial per service (or restore it) and adapt the window chrome."""
+        self.table.set_compact(compact)
+        self.setMinimumSize(*compact_min_size(len(self.table.columns)))   # the full table may be dragged down to it
+        self.inner_layout.setContentsMargins(*((COMPACT_MARGIN,) * 4 if compact else (12, 8, 12, 10)))
+        self.inner_layout.setSpacing(0 if compact else 6)
+        self._sync_header()
+        self.config.set("table_compact", bool(compact))
+
+    def _sync_header(self):
+        compact = self.config.get("ui_mode") == "table" and self.table.is_compact()
+        for widget in (self.status_dot, self.title_label, self.time_label):
+            widget.setVisible(not compact)
+        self.ghost_label.setVisible(self.config.get("click_through", False) and not compact)
+
+    def _sync_table_state(self):
+        if self._restoring_geometry or self.config.get("ui_mode") != "table":
+            return
+        compact = table_state(self.width(), self.height(), self.table.is_compact())
+        if compact != self.table.is_compact():
+            self._set_table_compact(compact)
+
     # ================= Sidebar mode =================
     def _apply_sidebar_mode(self):
         self.inner_layout.setContentsMargins(0, 0, 0, 0)
         self.inner_layout.setSpacing(0)
-        state = self.config.get("sidebar_state", "strip")
+        state = self.config.get("sidebar_state", "panel")
         self.inner_layout.addWidget(self.sidebar)
         self.sidebar.show()
         self._fade_timer.start(1500)      # stay fully visible for a moment after the mode is chosen
@@ -603,74 +644,29 @@ class HUDWindow(QWidget):
         self.sidebar.set_state(state)
         self._dock_sidebar()
 
+    def _fit_sidebar(self):
+        """Keep the docked window exactly as big as the panel needs (agy shows five bars once its data arrives).
+
+        New rows are measured before their style is applied (about 2 px taller each), so the window is docked
+        again once the event loop has polished them.
+        """
+        if self.config.get("ui_mode", "sidebar") != "sidebar" or self._resize is not None:
+            return
+        if self.sidebar.state() == "panel":
+            self._dock_sidebar()
+            QTimer.singleShot(0, self._settle_sidebar)
+
+    def _settle_sidebar(self):
+        if self.config.get("ui_mode", "sidebar") == "sidebar" and self._resize is None \
+                and self.sidebar.state() == "panel" and self.size() != self.sidebar.preferred_size():
+            self._dock_sidebar()
+
     def _show_sidebar_menu(self, global_pos):
         build_hud_menu(self, self).exec(global_pos)
 
-    def _fit_cards_height(self):
-        """Grow the window when the cards need more room than the saved size (agy shows five bars)."""
-        if self.config.get("ui_mode", "cards") != "cards":
-            return
-        mode = self.config.get("layout_mode", "horizontal")
-        base_h = MIN_HORIZ_H if mode == "horizontal" else MIN_VERT_H
-        self.root_layout.activate()
-        needed = max(base_h, self.root_layout.totalMinimumSize().height())
-        self.setMinimumHeight(needed)
-        if self.height() < needed:
-            self.resize(self.width(), needed)
-
-    def _apply_cards_layout(self, mode: str) -> tuple[int, int]:
-        self._clear_layout(self.cards_layout)
-        provider_ids = self.provider_order()
-
-        if mode == "horizontal":
-            self.setMinimumSize(MIN_HORIZ_W, MIN_HORIZ_H)
-            w = self.config.get("horizontal_width", DEF_HORIZ_W)
-            h = self.config.get("horizontal_height", DEF_HORIZ_H)
-            if w < MIN_HORIZ_W:
-                w = DEF_HORIZ_W
-            if h < MIN_HORIZ_H:
-                h = DEF_HORIZ_H
-            self.resize(w, h)
-
-            body_layout = QHBoxLayout()
-            body_layout.setSpacing(8)
-            for i, pid in enumerate(provider_ids):
-                body_layout.addWidget(self.cards[pid], 1)
-                if i < len(provider_ids) - 1:
-                    divider = QFrame()
-                    divider.setObjectName("Divider")
-                    divider.setFrameShape(QFrame.Shape.VLine)
-                    body_layout.addWidget(divider)
-            self.cards_layout.addLayout(body_layout)
-        else:
-            self.setMinimumSize(MIN_VERT_W, MIN_VERT_H)
-            w = self.config.get("vertical_width", DEF_VERT_W)
-            h = self.config.get("vertical_height", DEF_VERT_H)
-            if w < MIN_VERT_W:
-                w = DEF_VERT_W
-            if h < MIN_VERT_H:
-                h = DEF_VERT_H
-            self.resize(w, h)
-
-            for i, pid in enumerate(provider_ids):
-                self.cards_layout.addWidget(self.cards[pid])
-                if i < len(provider_ids) - 1:
-                    h_div = QFrame()
-                    h_div.setObjectName("HorizontalDivider")
-                    h_div.setFrameShape(QFrame.Shape.HLine)
-                    self.cards_layout.addWidget(h_div)
-
-        return w, h
-
     def toggle_ui_mode(self):
-        cur = self.config.get("ui_mode", "cards")
-        new_mode = "table" if cur == "cards" else "cards"
-        self._apply_ui_mode(new_mode)
-
-    def toggle_layout_mode(self):
-        cur = self.config.get("layout_mode", "horizontal")
-        new_mode = "vertical" if cur == "horizontal" else "horizontal"
-        self._apply_cards_layout_mode(new_mode)
+        cur = self.config.get("ui_mode", "sidebar")
+        self._apply_ui_mode("sidebar" if cur == "table" else "table")
 
     def _ensure_within_screen(self, w: int, h: int):
         current_center = self.geometry().center()
@@ -755,11 +751,8 @@ class HUDWindow(QWidget):
             return
         self.config.set("provider_order", order)
         self.sidebar.set_order(order)
-        mode = self.config.get("ui_mode", "cards")
-        if mode == "table":
+        if self.config.get("ui_mode", "sidebar") == "table":
             self._rebuild_table()
-        elif mode == "cards":
-            self._apply_ui_mode("cards")
 
     def agy_order(self) -> tuple:
         return normalize_order(self.config.get("agy_order", self.config.get("agy_primary")))
@@ -803,19 +796,16 @@ class HUDWindow(QWidget):
             return arrange_agy(metrics, self.agy_order())
         order = (self.config.get("row_order", {}) or {}).get(metrics.provider_id)
         # the table's dial is fixed (inner = 5 h, outer = week), so custom row order only applies elsewhere
-        if order and self.config.get("ui_mode", "cards") != "table":
+        if order and self.config.get("ui_mode", "sidebar") != "table":
             return arrange_by_order(metrics, order)
         return metrics
 
     def _publish(self, metrics: UsageMetrics):
         self._latest_metrics[metrics.provider_id] = metrics
-        if metrics.provider_id in self.cards:
-            self.cards[metrics.provider_id].update_metrics(metrics)
-        if metrics.provider_id in self.cards:
-            self._fit_cards_height()
         if metrics.provider_id in self.sidebar_cards:
             self.sidebar_cards[metrics.provider_id].update_metrics(metrics)
         self.sidebar.update_metrics(metrics)
+        self._fit_sidebar()
         self.table.update_metrics(metrics)
         self._provider_errors[metrics.provider_id] = bool(metrics.error)
         self.time_label.setText(datetime.now().strftime("%H:%M:%S"))
@@ -834,8 +824,6 @@ class HUDWindow(QWidget):
                 self.trigger_async_refresh()
         self._last_countdown_ts = cur_ts
 
-        for card in self.cards.values():
-            card.update_countdown()
         for card in self.sidebar_cards.values():
             card.update_countdown()
         self.sidebar.update_countdown()
@@ -888,7 +876,7 @@ class HUDWindow(QWidget):
 
     def set_click_through(self, enable: bool, notify: bool = True):
         self.config.set("click_through", enable)
-        self.ghost_label.setVisible(enable)
+        self._sync_header()
         self._apply_native_click_through(enable)
 
         if enable and notify and self.tray_icon:
@@ -951,12 +939,14 @@ class HUDWindow(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.current_edge is not None:
                 wh = self.windowHandle()
+                self._suspend_blur()
                 if wh:
                     wh.startSystemResize(self.current_edge)
                 event.accept()
                 return
             elif not self.config.get("locked", False):
                 wh = self.windowHandle()
+                self._suspend_blur()
                 if wh:
                     wh.startSystemMove()
                 event.accept()
@@ -969,10 +959,16 @@ class HUDWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sync_table_state()
+        self._refresh_mask()
+        if self._blur_suspended:
+            self._blur_resume_timer.start()
         self._save_geometry()
 
     def moveEvent(self, event):
         super().moveEvent(event)
+        if self._blur_suspended:
+            self._blur_resume_timer.start()
         if self.config.get("ui_mode") == "sidebar" and not self._docking and not self._restoring_geometry:
             self._snap_timer.start()
         self._save_geometry()
@@ -1003,61 +999,21 @@ class HUDWindow(QWidget):
             return
         self.geometry_timer.stop()
         pos, size = self.pos(), self.size()
-        ui_mode = self.config.get("ui_mode", "cards")
-        if ui_mode == "sidebar":
-            return  # position is saved when a drag settles (_finish_sidebar_move)
-        updates = {
-            "window_x": pos.x(),
-            "window_y": pos.y(),
-        }
-        if ui_mode == "table":
+        if self.config.get("ui_mode", "sidebar") != "table":
+            return  # sidebar position is saved when a drag settles (_finish_sidebar_move)
+        updates = {"window_x": pos.x(), "window_y": pos.y(), "table_compact": self.table.is_compact()}
+        if self.table.is_compact():
+            min_w, min_h = compact_min_size(len(self.table.columns))
+            updates["table_compact_width"] = max(min_w, size.width())
+            updates["table_compact_height"] = max(min_h, size.height())
+        else:
             updates["table_width"] = max(MIN_TABLE_W, size.width())
             updates["table_height"] = max(MIN_TABLE_H, size.height())
-        else:
-            layout_mode = self.config.get("layout_mode", "horizontal")
-            if layout_mode == "horizontal":
-                updates["horizontal_width"] = max(MIN_HORIZ_W, size.width())
-                updates["horizontal_height"] = max(MIN_HORIZ_H, size.height())
-            else:
-                updates["vertical_width"] = max(MIN_VERT_W, size.width())
-                updates["vertical_height"] = max(MIN_VERT_H, size.height())
         self.config.set_many(updates)
 
     # ================= Context Menu =================
-    def add_theme_menus(self, menu: QMenu):
-        """Colour scheme and appearance submenus (used by both HUD and tray)."""
-        def build(title, options, labels, current, apply):
-            sub = menu.addMenu(title)
-            for value in options:
-                act = sub.addAction(labels[value])
-                act.setCheckable(True)
-                act.setData(value)
-                act.triggered.connect(lambda checked, v=value: apply(v))
-
-            def sync():
-                for act in sub.actions():
-                    act.setChecked(act.data() == current())
-            sync()
-            sub.aboutToShow.connect(sync)
-            return sub
-
-        colors = build("🎨 配色 (Colors)", SCHEMES, SCHEME_LABELS, self.color_scheme, self.set_color_scheme)
-        def sync_colors():
-            colors.menuAction().setVisible(self.config.get("ui_mode", "cards") == "table")
-        sync_colors()
-        menu.aboutToShow.connect(sync_colors)
-        build("🌓 外觀 (Appearance)", APPEARANCES, APPEARANCE_LABELS,
-              lambda: self.config.get("appearance", "auto"), self.set_appearance)
-
     def contextMenuEvent(self, event):
         build_hud_menu(self, self).exec(event.globalPos())
-
-    def _apply_cards_layout_mode(self, mode: str):
-        self._persist_geometry()
-        self.config.set("layout_mode", mode)
-        self._apply_ui_mode("cards")
-        if self.tray_icon:
-            self.tray_icon.update_menu_state()
 
     def _toggle_always_on_top(self):
         new_val = not self.config.get("always_on_top", True)
@@ -1143,8 +1099,7 @@ class HUDWindow(QWidget):
             self.tray_icon.update_menu_state()
 
     def _reset_geometry(self):
-        ui_mode = self.config.get("ui_mode", "cards")
-        if ui_mode == "sidebar":
+        if self.config.get("ui_mode", "sidebar") == "sidebar":
             self.config.set_many({"sidebar_edge": "right", "sidebar_orientation": "vertical", "sidebar_offset": None,
                                   "sidebar_x": None, "sidebar_y": None, "sidebar_scale": 1.0})
             self.sidebar.set_scale(1.0)
@@ -1152,15 +1107,9 @@ class HUDWindow(QWidget):
             self.sidebar.set_dock_edge("right")
             self._dock_sidebar()
             return
-        if ui_mode == "table":
-            w, h = DEF_TABLE_W, DEF_TABLE_H
-        else:
-            layout_mode = self.config.get("layout_mode", "horizontal")
-            if layout_mode == "horizontal":
-                w, h = DEF_HORIZ_W, DEF_HORIZ_H
-            else:
-                w, h = DEF_VERT_W, DEF_VERT_H
-
+        w, h = DEF_TABLE_W, DEF_TABLE_H
+        if self.table.is_compact():
+            self._set_table_compact(False)
         self.resize(w, h)
         primary_screen = QGuiApplication.primaryScreen()
         screen_geom = primary_screen.availableGeometry() if primary_screen else self.screen().availableGeometry()
