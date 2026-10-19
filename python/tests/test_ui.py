@@ -249,7 +249,7 @@ class HudTests(unittest.TestCase):
     def test_sidebar_mode_docks_right_edge_and_switches_state(self):
         from PySide6.QtGui import QGuiApplication
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_edge='right', sidebar_offset=40)
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right', sidebar_offset=40)
             try:
                 work = QGuiApplication.primaryScreen().availableGeometry()
                 self.assertEqual(hud.width(), hud.sidebar.preferred_size().width())
@@ -271,7 +271,7 @@ class HudTests(unittest.TestCase):
     def test_sidebar_drag_snaps_to_any_edge_and_switches_orientation(self):
         from PySide6.QtGui import QGuiApplication
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
-            config, hud = self._hud(directory, ui_mode='sidebar')
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip')
             try:
                 work = QGuiApplication.primaryScreen().availableGeometry()
                 vertical = hud.size()
