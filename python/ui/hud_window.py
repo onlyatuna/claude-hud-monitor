@@ -24,13 +24,15 @@ from ui.sidebar import SidebarWidget, DEFAULT_ORDER
 from ui.dock_geometry import (EDGES, dock_to_edge, offset_along_edge, orientation_for_edge, pick_work_area,
                               snap_rect, snap_rect_corner, step_scale, clamp_scale)
 from ui.hud_menu import build_hud_menu
+from ui.table_layout import (FULL_MIN_W, FULL_MIN_H, DEF_COMPACT_W, DEF_COMPACT_H, COMPACT_MARGIN,
+                             compact_min_size, table_state)
 from ui import vibrancy
 from system.memory import trim_memory
 
 SCHEME_LABELS = {"scale": "色階 (Scale)", "duo": "雙色 (Duo)"}
 APPEARANCE_LABELS = {"auto": "跟隨系統 (Auto)", "light": "淺色 (Light)", "dark": "深色 (Dark)"}
 
-MIN_TABLE_W, MIN_TABLE_H = 380, 280
+MIN_TABLE_W, MIN_TABLE_H = FULL_MIN_W, FULL_MIN_H   # below this the table collapses to dials (ui/table_layout.py)
 DEF_TABLE_W, DEF_TABLE_H = 450, 350
 
 QWIDGETSIZE_MAX = 16777215
@@ -269,6 +271,8 @@ class HUDWindow(QWidget):
                 card.set_appearance(dark)
 
     def _rebuild_table(self):
+        if self.config.get("ui_mode", "sidebar") == "table":
+            self._persist_geometry()
         t = self.theme()
         s = self.color_scheme()
         old_table = self.table
@@ -323,13 +327,9 @@ class HUDWindow(QWidget):
         self.inner_layout.addWidget(self.table)
         self.table.show()
 
-        self.setMinimumSize(MIN_TABLE_W, MIN_TABLE_H)
-        w = self.config.get("table_width", DEF_TABLE_W)
-        h = self.config.get("table_height", DEF_TABLE_H)
-        if w < MIN_TABLE_W:
-            w = DEF_TABLE_W
-        if h < MIN_TABLE_H:
-            h = DEF_TABLE_H
+        compact = bool(self.config.get("table_compact", False))
+        self._set_table_compact(compact)
+        w, h = self._saved_table_size(compact)
         self.resize(w, h)
 
         if initial:
@@ -342,6 +342,41 @@ class HUDWindow(QWidget):
         self._restoring_geometry = False
         self._save_geometry()
         self._republish_all()
+
+    def _saved_table_size(self, compact: bool) -> tuple:
+        """The remembered window size for the collapsed or the full table (undersized values reset)."""
+        if compact:
+            min_w, min_h = compact_min_size(len(self.table.columns))
+            w = self.config.get("table_compact_width", DEF_COMPACT_W)
+            h = self.config.get("table_compact_height", DEF_COMPACT_H)
+            return (w if isinstance(w, int) and w >= min_w else DEF_COMPACT_W,
+                    h if isinstance(h, int) and h >= min_h else DEF_COMPACT_H)
+        w = self.config.get("table_width", DEF_TABLE_W)
+        h = self.config.get("table_height", DEF_TABLE_H)
+        return (w if isinstance(w, int) and w >= MIN_TABLE_W else DEF_TABLE_W,
+                h if isinstance(h, int) and h >= MIN_TABLE_H else DEF_TABLE_H)
+
+    def _set_table_compact(self, compact: bool):
+        """Collapse the table to one dial per service (or restore it) and adapt the window chrome."""
+        self.table.set_compact(compact)
+        self.setMinimumSize(*compact_min_size(len(self.table.columns)))   # the full table may be dragged down to it
+        self.inner_layout.setContentsMargins(*((COMPACT_MARGIN,) * 4 if compact else (12, 8, 12, 10)))
+        self.inner_layout.setSpacing(0 if compact else 6)
+        self._sync_header()
+        self.config.set("table_compact", bool(compact))
+
+    def _sync_header(self):
+        compact = self.config.get("ui_mode") == "table" and self.table.is_compact()
+        for widget in (self.status_dot, self.title_label, self.time_label):
+            widget.setVisible(not compact)
+        self.ghost_label.setVisible(self.config.get("click_through", False) and not compact)
+
+    def _sync_table_state(self):
+        if self._restoring_geometry or self.config.get("ui_mode") != "table":
+            return
+        compact = table_state(self.width(), self.height(), self.table.is_compact())
+        if compact != self.table.is_compact():
+            self._set_table_compact(compact)
 
     # ================= Sidebar mode =================
     def _apply_sidebar_mode(self):
@@ -792,7 +827,7 @@ class HUDWindow(QWidget):
 
     def set_click_through(self, enable: bool, notify: bool = True):
         self.config.set("click_through", enable)
-        self.ghost_label.setVisible(enable)
+        self._sync_header()
         self._apply_native_click_through(enable)
 
         if enable and notify and self.tray_icon:
@@ -873,6 +908,7 @@ class HUDWindow(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._sync_table_state()
         self._save_geometry()
 
     def moveEvent(self, event):
@@ -909,12 +945,14 @@ class HUDWindow(QWidget):
         pos, size = self.pos(), self.size()
         if self.config.get("ui_mode", "sidebar") != "table":
             return  # sidebar position is saved when a drag settles (_finish_sidebar_move)
-        updates = {
-            "window_x": pos.x(),
-            "window_y": pos.y(),
-            "table_width": max(MIN_TABLE_W, size.width()),
-            "table_height": max(MIN_TABLE_H, size.height()),
-        }
+        updates = {"window_x": pos.x(), "window_y": pos.y(), "table_compact": self.table.is_compact()}
+        if self.table.is_compact():
+            min_w, min_h = compact_min_size(len(self.table.columns))
+            updates["table_compact_width"] = max(min_w, size.width())
+            updates["table_compact_height"] = max(min_h, size.height())
+        else:
+            updates["table_width"] = max(MIN_TABLE_W, size.width())
+            updates["table_height"] = max(MIN_TABLE_H, size.height())
         self.config.set_many(updates)
 
     # ================= Context Menu =================
@@ -1014,6 +1052,8 @@ class HUDWindow(QWidget):
             self._dock_sidebar()
             return
         w, h = DEF_TABLE_W, DEF_TABLE_H
+        if self.table.is_compact():
+            self._set_table_compact(False)
         self.resize(w, h)
         primary_screen = QGuiApplication.primaryScreen()
         screen_geom = primary_screen.availableGeometry() if primary_screen else self.screen().availableGeometry()

@@ -134,6 +134,96 @@ class TableTests(unittest.TestCase):
         self.assertEqual(duo.columns['claude'].dial.outer[2], dark['duo']['outer'])
 
 
+class CompactTableTests(unittest.TestCase):
+    def _shown(self, scheme='scale', appearance='dark'):
+        table = make_table(scheme, appearance)
+        table.resize(450, 300)
+        table.show()
+        APP.processEvents()
+        return table
+
+    def test_compact_keeps_only_the_dials_in_provider_order(self):
+        table = UsageTable(THEMES['dark'], 'scale', provider_ids=['codex', 'claude', 'agy'])
+        table.resize(450, 300)
+        table.show()
+        APP.processEvents()
+        self.assertFalse(table.is_compact())
+        table.set_compact(True)
+        APP.processEvents()
+        self.assertTrue(table.is_compact())
+        self.assertFalse(table.full_view.isVisibleTo(table))
+        self.assertTrue(table.compact_view.isVisibleTo(table))
+        dials = table.compact_dials()
+        self.assertEqual(len(dials), 3)
+        self.assertEqual([d.provider_id for d in dials], ['codex', 'claude', 'agy'])
+        table.set_compact(False)
+        APP.processEvents()
+        self.assertTrue(table.full_view.isVisibleTo(table))
+        self.assertFalse(table.compact_view.isVisibleTo(table))
+
+    def test_compact_dials_follow_the_data(self):
+        table = self._shown()
+        reset = datetime.now(timezone.utc) + timedelta(hours=2)
+        table.update_metrics(UsageMetrics(provider_id='claude', metric1_val=42, metric1_text='42%', metric1_reset=reset,
+                                          metric2_val=71, metric2_text='71%',
+                                          metric2_reset=datetime.now(timezone.utc) + timedelta(days=3)))
+        full = table.columns['claude'].dial
+        small = next(d for d in table.compact_dials() if d.provider_id == 'claude')
+        self.assertEqual(small.inner_text, '42%')
+        self.assertEqual(small.inner[0], full.inner[0])
+        self.assertEqual(small.outer[0], full.outer[0])
+        self.assertEqual(small.inner[2], full.inner[2])
+
+    def test_compact_dials_have_no_caption_and_a_smaller_minimum(self):
+        table = self._shown()
+        table.update_metrics(UsageMetrics(provider_id='codex', metric1_title='WINDOW 1D', metric1_val=5, metric1_text='5%',
+                                          metric2_title='WINDOW 30D', metric2_val=10, metric2_text='10%'))
+        full = table.columns['codex'].dial
+        small = next(d for d in table.compact_dials() if d.provider_id == 'codex')
+        self.assertEqual(full.caption, '1D')
+        self.assertEqual(small.caption, '')
+        self.assertLess(small.minimumWidth(), full.minimumWidth())
+        self.assertEqual(small.minimumWidth(), 48)
+
+    def test_compact_tooltip_carries_what_the_screen_no_longer_shows(self):
+        table = self._shown()
+        reset = datetime.now(timezone.utc) + timedelta(hours=2)
+        table.update_metrics(UsageMetrics(provider_id='agy', metric1_val=30, metric1_text='30%', metric1_reset=reset,
+                                          metric2_val=60, metric2_text='60%',
+                                          metric2_reset=datetime.now(timezone.utc) + timedelta(days=2)))
+        small = next(d for d in table.compact_dials() if d.provider_id == 'agy')
+        tip = small.toolTip()
+        self.assertIn('Antigravity', tip)
+        self.assertIn('30%', tip)
+        self.assertIn('60%', tip)
+        self.assertIn('5 小時', tip)
+        self.assertIn('1 週', tip)
+
+    def test_offline_and_stale_states_reach_the_compact_dials(self):
+        table = self._shown()
+        table.update_metrics(UsageMetrics(provider_id='agy', error='timeout'))
+        small = next(d for d in table.compact_dials() if d.provider_id == 'agy')
+        self.assertTrue(small.muted)
+        self.assertEqual(small.inner_text, 'ERR')
+        self.assertIn('timeout', small.toolTip())
+        table.update_metrics(UsageMetrics(provider_id='agy', metric1_val=25, metric1_text='25%', metric2_val=10,
+                                          metric2_text='10%', error='timeout', stale=True,
+                                          last_success=datetime.now(timezone.utc)))
+        self.assertFalse(small.muted)
+        self.assertEqual(small.inner_text, '25%')
+        self.assertIn('STALE', small.toolTip())
+
+    def test_compact_row_gives_each_dial_a_square_to_draw_in(self):
+        table = UsageTable(THEMES['dark'], 'scale')
+        table.set_compact(True)
+        table.resize(240, 90)
+        table.show()
+        APP.processEvents()
+        widths = [d.width() for d in table.compact_dials()]
+        self.assertTrue(all(w >= 48 for w in widths))
+        self.assertLessEqual(max(widths) - min(widths), 1)
+
+
 class HudTests(unittest.TestCase):
     def _hud(self, directory, **settings):
         from ui.hud_window import HUDWindow
@@ -342,6 +432,113 @@ class HudTests(unittest.TestCase):
             finally:
                 self._close(hud)
 
+
+    def _shown_table(self, directory, **settings):
+        config, hud = self._hud(directory, ui_mode='table', **settings)
+        hud.show()
+        APP.processEvents()
+        return config, hud
+
+    def test_table_collapses_to_dials_when_shrunk_and_expands_when_enlarged(self):
+        from ui import table_layout as tl
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._shown_table(directory, table_width=450, table_height=350)
+            try:
+                self.assertFalse(hud.table.is_compact())
+                self.assertEqual(hud.minimumSize().width(), tl.compact_min_size(3)[0])   # free to shrink past the old 380x280
+                hud.resize(300, 200)
+                APP.processEvents()
+                self.assertTrue(hud.table.is_compact())
+                self.assertTrue(hud.title_label.isHidden())
+                self.assertTrue(hud.time_label.isHidden())
+                self.assertTrue(hud.status_dot.isHidden())
+                hud.resize(380 + tl.HYSTERESIS - 1, 300)        # inside the hysteresis band: stays compact
+                APP.processEvents()
+                self.assertTrue(hud.table.is_compact())
+                hud.resize(420, 320)
+                APP.processEvents()
+                self.assertFalse(hud.table.is_compact())
+                self.assertFalse(hud.title_label.isHidden())
+                self.assertFalse(hud.time_label.isHidden())
+            finally:
+                self._close(hud)
+
+    def test_table_can_be_dragged_down_to_the_compact_minimum(self):
+        from ui import table_layout as tl
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._shown_table(directory)
+            try:
+                hud.resize(10, 10)
+                APP.processEvents()
+                self.assertTrue(hud.table.is_compact())
+                self.assertEqual((hud.width(), hud.height()), tl.compact_min_size(3))
+                self.assertEqual(hud.minimumSize().width(), tl.compact_min_size(3)[0])
+                for dial in hud.table.compact_dials():
+                    self.assertGreaterEqual(dial.width(), tl.COMPACT_DIAL_MIN)
+                    self.assertGreaterEqual(dial.height(), tl.COMPACT_DIAL_MIN)
+            finally:
+                self._close(hud)
+
+    def test_compact_and_full_sizes_are_remembered_separately(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._shown_table(directory, table_width=520, table_height=410)
+            try:
+                hud.resize(260, 100)
+                APP.processEvents()
+                hud._persist_geometry()
+                saved = ConfigManager(config.path)
+                self.assertTrue(saved.get('table_compact'))
+                self.assertEqual((saved.get('table_compact_width'), saved.get('table_compact_height')), (260, 100))
+                self.assertEqual((saved.get('table_width'), saved.get('table_height')), (520, 410))
+                hud.resize(600, 420)
+                APP.processEvents()
+                hud._persist_geometry()
+                saved = ConfigManager(config.path)
+                self.assertFalse(saved.get('table_compact'))
+                self.assertEqual((saved.get('table_width'), saved.get('table_height')), (600, 420))
+                self.assertEqual((saved.get('table_compact_width'), saved.get('table_compact_height')), (260, 100))
+            finally:
+                self._close(hud)
+
+    def test_compact_table_is_restored_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='table', table_compact=True,
+                               table_compact_width=260, table_compact_height=100)
+            try:
+                self.assertTrue(hud.table.is_compact())
+                self.assertEqual((hud.width(), hud.height()), (260, 100))
+                self.assertTrue(hud.title_label.isHidden())
+            finally:
+                self._close(hud)
+
+    def test_compact_table_survives_a_style_round_trip_and_theme_change(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._hud(directory, ui_mode='table', table_compact=True,
+                               table_compact_width=260, table_compact_height=100)
+            try:
+                hud._on_data_fetched(UsageMetrics(provider_id='claude', metric1_val=42, metric1_text='42%'))
+                hud.set_appearance('light')           # rebuilds the table
+                self.assertTrue(hud.table.is_compact())
+                small = next(d for d in hud.table.compact_dials() if d.provider_id == 'claude')
+                self.assertEqual(small.inner_text, '42%')
+                hud._apply_ui_mode('sidebar')
+                hud._apply_ui_mode('table')
+                self.assertTrue(hud.table.is_compact())
+                self.assertEqual((hud.width(), hud.height()), (260, 100))
+            finally:
+                self._close(hud)
+
+    def test_reset_geometry_returns_the_table_to_its_full_default_size(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='table', table_compact=True,
+                                    table_compact_width=260, table_compact_height=100)
+            try:
+                hud._reset_geometry()
+                APP.processEvents()
+                self.assertFalse(hud.table.is_compact())
+                self.assertEqual((hud.width(), hud.height()), (450, 350))
+            finally:
+                self._close(hud)
 
     def test_classic_cards_style_is_gone(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
