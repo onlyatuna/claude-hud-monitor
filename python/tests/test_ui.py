@@ -262,10 +262,10 @@ class HudTests(unittest.TestCase):
             config, hud = self._hud(directory, ui_mode='table')
             try:
                 hud.toggle_ui_mode()                      # table -> sidebar: header widgets leave the layout
-                hud.set_click_through(False)              # re-syncs the header
+                hud._sync_header()
                 hud.toggle_ui_mode()
                 hud.toggle_ui_mode()
-                hud.set_click_through(False)
+                hud._sync_header()
                 for widget in (hud.status_dot, hud.title_label, hud.ghost_label, hud.time_label):
                     self.assertFalse(widget.isWindow() and widget.isVisible(), widget.objectName())
             finally:
