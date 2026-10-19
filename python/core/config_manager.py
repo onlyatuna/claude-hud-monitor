@@ -25,6 +25,7 @@ DEFAULT_CONFIG = {
     "provider_order": ["claude", "agy", "codex"],  # tile/card/column order; press-hold and drag a tile to change
     "table_width": 450,
     "table_height": 350,
+    "table_blur": True,  # Acrylic / frosted-glass behind the table; off = flat rounded panel
     "table_compact": False,  # collapsed to one dial per service (window dragged below 380x280)
     "table_compact_width": 240,
     "table_compact_height": 96,

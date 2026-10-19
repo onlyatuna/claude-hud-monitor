@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QEvent, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenu, QApplication
 )
-from PySide6.QtGui import QCursor, QGuiApplication, QIcon
+from PySide6.QtGui import QCursor, QGuiApplication, QIcon, QRegion
 
 from core.providers import PROVIDERS, UsageMetrics
 from core.agy_rows import arrange_agy, arrange_by_order, normalize_order, DEFAULT_ORDER as AGY_DEFAULT_ORDER
@@ -27,6 +27,7 @@ from ui.hud_menu import build_hud_menu
 from ui.table_layout import (FULL_MIN_W, FULL_MIN_H, DEF_COMPACT_W, DEF_COMPACT_H, COMPACT_MARGIN,
                              compact_min_size, table_state)
 from ui import vibrancy
+from ui.round_mask import rounded_rects
 from system.memory import trim_memory
 
 SCHEME_LABELS = {"scale": "色階 (Scale)", "duo": "雙色 (Duo)"}
@@ -84,6 +85,14 @@ class HUDWindow(QWidget):
         self.geometry_timer.setInterval(250)
         self.geometry_timer.timeout.connect(self._persist_geometry)
         self.current_edge = None
+
+        self._blur_active = False        # native blur is on behind the table
+        self._blur_suspended = False     # ... but paused while the window is moved or resized
+        self._mask_key = None
+        self._blur_resume_timer = QTimer(self)
+        self._blur_resume_timer.setSingleShot(True)
+        self._blur_resume_timer.setInterval(220)
+        self._blur_resume_timer.timeout.connect(self._resume_blur)
 
         self._latest_metrics = {}
         self._raw_metrics = {}
@@ -260,15 +269,55 @@ class HUDWindow(QWidget):
         t = self.theme()
         if ui_mode == "table":
             dark = (t is THEMES["dark"])
-            vibrant = bool(self.isVisible() and vibrancy.apply(self, dark, t["radius"]))
+            blur = bool(self.config.get("table_blur", True))
+            if not blur:
+                vibrancy.clear(self)
+            vibrant = bool(blur and self.isVisible() and vibrancy.apply(self, dark, t["radius"]))
+            self._blur_active, self._blur_suspended = vibrant, False
             self.setStyleSheet(get_hud_stylesheet(t, vibrant))
         else:
+            self._blur_active = False
             vibrancy.clear(self)
             dark = t is THEMES["dark"]
             self.setStyleSheet(get_cards_stylesheet(dark=dark))
             self.sidebar.set_appearance(dark, 'scale')   # status colours only; the duo scheme is for the table
             for card in self.sidebar_cards.values():
                 card.set_appearance(dark)
+        self._refresh_mask()
+
+    def _refresh_mask(self):
+        """Clip the table window to rounded corners where native blur would otherwise show square corners."""
+        if self.config.get("ui_mode", "sidebar") == "table" and vibrancy.mask_needed(self._blur_active):
+            key = (self.width(), self.height(), self.theme()["radius"])
+            if key != self._mask_key:
+                region = QRegion()
+                for rect in rounded_rects(*key):
+                    region = region.united(QRegion(*rect))
+                self.setMask(region)
+                self._mask_key = key
+        elif self._mask_key is not None:
+            self.clearMask()
+            self._mask_key = None
+
+    def toggle_table_blur(self):
+        self.config.set("table_blur", not self.config.get("table_blur", True))
+        self._apply_theme()
+        if self.tray_icon:
+            self.tray_icon.update_menu_state()
+
+    def _suspend_blur(self):
+        """Acrylic makes dragging and resizing stutter: drop the blur until the movement stops."""
+        if not self._blur_active or self.config.get("ui_mode", "sidebar") != "table":
+            return
+        if not self._blur_suspended:
+            self._blur_suspended = bool(vibrancy.suspend(self, self.theme() is THEMES["dark"]))
+        if self._blur_suspended:
+            self._blur_resume_timer.start()
+
+    def _resume_blur(self):
+        if self._blur_suspended and self._blur_active:
+            vibrancy.apply(self, self.theme() is THEMES["dark"], self.theme()["radius"])
+        self._blur_suspended = False
 
     def _rebuild_table(self):
         if self.config.get("ui_mode", "sidebar") == "table":
@@ -890,12 +939,14 @@ class HUDWindow(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             if self.current_edge is not None:
                 wh = self.windowHandle()
+                self._suspend_blur()
                 if wh:
                     wh.startSystemResize(self.current_edge)
                 event.accept()
                 return
             elif not self.config.get("locked", False):
                 wh = self.windowHandle()
+                self._suspend_blur()
                 if wh:
                     wh.startSystemMove()
                 event.accept()
@@ -909,10 +960,15 @@ class HUDWindow(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._sync_table_state()
+        self._refresh_mask()
+        if self._blur_suspended:
+            self._blur_resume_timer.start()
         self._save_geometry()
 
     def moveEvent(self, event):
         super().moveEvent(event)
+        if self._blur_suspended:
+            self._blur_resume_timer.start()
         if self.config.get("ui_mode") == "sidebar" and not self._docking and not self._restoring_geometry:
             self._snap_timer.start()
         self._save_geometry()

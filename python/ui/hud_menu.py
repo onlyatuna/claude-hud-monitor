@@ -76,6 +76,7 @@ def _build_appearance(hud, menu):
         sub.addSeparator()
         for value in SCHEMES:
             _check(sub, f"{SCHEME_LABELS[value]}", value == hud.color_scheme(), lambda v=value: hud.set_color_scheme(v))
+        _check(sub, "毛玻璃模糊 (Blur)", hud.config.get("table_blur", True), hud.toggle_table_blur)
     sub.addSeparator()
     opacity = hud.config.get("opacity", 0.88)
     opacity_menu = sub.addMenu("視窗透明度 (Opacity)")

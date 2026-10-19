@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 from core.config_manager import ConfigManager
 from core.providers.base import UsageMetrics, MetricRow
@@ -539,6 +540,124 @@ class HudTests(unittest.TestCase):
                 self.assertEqual((hud.width(), hud.height()), (450, 350))
             finally:
                 self._close(hud)
+
+    def _table_with_native_blur(self, directory, **settings):
+        """A shown table window as it would be on Windows with Acrylic working."""
+        config, hud = self._hud(directory, ui_mode='table', **settings)
+        hud.show()
+        APP.processEvents()
+        return config, hud
+
+    def test_blur_is_on_by_default_and_can_be_switched_off_and_on(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._table_with_native_blur(directory)
+            try:
+                self.assertTrue(config.get('table_blur'))
+                with patch('ui.hud_window.vibrancy.apply', return_value=True) as apply, \
+                        patch('ui.hud_window.vibrancy.clear') as clear:
+                    hud.toggle_table_blur()
+                    self.assertFalse(ConfigManager(config.path).get('table_blur'))
+                    clear.assert_called()
+                    apply.assert_not_called()
+                    self.assertIn(THEMES['dark']['panel_solid'] if hud.theme() is THEMES['dark'] else hud.theme()['panel_solid'],
+                                  hud.styleSheet())
+                    hud.toggle_table_blur()
+                    self.assertTrue(ConfigManager(config.path).get('table_blur'))
+                    apply.assert_called()
+            finally:
+                self._close(hud)
+
+    def test_rounded_mask_follows_the_native_blur_and_the_window_size(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._table_with_native_blur(directory)
+            try:
+                self.assertTrue(hud.mask().isEmpty())               # offscreen: no Acrylic, so no mask
+                with patch('ui.hud_window.vibrancy.apply', return_value=True), \
+                        patch('ui.hud_window.vibrancy.mask_needed', side_effect=lambda applied, platform=None: bool(applied)):
+                    hud._apply_theme()
+                    mask = hud.mask()
+                    self.assertFalse(mask.isEmpty())
+                    self.assertEqual(mask.boundingRect().size(), hud.size())
+                    self.assertFalse(mask.contains(QPoint(0, 0)))
+                    self.assertTrue(mask.contains(QPoint(hud.width() // 2, 0)))
+                    self.assertTrue(mask.contains(QPoint(hud.width() // 2, hud.height() // 2)))
+                    hud.resize(520, 400)
+                    APP.processEvents()
+                    self.assertEqual(hud.mask().boundingRect().size(), hud.size())
+                    self.assertFalse(hud.mask().contains(QPoint(hud.width() - 1, hud.height() - 1)))
+                    hud.resize(240, 96)                             # collapsed dials get the same rounding
+                    APP.processEvents()
+                    self.assertEqual(hud.mask().boundingRect().size(), hud.size())
+                    hud.toggle_table_blur()                         # no blur: nothing to clip
+                    self.assertTrue(hud.mask().isEmpty())
+                    hud.toggle_table_blur()
+                    self.assertFalse(hud.mask().isEmpty())
+                    hud._apply_ui_mode('sidebar')
+                    self.assertTrue(hud.mask().isEmpty())
+            finally:
+                self._close(hud)
+
+    def test_blur_pauses_while_the_window_is_moved_or_resized_and_comes_back(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._table_with_native_blur(directory, appearance='dark')
+            try:
+                with patch('ui.hud_window.vibrancy.apply', return_value=True) as apply, \
+                        patch('ui.hud_window.vibrancy.suspend', return_value=True) as suspend:
+                    hud._apply_theme()
+                    apply.reset_mock()
+                    hud._suspend_blur()
+                    suspend.assert_called_once()
+                    self.assertTrue(hud._blur_resume_timer.isActive())
+                    hud._suspend_blur()                              # a second press does not stack suspends
+                    self.assertEqual(suspend.call_count, 1)
+                    hud.move(hud.x() + 5, hud.y() + 5)               # movement keeps the pause going
+                    APP.processEvents()
+                    self.assertTrue(hud._blur_resume_timer.isActive())
+                    apply.assert_not_called()
+                    hud._blur_resume_timer.timeout.emit()
+                    apply.assert_called_once()
+                    self.assertTrue(apply.call_args.args[1])         # dark theme
+                    hud._suspend_blur()
+                    self.assertEqual(suspend.call_count, 2)
+            finally:
+                self._close(hud)
+
+    def test_blur_is_never_suspended_without_native_blur_or_outside_the_table(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _, hud = self._table_with_native_blur(directory)
+            try:
+                with patch('ui.hud_window.vibrancy.suspend') as suspend:
+                    hud._suspend_blur()                              # offscreen: blur never applied
+                    suspend.assert_not_called()
+                    hud._apply_ui_mode('sidebar')
+                    hud._suspend_blur()
+                    suspend.assert_not_called()
+            finally:
+                self._close(hud)
+
+    def test_blur_switch_is_offered_for_the_table_only(self):
+        from PySide6.QtWidgets import QMenu
+        captured = []
+
+        class RecordingMenu(QMenu):
+            def exec(self, *args):
+                captured.append(self)
+
+        from PySide6.QtGui import QContextMenuEvent
+        for mode, expected in (('table', True), ('sidebar', False)):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory, \
+                    patch('ui.hud_window.PROVIDERS', {}), patch('ui.hud_menu.QMenu', RecordingMenu):
+                _, hud = self._hud(directory, ui_mode=mode)
+                try:
+                    captured.clear()
+                    hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
+                    look = next(a.menu() for a in captured[0].actions() if a.menu() and 'Appearance' in a.text())
+                    blur = [a for a in look.actions() if 'Blur' in a.text()]
+                    self.assertEqual(bool(blur), expected)
+                    if blur:
+                        self.assertTrue(blur[0].isChecked())
+                finally:
+                    self._close(hud)
 
     def test_classic_cards_style_is_gone(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
