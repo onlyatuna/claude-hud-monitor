@@ -257,6 +257,20 @@ class HudTests(unittest.TestCase):
                 self._close(hud)
 
 
+    def test_header_widgets_never_pop_up_as_windows_outside_table(self):
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='table')
+            try:
+                hud.toggle_ui_mode()                      # table -> sidebar: header widgets leave the layout
+                hud.set_click_through(False)              # re-syncs the header
+                hud.toggle_ui_mode()
+                hud.toggle_ui_mode()
+                hud.set_click_through(False)
+                for widget in (hud.status_dot, hud.title_label, hud.ghost_label, hud.time_label):
+                    self.assertFalse(widget.isWindow() and widget.isVisible(), widget.objectName())
+            finally:
+                self._close(hud)
+
     def test_panel_follow_system_only_in_auto_mode(self):
         from PySide6.QtCore import Qt
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):

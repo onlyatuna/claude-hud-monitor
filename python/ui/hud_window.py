@@ -415,10 +415,13 @@ class HUDWindow(QWidget):
         self.config.set("table_compact", bool(compact))
 
     def _sync_header(self):
-        compact = self.config.get("ui_mode") == "table" and self.table.is_compact()
+        in_table = self.config.get("ui_mode") == "table"
+        compact = in_table and self.table.is_compact()
+        # Outside the table the header widgets sit unparented; showing them would pop up stray windows.
+        show = in_table and not compact
         for widget in (self.status_dot, self.title_label, self.time_label):
-            widget.setVisible(not compact)
-        self.ghost_label.setVisible(self.config.get("click_through", False) and not compact)
+            widget.setVisible(show)
+        self.ghost_label.setVisible(show and bool(self.config.get("click_through", False)))
 
     def _sync_table_state(self):
         if self._restoring_geometry or self.config.get("ui_mode") != "table":
