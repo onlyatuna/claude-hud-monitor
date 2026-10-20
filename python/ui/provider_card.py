@@ -1,18 +1,22 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QProgressBar, QFrame, QSizePolicy
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal, QEvent, QPoint, QRect
 
 from core.providers.base import UsageMetrics, BaseProvider
-from ui.styles import get_progress_color
+from ui.gauge import GaugeBar, ramp_color
+from ui.brand import brand_color
+from core.pace import reset_stamp
 
 PROVIDER_THEMES = {
-    "claude": {"color": "#38bdf8", "name": "CLAUDE CODE"},
-    "agy": {"color": "#10b981", "name": "ANTIGRAVITY"},
-    "codex": {"color": "#a855f7", "name": "OPENAI CODEX"}
+    "claude": {"color": brand_color("claude", True), "name": "CLAUDE CODE"},
+    "agy": {"color": brand_color("agy", True), "name": "ANTIGRAVITY"},
+    "codex": {"color": brand_color("codex", True), "name": "OPENAI CODEX"}
 }
 
 class ProviderCardWidget(QWidget):
+    rowOrderChanged = Signal(list)   # agy only: new order of the five row titles after a drag
+
     def __init__(self, provider_id: str, parent=None):
         super().__init__(parent)
         self.provider_id = provider_id
@@ -20,6 +24,10 @@ class ProviderCardWidget(QWidget):
         self.theme = PROVIDER_THEMES.get(provider_id, {"color": "#38bdf8", "name": provider_id.upper()})
         self.current_metrics = UsageMetrics(provider_id=provider_id)
         self._init_ui()
+        self._row_drag = None
+        self._drop_line = None
+        for cell in (self.m1_cell, self.m2_cell):
+            self._arm_cell(cell)
 
     def _init_ui(self):
         layout = QVBoxLayout(self)
@@ -67,17 +75,17 @@ class ProviderCardWidget(QWidget):
         m1_hdr.addWidget(self.m1_val)
         m1_box.addLayout(m1_hdr)
 
-        self.m1_bar = QProgressBar()
+        self.m1_bar = GaugeBar()
         self.m1_bar.setRange(0, 100)
         self.m1_bar.setValue(0)
-        self.m1_bar.setTextVisible(False)
         m1_box.addWidget(self.m1_bar)
 
         self.m1_sub = QLabel("重設於: --")
         self.m1_sub.setObjectName("SubDetail")
         m1_box.addWidget(self.m1_sub)
 
-        layout.addLayout(m1_box)
+        self.m1_cell = self._make_cell(m1_box)
+        layout.addWidget(self.m1_cell)
 
         # 3. Metric 2 (Weekly 7D or Credits)
         m2_box = QVBoxLayout()
@@ -94,29 +102,190 @@ class ProviderCardWidget(QWidget):
         m2_hdr.addWidget(self.m2_val)
         m2_box.addLayout(m2_hdr)
 
-        self.m2_bar = QProgressBar()
+        self.m2_bar = GaugeBar()
         self.m2_bar.setRange(0, 100)
         self.m2_bar.setValue(0)
-        self.m2_bar.setTextVisible(False)
         m2_box.addWidget(self.m2_bar)
 
         self.m2_sub = QLabel("重設於: --")
         self.m2_sub.setObjectName("SubDetail")
         m2_box.addWidget(self.m2_sub)
 
-        layout.addLayout(m2_box)
+        self.m2_cell = self._make_cell(m2_box)
+        layout.addWidget(self.m2_cell)
+        self.extra_rows = []
+        self.extra_container = None
+
+    @staticmethod
+    def _reset_text(reset, title, subtext=""):
+        """"重設於: 週五 18:00 · 6天 5時 55分" for weekly rows, just the countdown for short windows."""
+        if not reset:
+            return subtext or "重設於: --"
+        countdown = BaseProvider.format_countdown(reset)
+        stamp = reset_stamp(reset, title)
+        return f"重設於: {stamp} · {countdown}" if stamp else f"重設於: {countdown}"
+
+    @staticmethod
+    def _make_cell(box):
+        """A metric block as one hoverable, draggable cell."""
+        cell = QWidget()
+        cell.setObjectName("RowCell")
+        cell.setStyleSheet("QWidget#RowCell {background: transparent; border-radius: 6px;} QWidget#RowCell:hover {background: rgba(127, 127, 127, 0.16);}")
+        box.setContentsMargins(4, 2, 4, 2)
+        cell.setLayout(box)
+        return cell
+
+    def _arm_cell(self, cell):
+        cell.setCursor(Qt.CursorShape.OpenHandCursor)
+        cell.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        for widget in [cell] + cell.findChildren(QWidget):
+            widget.installEventFilter(self)
+
+    def _create_extra_row(self):
+        if self.extra_container is None:
+            self.extra_container = QWidget()
+            extra_layout = QVBoxLayout(self.extra_container)
+            extra_layout.setContentsMargins(0, 0, 0, 0)
+            extra_layout.setSpacing(1)
+            self.layout().addWidget(self.extra_container)
+        box = QVBoxLayout()
+        box.setSpacing(0)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(1)
+        title = QLabel()
+        title.setObjectName("MetricTitle")
+        value = QLabel()
+        value.setObjectName("MetricValue")
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(value)
+        box.addLayout(header)
+        bar = GaugeBar()
+        bar.setRange(0, 100)
+        box.addWidget(bar)
+        sub = QLabel()
+        sub.setObjectName("SubDetail")
+        box.addWidget(sub)
+        widget = self._make_cell(box)
+        self._arm_cell(widget)
+        self.extra_container.layout().addWidget(widget)
+        row = (widget, title, value, bar, sub)
+        self.extra_rows.append(row)
+        return row
+
+    def _update_extra_metrics(self, metrics):
+        while len(self.extra_rows) < len(metrics):
+            self._create_extra_row()
+        if self.extra_container is not None:
+            self.extra_container.setVisible(bool(metrics))
+        for index, (widget, title, value, bar, sub) in enumerate(self.extra_rows):
+            widget.setVisible(index < len(metrics))
+            if index >= len(metrics):
+                continue
+            metric = metrics[index]
+            title.setText(metric.title)
+            value.setText(metric.text)
+            color = ramp_color(metric.val, self.dark) if metric.val is not None else "#64748b"
+            value.setStyleSheet(f"color: {color}; font-size: 14px;")
+            bar.set_dark(self.dark)
+            bar.setValue(min(100, max(0, metric.val or 0)))
+            sub.setStyleSheet("color: #64748b;")
+            sub.setText(self._reset_text(metric.reset, metric.title, metric.subtext))
+
+    # ---- drag any metric block to reorder (the first two rows are the main pair)
+    def _drag_rows(self):
+        """[(title, QRect in card coordinates, cell widget)] in display order; [] when there is nothing to reorder."""
+        data = self.current_metrics
+        if (data.error and not data.stale) or not self.m1_label.text():
+            return []
+
+        def rect(cell):
+            top = cell.mapTo(self, QPoint(0, 0)).y()
+            return QRect(0, top, self.width(), max(1, cell.height()))
+
+        rows = [(self.m1_label.text(), rect(self.m1_cell), self.m1_cell),
+                (self.m2_label.text(), rect(self.m2_cell), self.m2_cell)]
+        for widget, title, _value, _bar, _sub in self.extra_rows[:len(data.extra_metrics)]:
+            rows.append((title.text(), rect(widget), widget))
+        return rows
+
+    def _cell_of(self, obj):
+        cells = {id(self.m1_cell), id(self.m2_cell)} | {id(row[0]) for row in self.extra_rows}
+        while obj is not None and id(obj) not in cells:
+            obj = obj.parentWidget()
+        return obj
+
+    def _drop_index(self, rows, source, y):
+        others = [row for i, row in enumerate(rows) if i != source]
+        index = sum(1 for _t, r, _c in others if y > r.center().y())
+        return others, index
+
+    def _show_drop_line(self, others, index):
+        if self._drop_line is None:
+            self._drop_line = QFrame(self)
+            self._drop_line.setFixedHeight(3)
+            self._drop_line.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._drop_line.setStyleSheet(f"background: {self.theme['color']}; border-radius: 1px;")
+        y = others[0][1].top() - 2 if index == 0 else others[index - 1][1].bottom() + 1
+        self._drop_line.setGeometry(4, y, max(10, self.width() - 8), 3)
+        self._drop_line.show()
+        self._drop_line.raise_()
+
+    def eventFilter(self, obj, event):
+        kind = event.type()
+        drag = self._row_drag
+        if drag is not None and obj is drag["cell"]:
+            if kind == QEvent.Type.MouseMove:
+                pos = event.globalPosition().toPoint()
+                if not drag["active"] and (pos - drag["start"]).manhattanLength() > 6:
+                    drag["active"] = True
+                    obj.setCursor(Qt.CursorShape.ClosedHandCursor)
+                if drag["active"]:
+                    rows = self._drag_rows()
+                    if rows:
+                        others, index = self._drop_index(rows, drag["source"], self.mapFromGlobal(pos).y())
+                        drag["target"] = index
+                        self._show_drop_line(others, index)
+                return True
+            if kind == QEvent.Type.MouseButtonRelease:
+                obj.releaseMouse()
+                obj.setCursor(Qt.CursorShape.OpenHandCursor)
+                if self._drop_line is not None:
+                    self._drop_line.hide()
+                self._row_drag = None
+                if drag["active"] and drag.get("target") is not None:
+                    rows = self._drag_rows()
+                    if rows:
+                        titles = [t for t, _r, _c in rows]
+                        moved = titles.pop(drag["source"])
+                        titles.insert(drag["target"], moved)
+                        if titles != [t for t, _r, _c in rows]:
+                            self.rowOrderChanged.emit(titles)
+                return True
+        elif kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            cell = self._cell_of(obj)
+            rows = self._drag_rows() if cell is not None else []
+            for index, (_title, _rect, row_cell) in enumerate(rows):
+                if row_cell is cell:
+                    self._row_drag = {"cell": cell, "source": index, "active": False, "target": None,
+                                      "start": event.globalPosition().toPoint()}
+                    cell.grabMouse()
+                    return True
+        return super().eventFilter(obj, event)
 
     def set_appearance(self, dark: bool):
         self.dark = dark
         base = PROVIDER_THEMES.get(self.provider_id, {"color": "#38bdf8", "name": self.provider_id.upper()})
         self.theme = dict(base)
         if not dark:
-            self.theme["color"] = {"claude": "#0369a1", "agy": "#047857", "codex": "#7e22ce"}.get(self.provider_id, "#0369a1")
+            self.theme["color"] = brand_color(self.provider_id, False)
         self.title.setStyleSheet(f"color: {self.theme['color']}; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;")
         self.update_metrics(self.current_metrics)
 
     def update_metrics(self, data: UsageMetrics):
         self.current_metrics = data
+        self._update_extra_metrics([] if data.error and not data.stale else data.extra_metrics)
         if data.provider_name:
             self.title.setText(data.provider_name)
         else:
@@ -158,18 +327,18 @@ class ProviderCardWidget(QWidget):
         # Metric 1
         self.m1_label.setText(data.metric1_title)
         self.m1_val.setText(data.metric1_text)
-        c1 = get_progress_color(data.metric1_val, self.dark) if data.metric1_val is not None else "#64748b"
+        c1 = ramp_color(data.metric1_val, self.dark) if data.metric1_val is not None else "#64748b"
         self.m1_val.setStyleSheet(f"color: {c1}; font-size: 14px;")
-        self.m1_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c1}; }}")
-        self.m1_bar.setValue(int(min(100, max(0, data.metric1_val or 0))))
+        self.m1_bar.set_dark(self.dark)
+        self.m1_bar.setValue(min(100, max(0, data.metric1_val or 0)))
 
         # Metric 2
         self.m2_label.setText(data.metric2_title)
         self.m2_val.setText(data.metric2_text)
-        c2 = get_progress_color(data.metric2_val, self.dark) if data.metric2_val is not None else "#64748b"
+        c2 = ramp_color(data.metric2_val, self.dark) if data.metric2_val is not None else "#64748b"
         self.m2_val.setStyleSheet(f"color: {c2}; font-size: 14px;")
-        self.m2_bar.setStyleSheet(f"QProgressBar::chunk {{ background-color: {c2}; }}")
-        self.m2_bar.setValue(int(min(100, max(0, data.metric2_val or 0))))
+        self.m2_bar.set_dark(self.dark)
+        self.m2_bar.setValue(min(100, max(0, data.metric2_val or 0)))
 
         # Badges (compact formatting to prevent squeezing title)
         b1 = (data.badge1_text or "").replace(" 剩餘:", ":").replace("剩餘:", ":")
@@ -205,7 +374,9 @@ class ProviderCardWidget(QWidget):
             label = getattr(self, f"m{index}_sub")
             reset = getattr(data, f"metric{index}_reset")
             subtext = getattr(data, f"metric{index}_subtext")
-            label.setText(f"重設於: {BaseProvider.format_countdown(reset)}" if reset else (subtext or "重設於: --"))
+            label.setText(self._reset_text(reset, getattr(data, f"metric{index}_title"), subtext))
+        for metric, row in zip(data.extra_metrics, self.extra_rows):
+            row[4].setText(self._reset_text(metric.reset, metric.title, metric.subtext))
         if data.stale:
             stamp = data.last_success.astimezone().strftime("%m/%d %H:%M:%S") if data.last_success else "--"
             self.m1_sub.setText(f"舊資料 {stamp}")

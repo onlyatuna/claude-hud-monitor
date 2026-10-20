@@ -15,7 +15,7 @@ QTimer / 手動刷新 / 休眠恢復
               ↓
         UsageMetrics
               ↓ Python queue → Qt timer
-       ProviderCardWidget (Classic Cards) / UsageTable (Modern Table)
+       SidebarWidget（磚與固定窄欄內的 ProviderCardWidget）/ UsageTable (Modern Table)
 ```
 
 ## 責任界線
@@ -23,11 +23,13 @@ QTimer / 手動刷新 / 休眠恢復
 - core/providers/：傳輸、認證讀取、解析；不碰 Qt widget、不修改憑證。
 - core/providers/base.py：共用資料契約、百分比驗證、錯誤分類、倒數。
 - core/refresh_controller.py：請求序號、退避、最後成功資料與排程；可變狀態由 Qt 主執行緒更新。
-- ui/hud_window.py：視窗、選單、穿透、排版/主題雙模式切換與休眠偵測。
+- ui/hud_window.py：視窗、選單、穿透、表格／側邊欄雙風格切換（傳統卡片已移除，舊設定由 core/config_manager.py 的 migrate_style 遷移到側邊欄固定窄欄）、表格收合、圓角遮罩與休眠偵測。
 - ui/provider_card.py：渲染經典卡片資料，不查網路。
-- ui/usage_table.py：渲染現代表格與圓盤儀表，不查網路；平均進度虛線與超出段斜紋只表達速度，不改變顏色。
-- ui/styles.py：經典暗黑樣式與現代毛玻璃淺色／深色主題樣式表。
-- ui/vibrancy.py：macOS 原生毛玻璃背景（NSVisualEffectView）；其他平台自動改用不透明面板。
+- ui/usage_table.py：渲染現代表格與圓盤儀表，不查網路；平均進度虛線與超出段斜紋只表達速度，不改變顏色。視窗縮到 380×280 以下時收合成每服務一顆圓盤（每個欄位另有一顆精簡圓盤，tooltip 帶完整細節）。
+- ui/table_layout.py：表格收合的門檻、遲滯與收合最小尺寸（純函式，有單元測試）。
+- ui/round_mask.py：圓角視窗遮罩的幾何（純函式）；Windows 的 Acrylic 模糊整個矩形，需裁掉四角。
+- ui/styles.py：側邊欄窄欄／飛出面板用的卡片樣式（深色／淺色）與表格的毛玻璃淺色／深色主題樣式表。
+- ui/vibrancy.py：macOS 原生毛玻璃背景（NSVisualEffectView）、Windows Acrylic（拖曳／縮放時可暫停模糊）；其他平台自動改用不透明面板。`table_blur` 設定可關閉毛玻璃。
 - core/pace.py：倒數格式、視窗長度解析、平均進度與色階門檻（純函式，具完整單元測試）。
 - core/config_manager.py：設定位置、批次更新、同目錄暫存檔與原子替換。
 - core/diagnostics.py：限制大小的操作紀錄，禁止傳入憑證、原始回應與 CLI stderr。
@@ -48,7 +50,7 @@ stale 與 last_success 由協調層管理，最後成功資料不可假裝是最
 worker 只持有 Python queue，不持有或從背景執行緒呼叫 Qt 物件；主執行緒每 25ms 取回結果。
 每個 Provider 同時最多一個 worker。手動刷新／休眠恢復使舊結果失效，原查詢結束後只補一次新查詢。
 不得以清除布林鎖或 join timeout 假裝取消 worker。關閉後忽略任何晚到結果。
-各服務獨立排程，AGY 慢查詢不阻塞其他服務。CLI 有總時限；urllib timeout 為 I/O timeout，非整體截止時間。
+各服務獨立排程，AGY 慢查詢不阻塞其他服務。AGY 只走 HTTP（不呼叫 agy 執行檔）；urllib timeout 為 I/O timeout，非整體截止時間。
 OS 層呼叫若卡住，該服務等待原查詢退出，不無限產生 worker；這仍是傳輸層的限制。
 
 ## 設定與平台

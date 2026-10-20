@@ -1,5 +1,5 @@
 """
-HUD themes and stylesheets supporting both Classic Cards and Modern Table layouts.
+HUD themes and stylesheets: the card styles used by the sidebar panel and the Modern Table themes.
 """
 
 # ==================== Common / Card Colors ====================
@@ -55,7 +55,7 @@ THEMES = {
 
 
 def get_cards_stylesheet(vibrant: bool = False, *, dark: bool = True) -> str:
-    """Classic Cards layout stylesheet (NVIDIA / RivaTuner Aesthetic)."""
+    """Card stylesheet for the sidebar panel and flyout (NVIDIA / RivaTuner aesthetic)."""
     bg = "rgba(14, 17, 23, 0.94)"
     template = """
     QWidget#CentralWidget {

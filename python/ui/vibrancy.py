@@ -72,8 +72,8 @@ def _apply_macos(widget, dark: bool, corner_radius: float) -> bool:
         return False
 
 
-def _apply_windows(widget, dark: bool) -> bool:
-    """Apply true borderless Acrylic blur on Windows without white edges."""
+def _set_windows_accent(widget, state: int, dark: bool) -> bool:
+    """Set the Windows window accent: 4 = Acrylic blur, 2 = flat tinted panel (no blur)."""
     try:
         import ctypes
 
@@ -102,13 +102,30 @@ def _apply_windows(widget, dark: bool) -> bool:
         # AccentFlags: 2 = Draw all borders OFF (prevents white square borders around rounded corners)
         # GradientColor: 0x99161a22 (AABBGGRR - deep dark smoke tint)
         grad_color = 0x99161a22 if dark else 0x99f0f2f8
-        accent = ACCENT_POLICY(4, 2, grad_color, 0)
+        accent = ACCENT_POLICY(state, 2, grad_color, 0)
         data = WINCOMPATTRDATA(19, ctypes.cast(ctypes.pointer(accent), c_void_p), sizeof(accent))
         res = user32.SetWindowCompositionAttribute(win_id, byref(data))
         return bool(res)
     except Exception as e:
         logger.warning(f"[Vibrancy Windows] Acrylic blur unavailable: {e}")
         return False
+
+
+def _apply_windows(widget, dark: bool) -> bool:
+    """Apply true borderless Acrylic blur on Windows without white edges."""
+    return _set_windows_accent(widget, 4, dark)
+
+
+def mask_needed(blur_applied: bool, platform: str = None) -> bool:
+    """Only Windows' Acrylic needs the window clipped to rounded corners (macOS clips its effect view itself)."""
+    return bool(blur_applied) and (platform or sys.platform) == "win32"
+
+
+def suspend(widget, dark: bool) -> bool:
+    """Drop the blur but keep the tint while the window is dragged or resized (Acrylic makes both stutter)."""
+    if not is_supported() or sys.platform != "win32":
+        return False
+    return _set_windows_accent(widget, 2, dark)
 
 
 def clear(widget) -> bool:

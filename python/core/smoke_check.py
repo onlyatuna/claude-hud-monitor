@@ -30,11 +30,10 @@ def run():
             hud = HUDWindow(config, providers={})
             hud._on_data_fetched(UsageMetrics(provider_id='agy', error='test'))
             hud._on_data_fetched(UsageMetrics(provider_id='agy', metric1_val=20, metric1_text='20%'))
-            if 'test' in hud.cards['agy'].m1_sub.text():
+            if 'test' in hud.sidebar_cards['agy'].m1_sub.text():
                 raise RuntimeError('Cards error survived recovery')
             if hud.table.columns['agy'].badge.text() == 'OFFLINE':
                 raise RuntimeError('Table error survived recovery')
-            hud.toggle_layout_mode()
             hud.toggle_ui_mode()
             hud.set_color_scheme('duo')
             hud.set_appearance('dark')

@@ -19,7 +19,9 @@ from PySide6.QtWidgets import QWidget, QLabel, QGridLayout, QHBoxLayout, QVBoxLa
 from core.pace import (FIVE_HOURS, ONE_WEEK, elapsed_fraction, format_countdown_dhm, format_countdown_hm,
                        format_reset_time, pace_mark, runout_text, scale_level, window_caption, window_seconds)
 from core.providers.base import UsageMetrics
-from ui.styles import get_table_stylesheet
+from ui.styles import get_table_stylesheet, THEMES
+from ui.brand import brand_color
+from ui.table_layout import COMPACT_DIAL_MIN, COMPACT_GAP
 
 PROVIDER_NAMES = {"claude": "Claude Code", "codex": "Codex", "agy": "Antigravity"}
 PROVIDER_ORDER = ["claude", "codex", "agy"]
@@ -49,12 +51,12 @@ def _hidpi_pixmap(size: int) -> QPixmap:
     return pm
 
 
-def provider_icon(provider_id: str, theme: dict, size: int = 18) -> QPixmap:
-    """Monochrome line glyph per provider in the text colour (no brand artwork)."""
+def provider_icon(provider_id: str, theme: dict, size: int = 18, color: Optional[str] = None) -> QPixmap:
+    """Line glyph per provider, drawn in the service colour (or the text colour); no brand artwork."""
     pm = _hidpi_pixmap(size)
     p = QPainter(pm)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setPen(QPen(QColor(theme["text"]), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+    p.setPen(QPen(QColor(color or theme["text"]), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                   Qt.PenJoinStyle.RoundJoin))
     p.setBrush(Qt.BrushStyle.NoBrush)
     s, c = float(size), size / 2
@@ -127,15 +129,16 @@ def _glyph_row(kind: str, color: str, text: str, theme: dict, obj: str, size: in
 class UsageDial(QWidget):
     """Inner pie = 5h window, outer ring = weekly window."""
 
-    def __init__(self, theme: dict, parent=None):
+    def __init__(self, theme: dict, parent=None, min_size: int = 84, provider_id: Optional[str] = None):
         super().__init__(parent)
         self.t = theme
+        self.provider_id = provider_id
         self.inner = (None, None, None)   # (percent, pace mark, colour)
         self.outer = (None, None, None)
         self.inner_text = "--"
         self.caption = ""
         self.muted = False
-        self.setMinimumSize(84, 84)
+        self.setMinimumSize(min_size, min_size)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def set_values(self, inner, inner_text, outer, caption="", muted=False):
@@ -277,10 +280,12 @@ class ProviderColumn:
         top.setSpacing(5)
         top.addStretch()
         self.icon = QLabel()
-        self.icon.setPixmap(provider_icon(provider_id, theme))
+        self.brand = brand_color(provider_id, theme is THEMES["dark"] or theme == THEMES["dark"])
+        self.icon.setPixmap(provider_icon(provider_id, theme, color=self.brand))
         top.addWidget(self.icon)
         self.name = QLabel(PROVIDER_NAMES.get(provider_id, provider_id))
         self.name.setObjectName("HeaderName")
+        self.name.setStyleSheet(f"color: {self.brand};")
         top.addWidget(self.name)
         top.addStretch()
         hv.addLayout(top)
@@ -290,6 +295,7 @@ class ProviderColumn:
         self.m1_reset = _cell("--:--", "Cell")
         self.m1_countdown = _cell("--:--", "Cell")
         self.dial = UsageDial(theme)
+        self.compact_dial = UsageDial(theme, min_size=COMPACT_DIAL_MIN, provider_id=provider_id)   # the collapsed view
         self.m2_val = _cell("--", "Pill")
         self.m2_reset = _cell("--:--", "Cell")
         self.m2_countdown = _cell("--:--:--", "Cell")
@@ -312,6 +318,28 @@ class ProviderColumn:
         data = self.current_metrics
         return bool(data.error) and not data.stale
 
+    def _set_dials(self, inner, inner_text, outer, caption="", muted=False):
+        self.dial.set_values(inner, inner_text, outer, caption, muted)
+        self.compact_dial.set_values(inner, inner_text, outer, "", muted)   # no room for the window caption
+
+    def _compact_tip(self, data, tip1, tip2):
+        """Everything the collapsed view no longer shows, in one tooltip."""
+        name = PROVIDER_NAMES.get(self.provider_id, self.provider_id)
+        lines = [name]
+        for label, text, reset, countdown, run_out in (
+                (LABELS["five_h"], data.metric1_text, data.metric1_reset, format_countdown_hm(data.metric1_reset), tip1),
+                (LABELS["week"], data.metric2_text, data.metric2_reset, format_countdown_dhm(data.metric2_reset), tip2)):
+            lines.append(f"{label}  {text}  {LABELS['reset']} {format_reset_time(reset, with_day=label == LABELS['week'])}"
+                         f"  {LABELS['left']} {countdown}")
+            if run_out:
+                lines.append(f"  {run_out}")
+        if data.stale:
+            stamp = data.last_success.astimezone().strftime("%m/%d %H:%M:%S") if data.last_success else "--"
+            lines.append(f"STALE 舊資料 {stamp}")
+        if data.error and data.stale:
+            lines.append(data.error)
+        return "\n".join(lines)
+
     def update_metrics(self, data: UsageMetrics):
         self.current_metrics = data
         for w in self.value_cells + [self.header]:
@@ -324,8 +352,10 @@ class ProviderColumn:
 
         if muted:
             self.badge.setText("OFFLINE")
-            self.dial.set_values((None, None, None), "ERR", (None, None, None), muted=True)
+            self._set_dials((None, None, None), "ERR", (None, None, None), muted=True)
             self.dial.setToolTip(data.error or "")
+            self.compact_dial.setToolTip("\n".join(s for s in (PROVIDER_NAMES.get(self.provider_id, self.provider_id),
+                                                               data.error) if s))
             self.m2_val.setText("--")
             self.m2_val.setStyleSheet("")
             for w, text in ((self.m1_reset, "--:--"), (self.m1_countdown, "--:--"),
@@ -333,11 +363,18 @@ class ProviderColumn:
                 w.setText(text)
             return
 
-        self.badge.setText("⏱ STALE" if data.stale else (data.badge1_text or data.badge2_text or " "))
+        self.badge.setText("⏱ STALE" if data.stale else self._badge_text(data))
         if data.stale:
             stamp = data.last_success.astimezone().strftime("%m/%d %H:%M:%S") if data.last_success else "--"
             self.header.setToolTip("\n".join(s for s in (f"舊資料 {stamp}", data.error) if s))
         self.update_countdown()
+
+    @staticmethod
+    def _badge_text(data):
+        if data.provider_id == "agy" and data.badge1_text and data.badge2_text:
+            compact = lambda t: t.replace(" 剩餘:", ":").replace("剩餘:", ":")
+            return f"{compact(data.badge1_text)} · {compact(data.badge2_text)}"
+        return data.badge1_text or data.badge2_text or " "
 
     def update_countdown(self):
         """Refresh everything that depends on the clock: countdowns, pace marks, run-out estimate."""
@@ -356,8 +393,8 @@ class ProviderColumn:
         mark1, mark2 = pace_mark(e1), pace_mark(e2)
         fill1, _ = self._colors(data.metric1_val, "inner")
         fill2, text2 = self._colors(data.metric2_val, "outer")
-        self.dial.set_values((data.metric1_val, mark1, fill1), data.metric1_text,
-                             (data.metric2_val, mark2, fill2), window_caption(data.metric1_title, "5H"))
+        self._set_dials((data.metric1_val, mark1, fill1), data.metric1_text,
+                        (data.metric2_val, mark2, fill2), window_caption(data.metric1_title, "5H"))
 
         pct = data.metric2_text.replace("%", " %")
         cap2 = window_caption(data.metric2_title, "7D")
@@ -373,6 +410,7 @@ class ProviderColumn:
         self.m2_val.setToolTip("\n".join(s for s in (tip2, stale_tip) if s))
         self.dial.setToolTip("\n".join(s for s in (tip1 and f"5 小時：{tip1}", tip2 and f"1 週：{tip2}",
                                                    stale_tip) if s))
+        self.compact_dial.setToolTip(self._compact_tip(data, tip1, tip2))
 
 
 class UsageTable(QWidget):
@@ -380,8 +418,23 @@ class UsageTable(QWidget):
         super().__init__(parent)
         self.setStyleSheet(get_table_stylesheet(theme))
         self.columns = {pid: ProviderColumn(pid, theme, scheme) for pid in provider_ids}
+        self._compact = False
 
-        grid = QGridLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.full_view = QWidget(self)
+        outer.addWidget(self.full_view)
+        self.compact_view = QWidget(self)
+        row = QHBoxLayout(self.compact_view)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(COMPACT_GAP)
+        for column in self.columns.values():
+            row.addWidget(column.compact_dial, 1)
+        outer.addWidget(self.compact_view)
+        self.compact_view.hide()
+
+        grid = QGridLayout(self.full_view)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(4)
@@ -433,6 +486,18 @@ class UsageTable(QWidget):
             grid.setColumnStretch(col, 1)
         grid.setRowStretch(5, 1)
         grid.setRowMinimumHeight(2, 18)
+
+    def is_compact(self) -> bool:
+        return self._compact
+
+    def set_compact(self, compact: bool):
+        """Collapse to one dial per service (or restore the full table)."""
+        self._compact = bool(compact)
+        self.full_view.setVisible(not self._compact)
+        self.compact_view.setVisible(self._compact)
+
+    def compact_dials(self) -> list:
+        return [column.compact_dial for column in self.columns.values()]
 
     def update_metrics(self, data: UsageMetrics):
         if data.provider_id in self.columns:
