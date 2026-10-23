@@ -90,7 +90,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: onlyatuna/ferrokit
-          ref: a622ac22a3cb08313134719e650ebdc36f591e4d
+          ref: c17b6c160aac96496d7726c7ae4e7e4a7c0d2050
           path: ferrokit
 
       # The runner image's stable Rust (rustup, with clippy and rustfmt); installing the newest

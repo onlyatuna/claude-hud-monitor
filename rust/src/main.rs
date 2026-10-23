@@ -432,8 +432,8 @@ fn main() -> std::process::ExitCode {
         }) else {
             return;
         };
-        let mut menu = build_menu(&cfg, &root);
-        if let Some(action) = menu.exec_popup(global_pos) {
+        let menu = std::rc::Rc::new(std::cell::RefCell::new(build_menu(&cfg, &root)));
+        if let Some(action) = ferrokit_widgets::menu::Menu::exec_popup(&menu, global_pos) {
             if let Some(id) = action.borrow().data().to_u64() {
                 let action_id = id as u32;
                 MAIN_TRAY.with(|t_cell| {
@@ -595,7 +595,7 @@ fn main() -> std::process::ExitCode {
     });
 
     // Timers matching Qt C++ QTimer architecture
-    let mut clock_timer = Timer::new();
+    let clock_timer = Timer::new();
     clock_timer.set_interval(1000);
     clock_timer.timeout.connect(move |()| {
         MAIN_HUD.with(|cell| {
@@ -607,9 +607,9 @@ fn main() -> std::process::ExitCode {
             }
         });
     });
-    clock_timer.as_mut().start();
+    clock_timer.start();
 
-    let mut poll_timer = Timer::new();
+    let poll_timer = Timer::new();
     poll_timer.set_interval(100);
     poll_timer.timeout.connect(move |()| {
         MAIN_HUD.with(|cell| {
@@ -618,7 +618,7 @@ fn main() -> std::process::ExitCode {
             }
         });
     });
-    poll_timer.as_mut().start();
+    poll_timer.start();
 
     // Run Qt event loop
     let exit_code = _app.exec();

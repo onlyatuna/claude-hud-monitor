@@ -129,6 +129,18 @@ pub(crate) fn set_label_color(
     }
 }
 
+/// A pen with round caps and joins. The HUD's drawing was matched against these; ferrokit's
+/// `Pen::new` now defaults to Qt's square cap and bevel join.
+pub(crate) fn round_pen(
+    color: ferrokit_gui::tiny_skia::Color,
+    width: f32,
+) -> ferrokit_gui::paint::Pen {
+    use ferrokit_gui::tiny_skia::{LineCap, LineJoin};
+    ferrokit_gui::paint::Pen::new(color, width)
+        .with_cap(LineCap::Round)
+        .with_join(LineJoin::Round)
+}
+
 /// Whether the UI is dark for an `appearance` setting. `"auto"` follows the operating system's
 /// colour scheme (Python `_system_is_dark`); an unknown scheme counts as dark, as there.
 pub(crate) fn resolve_is_dark(appearance: &str) -> bool {

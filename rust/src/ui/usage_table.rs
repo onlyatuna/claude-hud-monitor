@@ -12,16 +12,14 @@ use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::rc::Rc;
 
-use ferrokit_core::object::{ObjectData, ObjectId, QObject};
+use ferrokit_core::object::{ObjectData, ObjectDataMut, ObjectId, QObject};
 use ferrokit_gui::geometry::primitives::{Margins, PointF, Rect, RectF};
 use ferrokit_gui::paint::brush::Brush;
-use ferrokit_gui::paint::painter::{
-    create_donut_arc_path, create_pie_path, Painter, Pen, RenderHint,
-};
+use ferrokit_gui::paint::painter::{create_donut_arc_path, create_pie_path, Painter, RenderHint};
 use ferrokit_gui::paint::pixmap::Pixmap;
 use ferrokit_gui::text::font::{Font, FontWeight};
 use ferrokit_gui::text::font_metrics::FontMetrics;
-use ferrokit_gui::tiny_skia::{Color, LineCap, LineJoin, PathBuilder};
+use ferrokit_gui::tiny_skia::{Color, LineCap, PathBuilder};
 use ferrokit_widgets::{
     Alignment, BoxLayout, EmptyWidget, GridLayout, Label, Layout, Widget, WidgetBase, WidgetRef,
 };
@@ -55,7 +53,7 @@ fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
     }
 }
 
-use crate::ui::set_label_color;
+use crate::ui::{round_pen, set_label_color};
 
 /// Custom dial drawing matching Python `UsageDial`.
 pub struct UsageDial {
@@ -139,7 +137,7 @@ impl UsageDial {
         // `QPen(color, 1.6, CustomDashLine)` with `setDashPattern([1.6, 1.4])`: Qt measures the
         // pattern in pen widths and its pen defaults to square caps.
         painter.set_pen(
-            Pen::new(color, 1.6)
+            round_pen(color, 1.6)
                 .with_cap(LineCap::Square)
                 .with_dash_pattern(vec![1.6 * 1.6, 1.4 * 1.6]),
         );
@@ -151,8 +149,8 @@ impl QObject for UsageDial {
     fn object_data(&self) -> &ObjectData {
         &self.base.object_data
     }
-    fn object_data_mut(&mut self) -> &mut ObjectData {
-        &mut self.base.object_data
+    fn object_data_mut(&mut self) -> ObjectDataMut<'_> {
+        ObjectDataMut::new(&mut self.base.object_data)
     }
 }
 
@@ -162,7 +160,7 @@ impl Widget for UsageDial {
     }
 
     fn id(&self) -> ObjectId {
-        self.base.object_data.id
+        self.base.id()
     }
     fn geometry(&self) -> Rect {
         self.base.geometry()
@@ -242,13 +240,13 @@ impl Widget for UsageDial {
             side - ring_inset * 2.0,
         );
         painter.set_brush(Brush::NoBrush);
-        painter.set_pen(Pen::new(self.theme.track, ring_width));
+        painter.set_pen(round_pen(self.theme.track, ring_width));
         painter.draw_ellipse(ring_rect);
 
         let (o_pct, o_mark, o_color) = self.outer;
         if let Some(pct) = o_pct {
             if !self.muted && pct > 0.0 {
-                painter.set_pen(Pen::new(o_color, ring_width).with_cap(LineCap::Butt));
+                painter.set_pen(round_pen(o_color, ring_width).with_cap(LineCap::Butt));
                 painter.draw_arc(ring_rect, 90.0, Self::deg(pct));
 
                 // Hatching when outer pct > mark
@@ -375,11 +373,7 @@ impl Widget for UsageDial {
         if let Some(path) = builder.finish() {
             if !self.muted {
                 painter.set_brush(Brush::NoBrush);
-                painter.set_pen(
-                    Pen::new(self.theme.halo, 3.0)
-                        .with_cap(LineCap::Round)
-                        .with_join(LineJoin::Round),
-                );
+                painter.set_pen(round_pen(self.theme.halo, 3.0));
                 painter.stroke_path(&path);
             }
             painter.set_pen(None);
@@ -402,7 +396,7 @@ impl Widget for UsageDial {
             let origin = PointF::new(center.x - cap_w / 2.0, center.y + inner_side * 0.32);
             if let Some(path) = Painter::text_path(origin, &self.caption, &cap_font) {
                 painter.set_brush(Brush::NoBrush);
-                painter.set_pen(Pen::new(self.theme.halo, 2.5));
+                painter.set_pen(round_pen(self.theme.halo, 2.5));
                 painter.stroke_path(&path);
                 painter.set_pen(None);
                 painter.set_brush(Brush::Color(self.theme.text));
@@ -450,9 +444,7 @@ impl ProviderIconWidget {
     fn draw_glyph(&self, painter: &mut Painter) {
         let s = self.size;
         let c = s / 2.0;
-        let pen = Pen::new(self.color, 1.5)
-            .with_cap(LineCap::Round)
-            .with_join(LineJoin::Round);
+        let pen = round_pen(self.color, 1.5);
         painter.set_pen(pen);
         painter.set_brush(Brush::NoBrush);
 
@@ -504,8 +496,8 @@ impl QObject for ProviderIconWidget {
     fn object_data(&self) -> &ObjectData {
         &self.base.object_data
     }
-    fn object_data_mut(&mut self) -> &mut ObjectData {
-        &mut self.base.object_data
+    fn object_data_mut(&mut self) -> ObjectDataMut<'_> {
+        ObjectDataMut::new(&mut self.base.object_data)
     }
 }
 
@@ -515,7 +507,7 @@ impl Widget for ProviderIconWidget {
     }
 
     fn id(&self) -> ObjectId {
-        self.base.object_data.id
+        self.base.id()
     }
     fn geometry(&self) -> Rect {
         self.base.geometry()
@@ -639,8 +631,8 @@ impl QObject for GlyphWidget {
     fn object_data(&self) -> &ObjectData {
         &self.base.object_data
     }
-    fn object_data_mut(&mut self) -> &mut ObjectData {
-        &mut self.base.object_data
+    fn object_data_mut(&mut self) -> ObjectDataMut<'_> {
+        ObjectDataMut::new(&mut self.base.object_data)
     }
 }
 
@@ -650,7 +642,7 @@ impl Widget for GlyphWidget {
     }
 
     fn id(&self) -> ObjectId {
-        self.base.object_data.id
+        self.base.id()
     }
     fn geometry(&self) -> Rect {
         self.base.geometry()
@@ -733,13 +725,13 @@ impl Widget for GlyphWidget {
                     (r.height - 2.0).max(1.0),
                 );
                 painter.set_brush(Brush::NoBrush);
-                painter.set_pen(Pen::new(self.theme.track, 2.2));
+                painter.set_pen(round_pen(self.theme.track, 2.2));
                 painter.draw_ellipse(inset);
-                painter.set_pen(Pen::new(self.color, 2.2));
+                painter.set_pen(round_pen(self.color, 2.2));
                 painter.draw_arc(inset, 90.0, -250.0);
             }
             "tick" => {
-                let pen = Pen::new(self.theme.text, 1.4).with_dash_pattern(vec![1.5, 1.3]);
+                let pen = round_pen(self.theme.text, 1.4).with_dash_pattern(vec![1.5, 1.3]);
                 painter.set_pen(pen);
                 painter.set_brush(Brush::NoBrush);
                 painter.draw_line(
@@ -794,8 +786,8 @@ impl QObject for SeparatorWidget {
     fn object_data(&self) -> &ObjectData {
         &self.base.object_data
     }
-    fn object_data_mut(&mut self) -> &mut ObjectData {
-        &mut self.base.object_data
+    fn object_data_mut(&mut self) -> ObjectDataMut<'_> {
+        ObjectDataMut::new(&mut self.base.object_data)
     }
 }
 
@@ -805,7 +797,7 @@ impl Widget for SeparatorWidget {
     }
 
     fn id(&self) -> ObjectId {
-        self.base.object_data.id
+        self.base.id()
     }
     fn geometry(&self) -> Rect {
         self.base.geometry()
@@ -1050,7 +1042,7 @@ impl ProviderColumn {
             &self.m2_countdown,
             &self.header,
         ] {
-            w.borrow().set_tool_tip(error_tip);
+            w.borrow_mut().set_tool_tip(error_tip);
         }
 
         // Python `_set_state`: offline columns dim their value cells and name.
@@ -1090,7 +1082,7 @@ impl ProviderColumn {
                     true,
                 );
             }
-            self.dial.borrow().set_tool_tip(error_tip);
+            self.dial.borrow_mut().set_tool_tip(error_tip);
             set_label_text(&self.m2_val, "--");
             // Python `self.m2_val.setStyleSheet("")`: back to the sheet's colour.
             self.m2_val.borrow().set_style_sheet("");
@@ -1130,7 +1122,7 @@ impl ProviderColumn {
                 None => "--".to_string(),
             };
             self.header
-                .borrow()
+                .borrow_mut()
                 .set_tool_tip(&join_tip(&[&format!("舊資料 {stamp}"), error_tip]));
         }
         self.update_countdown();
@@ -1202,7 +1194,7 @@ impl ProviderColumn {
             _ => "",
         };
         self.m2_val
-            .borrow()
+            .borrow_mut()
             .set_tool_tip(&join_tip(&[&tip2, stale_tip]));
         let dial1 = if tip1.is_empty() {
             String::new()
@@ -1215,7 +1207,7 @@ impl ProviderColumn {
             format!("1 週：{tip2}")
         };
         self.dial
-            .borrow()
+            .borrow_mut()
             .set_tool_tip(&join_tip(&[&dial1, &dial2, stale_tip]));
     }
 }

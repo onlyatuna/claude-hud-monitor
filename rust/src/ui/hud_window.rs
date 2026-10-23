@@ -13,7 +13,7 @@ use chrono::Local;
 use ferrokit_core::event::EventKind;
 use ferrokit_core::QObject;
 use ferrokit_gui::geometry::primitives::{Margins, Rect, RectF};
-use ferrokit_gui::paint::{Brush, Pen, RenderHint};
+use ferrokit_gui::paint::{Brush, RenderHint};
 use ferrokit_platform::backdrop::BackdropType;
 use ferrokit_platform::WindowFlags;
 use ferrokit_widgets::{
@@ -164,7 +164,7 @@ fn install_panel_painter(
             let h = painter.device().height();
             let rect_f = RectF::new(0.5, 0.5, w - 1.0, h - 1.0);
             painter.set_brush(Brush::Color(bg));
-            painter.set_pen(Pen::new(border, 1.0));
+            painter.set_pen(crate::ui::round_pen(border, 1.0));
             // Python's QSS `border-radius` panel: Qt's stylesheet style draws the rounded border
             // with anti-aliasing (`qstylesheetstyle.cpp:1266-1285`), so AA is on for this shape.
             painter.set_render_hint(RenderHint::Antialiasing, true);
@@ -395,7 +395,7 @@ impl HUDWindow {
 
         let ghost_label = make_widget(Label::new("👻"));
         ghost_label
-            .borrow()
+            .borrow_mut()
             .set_tool_tip("滑鼠穿透中 (Alt+Shift+C 解除)");
         ghost_label.borrow_mut().set_visible(ct);
 
@@ -403,7 +403,7 @@ impl HUDWindow {
         btn.set_object_name("LayoutToggleBtn");
         let layout_toggle_btn = make_widget(btn);
         layout_toggle_btn
-            .borrow()
+            .borrow_mut()
             .set_tool_tip("切換 橫向並排 / 直式堆疊 佈局");
         layout_toggle_btn.borrow().set_visible(ui_mode != "table");
 
@@ -443,16 +443,10 @@ impl HUDWindow {
         stack
             .borrow_mut()
             .set_size_policy(Self::stack_policy(ui_mode == "table"));
-        if let Some(s) = stack
-            .borrow_mut()
-            .as_any_mut()
-            .downcast_mut::<StackedWidget>()
-        {
-            s.add_widget(cards_container.clone());
-            s.add_widget(table.widget());
-            let active_index = if ui_mode == "table" { 1 } else { 0 };
-            s.set_current_index(active_index);
-        }
+        StackedWidget::add_widget(&stack, cards_container.clone());
+        StackedWidget::add_widget(&stack, table.widget());
+        let active_index = if ui_mode == "table" { 1 } else { 0 };
+        StackedWidget::set_current_index(&stack, active_index);
 
         // Root layout
         let mut root_layout = BoxLayout::vertical();
@@ -798,14 +792,7 @@ impl HUDWindow {
         self.window.set_style_sheet(sheet);
         ferrokit_widgets::application::Application::set_style_sheet(sheet);
         let (w, h) = if mode == "table" {
-            if let Some(s) = self
-                .stack
-                .borrow_mut()
-                .as_any_mut()
-                .downcast_mut::<StackedWidget>()
-            {
-                s.set_current_index(1);
-            }
+            StackedWidget::set_current_index(&self.stack, 1);
             self.stack
                 .borrow_mut()
                 .set_size_policy(Self::stack_policy(true));
@@ -819,14 +806,7 @@ impl HUDWindow {
                 cfg.table_height.max(MIN_TABLE_HEIGHT) as i32,
             )
         } else {
-            if let Some(s) = self
-                .stack
-                .borrow_mut()
-                .as_any_mut()
-                .downcast_mut::<StackedWidget>()
-            {
-                s.set_current_index(0);
-            }
+            StackedWidget::set_current_index(&self.stack, 0);
             self.stack
                 .borrow_mut()
                 .set_size_policy(Self::stack_policy(false));

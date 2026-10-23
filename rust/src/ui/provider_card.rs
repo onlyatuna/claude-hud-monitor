@@ -336,7 +336,7 @@ impl ProviderCardWidget {
         let default_name = default_provider_name(&self.provider_id);
         // `self.setToolTip(data.error or "")` (`provider_card.py:125`); the card is `container`.
         self.container
-            .borrow()
+            .borrow_mut()
             .set_tool_tip(data.error.as_deref().unwrap_or(""));
         if !data.provider_name.is_empty() {
             set_label_text(&self.title, &data.provider_name);
