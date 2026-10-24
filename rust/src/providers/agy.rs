@@ -248,51 +248,11 @@ impl AgyProvider {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("無法啟動 agy，請確認安裝與執行權限: {e}"))?;
-
-        // Drain stdout and stderr in background threads to avoid OS pipe buffer deadlock
-        let mut stdout_pipe = child.stdout.take().unwrap();
-        let mut stderr_pipe = child.stderr.take().unwrap();
-
-        let stdout_thread = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut stdout_pipe, &mut buf);
-            buf
-        });
-
-        let stderr_thread = std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = std::io::Read::read_to_end(&mut stderr_pipe, &mut buf);
-            buf
-        });
-
-        let timeout = std::time::Duration::from_secs(timeout_secs.max(5));
-        let exit_status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if started.elapsed() >= timeout {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        let _ = stdout_thread.join();
-                        let _ = stderr_thread.join();
-                        return Err(format!("agy 執行逾時 (超過 {} 秒)", timeout_secs));
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                Err(e) => {
-                    let _ = child.kill();
-                    let _ = stdout_thread.join();
-                    let _ = stderr_thread.join();
-                    return Err(format!("agy 等待錯誤: {e}"));
-                }
-            }
+        let timeout = Duration::from_secs(timeout_secs.max(5));
+        let (exit_status, stdout_bytes, stderr_bytes) = match run_command(cmd, timeout)? {
+            CmdOutcome::Done(st, o, e) => (st, o, e),
+            CmdOutcome::TimedOut => return Err(format!("agy 執行逾時 (超過 {} 秒)", timeout_secs)),
         };
-
-        let stdout_bytes = stdout_thread.join().unwrap_or_default();
-        let stderr_bytes = stderr_thread.join().unwrap_or_default();
 
         let elapsed = started.elapsed().as_secs_f64();
         info!(
@@ -573,6 +533,137 @@ fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
     }
 }
 
+enum CmdOutcome {
+    Done(std::process::ExitStatus, Vec<u8>, Vec<u8>),
+    TimedOut,
+}
+
+/// Owns the whole process tree of a spawned child. Dropping it kills any
+/// remaining descendants (Windows: job object KILL_ON_JOB_CLOSE).
+#[cfg(target_os = "windows")]
+struct TreeGuard(windows_sys::Win32::Foundation::HANDLE);
+
+#[cfg(target_os = "windows")]
+impl TreeGuard {
+    fn new(child: &std::process::Child) -> Option<Self> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::*;
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job.is_null() {
+                return None;
+            }
+            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let ok = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if ok == 0 || AssignProcessToJobObject(job, child.as_raw_handle() as _) == 0 {
+                windows_sys::Win32::Foundation::CloseHandle(job);
+                return None;
+            }
+            Some(Self(job))
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for TreeGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+struct TreeGuard(u32);
+
+#[cfg(not(target_os = "windows"))]
+impl TreeGuard {
+    fn new(child: &std::process::Child) -> Option<Self> {
+        Some(Self(child.id()))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+impl Drop for TreeGuard {
+    fn drop(&mut self) {
+        // Child was started as its own process-group leader.
+        let _ = Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", self.0)])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+}
+
+/// Run `cmd` with piped stdout/stderr. On timeout the whole process tree is
+/// killed and reader threads are detached, never joined unboundedly.
+fn run_command(mut cmd: Command, timeout: Duration) -> Result<CmdOutcome, String> {
+    use std::sync::mpsc;
+    const READER_GRACE: Duration = Duration::from_secs(2);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let started = Instant::now();
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("無法啟動 agy，請確認安裝與執行權限: {e}"))?;
+    let guard = TreeGuard::new(&child);
+
+    fn drain<R: std::io::Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = pipe.read_to_end(&mut buf);
+            let _ = tx.send(buf);
+        });
+        rx
+    }
+    let out_rx = drain(child.stdout.take().unwrap());
+    let err_rx = drain(child.stderr.take().unwrap());
+
+    let kill_tree = |child: &mut std::process::Child, guard: Option<TreeGuard>| {
+        let _ = child.kill();
+        drop(guard); // kills descendants holding the pipes
+        let _ = child.wait();
+    };
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Ok(None) => {
+                if started.elapsed() >= timeout {
+                    kill_tree(&mut child, guard);
+                    return Ok(CmdOutcome::TimedOut);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(e) => {
+                kill_tree(&mut child, guard);
+                return Err(format!("agy 等待錯誤: {e}"));
+            }
+        }
+    };
+    // Direct child exited; reap any lingering descendants so pipes close.
+    drop(guard);
+    let out = out_rx.recv_timeout(READER_GRACE).unwrap_or_default();
+    let err = err_rx.recv_timeout(READER_GRACE).unwrap_or_default();
+    Ok(CmdOutcome::Done(status, out, err))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -735,5 +826,46 @@ mod tests {
             metrics.error,
             metrics.error_code
         );
+    }
+
+    #[test]
+    fn run_command_timeout_kills_grandchild_tree() {
+        use std::sync::mpsc;
+        let marker = std::env::temp_dir().join(format!("agy_tree_{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let m = marker.to_string_lossy().to_string();
+
+        #[cfg(target_os = "windows")]
+        let cmd = {
+            use std::os::windows::process::CommandExt;
+            let mut c = Command::new("cmd.exe");
+            c.creation_flags(0x08000000);
+            // grandchild: powershell holds inherited pipes, would write marker after 6s
+            c.args([
+                "/d", "/s", "/c",
+                &format!("call powershell -NoProfile -Command \"Start-Sleep 6; Set-Content '{m}' x\""),
+            ]);
+            c
+        };
+        #[cfg(not(target_os = "windows"))]
+        let cmd = {
+            let mut c = Command::new("sh");
+            c.args(["-c", &format!("(sleep 6; echo x > '{m}') & sleep 30")]);
+            c
+        };
+
+        let (tx, rx) = mpsc::channel();
+        let t0 = Instant::now();
+        std::thread::spawn(move || {
+            let _ = tx.send(run_command(cmd, Duration::from_millis(500)));
+        });
+        let res = rx
+            .recv_timeout(Duration::from_secs(4))
+            .expect("run_command blocked past timeout");
+        assert!(matches!(res, Ok(CmdOutcome::TimedOut)));
+        assert!(t0.elapsed() < Duration::from_secs(4));
+        // Wait past the grandchild's schedule; if it survived it writes the marker.
+        std::thread::sleep(Duration::from_secs(8));
+        assert!(!marker.exists(), "grandchild survived timeout");
     }
 }
