@@ -568,6 +568,20 @@ impl TreeGuard {
             Some(Self(job))
         }
     }
+
+    /// Clear KILL_ON_JOB_CLOSE so dropping the guard leaves descendants alone.
+    fn disarm(&mut self) {
+        use windows_sys::Win32::System::JobObjects::*;
+        unsafe {
+            let info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            SetInformationJobObject(
+                self.0,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const _,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -580,21 +594,34 @@ impl Drop for TreeGuard {
 }
 
 #[cfg(not(target_os = "windows"))]
-struct TreeGuard(u32);
+struct TreeGuard {
+    pgid: u32,
+    armed: bool,
+}
 
 #[cfg(not(target_os = "windows"))]
 impl TreeGuard {
     fn new(child: &std::process::Child) -> Option<Self> {
-        Some(Self(child.id()))
+        Some(Self {
+            pgid: child.id(),
+            armed: true,
+        })
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
     }
 }
 
 #[cfg(not(target_os = "windows"))]
 impl Drop for TreeGuard {
     fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
         // Child was started as its own process-group leader.
         let _ = Command::new("kill")
-            .args(["-KILL", "--", &format!("-{}", self.0)])
+            .args(["-KILL", "--", &format!("-{}", self.pgid)])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -622,6 +649,9 @@ fn run_command(mut cmd: Command, timeout: Duration) -> Result<CmdOutcome, String
         .spawn()
         .map_err(|e| format!("無法啟動 agy，請確認安裝與執行權限: {e}"))?;
     let guard = TreeGuard::new(&child);
+    if guard.is_none() {
+        warn!("agy: process-tree guard setup failed; timeout will only kill the direct child");
+    }
 
     fn drain<R: std::io::Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
         let (tx, rx) = mpsc::channel();
@@ -635,6 +665,7 @@ fn run_command(mut cmd: Command, timeout: Duration) -> Result<CmdOutcome, String
     let out_rx = drain(child.stdout.take().unwrap());
     let err_rx = drain(child.stderr.take().unwrap());
 
+    // Timeout/error path only: killing the tree is the guard's drop.
     let kill_tree = |child: &mut std::process::Child, guard: Option<TreeGuard>| {
         let _ = child.kill();
         drop(guard); // kills descendants holding the pipes
@@ -657,8 +688,11 @@ fn run_command(mut cmd: Command, timeout: Duration) -> Result<CmdOutcome, String
             }
         }
     };
-    // Direct child exited; reap any lingering descendants so pipes close.
-    drop(guard);
+    // Direct child exited normally: leave any descendants alone. If one still
+    // holds the pipes, the bounded waits below give up with empty output.
+    if let Some(mut g) = guard {
+        g.disarm();
+    }
     let out = out_rx.recv_timeout(READER_GRACE).unwrap_or_default();
     let err = err_rx.recv_timeout(READER_GRACE).unwrap_or_default();
     Ok(CmdOutcome::Done(status, out, err))
@@ -828,44 +862,143 @@ mod tests {
         );
     }
 
+    /// Spawns (via the platform shell) a long-lived grandchild and writes its
+    /// PID to `marker`. With `wait` the shell stays alive until it exits.
+    fn grandchild_cmd(marker: &std::path::Path, wait: bool) -> Command {
+        let m = marker.to_string_lossy().to_string();
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let (style, tail) = if wait {
+                ("-NoNewWindow", "\n$p.WaitForExit()")
+            } else {
+                ("-WindowStyle Hidden", "")
+            };
+            let ps = format!(
+                "$p = Start-Process -PassThru {style} ping -ArgumentList '-n','40','127.0.0.1'\nSet-Content -Path '{m}' -Value $p.Id{tail}\n"
+            );
+            let script = marker.with_extension("ps1");
+            std::fs::write(&script, ps).unwrap();
+            let mut c = Command::new("cmd.exe");
+            c.creation_flags(0x08000000);
+            c.args(["/d", "/s", "/c", "call", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
+            c.arg(&script);
+            c
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let inner = format!("sh -c 'echo $$ > {m}; exec sleep 40'");
+            let script = if wait {
+                format!("{inner} & wait")
+            } else {
+                format!("({inner} >/dev/null 2>&1 &)")
+            };
+            let mut c = Command::new("sh");
+            c.args(["-c", &script]);
+            c
+        }
+    }
+
+    fn read_pid(marker: &std::path::Path) -> u32 {
+        for _ in 0..600 {
+            if let Ok(t) = std::fs::read_to_string(marker) {
+                if let Ok(p) = t.trim_start_matches('\u{feff}').trim().parse() {
+                    return p;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("grandchild never reported its pid");
+    }
+
+    fn pid_alive(pid: u32) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let out = Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+                .creation_flags(0x08000000)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+        }
+    }
+
+    fn kill_pid(pid: u32) {
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = Command::new("taskkill")
+                .args(["/F", "/PID", &pid.to_string()])
+                .creation_flags(0x08000000)
+                .output();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
+        }
+    }
+
+    fn marker_path(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("agy_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
     #[test]
     fn run_command_timeout_kills_grandchild_tree() {
         use std::sync::mpsc;
-        let marker = std::env::temp_dir().join(format!("agy_tree_{}", std::process::id()));
-        let _ = std::fs::remove_file(&marker);
-        let m = marker.to_string_lossy().to_string();
-
-        #[cfg(target_os = "windows")]
-        let cmd = {
-            use std::os::windows::process::CommandExt;
-            let mut c = Command::new("cmd.exe");
-            c.creation_flags(0x08000000);
-            // grandchild: powershell holds inherited pipes, would write marker after 6s
-            c.args([
-                "/d", "/s", "/c",
-                &format!("call powershell -NoProfile -Command \"Start-Sleep 6; Set-Content '{m}' x\""),
-            ]);
-            c
-        };
-        #[cfg(not(target_os = "windows"))]
-        let cmd = {
-            let mut c = Command::new("sh");
-            c.args(["-c", &format!("(sleep 6; echo x > '{m}') & sleep 30")]);
-            c
-        };
+        let marker = marker_path("tree");
+        let cmd = grandchild_cmd(&marker, true);
 
         let (tx, rx) = mpsc::channel();
-        let t0 = Instant::now();
         std::thread::spawn(move || {
-            let _ = tx.send(run_command(cmd, Duration::from_millis(500)));
+            let _ = tx.send(run_command(cmd, Duration::from_secs(4)));
         });
+        // Guard: grandchild lives 40s, so an unbounded join would blow this.
         let res = rx
-            .recv_timeout(Duration::from_secs(4))
+            .recv_timeout(Duration::from_secs(15))
             .expect("run_command blocked past timeout");
         assert!(matches!(res, Ok(CmdOutcome::TimedOut)));
-        assert!(t0.elapsed() < Duration::from_secs(4));
-        // Wait past the grandchild's schedule; if it survived it writes the marker.
-        std::thread::sleep(Duration::from_secs(8));
-        assert!(!marker.exists(), "grandchild survived timeout");
+
+        // Grandchild had started before the timeout fired.
+        let pid = read_pid(&marker);
+        let mut alive = true;
+        for _ in 0..60 {
+            alive = pid_alive(pid);
+            if !alive {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if alive {
+            kill_pid(pid);
+        }
+        let _ = std::fs::remove_file(&marker);
+        let _ = std::fs::remove_file(marker.with_extension("ps1"));
+        assert!(!alive, "grandchild survived timeout");
+    }
+
+    #[test]
+    fn run_command_normal_exit_leaves_detached_child_alone() {
+        let marker = marker_path("detached");
+        let cmd = grandchild_cmd(&marker, false);
+        let res = run_command(cmd, Duration::from_secs(30));
+        assert!(matches!(res, Ok(CmdOutcome::Done(..))));
+        let pid = read_pid(&marker);
+        let alive = pid_alive(pid);
+        kill_pid(pid);
+        let _ = std::fs::remove_file(&marker);
+        let _ = std::fs::remove_file(marker.with_extension("ps1"));
+        assert!(alive, "normal exit must not kill descendants");
     }
 }
