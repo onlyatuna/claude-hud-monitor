@@ -31,6 +31,8 @@ pub const ACTION_APPEARANCE_DARK: u32 = 32;
 
 pub const ACTION_SCHEME_SCALE: u32 = 40;
 pub const ACTION_SCHEME_DUO: u32 = 41;
+/// The `table_blur` switch (Python `toggle_table_blur`), in the Colors submenu: both are table-only.
+pub const ACTION_TABLE_BLUR: u32 = 42;
 
 pub const ACTION_CLICK_THROUGH: u32 = 50;
 pub const ACTION_ALWAYS_ON_TOP: u32 = 51;
@@ -58,6 +60,9 @@ pub const ACTION_CLAUDE_PROFILE_AUTO: u32 = 100;
 pub const ACTION_CLAUDE_PROFILE_BASE: u32 = 1000;
 
 pub const ACTION_EXIT: u32 = 99;
+
+/// Python `hud_menu._build_appearance`: the blur check item.
+const TABLE_BLUR_LABEL: &str = "毛玻璃模糊 (Blur)";
 
 /// Python `SCHEME_LABELS` (`hud_window.py:25`) in `SCHEMES` order (`styles.py:20`).
 const SCHEME_CHOICES: [(&str, u32, &str); 2] = [
@@ -438,6 +443,7 @@ fn add_theme_menus(menu: &mut Menu, cfg: &Config) {
         for (value, id, label) in SCHEME_CHOICES {
             add_check(&mut sc, id, label, cfg.color_scheme == value);
         }
+        add_check(&mut sc, ACTION_TABLE_BLUR, TABLE_BLUR_LABEL, cfg.table_blur);
     }
     let scheme_action = menu.add_menu_ref(&scheme_sub);
     scheme_action
@@ -598,6 +604,10 @@ impl HUDTrayIcon {
                 });
                 let dark = hud.is_dark;
                 hud.set_theme(dark);
+                self.update_menu_state();
+            }
+            ACTION_TABLE_BLUR => {
+                hud.toggle_table_blur();
                 self.update_menu_state();
             }
             ACTION_CLICK_THROUGH => {
@@ -993,7 +1003,11 @@ mod menu_parity_tests {
         let menu = build_hud_context_menu(&cfg, &test_hud_root());
         assert_eq!(
             submenu_visible_labels(&menu, "(Colors)"),
-            vec!["色階 (Scale)".to_string(), "雙色 (Duo)".to_string()]
+            vec![
+                "色階 (Scale)".to_string(),
+                "雙色 (Duo)".to_string(),
+                "毛玻璃模糊 (Blur)".to_string()
+            ]
         );
     }
 
@@ -1123,7 +1137,11 @@ mod menu_parity_tests {
         assert_eq!(visible_top_level(&menu), expected);
         assert_eq!(
             submenu_visible_labels(&menu, "(Colors)"),
-            vec!["色階 (Scale)".to_string(), "雙色 (Duo)".to_string()]
+            vec![
+                "色階 (Scale)".to_string(),
+                "雙色 (Duo)".to_string(),
+                "毛玻璃模糊 (Blur)".to_string()
+            ]
         );
     }
 

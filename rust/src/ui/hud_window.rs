@@ -23,7 +23,10 @@ use parking_lot::Mutex;
 
 use super::provider_card::ProviderCardWidget;
 use super::styles::{get_theme, Theme};
-use super::usage_table::UsageTable;
+use super::table_layout::{
+    compact_min_size, table_state, COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W,
+};
+use super::usage_table::{TableViews, UsageTable, PROVIDER_ORDER};
 use crate::config::{
     Config, ResizeDebouncer, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH,
     DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH, DEFAULT_VERTICAL_HEIGHT, DEFAULT_VERTICAL_WIDTH,
@@ -34,19 +37,131 @@ use crate::providers::base::UsageMetrics;
 use crate::providers::Provider;
 use crate::refresh_controller::RefreshController;
 
+/// The root layout's margins and spacing: `(12, 8, 12, 10)` and 6 for the full table.
+const FULL_MARGINS: (i32, i32, i32, i32) = (12, 8, 12, 10);
+const FULL_SPACING: i32 = 6;
+
+/// Smallest table window: it holds the collapsed dial row, and the full table may be dragged down to it
+/// (Python `compact_min_size(len(self.table.columns))`).
+fn table_min_size() -> (i32, i32) {
+    compact_min_size(PROVIDER_ORDER.len() as i32)
+}
+
+/// Python `_saved_table_size`: the remembered window size of the collapsed or the full table; an
+/// undersized value falls back to the default.
+fn saved_table_size(cfg: &Config, compact: bool) -> (i32, i32) {
+    if compact {
+        let (min_w, min_h) = table_min_size();
+        let (w, h) = (cfg.table_compact_width as i32, cfg.table_compact_height as i32);
+        (
+            if w >= min_w { w } else { DEF_COMPACT_W },
+            if h >= min_h { h } else { DEF_COMPACT_H },
+        )
+    } else {
+        let (w, h) = (cfg.table_width, cfg.table_height);
+        (
+            if w >= MIN_TABLE_WIDTH { w } else { DEFAULT_TABLE_WIDTH } as i32,
+            if h >= MIN_TABLE_HEIGHT { h } else { DEFAULT_TABLE_HEIGHT } as i32,
+        )
+    }
+}
+
+/// Python `_persist_geometry`'s table size: into the collapsed or the full keys, never below the minimum.
+fn apply_table_size(cfg: &mut Config, width: i32, height: i32) {
+    let (w, h) = (width as u32, height as u32);
+    if cfg.table_compact {
+        let (min_w, min_h) = table_min_size();
+        cfg.table_compact_width = w.max(min_w as u32);
+        cfg.table_compact_height = h.max(min_h as u32);
+    } else {
+        cfg.table_width = w.max(MIN_TABLE_WIDTH);
+        cfg.table_height = h.max(MIN_TABLE_HEIGHT);
+    }
+}
+
 /// Python `_persist_geometry`'s size part: the active mode's width and height, never below the
 /// mode's minimum.
 fn apply_size(cfg: &mut Config, width: i32, height: i32) {
     let (w, h) = (width as u32, height as u32);
     if cfg.ui_mode == "table" {
-        cfg.table_width = w.max(MIN_TABLE_WIDTH);
-        cfg.table_height = h.max(MIN_TABLE_HEIGHT);
+        apply_table_size(cfg, width, height);
     } else if cfg.layout_mode == "horizontal" {
         cfg.horizontal_width = w.max(MIN_HORIZONTAL_WIDTH);
         cfg.horizontal_height = h.max(MIN_HORIZONTAL_HEIGHT);
     } else {
         cfg.vertical_width = w.max(MIN_VERTICAL_WIDTH);
         cfg.vertical_height = h.max(MIN_VERTICAL_HEIGHT);
+    }
+}
+
+/// What the header and the root layout look like around the table: the collapsed dial row hides the
+/// header widgets and shrinks the margins (Python `_set_table_compact`, `_sync_header`,
+/// `_sync_table_state`). Cloneable so the window's resize handler can run it without the HUD.
+#[derive(Clone)]
+struct TableChrome {
+    config: Arc<Mutex<Config>>,
+    views: TableViews,
+    root: WidgetRef,
+    /// Status dot, title, time.
+    header: [WidgetRef; 3],
+    ghost: WidgetRef,
+}
+
+impl TableChrome {
+    /// Python `_sync_header`: the collapsed table shows no header widgets.
+    fn sync_header(&self) {
+        let (in_table, click_through) = {
+            let cfg = self.config.lock();
+            (cfg.ui_mode == "table", cfg.click_through)
+        };
+        let show = !(in_table && self.views.is_compact());
+        for w in &self.header {
+            w.borrow().set_visible(show);
+        }
+        self.ghost.borrow().set_visible(show && click_through);
+    }
+
+    fn set_margins(&self, compact: bool) {
+        let (m, spacing) = if compact {
+            ((COMPACT_MARGIN, COMPACT_MARGIN, COMPACT_MARGIN, COMPACT_MARGIN), 0)
+        } else {
+            (FULL_MARGINS, FULL_SPACING)
+        };
+        if let Some(layout) = self.root.borrow_mut().layout_mut() {
+            layout.set_margins(Margins::new(m.0, m.1, m.2, m.3));
+            layout.set_spacing(spacing);
+        }
+    }
+
+    /// Python `_set_table_compact`: collapse the table to one dial per service (or restore it) and
+    /// adapt the window chrome.
+    fn set_compact(&self, compact: bool) {
+        self.views.set_compact(compact);
+        self.set_margins(compact);
+        self.config.lock().table_compact = compact;
+        self.sync_header();
+    }
+
+    /// Python `_sync_table_state`: collapse or expand for the window's new size.
+    fn sync_state(&self, width: i32, height: i32) {
+        if self.config.lock().ui_mode != "table" {
+            return;
+        }
+        let was = self.views.is_compact();
+        let now = table_state(width, height, was);
+        if now != was {
+            self.set_compact(now);
+        }
+    }
+
+    /// Leaving the table style: the full margins and the header again.
+    fn leave_table(&self) {
+        self.set_margins(false);
+        self.sync_header();
+    }
+
+    fn relayout(&self) {
+        self.root.borrow().update_layout();
     }
 }
 
@@ -205,10 +320,17 @@ type TrimFn = Arc<dyn Fn() + Send + Sync>;
 type BackdropFn = fn(&mut Window, BackdropType, bool) -> bool;
 
 /// The backdrop half of Python `_apply_theme` (`hud_window.py:240-252`): table mode asks for the
-/// Acrylic blur only while the window is visible (`self.isVisible() and vibrancy.apply(...)`) and
-/// is vibrant only if that succeeded; cards mode clears the blur (`vibrancy.clear`).
-fn install_backdrop(window: &mut Window, set: BackdropFn, ui_mode: &str, dark: bool) -> bool {
-    if ui_mode == "table" {
+/// Acrylic blur only while the window is visible and the `table_blur` switch is on
+/// (`blur and self.isVisible() and vibrancy.apply(...)`) and is vibrant only if that succeeded;
+/// without the switch, and in cards mode, the blur is cleared (`vibrancy.clear`).
+fn install_backdrop(
+    window: &mut Window,
+    set: BackdropFn,
+    ui_mode: &str,
+    dark: bool,
+    blur: bool,
+) -> bool {
+    if ui_mode == "table" && blur {
         window.is_visible() && set(window, BackdropType::Acrylic, dark)
     } else {
         set(window, BackdropType::None, dark);
@@ -248,6 +370,7 @@ pub struct HUDWindow {
     /// The table panel sits on an installed blur (Python `vibrant`); read by the panel painter.
     vibrant: Rc<Cell<bool>>,
     set_backdrop: BackdropFn,
+    chrome: TableChrome,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -300,12 +423,9 @@ impl HUDWindow {
             let cfg = config.lock();
             let is_dark = crate::ui::resolve_is_dark(&cfg.appearance);
             let (w, h, min_w, min_h) = if cfg.ui_mode == "table" {
-                (
-                    cfg.table_width.max(MIN_TABLE_WIDTH) as i32,
-                    cfg.table_height.max(MIN_TABLE_HEIGHT) as i32,
-                    MIN_TABLE_WIDTH as i32,
-                    MIN_TABLE_HEIGHT as i32,
-                )
+                let (w, h) = saved_table_size(&cfg, cfg.table_compact);
+                let (min_w, min_h) = table_min_size();
+                (w, h, min_w, min_h)
             } else if cfg.layout_mode == "horizontal" {
                 (
                     cfg.horizontal_width.max(MIN_HORIZONTAL_WIDTH) as i32,
@@ -369,11 +489,13 @@ impl HUDWindow {
         // The window is not shown yet, so table mode starts on the solid panel; `show` installs the
         // blur (Python: `showEvent` -> `_apply_theme`).
         let set_backdrop: BackdropFn = Window::set_backdrop;
+        let table_blur = config.lock().table_blur;
         let vibrant = Rc::new(Cell::new(install_backdrop(
             &mut window,
             set_backdrop,
             &ui_mode,
             dark,
+            table_blur,
         )));
         let sheet = style_sheet_for(&ui_mode, dark);
         window.set_style_sheet(sheet);
@@ -449,14 +571,33 @@ impl HUDWindow {
         StackedWidget::set_current_index(&stack, active_index);
 
         // Root layout
+        let compact_start = ui_mode == "table" && config.lock().table_compact;
         let mut root_layout = BoxLayout::vertical();
-        root_layout.set_margins(Margins::new(12, 8, 12, 10));
-        root_layout.set_spacing(6);
+        if compact_start {
+            let m = COMPACT_MARGIN;
+            root_layout.set_margins(Margins::new(m, m, m, m));
+            root_layout.set_spacing(0);
+        } else {
+            let m = FULL_MARGINS;
+            root_layout.set_margins(Margins::new(m.0, m.1, m.2, m.3));
+            root_layout.set_spacing(FULL_SPACING);
+        }
         root_layout.add_layout(Box::new(header_layout), 0);
         root_layout.add_widget(stack.clone());
         let root = window.root_widget();
         install_panel_painter(&root, &theme, Arc::clone(&config), Rc::clone(&vibrant));
         root.borrow_mut().set_layout(Box::new(root_layout));
+        let chrome = TableChrome {
+            config: Arc::clone(&config),
+            views: table.views(),
+            root: Rc::clone(&root),
+            header: [status_dot.clone(), title_label.clone(), time_label.clone()],
+            ghost: ghost_label.clone(),
+        };
+        if ui_mode == "table" {
+            table.set_compact(compact_start);
+        }
+        chrome.sync_header();
         // Connect frameless window dragging and edge resizing
         let hwnd = window.native_handle();
         let cfg_move = Arc::clone(&config);
@@ -503,6 +644,7 @@ impl HUDWindow {
         });
         let cfg_resize = Arc::clone(&config);
         let debouncer_resize = Arc::clone(&debouncer);
+        let chrome_resize = chrome.clone();
         // The window's current geometry as the events report it: the window event handler below
         // cannot reach `window.geometry()`, and Python reads `self.pos()`/`self.size()` instead.
         let geom_now = Rc::new(Cell::new(window.geometry()));
@@ -512,6 +654,11 @@ impl HUDWindow {
             g.width = size.width;
             g.height = size.height;
             geom_resize.set(g);
+            // Python `resizeEvent`: `_sync_table_state`, then the save. The handler runs before the layout pass, so the view the table collapses to is
+            // the one that gets laid out.
+            if !debouncer_resize.is_restoring() {
+                chrome_resize.sync_state(size.width, size.height);
+            }
             if debouncer_resize.is_restoring() {
                 return;
             }
@@ -582,6 +729,7 @@ impl HUDWindow {
             trim,
             vibrant,
             set_backdrop,
+            chrome,
         };
         debouncer.set_restoring(false);
 
@@ -664,8 +812,24 @@ impl HUDWindow {
 
     /// Installs or clears the blur for `ui_mode` and records whether the panel sits on it.
     fn refresh_backdrop(&mut self, ui_mode: &str) {
-        let vibrant = install_backdrop(&mut self.window, self.set_backdrop, ui_mode, self.is_dark);
+        let blur = self.config.lock().table_blur;
+        let vibrant = install_backdrop(
+            &mut self.window,
+            self.set_backdrop,
+            ui_mode,
+            self.is_dark,
+            blur,
+        );
         self.vibrant.set(vibrant);
+    }
+
+    /// Python `toggle_table_blur`: the `table_blur` switch, applied at once.
+    pub fn toggle_table_blur(&mut self) {
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
+            cfg.table_blur = !cfg.table_blur;
+        });
+        self.set_theme(self.is_dark);
+        self.window.render_and_present();
     }
 
     pub fn hide(&mut self) {
@@ -736,8 +900,9 @@ impl HUDWindow {
     pub fn set_click_through(&mut self, enabled: bool) {
         self.is_click_through = enabled;
         self.window.set_click_through(enabled);
-        self.ghost_label.borrow_mut().set_visible(enabled);
         self.config.lock().click_through = enabled;
+        // Python `_sync_header`: the ghost shows only where the header does.
+        self.chrome.sync_header();
         self.window.render_and_present();
     }
 
@@ -764,8 +929,7 @@ impl HUDWindow {
             cfg.window_x = Some(geom.x);
             cfg.window_y = Some(geom.y);
             if old_mode == "table" {
-                cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
-                cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+                apply_table_size(cfg, geom.width, geom.height);
             } else if old_layout == "horizontal" {
                 cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
                 cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
@@ -798,13 +962,13 @@ impl HUDWindow {
                 .set_size_policy(Self::stack_policy(true));
             set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
             self.layout_toggle_btn.borrow().set_visible(false);
-            self.window
-                .set_minimum_size(MIN_TABLE_WIDTH as i32, MIN_TABLE_HEIGHT as i32);
-            let cfg = self.config.lock();
-            (
-                cfg.table_width.max(MIN_TABLE_WIDTH) as i32,
-                cfg.table_height.max(MIN_TABLE_HEIGHT) as i32,
-            )
+            // Python `_rebuild_table`: the collapsed or the full table, as last left.
+            let (min_w, min_h) = table_min_size();
+            self.window.set_minimum_size(min_w, min_h);
+            let compact = self.config.lock().table_compact;
+            self.chrome.set_compact(compact);
+            let size = saved_table_size(&self.config.lock(), compact);
+            size
         } else {
             StackedWidget::set_current_index(&self.stack, 0);
             self.stack
@@ -812,6 +976,7 @@ impl HUDWindow {
                 .set_size_policy(Self::stack_policy(false));
             set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
             self.layout_toggle_btn.borrow().set_visible(true);
+            self.chrome.leave_table();
             let cfg = self.config.lock();
             if cfg.layout_mode == "horizontal" {
                 self.window
@@ -844,6 +1009,7 @@ impl HUDWindow {
         );
         self.window.set_geometry(Rect::new(nx, ny, w, h));
         self.cards_container.borrow().update_layout();
+        self.chrome.relayout();
     }
 
     pub fn apply_cards_layout_mode(&mut self, mode: &str) {
@@ -856,8 +1022,7 @@ impl HUDWindow {
             cfg.window_x = Some(geom.x);
             cfg.window_y = Some(geom.y);
             if old_mode == "table" {
-                cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
-                cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+                apply_table_size(cfg, geom.width, geom.height);
             } else if old_layout == "horizontal" {
                 cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
                 cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
@@ -1028,6 +1193,15 @@ impl HUDWindow {
     }
 
     pub fn reset_geometry(&mut self) {
+        // Python `_reset_geometry`: reset size expands a collapsed table first.
+        let collapsed = {
+            let cfg = self.config.lock();
+            cfg.ui_mode == "table" && self.table.is_compact()
+        };
+        if collapsed {
+            self.chrome.set_compact(false);
+            self.chrome.relayout();
+        }
         let (w, h) = {
             let cfg = self.config.lock();
             if cfg.ui_mode == "table" {
@@ -1061,6 +1235,75 @@ impl HUDWindow {
 impl Drop for HUDWindow {
     fn drop(&mut self) {
         self.debouncer.shutdown();
+    }
+}
+
+/// The pure size rules of the collapsible table (no window involved).
+#[cfg(test)]
+mod table_size_tests {
+    use super::*;
+
+    fn table_cfg(compact: bool) -> Config {
+        Config {
+            ui_mode: "table".to_string(),
+            table_compact: compact,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn full_and_collapsed_sizes_are_stored_under_their_own_keys() {
+        let mut cfg = table_cfg(false);
+        apply_size(&mut cfg, 500, 400);
+        assert_eq!((cfg.table_width, cfg.table_height), (500, 400));
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (240, 96)
+        );
+
+        cfg.table_compact = true;
+        apply_size(&mut cfg, 300, 120);
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (300, 120)
+        );
+        assert_eq!((cfg.table_width, cfg.table_height), (500, 400), "survives");
+    }
+
+    #[test]
+    fn stored_sizes_never_go_below_the_minimum_of_their_view() {
+        let mut cfg = table_cfg(false);
+        apply_size(&mut cfg, 10, 10);
+        assert_eq!((cfg.table_width, cfg.table_height), (380, 280));
+        cfg.table_compact = true;
+        apply_size(&mut cfg, 10, 10);
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (174, 62)
+        );
+    }
+
+    #[test]
+    fn saved_sizes_fall_back_to_the_defaults_when_undersized() {
+        let mut cfg = table_cfg(false);
+        cfg.table_width = 100;
+        cfg.table_height = 400;
+        assert_eq!(saved_table_size(&cfg, false), (450, 400));
+        cfg.table_width = 500;
+        cfg.table_height = 200;
+        assert_eq!(saved_table_size(&cfg, false), (500, 350));
+
+        cfg.table_compact_width = 100;
+        cfg.table_compact_height = 70;
+        assert_eq!(saved_table_size(&cfg, true), (240, 70));
+        cfg.table_compact_width = 200;
+        cfg.table_compact_height = 30;
+        assert_eq!(saved_table_size(&cfg, true), (200, 96));
+    }
+
+    #[test]
+    fn the_table_window_may_shrink_to_the_collapsed_minimum() {
+        assert_eq!(table_min_size(), (174, 62));
     }
 }
 

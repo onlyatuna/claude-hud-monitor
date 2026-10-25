@@ -60,6 +60,18 @@ pub struct Config {
     pub autostart: bool,
     #[serde(default = "default_claude_profile")]
     pub claude_profile: String,
+
+    // --- table polish (hud-table-polish): blur switch and the collapsed dial row ---
+    /// Acrylic behind the table; off = the flat rounded panel.
+    #[serde(default = "default_true")]
+    pub table_blur: bool,
+    /// Collapsed to one dial per service (window dragged below 380x280).
+    #[serde(default)]
+    pub table_compact: bool,
+    #[serde(default = "default_table_compact_width")]
+    pub table_compact_width: u32,
+    #[serde(default = "default_table_compact_height")]
+    pub table_compact_height: u32,
 }
 
 // Window size constants, `hud_window.py:31-35`. The minimum is the explicit `setMinimumSize`; it wins
@@ -77,6 +89,8 @@ pub const MIN_TABLE_WIDTH: u32 = 380;
 pub const MIN_TABLE_HEIGHT: u32 = 280;
 pub const DEFAULT_TABLE_WIDTH: u32 = 450;
 pub const DEFAULT_TABLE_HEIGHT: u32 = 350;
+pub const DEFAULT_TABLE_COMPACT_WIDTH: u32 = crate::ui::table_layout::DEF_COMPACT_W as u32;
+pub const DEFAULT_TABLE_COMPACT_HEIGHT: u32 = crate::ui::table_layout::DEF_COMPACT_H as u32;
 
 fn default_ui_mode() -> String {
     "cards".to_owned()
@@ -86,6 +100,12 @@ fn default_table_width() -> u32 {
 }
 fn default_table_height() -> u32 {
     DEFAULT_TABLE_HEIGHT
+}
+fn default_table_compact_width() -> u32 {
+    DEFAULT_TABLE_COMPACT_WIDTH
+}
+fn default_table_compact_height() -> u32 {
+    DEFAULT_TABLE_COMPACT_HEIGHT
 }
 fn default_color_scheme() -> String {
     "scale".to_owned()
@@ -149,6 +169,10 @@ impl Default for Config {
             locked: false,
             autostart: false,
             claude_profile: default_claude_profile(),
+            table_blur: true,
+            table_compact: false,
+            table_compact_width: default_table_compact_width(),
+            table_compact_height: default_table_compact_height(),
         }
     }
 }
@@ -753,6 +777,29 @@ mod tests {
         assert_eq!(restored.opacity, 0.75);
         assert!(restored.click_through);
         assert_eq!(restored.refresh_interval_sec, 120);
+    }
+
+    /// The table-polish keys keep the Python names and defaults, and a config.json written before
+    /// they existed still loads.
+    #[test]
+    fn test_table_polish_keys_default_and_round_trip() {
+        let cfg: Config = serde_json::from_str("{}").expect("empty config");
+        assert!(cfg.table_blur);
+        assert!(!cfg.table_compact);
+        assert_eq!((cfg.table_compact_width, cfg.table_compact_height), (240, 96));
+
+        let json = serde_json::to_value(Config::default()).expect("serialize");
+        assert_eq!(json["table_blur"], true);
+        assert_eq!(json["table_compact"], false);
+        assert_eq!(json["table_compact_width"], 240);
+        assert_eq!(json["table_compact_height"], 96);
+
+        let cfg: Config = serde_json::from_str(
+            r#"{"table_blur": false, "table_compact": true, "table_compact_width": 300, "table_compact_height": 80}"#,
+        )
+        .expect("python config");
+        assert!(!cfg.table_blur && cfg.table_compact);
+        assert_eq!((cfg.table_compact_width, cfg.table_compact_height), (300, 80));
     }
 
     #[test]

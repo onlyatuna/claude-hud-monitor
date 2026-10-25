@@ -3,12 +3,14 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 use ferrokit_gui::geometry::primitives::Margins;
 use ferrokit_gui::text::font::{Font, FontWeight};
 use ferrokit_gui::tiny_skia::Color;
 use ferrokit_widgets::{BoxLayout, EmptyWidget, Label, Layout, ProgressBar, Widget, WidgetRef};
 
+use super::brand::brand_color;
+use crate::pace::reset_stamp;
 use crate::providers::base::{format_countdown, UsageMetrics};
 
 pub fn get_progress_color(percent: f64, dark: bool) -> Color {
@@ -37,36 +39,23 @@ pub fn get_progress_color(percent: f64, dark: bool) -> Color {
     }
 }
 
+/// The service identity colour (Python `PROVIDER_THEMES[...]["color"]` / `brand_color`).
 pub fn provider_accent_color(provider_id: &str, dark: bool) -> Color {
-    match provider_id {
-        "claude" => {
-            if dark {
-                Color::from_rgba8(56, 189, 248, 255)
-            } else {
-                Color::from_rgba8(3, 105, 161, 255)
-            }
-        }
-        "agy" => {
-            if dark {
-                Color::from_rgba8(16, 185, 129, 255)
-            } else {
-                Color::from_rgba8(4, 120, 87, 255)
-            }
-        }
-        "codex" => {
-            if dark {
-                Color::from_rgba8(168, 85, 247, 255)
-            } else {
-                Color::from_rgba8(126, 34, 206, 255)
-            }
-        }
-        _ => {
-            if dark {
-                Color::from_rgba8(56, 189, 248, 255)
-            } else {
-                Color::from_rgba8(3, 105, 161, 255)
-            }
-        }
+    brand_color(provider_id, dark)
+}
+
+/// Python `_reset_text`: "重設於: 週五 18:00 · 6天 5時 55分" for weekly rows (the wall-clock reset time
+/// first), just the countdown for short windows, "重設於: --" without a reset time.
+fn reset_text(reset: Option<DateTime<Utc>>, title: &str) -> String {
+    if reset.is_none() {
+        return "重設於: --".to_string();
+    }
+    let countdown = format_countdown(reset);
+    let stamp = reset_stamp(reset, title);
+    if stamp.is_empty() {
+        format!("重設於: {countdown}")
+    } else {
+        format!("重設於: {stamp} · {countdown}")
     }
 }
 
@@ -466,23 +455,14 @@ impl ProviderCardWidget {
             return;
         }
 
-        if let Some(reset) = data.metric1_reset {
-            set_label_text(
-                &self.m1_sub,
-                format!("重設於: {}", format_countdown(Some(reset))),
-            );
-        } else {
-            set_label_text(&self.m1_sub, "重設於: --");
-        }
-
-        if let Some(reset) = data.metric2_reset {
-            set_label_text(
-                &self.m2_sub,
-                format!("重設於: {}", format_countdown(Some(reset))),
-            );
-        } else {
-            set_label_text(&self.m2_sub, "重設於: --");
-        }
+        set_label_text(
+            &self.m1_sub,
+            reset_text(data.metric1_reset, &data.metric1_title),
+        );
+        set_label_text(
+            &self.m2_sub,
+            reset_text(data.metric2_reset, &data.metric2_title),
+        );
 
         if data.stale {
             let stale_color = if self.dark {

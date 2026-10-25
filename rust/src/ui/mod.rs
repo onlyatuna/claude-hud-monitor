@@ -18,7 +18,9 @@ pub mod provider_card;
 mod provider_card_relayout_tests;
 #[cfg(test)]
 mod qss_box_audit;
+pub mod round_mask;
 pub mod styles;
+pub mod table_layout;
 #[cfg(test)]
 pub(crate) mod test_support;
 #[cfg(all(test, windows))]
