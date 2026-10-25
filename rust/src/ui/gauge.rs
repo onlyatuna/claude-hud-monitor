@@ -232,9 +232,219 @@ pub fn draw_gauge_bar(
     painter.draw_rounded_rect(fill, radius, radius);
 }
 
+/// Python `GaugeBar(QWidget)`: a thin progress bar with a rounded track and the gradient revealed
+/// up to the value. Drop-in for the bits of `QProgressBar` the cards use (`setRange` / `setValue` /
+/// `value` / `setTextVisible`).
+pub struct GaugeBar {
+    base: ferrokit_widgets::WidgetBase,
+    value: i32,
+    minimum: i32,
+    maximum: i32,
+    dark: bool,
+    muted: bool,
+}
+
+impl GaugeBar {
+    /// `GaugeBar(parent=None, height=5)`: `setFixedHeight(height)`, `Expanding x Fixed`.
+    pub fn new(height: i32) -> Self {
+        use ferrokit_gui::geometry::primitives::{Rect, Size};
+        use ferrokit_widgets::{Policy, QSizePolicy, Widget};
+        let base = ferrokit_widgets::WidgetBase::with_geometry(Rect::new(0, 0, 0, height));
+        base.set_size_policy(QSizePolicy::new(Policy::Expanding, Policy::Fixed));
+        let bar = Self {
+            base,
+            value: 0,
+            minimum: 0,
+            maximum: 100,
+            dark: true,
+            muted: false,
+        };
+        // `setFixedHeight`: both bounds on the height axis only.
+        bar.set_minimum_size(Size::new(0, height));
+        bar.set_maximum_size(Size::new(16_777_215, height));
+        bar
+    }
+
+    pub fn set_range(&mut self, minimum: i32, maximum: i32) {
+        self.minimum = minimum;
+        self.maximum = maximum.max(minimum + 1);
+        ferrokit_widgets::Widget::update(self);
+    }
+
+    pub fn set_value(&mut self, value: i32) {
+        self.value = value;
+        ferrokit_widgets::Widget::update(self);
+    }
+
+    pub fn value(&self) -> i32 {
+        self.value
+    }
+
+    /// `setTextVisible`: the gauge never draws text.
+    pub fn set_text_visible(&mut self, _visible: bool) {}
+
+    pub fn set_dark(&mut self, dark: bool) {
+        if dark != self.dark {
+            self.dark = dark;
+            ferrokit_widgets::Widget::update(self);
+        }
+    }
+
+    pub fn dark(&self) -> bool {
+        self.dark
+    }
+
+    pub fn set_muted(&mut self, muted: bool) {
+        if muted != self.muted {
+            self.muted = muted;
+            ferrokit_widgets::Widget::update(self);
+        }
+    }
+
+    /// How full the bar is, 0..=1.
+    pub fn fraction(&self) -> f64 {
+        let span = (self.maximum - self.minimum) as f64;
+        ((self.value - self.minimum) as f64 / span).clamp(0.0, 1.0)
+    }
+}
+
+impl ferrokit_core::object::QObject for GaugeBar {
+    fn object_data(&self) -> &ferrokit_core::object::ObjectData {
+        &self.base.object_data
+    }
+    fn object_data_mut(&mut self) -> ferrokit_core::object::ObjectDataMut<'_> {
+        ferrokit_core::object::ObjectDataMut::new(&mut self.base.object_data)
+    }
+}
+
+impl ferrokit_widgets::Widget for GaugeBar {
+    fn widget_base(&self) -> &ferrokit_widgets::WidgetBase {
+        &self.base
+    }
+    fn id(&self) -> ferrokit_core::object::ObjectId {
+        self.base.id()
+    }
+    fn geometry(&self) -> ferrokit_gui::geometry::primitives::Rect {
+        self.base.geometry()
+    }
+    fn set_geometry(&self, rect: ferrokit_gui::geometry::primitives::Rect) {
+        self.base.set_geometry(rect);
+    }
+    fn is_visible(&self) -> bool {
+        self.base.is_visible()
+    }
+    fn set_visible(&self, visible: bool) {
+        self.base.set_visible(visible);
+    }
+    fn is_enabled(&self) -> bool {
+        self.base.is_enabled()
+    }
+    fn update(&self) {
+        self.base.update();
+    }
+    fn dirty_rect(&self) -> Option<ferrokit_gui::geometry::primitives::Rect> {
+        self.base.dirty_rect()
+    }
+    fn clear_dirty(&self) {
+        self.base.clear_dirty();
+    }
+    fn parent_widget(&self) -> Option<ferrokit_widgets::WidgetWeak> {
+        self.base.parent_widget()
+    }
+    fn set_parent_widget(&self, parent: Option<ferrokit_widgets::WidgetWeak>) {
+        self.base.set_parent_widget(parent);
+    }
+    fn window_id(&self) -> Option<ferrokit_core::object::ObjectId> {
+        self.base.window_id()
+    }
+    fn set_window_id(&self, window_id: Option<ferrokit_core::object::ObjectId>) {
+        self.base.set_window_id(window_id);
+    }
+    fn children(&self) -> Vec<ferrokit_widgets::WidgetRef> {
+        self.base.children()
+    }
+    fn add_child(&mut self, _child: ferrokit_widgets::WidgetRef) {}
+    fn remove_child(&mut self, _child_id: ferrokit_core::object::ObjectId) {}
+
+    /// Python `GaugeBar.paintEvent`.
+    fn paint_event(&mut self, painter: &mut Painter) {
+        let theme = crate::ui::styles::get_theme(self.dark);
+        let geo = self.base.geometry();
+        let track = RectF::new(0.0, 0.0, geo.width as f32, geo.height as f32);
+        let stops = ramp_stops(self.dark, None);
+        draw_gauge_bar(
+            painter,
+            track,
+            self.fraction(),
+            theme.track,
+            &stops,
+            self.muted,
+            true,
+        );
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Paints `bar` (200 x height) into a pixmap and returns it.
+    fn grab(bar: &mut GaugeBar, width: u32) -> ferrokit_gui::paint::pixmap::Pixmap {
+        use ferrokit_gui::geometry::primitives::Rect;
+        use ferrokit_widgets::Widget;
+        let h = bar.geometry().height.max(1) as u32;
+        bar.set_geometry(Rect::new(0, 0, width as i32, h as i32));
+        let mut pixmap = ferrokit_gui::paint::pixmap::Pixmap::new(width, h).unwrap();
+        let mut painter = Painter::begin(&mut pixmap);
+        ferrokit_widgets::Widget::paint_event(bar, &mut painter);
+        drop(painter);
+        pixmap
+    }
+
+    #[test]
+    fn api_matches_what_the_cards_use() {
+        let mut bar = GaugeBar::new(5);
+        bar.set_range(0, 100);
+        bar.set_text_visible(false);
+        bar.set_value(40);
+        assert_eq!(bar.value(), 40);
+        assert!((bar.fraction() - 0.4).abs() < 1e-9);
+        bar.set_value(250);
+        assert_eq!(bar.fraction(), 1.0);
+        bar.set_value(-3);
+        assert_eq!(bar.fraction(), 0.0);
+    }
+
+    #[test]
+    fn paints_in_both_themes_and_when_empty() {
+        let mut bar = GaugeBar::new(5);
+        for dark in [true, false] {
+            bar.set_dark(dark);
+            for value in [0, 1, 50, 100] {
+                bar.set_value(value);
+                let pixmap = grab(&mut bar, 120);
+                assert_eq!(pixmap.physical_width(), 120);
+            }
+        }
+    }
+
+    #[test]
+    fn fill_is_a_revealed_gradient_not_one_flat_colour() {
+        let mut bar = GaugeBar::new(6);
+        bar.set_value(100);
+        let pixmap = grab(&mut bar, 200);
+        let left = pixmap.pixel(8, 3).unwrap();
+        let right = pixmap.pixel(192, 3).unwrap();
+        assert_ne!((left.red(), left.green(), left.blue()), (right.red(), right.green(), right.blue()));
+        assert!(right.red() > left.red(), "warmer on the right");
+    }
 
     #[test]
     fn stops_follow_the_status_bands() {

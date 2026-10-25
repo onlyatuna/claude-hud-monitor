@@ -860,6 +860,138 @@ fn dirs_home() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// The sidebar keys keep the names, defaults and tolerance of the Python `ConfigManager`.
+#[cfg(test)]
+mod sidebar_config_tests {
+    use super::*;
+
+    fn parse(json: &str) -> Config {
+        serde_json::from_str(json).expect("config parses")
+    }
+
+    #[test]
+    fn defaults_match_python_default_config() {
+        let cfg = Config::default();
+        assert_eq!(cfg.sidebar_state, "panel");
+        assert_eq!(cfg.sidebar_edge, "right");
+        assert_eq!(cfg.sidebar_orientation, "vertical");
+        assert_eq!(cfg.sidebar_offset, None);
+        assert_eq!((cfg.sidebar_x, cfg.sidebar_y), (None, None));
+        assert!(cfg.sidebar_idle_fade);
+        assert_eq!(cfg.sidebar_idle_level, 0.6);
+        assert_eq!(cfg.sidebar_idle_delay_ms, 900);
+        assert_eq!(cfg.sidebar_scale, 1.0);
+        assert!(cfg.row_order.is_empty());
+        assert_eq!(
+            cfg.agy_order,
+            ["C/G 5H", "ARGON 7D", "GEMINI 5H", "GEMINI 7D", "C/G 7D"]
+        );
+        assert_eq!(cfg.provider_order, ["claude", "agy", "codex"]);
+    }
+
+    #[test]
+    fn a_python_written_file_loads() {
+        let cfg = parse(
+            r#"{"ui_mode": "sidebar", "sidebar_state": "strip", "sidebar_edge": "left",
+                "sidebar_orientation": "horizontal", "sidebar_offset": 40, "sidebar_x": 12,
+                "sidebar_y": -3, "sidebar_scale": 1.4, "sidebar_idle_fade": false,
+                "sidebar_idle_level": 0.4, "sidebar_idle_delay_ms": 2000,
+                "row_order": {"claude": ["WEEKLY 7D", "SESSION 5H"]},
+                "agy_order": ["ARGON 7D", "C/G 5H", "GEMINI 5H", "GEMINI 7D", "C/G 7D"],
+                "provider_order": ["codex", "claude", "agy"]}"#,
+        );
+        assert_eq!(cfg.ui_mode, "sidebar");
+        assert_eq!(cfg.sidebar_state, "strip");
+        assert_eq!(cfg.sidebar_edge, "left");
+        assert_eq!(cfg.sidebar_orientation, "horizontal");
+        assert_eq!(cfg.sidebar_offset, Some(SidebarOffset::At(40)));
+        assert_eq!((cfg.sidebar_x, cfg.sidebar_y), (Some(12), Some(-3)));
+        assert_eq!(cfg.sidebar_scale, 1.4);
+        assert!(!cfg.sidebar_idle_fade);
+        assert_eq!(cfg.sidebar_idle_delay_ms, 2000);
+        assert_eq!(cfg.row_order["claude"], ["WEEKLY 7D", "SESSION 5H"]);
+        assert_eq!(cfg.agy_order[0], "ARGON 7D");
+        assert_eq!(cfg.provider_order, ["codex", "claude", "agy"]);
+    }
+
+    #[test]
+    fn offset_round_trips_as_a_number_or_the_word_end() {
+        let mut cfg = Config::default();
+        cfg.sidebar_offset = Some(SidebarOffset::End);
+        let json = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(json["sidebar_offset"], "end");
+        assert_eq!(parse(&json.to_string()).sidebar_offset, Some(SidebarOffset::End));
+        cfg.sidebar_offset = Some(SidebarOffset::At(25));
+        let json = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(json["sidebar_offset"], 25);
+        assert_eq!(parse(&json.to_string()).sidebar_offset, Some(SidebarOffset::At(25)));
+        cfg.sidebar_offset = None;
+        assert!(serde_json::to_value(&cfg).unwrap()["sidebar_offset"].is_null());
+        assert_eq!(parse(r#"{"sidebar_offset": null}"#).sidebar_offset, None);
+    }
+
+    #[test]
+    fn a_bad_value_keeps_that_one_default_and_nothing_else() {
+        let cfg = parse(
+            r#"{"opacity": 0.5, "sidebar_offset": "middle", "sidebar_x": "left", "sidebar_scale": "big",
+                "sidebar_state": 7, "sidebar_idle_fade": "yes", "row_order": [1],
+                "agy_order": "x", "provider_order": {"a": 1}, "sidebar_idle_delay_ms": 1.5}"#,
+        );
+        assert_eq!(cfg.opacity, 0.5);
+        assert_eq!(cfg.sidebar_offset, None);
+        assert_eq!(cfg.sidebar_x, None);
+        assert_eq!(cfg.sidebar_scale, 1.0);
+        assert_eq!(cfg.sidebar_state, "panel");
+        assert!(cfg.sidebar_idle_fade);
+        assert!(cfg.row_order.is_empty());
+        assert_eq!(cfg.agy_order.len(), 5);
+        assert_eq!(cfg.provider_order, ["claude", "agy", "codex"]);
+        assert_eq!(cfg.sidebar_idle_delay_ms, 900);
+    }
+
+    #[test]
+    fn a_file_without_the_keys_gets_the_defaults() {
+        let cfg = parse(r#"{"opacity": 0.7}"#);
+        assert_eq!(cfg.sidebar_edge, "right");
+        assert_eq!(cfg.provider_order, ["claude", "agy", "codex"]);
+    }
+
+    #[test]
+    fn scale_setting_is_rounded_clamped_and_finite() {
+        let at = |scale: f64| Config { sidebar_scale: scale, ..Default::default() }.sidebar_scale_setting();
+        assert_eq!(at(1.234), 1.23);
+        assert_eq!(at(0.1), 0.6);
+        assert_eq!(at(9.0), 2.0);
+        assert_eq!(at(f64::NAN), 1.0);
+        assert_eq!(at(f64::INFINITY), 1.0);
+    }
+
+    #[test]
+    fn provider_order_must_be_a_permutation() {
+        let at = |order: &[&str]| {
+            Config { provider_order: order.iter().map(|s| s.to_string()).collect(), ..Default::default() }
+                .provider_order_setting()
+        };
+        assert_eq!(at(&["codex", "claude", "agy"]), ["codex", "claude", "agy"]);
+        assert_eq!(at(&["claude", "agy"]), ["claude", "agy", "codex"]);
+        assert_eq!(at(&["claude", "claude", "agy"]), ["claude", "agy", "codex"]);
+        assert_eq!(at(&[]), ["claude", "agy", "codex"]);
+    }
+
+    #[test]
+    fn idle_fade_settings_are_clamped_like_python() {
+        let level = |v: f64| Config { sidebar_idle_level: v, ..Default::default() }.idle_fade_level_setting();
+        assert_eq!(level(0.05), 0.2);
+        assert_eq!(level(2.0), 0.95);
+        assert_eq!(level(0.4), 0.4);
+        assert_eq!(level(f64::NAN), 0.6);
+        let delay = |v: i64| Config { sidebar_idle_delay_ms: v, ..Default::default() }.idle_fade_delay_setting();
+        assert_eq!(delay(10), 200);
+        assert_eq!(delay(99999), 30000);
+        assert_eq!(delay(900), 900);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
