@@ -20,6 +20,7 @@ pub mod provider_card;
 mod provider_card_relayout_tests;
 #[cfg(test)]
 mod qss_box_audit;
+pub mod sidebar;
 pub mod styles;
 #[cfg(test)]
 pub(crate) mod test_support;

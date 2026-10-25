@@ -248,6 +248,8 @@ pub struct HUDWindow {
     /// The table panel sits on an installed blur (Python `vibrant`); read by the panel painter.
     vibrant: Rc<Cell<bool>>,
     set_backdrop: BackdropFn,
+    /// What each provider last reported, before any row order is applied (Python `_raw_metrics`).
+    raw_metrics: HashMap<String, UsageMetrics>,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -582,6 +584,7 @@ impl HUDWindow {
             trim,
             vibrant,
             set_backdrop,
+            raw_metrics: HashMap::new(),
         };
         debouncer.set_restoring(false);
 
@@ -910,7 +913,31 @@ impl HUDWindow {
         );
     }
 
+    /// Python `_on_data_fetched`: remember what the provider reported, show it arranged.
     pub fn on_data_fetched(&mut self, data: &UsageMetrics) {
+        self.raw_metrics
+            .insert(data.provider_id.clone(), data.clone());
+        let arranged = self.arranged(data);
+        self.publish(&arranged);
+    }
+
+    /// Python `_arranged`: agy's rows in the saved `agy_order`, another provider's in its saved
+    /// `row_order` (the table's dials are fixed, so a custom order does not apply there).
+    fn arranged(&self, metrics: &UsageMetrics) -> UsageMetrics {
+        if metrics.provider_id == "agy" {
+            return crate::agy_rows::arrange_agy(metrics, &self.agy_order());
+        }
+        let cfg = self.config.lock();
+        match cfg.row_order.get(&metrics.provider_id) {
+            Some(order) if !order.is_empty() && cfg.ui_mode != "table" => {
+                crate::agy_rows::arrange_by_order(metrics, order)
+            }
+            _ => metrics.clone(),
+        }
+    }
+
+    /// Python `_publish`.
+    fn publish(&mut self, data: &UsageMetrics) {
         if let Some(card) = self.cards.get_mut(&data.provider_id) {
             card.update_metrics(data);
         }
@@ -923,6 +950,68 @@ impl HUDWindow {
         );
         self.refresh_status_dot();
         self.cards_container.borrow().update_layout();
+    }
+
+    /// Python `_republish_all`.
+    fn republish_all(&mut self) {
+        let raws: Vec<UsageMetrics> = self.raw_metrics.values().cloned().collect();
+        for raw in raws {
+            let arranged = self.arranged(&raw);
+            self.publish(&arranged);
+        }
+    }
+
+    /// Python `provider_order`: tile / card / column order.
+    pub fn provider_order(&self) -> Vec<String> {
+        self.config.lock().provider_order_setting()
+    }
+
+    /// Python `agy_order`: the five agy rows, the first two being the main pair.
+    pub fn agy_order(&self) -> Vec<String> {
+        crate::agy_rows::normalize_order(&self.config.lock().agy_order)
+    }
+
+    /// Python `set_agy_order`.
+    pub fn set_agy_order(&mut self, titles: &[String]) {
+        let order = crate::agy_rows::normalize_order(titles);
+        if order == self.agy_order() {
+            return;
+        }
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
+            cfg.agy_order = order.clone();
+        });
+        if let Some(raw) = self.raw_metrics.get("agy").cloned() {
+            let arranged = self.arranged(&raw);
+            self.publish(&arranged);
+        }
+    }
+
+    /// Python `set_row_order(provider_id, titles)`: agy keeps its own order.
+    pub fn set_row_order(&mut self, provider_id: &str, titles: &[String]) {
+        if provider_id == "agy" {
+            self.set_agy_order(titles);
+            return;
+        }
+        let titles = titles.to_vec();
+        if self.config.lock().row_order.get(provider_id) == Some(&titles) {
+            return;
+        }
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
+            cfg.row_order.insert(provider_id.to_owned(), titles.clone());
+        });
+        if let Some(raw) = self.raw_metrics.get(provider_id).cloned() {
+            let arranged = self.arranged(&raw);
+            self.publish(&arranged);
+        }
+    }
+
+    /// Python `reset_agy_order`.
+    pub fn reset_agy_order(&mut self) {
+        let default: Vec<String> = crate::agy_rows::DEFAULT_ORDER
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        self.set_agy_order(&default);
     }
 
     /// Python `_on_system_appearance_changed`: under `appearance = "auto"` the UI follows the

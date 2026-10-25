@@ -253,7 +253,7 @@ pub fn step_scale(scale: f64, steps: i32) -> f64 {
 }
 
 /// Python `round()` for floats: round half to even.
-fn py_round(x: f64) -> i32 {
+pub fn py_round(x: f64) -> i32 {
     let r = x.round();
     if (x - x.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
         (r - x.signum()) as i32
