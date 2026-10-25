@@ -1499,9 +1499,23 @@ impl QObject for HudFilter {
         let Some(hud) = self.state.get().and_then(|w| w.upgrade()) else {
             return false;
         };
-        let (sidebar_mode, locked) = {
-            let cfg = self.config.lock();
-            (cfg.ui_mode == "sidebar", cfg.locked)
+        if !matches!(
+            event.kind,
+            EventKind::Enter { .. }
+                | EventKind::Leave
+                | EventKind::MouseMove { .. }
+                | EventKind::MouseButtonPress { .. }
+                | EventKind::MouseButtonRelease { .. }
+        ) {
+            return false;
+        }
+        // `try_lock`: the config guard may be held by the code that dispatched this event
+        let Some((sidebar_mode, locked)) = self
+            .config
+            .try_lock()
+            .map(|cfg| (cfg.ui_mode == "sidebar", cfg.locked))
+        else {
+            return false;
         };
         if !sidebar_mode {
             return false;
@@ -1559,7 +1573,9 @@ impl QObject for HudFilter {
                     }
                     EventKind::MouseButtonPress { button: 1, .. } if zone.is_some() => {
                         let zone = zone.unwrap_or_default();
-                        let scale = self.config.lock().sidebar_scale_setting();
+                        let Some(scale) = self.config.try_lock().map(|c| c.sidebar_scale_setting()) else {
+                            return false;
+                        };
                         *hud.resize.borrow_mut() = Some(ResizeState {
                             start: pos,
                             geom: hud.geom.get(),
