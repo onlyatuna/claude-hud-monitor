@@ -64,6 +64,20 @@ pub fn format_reset_time(target: Option<DateTime<Utc>>, with_day: bool) -> Strin
     }
 }
 
+/// Wall-clock reset time ("週五 18:00") for windows of a day or longer; empty for short windows
+/// (Python `reset_stamp`).
+pub fn reset_stamp(target: Option<DateTime<Utc>>, title: &str) -> String {
+    if target.is_none() {
+        return String::new();
+    }
+    let long_window = window_seconds(title, 0) >= 86400 || title.to_uppercase().contains("WEEK");
+    if long_window {
+        format_reset_time(target, true)
+    } else {
+        String::new()
+    }
+}
+
 pub fn short_window(title: &str) -> String {
     title
         .replace("WINDOW ", "")
@@ -263,5 +277,16 @@ mod tests {
         assert!(text.contains("用完"));
         assert_eq!(runout_text(Some(80.0), Some(0.01), ONE_WEEK), "");
         assert_eq!(runout_text(None, Some(0.5), ONE_WEEK), "");
+    }
+
+    #[test]
+    fn test_reset_stamp_only_for_day_or_longer_windows() {
+        let t = Some(Utc::now() + Duration::days(2));
+        assert_eq!(reset_stamp(t, "WEEKLY 7D"), format_reset_time(t, true));
+        assert_eq!(reset_stamp(t, "WINDOW 30D"), format_reset_time(t, true));
+        assert_eq!(reset_stamp(t, "WEEK"), format_reset_time(t, true));
+        assert_eq!(reset_stamp(t, "SESSION 5H"), "");
+        assert_eq!(reset_stamp(t, ""), "");
+        assert_eq!(reset_stamp(None, "WEEKLY 7D"), "");
     }
 }

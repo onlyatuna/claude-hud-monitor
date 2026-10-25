@@ -1,5 +1,6 @@
 // src/ui/mod.rs — Qt HUD UI module
 
+pub mod brand;
 #[cfg(all(test, windows))]
 mod button_hover_tests;
 #[cfg(test)]
