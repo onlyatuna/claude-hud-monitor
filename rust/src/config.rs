@@ -19,35 +19,35 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_sidebar_coord")]
     pub window_x: Option<i32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_sidebar_coord")]
     pub window_y: Option<i32>,
-    #[serde(default = "default_ui_mode")]
+    #[serde(default = "default_ui_mode", deserialize_with = "lenient_ui_mode")]
     pub ui_mode: String,
-    #[serde(default = "default_table_width")]
+    #[serde(default = "default_table_width", deserialize_with = "lenient_table_width")]
     pub table_width: u32,
-    #[serde(default = "default_table_height")]
+    #[serde(default = "default_table_height", deserialize_with = "lenient_table_height")]
     pub table_height: u32,
-    #[serde(default = "default_color_scheme")]
+    #[serde(default = "default_color_scheme", deserialize_with = "lenient_color_scheme")]
     pub color_scheme: String,
-    #[serde(default = "default_appearance")]
+    #[serde(default = "default_appearance", deserialize_with = "lenient_appearance")]
     pub appearance: String,
-    #[serde(default = "default_layout_mode")]
+    #[serde(default = "default_layout_mode", deserialize_with = "lenient_layout_mode")]
     pub layout_mode: String,
-    #[serde(default = "default_vertical_width")]
+    #[serde(default = "default_vertical_width", deserialize_with = "lenient_vertical_width")]
     pub vertical_width: u32,
-    #[serde(default = "default_vertical_height")]
+    #[serde(default = "default_vertical_height", deserialize_with = "lenient_vertical_height")]
     pub vertical_height: u32,
-    #[serde(default = "default_horizontal_width")]
+    #[serde(default = "default_horizontal_width", deserialize_with = "lenient_horizontal_width")]
     pub horizontal_width: u32,
-    #[serde(default = "default_horizontal_height")]
+    #[serde(default = "default_horizontal_height", deserialize_with = "lenient_horizontal_height")]
     pub horizontal_height: u32,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "lenient_bool_true")]
     pub always_on_top: bool,
-    #[serde(default = "default_opacity")]
+    #[serde(default = "default_opacity", deserialize_with = "lenient_opacity")]
     pub opacity: f32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool_false")]
     pub click_through: bool,
     // ---- Sidebar style (Python `DEFAULT_CONFIG`, `config_manager.py`). Read leniently: a wrong
     // type in a hand-edited file falls back to the default instead of discarding the whole file.
@@ -87,17 +87,17 @@ pub struct Config {
     pub agy_order: Vec<String>,
     #[serde(default = "default_provider_order", deserialize_with = "lenient_provider_order")]
     pub provider_order: Vec<String>,
-    #[serde(default = "default_refresh_interval")]
+    #[serde(default = "default_refresh_interval", deserialize_with = "lenient_refresh_interval")]
     pub refresh_interval_sec: u64,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "lenient_bool_true")]
     pub hotkey_enabled: bool,
-    #[serde(default = "default_hotkey")]
+    #[serde(default = "default_hotkey", deserialize_with = "lenient_hotkey")]
     pub hotkey: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool_false")]
     pub locked: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool_false")]
     pub autostart: bool,
-    #[serde(default = "default_claude_profile")]
+    #[serde(default = "default_claude_profile", deserialize_with = "lenient_claude_profile")]
     pub claude_profile: String,
 
     // --- table polish (hud-table-polish): blur switch and the collapsed dial row ---
@@ -342,6 +342,20 @@ macro_rules! lenient_field {
         }
     };
 }
+lenient_field!(lenient_ui_mode, String, default_ui_mode());
+lenient_field!(lenient_table_width, u32, default_table_width());
+lenient_field!(lenient_table_height, u32, default_table_height());
+lenient_field!(lenient_color_scheme, String, default_color_scheme());
+lenient_field!(lenient_appearance, String, default_appearance());
+lenient_field!(lenient_layout_mode, String, default_layout_mode());
+lenient_field!(lenient_vertical_width, u32, default_vertical_width());
+lenient_field!(lenient_vertical_height, u32, default_vertical_height());
+lenient_field!(lenient_horizontal_width, u32, default_horizontal_width());
+lenient_field!(lenient_horizontal_height, u32, default_horizontal_height());
+lenient_field!(lenient_opacity, f32, default_opacity());
+lenient_field!(lenient_refresh_interval, u64, default_refresh_interval());
+lenient_field!(lenient_hotkey, String, default_hotkey());
+lenient_field!(lenient_claude_profile, String, default_claude_profile());
 lenient_field!(lenient_sidebar_state, String, default_sidebar_state());
 lenient_field!(lenient_sidebar_edge, String, default_sidebar_edge());
 lenient_field!(lenient_sidebar_orientation, String, default_sidebar_orientation());
@@ -1005,6 +1019,30 @@ mod sidebar_config_tests {
         assert_eq!(cfg.agy_order.len(), 5);
         assert_eq!(cfg.provider_order, ["claude", "agy", "codex"]);
         assert_eq!(cfg.sidebar_idle_delay_ms, 900);
+    }
+
+    #[test]
+    fn a_wrong_typed_older_key_keeps_its_default_and_nothing_else() {
+        let cfg = parse(
+            r#"{"ui_mode": 5, "opacity": "high", "locked": "yes", "always_on_top": 1,
+                "window_x": "left", "table_width": -3, "layout_mode": [], "hotkey": 7,
+                "refresh_interval_sec": "fast", "claude_profile": null,
+                "appearance": "dark", "sidebar_edge": "top"}"#,
+        );
+        let defaults = Config::default();
+        assert_eq!(cfg.ui_mode, defaults.ui_mode);
+        assert_eq!(cfg.opacity, defaults.opacity);
+        assert!(!cfg.locked);
+        assert!(cfg.always_on_top);
+        assert_eq!(cfg.window_x, None);
+        assert_eq!(cfg.table_width, defaults.table_width);
+        assert_eq!(cfg.layout_mode, defaults.layout_mode);
+        assert_eq!(cfg.hotkey, defaults.hotkey);
+        assert_eq!(cfg.refresh_interval_sec, defaults.refresh_interval_sec);
+        assert_eq!(cfg.claude_profile, defaults.claude_profile);
+        // the keys that were fine survive
+        assert_eq!(cfg.appearance, "dark");
+        assert_eq!(cfg.sidebar_edge, "top");
     }
 
     #[test]

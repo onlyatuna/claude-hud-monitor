@@ -196,26 +196,65 @@ impl<T> Notifier<T> {
 
 /// A value that only the thread that made it may touch, made `Send + Sync` so that a
 /// `ferrokit_core::timer::Timer::timeout` slot (which has to be) can hold the HUD's `Rc` state.
-/// Every HUD timer fires on the UI thread; `get` returns `None` anywhere else.
+/// Every HUD timer fires on the UI thread; `get` returns `None` anywhere else, and dropping the
+/// value anywhere else leaks it instead of running its destructor on the wrong thread (an `Rc`
+/// count changed from two threads is a data race).
 pub struct UiThread<T> {
-    value: T,
+    value: std::mem::ManuallyDrop<T>,
     thread: std::thread::ThreadId,
 }
 
 // SAFETY: `value` is only reachable through `get`, which refuses every thread but the one that
-// made it; a `UiThread` is dropped on that thread as well (timers and widgets live there).
+// made it, and `Drop` runs the destructor on that thread only.
 unsafe impl<T> Send for UiThread<T> {}
 unsafe impl<T> Sync for UiThread<T> {}
 
 impl<T> UiThread<T> {
     pub fn new(value: T) -> Self {
         Self {
-            value,
+            value: std::mem::ManuallyDrop::new(value),
             thread: std::thread::current().id(),
         }
     }
 
     pub fn get(&self) -> Option<&T> {
-        (std::thread::current().id() == self.thread).then_some(&self.value)
+        (std::thread::current().id() == self.thread).then_some(&*self.value)
+    }
+}
+
+impl<T> Drop for UiThread<T> {
+    fn drop(&mut self) {
+        if std::thread::current().id() == self.thread {
+            // SAFETY: `value` is dropped exactly once, here, and never used afterwards.
+            unsafe { std::mem::ManuallyDrop::drop(&mut self.value) };
+        }
+    }
+}
+
+#[cfg(test)]
+mod ui_thread_tests {
+    use super::*;
+    use std::rc::Rc;
+
+    #[test]
+    fn the_owning_thread_reads_and_drops_the_value() {
+        let rc = Rc::new(5);
+        let cell = UiThread::new(Rc::clone(&rc));
+        assert_eq!(cell.get().map(|v| **v), Some(5));
+        assert_eq!(Rc::strong_count(&rc), 2);
+        drop(cell);
+        assert_eq!(Rc::strong_count(&rc), 1);
+    }
+
+    #[test]
+    fn another_thread_neither_reads_nor_drops_the_value() {
+        let rc = Rc::new(5);
+        let cell = UiThread::new(Rc::clone(&rc));
+        let moved = std::thread::spawn(move || {
+            assert!(cell.get().is_none());
+            // dropped here, on the wrong thread: leaked, so the count is not touched
+        });
+        moved.join().unwrap();
+        assert_eq!(Rc::strong_count(&rc), 2, "the Rc count must not change off-thread");
     }
 }

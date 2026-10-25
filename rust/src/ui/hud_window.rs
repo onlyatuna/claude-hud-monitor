@@ -818,12 +818,12 @@ impl HUDWindow {
         snap_timer.set_single_shot(true);
         snap_timer.set_interval(SIDEBAR_SNAP_DELAY_MS);
         snap_timer.timeout.connect(|()| {
-            with_hud(|hud| hud.finish_sidebar_move());
+            with_hud_retry(|hud| hud.finish_sidebar_move());
         });
         let fade_timer = Timer::new();
         fade_timer.set_single_shot(true);
         fade_timer.timeout.connect(|()| {
-            with_hud(|hud| hud.apply_opacity());
+            with_hud_retry(|hud| hud.apply_opacity());
         });
         let sidebar_hud = Rc::new(SidebarHud {
             docking: Cell::new(false),
@@ -832,6 +832,7 @@ impl HUDWindow {
             snap_timer,
             fade_timer,
             geom: Rc::clone(&geom_now),
+            root: root.clone(),
             root_id: root.borrow().id(),
         });
         let geom_resize = Rc::clone(&geom_now);
@@ -1223,6 +1224,7 @@ impl HUDWindow {
         ferrokit_widgets::application::Application::set_style_sheet(sheet);
         if mode == "sidebar" {
             // Python `_apply_ui_mode("sidebar")`: the flyout goes, the bar is sized by its content
+            self.cancel_resize();
             self.sidebar.close_flyout();
             self.refresh_backdrop(mode);
             self.window.set_minimum_size(0, 0);
@@ -1233,6 +1235,7 @@ impl HUDWindow {
         }
         if self.sidebar_layout {
             // leaving the sidebar: back to the header + page layout and a resizable window
+            self.cancel_resize();
             self.sidebar.close_flyout();
             self.install_root_layout(false);
             self.window
@@ -1676,6 +1679,7 @@ pub struct SidebarHud {
     fade_timer: Timer,
     /// The window geometry as the window's events report it.
     geom: Rc<Cell<Rect>>,
+    root: WidgetRef,
     root_id: ObjectId,
 }
 
@@ -1777,11 +1781,70 @@ pub fn faded_opacity(base: f32, level: f64, active: bool) -> f32 {
     }
 }
 
-/// `with_hud` once the event that is being dispatched is done.
-fn with_hud_later(f: impl FnOnce(&mut HUDWindow) + 'static) {
-    ferrokit_widgets::WidgetCommandQueue::post_task(move || {
-        with_hud(f);
+/// How long and how often a task that found the HUD borrowed tries again (Python runs the slot
+/// at once; here a nested call from inside a HUD method has to wait for that method to return).
+const HUD_RETRY_MS: u64 = 20;
+const HUD_RETRIES: u32 = 50;
+
+/// Whether a task that did not run (the HUD was borrowed) is tried again.
+fn should_retry(ran: bool, tries_left: u32) -> bool {
+    !ran && tries_left > 0
+}
+
+/// Runs `f` on the HUD, trying again every `HUD_RETRY_MS` while it is borrowed. State the HUD
+/// must leave (a resize grab, the sidebar's mode) is never skipped silently.
+fn with_hud_retry(f: impl FnOnce(&mut HUDWindow) + 'static) {
+    run_on_hud(Arc::new(UiThread::new(RefCell::new(Some(f)))), HUD_RETRIES);
+}
+
+fn run_on_hud<F: FnOnce(&mut HUDWindow) + 'static>(
+    slot: Arc<UiThread<RefCell<Option<F>>>>,
+    tries_left: u32,
+) {
+    let Some(cell) = slot.get() else { return };
+    let ran = with_hud(|hud| {
+        let task = cell.borrow_mut().take();
+        if let Some(task) = task {
+            task(hud);
+        }
     });
+    if should_retry(ran, tries_left) {
+        ferrokit_core::timer::Timer::single_shot(HUD_RETRY_MS, move || {
+            run_on_hud(slot, tries_left - 1)
+        });
+    }
+}
+
+/// `with_hud_retry` once the event that is being dispatched is done.
+fn with_hud_later(f: impl FnOnce(&mut HUDWindow) + 'static) {
+    ferrokit_widgets::WidgetCommandQueue::post_task(move || with_hud_retry(f));
+}
+
+/// Whether `id` is `root` or a widget below it. While a filter runs only the notified widget is
+/// mutably borrowed, so a widget that cannot be read is that one and counts as found.
+pub fn tree_contains(root: &WidgetRef, id: ObjectId) -> bool {
+    let Ok(widget) = root.try_borrow() else {
+        return true;
+    };
+    widget.id() == id || widget.children().iter().any(|child| tree_contains(child, id))
+}
+
+/// A resize drag whose button is no longer held lost its release event.
+fn resize_lost_release(buttons_up: bool) -> bool {
+    buttons_up
+}
+
+/// The events `HudFilter` looks at; everything else (paint, timers, layout) returns at once.
+fn is_filtered_kind(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Enter { .. }
+            | EventKind::Leave
+            | EventKind::FocusOut { .. }
+            | EventKind::MouseMove { .. }
+            | EventKind::MouseButtonPress { .. }
+            | EventKind::MouseButtonRelease { .. }
+    )
 }
 
 impl SidebarHud {
@@ -1823,19 +1886,12 @@ impl QObject for HudFilter {
     }
 
     fn event_filter(&mut self, watched: ObjectId, event: &mut Event) -> bool {
+        if !is_filtered_kind(&event.kind) {
+            return false;
+        }
         let Some(hud) = self.state.get().and_then(|w| w.upgrade()) else {
             return false;
         };
-        if !matches!(
-            event.kind,
-            EventKind::Enter { .. }
-                | EventKind::Leave
-                | EventKind::MouseMove { .. }
-                | EventKind::MouseButtonPress { .. }
-                | EventKind::MouseButtonRelease { .. }
-        ) {
-            return false;
-        }
         // `try_lock`: the config guard may be held by the code that dispatched this event
         let Some((sidebar_mode, locked)) = self
             .config
@@ -1863,7 +1919,13 @@ impl QObject for HudFilter {
             }
         }
         if hud.resize.borrow().is_some() {
+            let buttons_up = ferrokit_widgets::application::Application::mouse_buttons().is_empty();
             return match &event.kind {
+                // a move with no button held: the release never arrived, so the drag is over
+                EventKind::MouseMove { .. } if resize_lost_release(buttons_up) => {
+                    with_hud_later(|hud| hud.end_resize());
+                    true
+                }
                 EventKind::MouseMove { .. } => {
                     let pos = Cursor::pos();
                     with_hud_later(move |hud| hud.resize_to(pos));
@@ -1872,6 +1934,11 @@ impl QObject for HudFilter {
                 EventKind::MouseButtonRelease { .. } => {
                     with_hud_later(|hud| hud.end_resize());
                     true
+                }
+                // the window lost the keyboard focus or the pointer mid-drag
+                EventKind::FocusOut { .. } | EventKind::Leave if watched == hud.root_id => {
+                    with_hud_later(|hud| hud.cancel_resize());
+                    false
                 }
                 _ => false,
             };
@@ -1885,12 +1952,10 @@ impl QObject for HudFilter {
                 false
             }
             EventKind::MouseMove { .. } | EventKind::MouseButtonPress { .. } => {
-                // Python also asks whether `obj` is the HUD or one of its descendants. That walks
-                // the widget tree, and the widget being notified is mutably borrowed while this
-                // runs; the zone test against the HUD's own rectangle (global position) is what
-                // decides in practice, and it never matches a popup menu (those run their own loop).
+                // Python: `isinstance(obj, QWidget) and (obj is self or self.isAncestorOf(obj))`
                 let pos = Cursor::pos();
-                let zone = resize_zone(hud.geom.get(), pos);
+                let zone = resize_zone(hud.geom.get(), pos)
+                    .filter(|_| tree_contains(&hud.root, watched));
                 match &event.kind {
                     EventKind::MouseMove { .. } => {
                         if ferrokit_widgets::application::Application::mouse_buttons().is_empty() {
@@ -2085,6 +2150,15 @@ impl HUDWindow {
         self.sidebar_hud.docking.set(false);
     }
 
+    /// A resize that ends without a release (mode switch, focus lost): the grab, the cursor and
+    /// the state go, nothing is saved.
+    fn cancel_resize(&mut self) {
+        if self.sidebar_hud.resize.borrow_mut().take().is_some() {
+            self.window.root_widget().borrow().release_mouse();
+        }
+        self.sidebar_hud.set_grip_cursor(None);
+    }
+
     /// Python `_end_resize`.
     fn end_resize(&mut self) {
         self.window.root_widget().borrow().release_mouse();
@@ -2137,7 +2211,7 @@ impl HUDWindow {
         if self.sidebar.state() == State::Panel {
             self.dock_sidebar();
             Timer::single_shot(0, || {
-                with_hud(|hud| hud.settle_sidebar());
+                with_hud_retry(|hud| hud.settle_sidebar());
             });
         }
     }
@@ -3401,6 +3475,53 @@ mod sidebar_geometry_tests {
         assert_eq!(resize_origin("t", G, 64, 400).1, 300 - 400);
         // a grip without a horizontal part keeps the centre
         assert_eq!(resize_origin("b", G, 128, 200).0, 131 - 64);
+    }
+
+    #[test]
+    fn a_task_that_found_the_hud_busy_is_tried_again_until_it_runs() {
+        assert!(should_retry(false, 5));
+        assert!(!should_retry(true, 5), "it ran");
+        assert!(!should_retry(false, 0), "out of tries");
+        assert!(HUD_RETRIES as u64 * HUD_RETRY_MS >= 500, "long enough to outlast a layout pass");
+    }
+
+    #[test]
+    fn a_drag_without_a_held_button_lost_its_release() {
+        assert!(resize_lost_release(true));
+        assert!(!resize_lost_release(false));
+    }
+
+    #[test]
+    fn only_input_events_reach_the_filter_logic() {
+        assert!(is_filtered_kind(&EventKind::MouseMove { x: 0, y: 0 }));
+        assert!(is_filtered_kind(&EventKind::MouseButtonPress { x: 0, y: 0, button: 1 }));
+        assert!(is_filtered_kind(&EventKind::MouseButtonRelease { x: 0, y: 0, button: 1 }));
+        assert!(is_filtered_kind(&EventKind::Leave));
+        assert!(is_filtered_kind(&EventKind::Enter { x: 0, y: 0 }));
+        assert!(!is_filtered_kind(&EventKind::Close));
+        assert!(!is_filtered_kind(&EventKind::Resize { width: 1, height: 1, old_width: 0, old_height: 0 }));
+    }
+
+    #[test]
+    fn the_filter_only_accepts_widgets_of_the_hud_tree() {
+        let mk = || -> WidgetRef { make_widget(EmptyWidget::new()) };
+        let (root, child, grandchild, stranger) = (mk(), mk(), mk(), mk());
+        let mut inner = BoxLayout::vertical();
+        inner.add_widget(grandchild.clone());
+        child.borrow_mut().set_layout(Box::new(inner));
+        let mut outer = BoxLayout::vertical();
+        outer.add_widget(child.clone());
+        root.borrow_mut().set_layout(Box::new(outer));
+        let id = |w: &WidgetRef| w.borrow().id();
+        assert!(tree_contains(&root, id(&root)));
+        assert!(tree_contains(&root, id(&child)));
+        assert!(tree_contains(&root, id(&grandchild)));
+        assert!(!tree_contains(&root, id(&stranger)), "another window's widget");
+        // the widget that is being notified is mutably borrowed and cannot be read: it is found
+        let child_id = id(&child);
+        let held = child.borrow_mut();
+        assert!(tree_contains(&root, child_id));
+        drop(held);
     }
 
     #[test]

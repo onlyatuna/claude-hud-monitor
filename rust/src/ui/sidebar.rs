@@ -615,6 +615,26 @@ impl ButtonData {
         }
     }
 
+    /// Drops a press / hold / drag that is in progress (the sidebar changes shape or order under
+    /// it): no stuck `reordering`, down state or closed-hand cursor.
+    fn reset_interaction(&self) {
+        self.hold.stop();
+        self.press_pos.set(None);
+        self.dragged.set(false);
+        let was_reordering = self.reordering.replace(false);
+        let was_down = self.down.replace(false);
+        if was_reordering {
+            if let Some(w) = self.widget() {
+                if let Ok(w) = w.try_borrow() {
+                    w.set_cursor(CursorShape::PointingHand);
+                }
+            }
+        }
+        if was_reordering || was_down {
+            self.update();
+        }
+    }
+
     /// Python `_begin_reorder` (the hold timer fired).
     fn begin_reorder(&self) {
         let Some(owner) = self.owner.upgrade() else { return };
@@ -1732,6 +1752,7 @@ impl SidebarInner {
     /// Python `set_state` after its early return.
     fn set_state_forced(self: &Rc<Self>, state: State) {
         self.close_flyout();
+        self.reset_buttons();
         self.state.set(state);
         ferrokit_widgets::widget::set_widget_visible(&self.strip, state == State::Strip);
         ferrokit_widgets::widget::set_widget_visible(&self.panel, state == State::Panel);
@@ -1780,6 +1801,7 @@ impl SidebarInner {
     }
 
     fn apply_order(self: &Rc<Self>) {
+        self.reset_buttons();
         let order = self.order.borrow().clone();
         for (_, widget, _) in self.buttons() {
             layout_remove(&self.strip, widget);
@@ -1793,6 +1815,13 @@ impl SidebarInner {
         if self.state.get() == State::Panel {
             self.set_state_forced(State::Strip);
             self.set_state_forced(State::Panel);
+        }
+    }
+
+    /// `ButtonData::reset_interaction` for every tile.
+    fn reset_buttons(&self) {
+        for (_, _, data) in self.buttons() {
+            data.reset_interaction();
         }
     }
 
