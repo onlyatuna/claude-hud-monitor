@@ -1079,6 +1079,7 @@ impl HUDWindow {
             self.hide();
         } else {
             self.show();
+            self.window.activate_window();
         }
     }
 
