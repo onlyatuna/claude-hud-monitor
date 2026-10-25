@@ -375,7 +375,7 @@ impl Provider for AgyProvider {
             res.badge2_text = "Argon: --".to_owned();
             return res;
         };
-        info!("[AgyProvider] completing the quota with the statusLine cache");
+        debug!("[AgyProvider] completing the quota with the statusLine cache");
         self.merge_cache(res, &cache, &now)
     }
 }
@@ -420,6 +420,8 @@ fn text_of(object: &Value, keys: &[&str]) -> Result<String, ()> {
             Some(Value::String(s)) => return Ok(s.clone()),
             Some(Value::Bool(false)) => {}
             Some(Value::Number(n)) if n.as_f64() == Some(0.0) => {}
+            Some(Value::Array(a)) if a.is_empty() => {}
+            Some(Value::Object(o)) if o.is_empty() => {}
             Some(_) => return Err(()),
         }
     }
@@ -551,12 +553,15 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
             return format_error(now);
         };
         let lower = name.to_lowercase();
-        let buckets = match group.get("buckets") {
-            None => &NO_ITEMS,
-            Some(Value::Array(list)) => list,
-            Some(_) => return format_error(now),
+        let buckets_of = || match group.get("buckets") {
+            None => Some(&NO_ITEMS),
+            Some(Value::Array(list)) => Some(list),
+            Some(_) => None,
         };
         if lower.contains("gemini") && !lower.contains("argon") {
+            let Some(buckets) = buckets_of() else {
+                return format_error(now);
+            };
             for bucket in buckets {
                 if !bucket.is_object() {
                     return format_error(now);
@@ -586,6 +591,9 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
                 }
             }
         } else if (lower.contains("claude") || lower.contains("gpt")) && !lower.contains("argon") {
+            let Some(buckets) = buckets_of() else {
+                return format_error(now);
+            };
             for bucket in buckets {
                 if !bucket.is_object() {
                     return format_error(now);
@@ -922,6 +930,16 @@ mod tests {
         }
         let r = parse_model_buckets(&serde_json::from_str(r#"{"buckets":{}}"#).unwrap(), "12:00:00");
         assert_eq!(r.error_code, "schema");
+    }
+
+    #[test]
+    fn an_unknown_group_with_odd_buckets_is_ignored_not_an_error() {
+        let summary = r#"{"groups":[
+            {"name":"Claude and GPT models","buckets":[{"id":"3p-5h","remainingFraction":0.5}]},
+            {"name":"Something new","buckets":"later"}]}"#;
+        let r = parse_agy_json(&serde_json::from_str(summary).unwrap(), "12:00:00");
+        assert!(r.error.is_none(), "{:?}", r.error);
+        near(r.extra_metrics[0].val, 50.0);
     }
 
     #[test]

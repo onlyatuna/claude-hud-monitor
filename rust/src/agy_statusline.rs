@@ -86,8 +86,14 @@ pub fn agy_settings_path() -> PathBuf {
 
 /// The user's home folder (`os.path.expanduser('~')`).
 pub fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
+    // Python's `expanduser` reads `USERPROFILE` and ignores `HOME` on Windows.
+    let (first, second) = if cfg!(windows) {
+        ("USERPROFILE", "HOME")
+    } else {
+        ("HOME", "USERPROFILE")
+    };
+    std::env::var_os(first)
+        .or_else(|| std::env::var_os(second))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
 }
@@ -163,6 +169,8 @@ fn owned(statusline: &Value) -> bool {
 /// Copies `path` to `<path>.bak-hud-<stamp>`; an exclusive create keeps the backups made within the
 /// same second.
 fn backup(path: &Path) -> std::io::Result<()> {
+    // Opened first: a missing source must not leave an empty backup behind.
+    let mut source = fs::File::open(path)?;
     let stamp = Local::now().format("%Y%m%d-%H%M%S");
     let base = format!("{}.bak-hud-{stamp}", path.display());
     let mut candidate = base.clone();
@@ -170,7 +178,6 @@ fn backup(path: &Path) -> std::io::Result<()> {
     loop {
         match OpenOptions::new().write(true).create_new(true).open(&candidate) {
             Ok(mut target) => {
-                let mut source = fs::File::open(path)?;
                 std::io::copy(&mut source, &mut target)?;
                 return Ok(());
             }
@@ -298,7 +305,8 @@ pub fn uninstall_statusline(settings_path: Option<&Path>) -> Outcome {
     }
     let written = (|| -> std::io::Result<()> {
         backup(&settings_path)?;
-        settings.remove("statusLine");
+        // `shift_remove` keeps the order of the user's other keys (`remove` swaps the last one in).
+        settings.shift_remove("statusLine");
         write_settings(&settings_path, &settings)
     })();
     if written.is_ok() {
@@ -494,6 +502,28 @@ mod tests {
             text.find("statusLine").unwrap(),
         );
         assert!(zeta < alpha && alpha < status, "{text}");
+    }
+
+    #[test]
+    fn uninstall_keeps_the_order_of_the_users_keys() {
+        let dir = Dir::new("uninstall_order");
+        let settings = dir.path().join("settings.json");
+        fs::write(&settings, r#"{"zeta":1,"alpha":2,"mid":3}"#).unwrap();
+        assert_eq!(install(&dir, &settings), Outcome::Installed);
+        // Put our entry first so a swap-style removal would move `mid` into its place.
+        let mut data: Map<String, Value> =
+            serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        let status = data.shift_remove("statusLine").unwrap();
+        data.shift_insert(0, "statusLine".to_owned(), status);
+        fs::write(&settings, serde_json::to_string(&data).unwrap()).unwrap();
+        assert_eq!(uninstall_statusline(Some(&settings)), Outcome::Removed);
+        let text = fs::read_to_string(&settings).unwrap();
+        let (zeta, alpha, mid) = (
+            text.find("zeta").unwrap(),
+            text.find("alpha").unwrap(),
+            text.find("mid").unwrap(),
+        );
+        assert!(zeta < alpha && alpha < mid, "{text}");
     }
 
     #[test]
