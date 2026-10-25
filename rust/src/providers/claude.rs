@@ -246,11 +246,12 @@ pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| pref_trimmed.to_string());
+    let raw = pref_trimmed.strip_prefix('.').unwrap_or(pref_trimmed);
     (
         ClaudeProfile {
-            id: pref_trimmed.trim_start_matches('.').to_string(),
-            display_name: format!("{} (~/{})", pref_trimmed, fallback_name),
-            short_name: pref_trimmed.trim_start_matches('.').to_string(),
+            id: raw.to_string(),
+            display_name: format!("{} (~/{})", raw, fallback_name),
+            short_name: raw.to_string(),
             dir_path: fallback_dir,
             credentials_path: cred_path,
             last_activity,
@@ -467,6 +468,7 @@ fn parse_claude_response(data: Value, now_str: &str) -> UsageMetrics {
     let rows = match breakdown.get("rows") {
         None => &empty,
         Some(Value::Array(rows)) => rows,
+        Some(Value::Object(o)) if o.is_empty() => &empty,
         Some(_) => return format_error("claude", "Claude", now_str),
     };
     for r in rows {
