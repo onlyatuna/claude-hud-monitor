@@ -63,14 +63,20 @@ pub struct Config {
 
     // --- table polish (hud-table-polish): blur switch and the collapsed dial row ---
     /// Acrylic behind the table; off = the flat rounded panel.
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "lenient_bool_true")]
     pub table_blur: bool,
     /// Collapsed to one dial per service (window dragged below 380x280).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool_false")]
     pub table_compact: bool,
-    #[serde(default = "default_table_compact_width")]
+    #[serde(
+        default = "default_table_compact_width",
+        deserialize_with = "lenient_compact_width"
+    )]
     pub table_compact_width: u32,
-    #[serde(default = "default_table_compact_height")]
+    #[serde(
+        default = "default_table_compact_height",
+        deserialize_with = "lenient_compact_height"
+    )]
     pub table_compact_height: u32,
 }
 
@@ -100,6 +106,34 @@ fn default_table_width() -> u32 {
 }
 fn default_table_height() -> u32 {
     DEFAULT_TABLE_HEIGHT
+}
+// The table-polish keys are read one by one like Python's per-key `isinstance` checks: a value of the
+// wrong type falls back to that key's default instead of failing the whole file.
+fn lenient_bool_true<'de, D: serde::Deserializer<'de>>(de: D) -> Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(de)
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true))
+}
+fn lenient_bool_false<'de, D: serde::Deserializer<'de>>(de: D) -> Result<bool, D::Error> {
+    Ok(serde_json::Value::deserialize(de)
+        .ok()
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false))
+}
+fn lenient_compact_width<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u32, D::Error> {
+    Ok(serde_json::Value::deserialize(de)
+        .ok()
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or_else(default_table_compact_width))
+}
+fn lenient_compact_height<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u32, D::Error> {
+    Ok(serde_json::Value::deserialize(de)
+        .ok()
+        .and_then(|v| v.as_u64())
+        .and_then(|v| u32::try_from(v).ok())
+        .unwrap_or_else(default_table_compact_height))
 }
 fn default_table_compact_width() -> u32 {
     DEFAULT_TABLE_COMPACT_WIDTH
@@ -800,6 +834,22 @@ mod tests {
         .expect("python config");
         assert!(!cfg.table_blur && cfg.table_compact);
         assert_eq!((cfg.table_compact_width, cfg.table_compact_height), (300, 80));
+    }
+
+    /// One wrong-typed table-polish key must not reset the whole config (Python checks each key alone).
+    #[test]
+    fn test_wrong_typed_table_polish_keys_fall_back_per_key() {
+        let cfg: Config = serde_json::from_str(
+            r#"{"opacity": 0.5, "table_blur": "yes", "table_compact": 1,
+                "table_compact_width": -5, "table_compact_height": "tall"}"#,
+        )
+        .expect("a bad new key must not fail the file");
+        assert_eq!(cfg.opacity, 0.5, "other keys survive");
+        assert!(cfg.table_blur);
+        assert!(!cfg.table_compact);
+        assert_eq!((cfg.table_compact_width, cfg.table_compact_height), (240, 96));
+        let cfg: Config = serde_json::from_str(r#"{"table_compact_width": 99999999999}"#).unwrap();
+        assert_eq!(cfg.table_compact_width, 240);
     }
 
     #[test]

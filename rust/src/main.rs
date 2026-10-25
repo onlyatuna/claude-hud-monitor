@@ -601,9 +601,13 @@ fn main() -> std::process::ExitCode {
     clock_timer.timeout.connect(move |()| {
         MAIN_HUD.with(|cell| {
             if let Some(hud) = cell.borrow().as_ref() {
-                hud.borrow_mut().on_clock_tick(std::time::SystemTime::now());
+                // A nested event loop (menu, drag) can fire this while the HUD is borrowed: skip the tick.
+                let Ok(mut hud) = hud.try_borrow_mut() else {
+                    return;
+                };
+                hud.on_clock_tick(std::time::SystemTime::now());
                 if WAKE_REQUESTED.swap(false, Ordering::Relaxed) {
-                    hud.borrow_mut().show();
+                    hud.show();
                 }
             }
         });
@@ -615,7 +619,9 @@ fn main() -> std::process::ExitCode {
     poll_timer.timeout.connect(move |()| {
         MAIN_HUD.with(|cell| {
             if let Some(hud) = cell.borrow().as_ref() {
-                hud.borrow_mut().poll_refresh();
+                if let Ok(mut hud) = hud.try_borrow_mut() {
+                    hud.poll_refresh();
+                }
             }
         });
     });

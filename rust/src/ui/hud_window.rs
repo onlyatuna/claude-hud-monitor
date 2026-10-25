@@ -129,7 +129,12 @@ impl TableChrome {
         } else {
             (FULL_MARGINS, FULL_SPACING)
         };
-        if let Some(layout) = self.root.borrow_mut().layout_mut() {
+        // The resize handler can run while the root is borrowed by a layout pass: skip then, the
+        // layout pass that follows the resize picks the margins up on the next sync.
+        let Ok(mut root) = self.root.try_borrow_mut() else {
+            return;
+        };
+        if let Some(layout) = root.layout_mut() {
             layout.set_margins(Margins::new(m.0, m.1, m.2, m.3));
             layout.set_spacing(spacing);
         }
@@ -385,13 +390,34 @@ pub fn register_hud(hud: &Rc<RefCell<HUDWindow>>) {
     HUD.with(|h| *h.borrow_mut() = Rc::downgrade(hud));
 }
 
-/// Runs `f` on the registered HUD unless it is already borrowed (a handler re-entered from a HUD call).
-fn with_hud(f: impl FnOnce(&mut HUDWindow)) {
-    if let Some(hud) = HUD.with(|h| h.borrow().upgrade()) {
-        if let Ok(mut hud) = hud.try_borrow_mut() {
+/// Runs `f` on the registered HUD unless it is already borrowed (a handler re-entered from a HUD
+/// call). Returns whether `f` ran; with no HUD registered there is nothing to retry, so that counts as run.
+fn with_hud(f: impl FnOnce(&mut HUDWindow)) -> bool {
+    let Some(hud) = HUD.with(|h| h.borrow().upgrade()) else {
+        return true;
+    };
+    let ran = match hud.try_borrow_mut() {
+        Ok(mut hud) => {
             f(&mut hud);
+            true
         }
+        Err(_) => false,
+    };
+    ran
+}
+
+/// The resume step of the blur pause: runs `resume_blur`, and while the HUD is busy tries again
+/// `BLUR_RESUME_MS` later.
+fn resume_blur_or_retry() {
+    if blur_resume_needs_retry(with_hud(|hud| hud.resume_blur())) {
+        ferrokit_core::timer::Timer::single_shot(BLUR_RESUME_MS, resume_blur_or_retry);
     }
+}
+
+/// The resume timer is single-shot: when the HUD was busy it must arm itself again, or the blur would
+/// stay suspended for good.
+fn blur_resume_needs_retry(hud_was_available: bool) -> bool {
+    !hud_was_available
 }
 
 pub struct HUDWindow {
@@ -696,7 +722,7 @@ impl HUDWindow {
         blur_resume_timer.set_interval(BLUR_RESUME_MS);
         blur_resume_timer
             .timeout
-            .connect(move |()| with_hud(|hud| hud.resume_blur()));
+            .connect(move |()| resume_blur_or_retry());
 
         let cfg_press = Arc::clone(&config);
         window.set_mouse_press_handler(move |pos, button| {
@@ -1377,6 +1403,14 @@ impl Drop for HUDWindow {
 #[cfg(test)]
 mod table_size_tests {
     use super::*;
+
+    #[test]
+    fn a_busy_hud_makes_the_resume_timer_arm_itself_again() {
+        assert!(blur_resume_needs_retry(false));
+        assert!(!blur_resume_needs_retry(true));
+        // No HUD registered (or the borrow free) counts as run: `with_hud` returns true.
+        assert!(with_hud(|_| unreachable!()));
+    }
 
     fn table_cfg(compact: bool) -> Config {
         Config {
