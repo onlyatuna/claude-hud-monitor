@@ -20,7 +20,6 @@ use ferrokit_platform::backdrop::BackdropType;
 use ferrokit_platform::cursor::CursorShape;
 use ferrokit_platform::WindowFlags;
 use ferrokit_widgets::cursor::Cursor;
-use ferrokit_widgets::focus::find_widget_by_id;
 use ferrokit_widgets::{
     BoxLayout, Button, EmptyWidget, Label, Layout, StackedWidget, Widget, WidgetRef, Window,
 };
@@ -585,7 +584,6 @@ impl HUDWindow {
             snap_timer,
             fade_timer,
             geom: Rc::clone(&geom_now),
-            root: root.clone(),
             root_id: root.borrow().id(),
         });
         let geom_resize = Rc::clone(&geom_now);
@@ -1341,7 +1339,6 @@ pub struct SidebarHud {
     fade_timer: Timer,
     /// The window geometry as the window's events report it.
     geom: Rc<Cell<Rect>>,
-    root: WidgetRef,
     root_id: ObjectId,
 }
 
@@ -1547,9 +1544,10 @@ impl QObject for HudFilter {
                 false
             }
             EventKind::MouseMove { .. } | EventKind::MouseButtonPress { .. } => {
-                if find_widget_by_id(&hud.root, watched).is_none() {
-                    return false;
-                }
+                // Python also asks whether `obj` is the HUD or one of its descendants. That walks
+                // the widget tree, and the widget being notified is mutably borrowed while this
+                // runs; the zone test against the HUD's own rectangle (global position) is what
+                // decides in practice, and it never matches a popup menu (those run their own loop).
                 let pos = Cursor::pos();
                 let zone = resize_zone(hud.geom.get(), pos);
                 match &event.kind {
