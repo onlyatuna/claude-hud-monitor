@@ -1,25 +1,27 @@
-// src/providers/agy.rs — Antigravity CLI usage provider
+// src/providers/agy.rs — Antigravity usage provider
 //
-// Runs `agy --output-format json --print /quota` as a subprocess.
-// Parses Gemini 5h / Weekly 7d buckets from the JSON output.
-// Mirrors Python core/providers/agy_provider.py
+// Mirrors Python core/providers/agy_provider.py: two CloudCode quota endpoints (the summary of the
+// Claude/GPT buckets and the per-model Gemini buckets), completed by the quota cache that agy's
+// status line hook writes (`agy_statusline`). There is no CLI fallback.
 
-use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
+use super::base::{now_str, percent_text, percentage, MetricRow, Provider, UsageMetrics};
+use crate::agy_statusline::{self, QuotaCache};
 use chrono::{DateTime, Utc};
-use log::{info, warn};
+use log::{debug, info};
 use serde_json::Value;
-use std::process::Command;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use ureq::OrAnyStatus;
 
-const QUOTA_URL: &str =
+const SUMMARY_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
-const QUOTA_URL_FALLBACK: &str =
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
-const USER_AGENT: &str = "antigravity/1.0";
+const QUOTA_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+const USER_AGENT: &str = "antigravity/1.2.4";
+const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 
-static AGY_BINARY: OnceLock<Option<String>> = OnceLock::new();
+const AUTH_MESSAGE: &str = "登入憑證已失效，請使用原 CLI 重新登入";
+const NO_DATA_MESSAGE: &str = "未取得有效配額資料";
+const STATUSLINE_HINT: &str = "需啟用 agy statusLine";
+const FORMAT_MESSAGE: &str = "配額資料格式不相容";
 
 #[cfg(target_os = "windows")]
 mod os_cred {
@@ -53,6 +55,7 @@ mod os_cred {
         fn CredFree(buffer: *mut std::ffi::c_void);
     }
 
+    /// The access token in the Credential Manager entry `gemini:antigravity`.
     pub fn get_gemini_token() -> Option<String> {
         let target: Vec<u16> = OsStr::new("gemini:antigravity\0").encode_wide().collect();
         let mut cred_ptr: *mut CREDENTIALW = std::ptr::null_mut();
@@ -72,12 +75,7 @@ mod os_cred {
         unsafe {
             CredFree(cred_ptr as *mut std::ffi::c_void);
         }
-
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        json.get("token")?
-            .get("access_token")?
-            .as_str()
-            .map(|s| s.to_string())
+        super::token_of(&serde_json::from_str(&text).ok()?)
     }
 }
 
@@ -85,6 +83,7 @@ mod os_cred {
 mod os_cred {
     use std::process::Command;
 
+    /// The access token in the Keychain item `gemini:antigravity`.
     pub fn get_gemini_token() -> Option<String> {
         let output = Command::new("security")
             .args([
@@ -101,256 +100,259 @@ mod os_cred {
             return None;
         }
         let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        json.get("token")?
-            .get("access_token")?
-            .as_str()
-            .map(|s| s.to_string())
+        super::token_of(&serde_json::from_str(&text).ok()?)
     }
 }
 
-#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+/// Linux has no credential store lookup in the Python HUD; only the token file is read.
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod os_cred {
-    use std::process::Command;
-
     pub fn get_gemini_token() -> Option<String> {
-        let output = Command::new("secret-tool")
-            .args(["lookup", "service", "gemini", "account", "antigravity"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let json: serde_json::Value = serde_json::from_str(&text).ok()?;
-        json.get("token")?
-            .get("access_token")?
-            .as_str()
-            .map(|s| s.to_string())
+        None
     }
 }
+
+/// `data["token"]["access_token"]`.
+fn token_of(data: &Value) -> Option<String> {
+    data.get("token")?
+        .get("access_token")?
+        .as_str()
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+}
+
+/// Python `_get_access_token`: the OS credential store first (Windows, macOS), then
+/// `~/.gemini/antigravity-cli/antigravity-oauth-token`.
+fn get_access_token() -> Option<String> {
+    if let Some(token) = os_cred::get_gemini_token() {
+        return Some(token);
+    }
+    let path = agy_statusline::home_dir()
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("antigravity-oauth-token");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(_) => return None,
+    };
+    match serde_json::from_str::<Value>(&text) {
+        Ok(data) => token_of(&data),
+        Err(e) => {
+            debug!("[AgyProvider] Token file read failed: {e}");
+            None
+        }
+    }
+}
+
+/// One POST of an empty JSON object: the HTTP status and the body, or why no answer came.
+type PostFn = Box<dyn Fn(&str, &str) -> Result<(u16, String), String> + Send + Sync>;
+type TokenFn = Box<dyn Fn() -> Option<String> + Send + Sync>;
+type CacheFn = Box<dyn Fn() -> Option<QuotaCache> + Send + Sync>;
 
 pub struct AgyProvider {
-    timeout_secs: u64,
-    client: ureq::Agent,
+    post: PostFn,
+    token: TokenFn,
+    cache: CacheFn,
 }
 
 impl AgyProvider {
     pub fn new() -> Self {
-        let timeout = Duration::from_secs(8);
-        let client = ureq::AgentBuilder::new().timeout(timeout).build();
-        Self {
-            timeout_secs: 30,
-            client,
+        let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
+        Self::from_parts(
+            Box::new(move |url, token| {
+                let reply = agent
+                    .post(url)
+                    .set("Authorization", &format!("Bearer {token}"))
+                    .set("Content-Type", "application/json")
+                    .set("User-Agent", USER_AGENT)
+                    .send_string("{}")
+                    .or_any_status()
+                    .map_err(|e| e.to_string())?;
+                let status = reply.status();
+                // An error status carries a body the caller does not read.
+                let body = if status == 200 {
+                    reply.into_string().map_err(|e| e.to_string())?
+                } else {
+                    String::new()
+                };
+                Ok((status, body))
+            }),
+            Box::new(get_access_token),
+            Box::new(agy_statusline::read_default_quota_cache),
+        )
+    }
+
+    /// The provider with its three outside sources given: the POST, the token and the cache.
+    fn from_parts(post: PostFn, token: TokenFn, cache: CacheFn) -> Self {
+        Self { post, token, cache }
+    }
+
+    /// Python `_fetch_via_http`: the summary endpoint, then the quota endpoint. A 401 from either
+    /// is an auth failure; any other failure of one endpoint leaves its part of the result empty.
+    fn fetch_via_http(&self, token: &str, now: &str) -> UsageMetrics {
+        let mut summary: Option<UsageMetrics> = None;
+        match self.request(SUMMARY_URL, token) {
+            Reply::Auth => return failure(now, "auth", AUTH_MESSAGE),
+            Reply::Body(body) => {
+                let parsed = parse_agy_json(&body, now);
+                if parsed.error.is_none() {
+                    summary = Some(parsed);
+                } else {
+                    debug!("[AgyProvider] {SUMMARY_URL} returned no usable quota data");
+                }
+            }
+            Reply::Failed => {}
+        }
+
+        let mut quota: Option<UsageMetrics> = None;
+        match self.request(QUOTA_URL, token) {
+            Reply::Auth => return failure(now, "auth", AUTH_MESSAGE),
+            Reply::Body(body) => {
+                let parsed = parse_model_buckets(&body, now);
+                if parsed.error.is_none() {
+                    quota = Some(parsed);
+                } else {
+                    debug!("[AgyProvider] {QUOTA_URL} returned no usable quota data");
+                }
+            }
+            Reply::Failed => {}
+        }
+
+        let m1_val = quota.as_ref().and_then(|q| q.metric1_val);
+        let m1_reset = quota.as_ref().and_then(|q| q.metric1_reset);
+        let badge1 = summary
+            .as_ref()
+            .filter(|s| !s.badge1_text.is_empty())
+            .map_or_else(
+                || format!("C/G 剩餘: {}", percent_text(None)),
+                |s| s.badge1_text.clone(),
+            );
+        let rows = summary.map_or_else(empty_rows, |s| s.extra_metrics);
+        let has_cg = rows.iter().take(2).any(|row| row.val.is_some());
+        let has_error = m1_val.is_none() && !has_cg;
+
+        UsageMetrics {
+            provider_name: "Antigravity".to_owned(),
+            provider_id: "agy".to_owned(),
+            metric1_title: "GEMINI 5H".to_owned(),
+            metric1_val: m1_val,
+            metric1_text: percent_text(m1_val),
+            metric1_reset: m1_reset,
+            metric2_title: "GEMINI 7D".to_owned(),
+            metric2_val: None,
+            metric2_text: "--".to_owned(),
+            metric2_reset: None,
+            metric2_subtext: "Gemini 週額度來源未知".to_owned(),
+            badge1_text: badge1,
+            badge2_text: "Gemini Models".to_owned(),
+            last_updated_time: now.to_owned(),
+            error: has_error.then(|| NO_DATA_MESSAGE.to_owned()),
+            error_code: if has_error { "schema" } else { "" }.to_owned(),
+            extra_metrics: if has_error { Vec::new() } else { rows },
+            ..Default::default()
         }
     }
 
-    fn find_agy_binary_uncached() -> Option<String> {
-        // 1. Windows default AppData directly on filesystem (instant, zero process execution)
-        #[cfg(target_os = "windows")]
-        {
-            let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
-            for suffix in &[
-                "agy\\bin\\agy.exe",
-                "agy\\bin\\agy.cmd",
-                "agy\\bin\\agy.bat",
-            ] {
-                let candidate = format!("{}\\{}", local, suffix);
-                if std::path::Path::new(&candidate).is_file() {
-                    return Some(candidate);
-                }
-            }
-        }
-
-        // 2. Scan PATH directly using filesystem checks (zero process execution, zero console popups)
-        if let Some(path_var) = std::env::var_os("PATH") {
-            for dir in std::env::split_paths(&path_var) {
-                #[cfg(target_os = "windows")]
-                for ext in &["exe", "cmd", "bat"] {
-                    let cand = dir.join(format!("agy.{}", ext));
-                    if cand.is_file() {
-                        return Some(cand.to_string_lossy().to_string());
-                    }
-                }
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let cand = dir.join("agy");
-                    if cand.is_file() {
-                        return Some(cand.to_string_lossy().to_string());
-                    }
-                }
-            }
-        }
-
-        // 3. macOS / Linux default paths
-        #[cfg(not(target_os = "windows"))]
-        {
-            let home = std::env::var("HOME").unwrap_or_default();
-            for candidate in &[
-                format!("{}/.local/bin/agy", home),
-                "/usr/local/bin/agy".to_owned(),
-                format!("{}/bin/agy", home),
-            ] {
-                if std::path::Path::new(candidate).is_file() {
-                    return Some(candidate.clone());
-                }
-            }
-        }
-
-        None
-    }
-
-    fn find_agy_binary() -> Option<String> {
-        AGY_BINARY
-            .get_or_init(Self::find_agy_binary_uncached)
-            .clone()
-    }
-
-    fn run_agy(bin: &str, timeout_secs: u64) -> Result<String, String> {
-        let started = Instant::now();
-
-        #[cfg(target_os = "windows")]
-        let mut cmd = {
-            use std::os::windows::process::CommandExt;
-            const CREATE_NO_WINDOW: u32 = 0x08000000;
-            if bin.to_lowercase().ends_with(".cmd") || bin.to_lowercase().ends_with(".bat") {
-                let mut c = Command::new("cmd.exe");
-                c.creation_flags(CREATE_NO_WINDOW);
-                c.args([
-                    "/d",
-                    "/s",
-                    "/c",
-                    "call",
-                    bin,
-                    "--output-format",
-                    "json",
-                    "--print",
-                    "/quota",
-                ]);
-                c
-            } else {
-                let mut c = Command::new(bin);
-                c.creation_flags(CREATE_NO_WINDOW);
-                c.args(["--output-format", "json", "--print", "/quota"]);
-                c
-            }
-        };
-
-        #[cfg(not(target_os = "windows"))]
-        let mut cmd = {
-            let mut c = Command::new(bin);
-            c.args(["--output-format", "json", "--print", "/quota"]);
-            c
-        };
-
-        cmd.current_dir(std::env::temp_dir());
-        cmd.stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        let timeout = Duration::from_secs(timeout_secs.max(5));
-        let (exit_status, stdout_bytes, stderr_bytes) = match run_command(cmd, timeout)? {
-            CmdOutcome::Done(st, o, e) => (st, o, e),
-            CmdOutcome::TimedOut => return Err(format!("agy 執行逾時 (超過 {} 秒)", timeout_secs)),
-        };
-
-        let elapsed = started.elapsed().as_secs_f64();
-        info!(
-            "quota exit={} elapsed={:.2}s",
-            exit_status.code().unwrap_or(-1),
-            elapsed
-        );
-
-        if !exit_status.success() {
-            let stderr_msg = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
-            if !stderr_msg.is_empty() {
-                return Err(format!(
-                    "agy 查詢失敗 (exit {}): {}",
-                    exit_status.code().unwrap_or(-1),
-                    stderr_msg
-                ));
-            }
-            return Err(format!(
-                "agy 查詢失敗 (exit {})",
-                exit_status.code().unwrap_or(-1)
-            ));
-        }
-
-        Ok(String::from_utf8_lossy(&stdout_bytes).to_string())
-    }
-
-    fn fetch_usage_api(&self, token: &str, now: &str) -> Result<UsageMetrics, String> {
-        for url in &[QUOTA_URL, QUOTA_URL_FALLBACK] {
-            let res = self
-                .client
-                .post(url)
-                .set("Authorization", &format!("Bearer {}", token))
-                .set("Content-Type", "application/json")
-                .set("User-Agent", USER_AGENT)
-                .send_string("{}")
-                .or_any_status();
-
-            match res {
-                Ok(resp) => {
-                    let status = resp.status();
-                    if status == 200 {
-                        let json: Value = resp
-                            .into_json()
-                            .map_err(|e| format!("API JSON 解析失敗: {e}"))?;
-                        let metrics = parse_agy_json(json, now);
-                        if metrics.metric1_val.is_some() || metrics.metric2_val.is_some() {
-                            return Ok(metrics);
-                        } else {
-                            return Err("API 回傳中未找到有效配額項目".to_string());
-                        }
-                    } else if status == 401 {
-                        return Err("Token 已失效 (HTTP 401 Unauthorized)".to_string());
-                    } else {
-                        log::debug!("[AgyProvider] {} 回應 HTTP {}", url, status);
-                    }
-                }
+    /// One endpoint: its parsed JSON body on HTTP 200, `Auth` on 401, `Failed` on anything else
+    /// (another status, no connection, a body that is not JSON).
+    fn request(&self, url: &str, token: &str) -> Reply {
+        match (self.post)(url, token) {
+            Ok((401, _)) => Reply::Auth,
+            Ok((200, body)) => match serde_json::from_str::<Value>(&body) {
+                Ok(value) => Reply::Body(value),
                 Err(e) => {
-                    log::debug!("[AgyProvider] {} 連線失敗: {}", url, e);
+                    debug!("[AgyProvider] {url} HTTP fetch error: {e}");
+                    Reply::Failed
                 }
+            },
+            Ok((status, _)) => {
+                debug!("[AgyProvider] {url} returned HTTP {status}");
+                Reply::Failed
+            }
+            Err(e) => {
+                debug!("[AgyProvider] {url} HTTP fetch error: {e}");
+                Reply::Failed
             }
         }
-        Err("所有配額 API 連線均未成功".to_string())
     }
 
-    fn fetch_usage_cli(&self, now: &str) -> UsageMetrics {
-        let Some(bin) = Self::find_agy_binary() else {
-            warn!("[AgyProvider] Antigravity CLI binary not found");
-            return UsageMetrics::error_result(
-                "agy",
-                "Antigravity",
-                "未找到 agy 指令\n請確認已安裝 Antigravity CLI",
-                "cli_not_found",
-            );
-        };
+    /// Python `_merge_cache`: fills what the endpoints did not report from the status line cache.
+    fn merge_cache(
+        &self,
+        res: Option<UsageMetrics>,
+        cache: &QuotaCache,
+        now: &str,
+    ) -> UsageMetrics {
+        let had_response = res.is_some();
+        let mut result = res.unwrap_or_default();
+        let buckets = &cache.buckets;
+        let used = |fraction: f64| ((1.0 - fraction) * 100.0).clamp(0.0, 100.0);
 
-        let stdout = match Self::run_agy(&bin, self.timeout_secs) {
-            Ok(s) => s,
-            Err(msg) => {
-                if msg.contains("exit") {
-                    return UsageMetrics::error_result("agy", "Antigravity", &msg, "cli_exit");
-                }
-                return UsageMetrics::error_result("agy", "Antigravity", &msg, "cli_start");
+        let mut rows = std::mem::take(&mut result.extra_metrics);
+        if rows.is_empty() {
+            rows = empty_rows();
+        }
+        for (row, key) in rows
+            .iter_mut()
+            .zip(["3p-5h", "3p-weekly", "gemini-argon-wtu-weekly"])
+        {
+            if let (None, Some(bucket)) = (row.val, buckets.get(key)) {
+                let val = used(bucket.remaining_fraction);
+                row.val = Some(val);
+                row.text = percent_text(Some(val));
+                row.reset = bucket.reset_time;
+                row.subtext = String::new();
             }
-        };
+        }
 
-        // Resilient JSON extraction (handle CLI banners/prefixes)
-        let raw: Option<Value> = try_parse_json(&stdout);
-        let Some(raw) = raw else {
-            return UsageMetrics::error_result(
-                "agy",
-                "Antigravity",
-                "agy 配額格式不相容，請查看相容性文件",
-                "schema",
-            );
+        if result.metric1_val.is_none() {
+            if let Some(bucket) = buckets.get("gemini-5h") {
+                result.metric1_val = Some(used(bucket.remaining_fraction));
+                result.metric1_reset = bucket.reset_time;
+            }
+        }
+        let weekly = buckets.get("gemini-weekly");
+        result.metric2_val = weekly.map(|b| used(b.remaining_fraction));
+        result.metric2_reset = weekly.and_then(|b| b.reset_time);
+        result.metric2_subtext = if weekly.is_some() {
+            String::new()
+        } else {
+            STATUSLINE_HINT.to_owned()
         };
-
-        parse_agy_json(raw, now)
+        if !had_response
+            || result.badge1_text.is_empty()
+            || result.badge1_text == format!("C/G 剩餘: {}", percent_text(None))
+        {
+            let remaining = buckets
+                .get("3p-weekly")
+                .map(|b| b.remaining_fraction * 100.0);
+            result.badge1_text = format!("C/G 剩餘: {}", percent_text(remaining));
+        }
+        let argon = buckets
+            .get("gemini-argon-wtu-weekly")
+            .map(|b| b.remaining_fraction * 100.0);
+        result.badge2_text = format!("Argon 剩餘: {}", percent_text(argon));
+        result.metric1_title = "GEMINI 5H".to_owned();
+        result.metric2_title = "GEMINI 7D".to_owned();
+        result.metric1_text = percent_text(result.metric1_val);
+        result.metric2_text = percent_text(result.metric2_val);
+        result.provider_name = "Antigravity".to_owned();
+        result.provider_id = "agy".to_owned();
+        result.last_updated_time = now.to_owned();
+        let has_value = result.metric1_val.is_some()
+            || result.metric2_val.is_some()
+            || rows.iter().any(|row| row.val.is_some());
+        result.error = (!has_value).then(|| NO_DATA_MESSAGE.to_owned());
+        result.error_code = if has_value { "" } else { "schema" }.to_owned();
+        result.extra_metrics = if has_value { rows } else { Vec::new() };
+        result
     }
+}
+
+enum Reply {
+    Body(Value),
+    Auth,
+    Failed,
 }
 
 impl Provider for AgyProvider {
@@ -363,642 +365,587 @@ impl Provider for AgyProvider {
 
     fn fetch_usage(&self) -> UsageMetrics {
         let now = now_str();
-
-        // 1. Fast path: Direct CloudCode API call (~200ms vs ~4000ms)
-        if let Some(token) = os_cred::get_gemini_token() {
-            match self.fetch_usage_api(&token, &now) {
-                Ok(metrics) => {
-                    info!("[AgyProvider] Direct API fetch succeeded (fast path)");
-                    return metrics;
-                }
-                Err(err) => {
-                    warn!(
-                        "[AgyProvider] Direct API fetch failed ({}), falling back to CLI subprocess",
-                        err
-                    );
-                }
-            }
-        } else {
-            info!("[AgyProvider] No cached OAuth token in keyring, using CLI subprocess");
-        }
-
-        // 2. Fallback path: CLI subprocess (refreshes tokens and updates keyring)
-        self.fetch_usage_cli(&now)
+        let cache = (self.cache)();
+        let token = (self.token)();
+        let res = token.as_deref().map(|token| self.fetch_via_http(token, &now));
+        let Some(cache) = cache else {
+            let mut res = res.unwrap_or_else(|| {
+                failure(&now, "no_token", "未找到 Antigravity 登入憑證\n請先登入 Antigravity")
+            });
+            res.badge2_text = "Argon: --".to_owned();
+            return res;
+        };
+        info!("[AgyProvider] completing the quota with the statusLine cache");
+        self.merge_cache(res, &cache, &now)
     }
 }
 
-fn try_parse_json(text: &str) -> Option<Value> {
-    let trimmed = text.trim();
-    // Try direct parse first
-    if let Ok(v) = serde_json::from_str::<Value>(trimmed) {
-        return Some(v);
-    }
-    // Find outermost {...}
-    let start = text.find('{')?;
-    let end = text.rfind('}')?;
-    if end > start {
-        serde_json::from_str::<Value>(&text[start..=end]).ok()
-    } else {
-        None
-    }
+static NO_ITEMS: Vec<Value> = Vec::new();
+
+/// Python `_empty_rows`.
+fn empty_rows() -> Vec<MetricRow> {
+    let mut argon = MetricRow::new("ARGON 7D", None, "--");
+    argon.subtext = STATUSLINE_HINT.to_owned();
+    vec![
+        MetricRow::new("C/G 5H", None, "--"),
+        MetricRow::new("C/G 7D", None, "--"),
+        argon,
+    ]
 }
 
-fn parse_agy_json(raw: Value, now_str: &str) -> UsageMetrics {
-    let groups = raw
-        .pointer("/command/data/groups")
-        .or_else(|| raw.get("groups"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut m1_used_pct: Option<f64> = None;
-    let mut m1_reset_dt: Option<DateTime<Utc>> = None;
-    let mut m2_used_pct: Option<f64> = None;
-    let mut m2_reset_dt: Option<DateTime<Utc>> = None;
-    let mut third_party_rem_pct: Option<f64> = None;
-
-    for g in &groups {
-        let g_name = g
-            .get("name")
-            .or_else(|| g.get("displayName"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_lowercase();
-
-        if g_name.contains("gemini") {
-            let buckets = g
-                .get("buckets")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            for b in &buckets {
-                let b_id = b
-                    .get("id")
-                    .or_else(|| b.get("bucketId"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                let b_window = b
-                    .get("window")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                let rem_frac = percentage(
-                    b.get("remaining_fraction")
-                        .or_else(|| b.get("remainingFraction"))
-                        .and_then(|v| v.as_f64()),
-                    1.0,
-                );
-                let Some(rem_frac) = rem_frac else {
-                    continue;
-                };
-                let used_pct = (1.0 - rem_frac) * 100.0;
-                let used_pct = used_pct.clamp(0.0, 100.0);
-
-                let reset_dt: Option<DateTime<Utc>> = b
-                    .get("reset_time")
-                    .or_else(|| b.get("resetTime"))
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| DateTime::parse_from_rfc3339(&s.replace('Z', "+00:00")).ok())
-                    .map(|dt| dt.with_timezone(&Utc));
-
-                if (b_id.contains("5h") || b_window.contains("5h"))
-                    && m1_used_pct.is_none_or(|cur| used_pct > cur)
-                {
-                    m1_used_pct = Some(used_pct);
-                    m1_reset_dt = reset_dt;
-                } else if (b_id.contains("week") || b_window.contains("week"))
-                    && m2_used_pct.is_none_or(|cur| used_pct > cur)
-                {
-                    m2_used_pct = Some(used_pct);
-                    m2_reset_dt = reset_dt;
-                }
-            }
-        } else if g_name.contains("claude") || g_name.contains("gpt") {
-            let buckets = g
-                .get("buckets")
-                .and_then(|v| v.as_array())
-                .cloned()
-                .unwrap_or_default();
-            for b in &buckets {
-                let b_id = b
-                    .get("id")
-                    .or_else(|| b.get("bucketId"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                if b_id.contains("week") || b_id.contains("third_party") {
-                    let rem_frac = percentage(
-                        b.get("remaining_fraction")
-                            .or_else(|| b.get("remainingFraction"))
-                            .and_then(|v| v.as_f64()),
-                        1.0,
-                    );
-                    if let Some(rem_frac) = rem_frac {
-                        let remaining = rem_frac * 100.0;
-                        third_party_rem_pct = Some(
-                            third_party_rem_pct.map_or(remaining, |cur: f64| cur.min(remaining)),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
+/// Python `_failure`.
+fn failure(now: &str, code: &str, message: &str) -> UsageMetrics {
     UsageMetrics {
-        provider_id: "agy".to_owned(),
         provider_name: "Antigravity".to_owned(),
-        metric1_title: "SESSION 5H".to_owned(),
-        metric1_val: m1_used_pct,
-        metric1_text: percent_text(m1_used_pct),
-        metric1_reset: m1_reset_dt,
-        metric2_title: "WEEKLY 7D".to_owned(),
-        metric2_val: m2_used_pct,
-        metric2_text: percent_text(m2_used_pct),
-        metric2_reset: m2_reset_dt,
-        badge1_text: format!("C/G 剩餘: {}", percent_text(third_party_rem_pct)),
-        badge2_text: "Gemini Models".to_owned(),
-        last_updated_time: now_str.to_owned(),
-        error: if m1_used_pct.is_none() && m2_used_pct.is_none() {
-            Some("未取得有效配額資料".to_owned())
-        } else {
-            None
-        },
-        error_code: if m1_used_pct.is_none() && m2_used_pct.is_none() {
-            "schema".to_owned()
-        } else {
-            String::new()
-        },
+        provider_id: "agy".to_owned(),
+        last_updated_time: now.to_owned(),
+        error: Some(message.to_owned()),
+        error_code: code.to_owned(),
         ..Default::default()
     }
 }
 
-enum CmdOutcome {
-    Done(std::process::ExitStatus, Vec<u8>, Vec<u8>),
-    TimedOut,
+/// The result `safe_parse` gives for a body that does not have the expected shape.
+fn format_error(now: &str) -> UsageMetrics {
+    failure(now, "schema", FORMAT_MESSAGE)
 }
 
-/// Owns the whole process tree of a spawned child. Dropping it kills any
-/// remaining descendants (Windows: job object KILL_ON_JOB_CLOSE).
-#[cfg(target_os = "windows")]
-struct TreeGuard(windows_sys::Win32::Foundation::HANDLE);
-
-#[cfg(target_os = "windows")]
-impl TreeGuard {
-    fn new(child: &std::process::Child) -> Option<Self> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::System::JobObjects::*;
-        unsafe {
-            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
-            if job.is_null() {
-                return None;
-            }
-            let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-            let ok = SetInformationJobObject(
-                job,
-                JobObjectExtendedLimitInformation,
-                &info as *const _ as *const _,
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            );
-            if ok == 0 || AssignProcessToJobObject(job, child.as_raw_handle() as _) == 0 {
-                windows_sys::Win32::Foundation::CloseHandle(job);
-                return None;
-            }
-            Some(Self(job))
+/// The text of the first non-empty field among `keys` (Python `a.get(x) or a.get(y) or ""`);
+/// `Err` when that value is not a string.
+fn text_of(object: &Value, keys: &[&str]) -> Result<String, ()> {
+    for key in keys {
+        match object.get(*key) {
+            None | Some(Value::Null) => {}
+            Some(Value::String(s)) if s.is_empty() => {}
+            Some(Value::String(s)) => return Ok(s.clone()),
+            Some(Value::Bool(false)) => {}
+            Some(Value::Number(n)) if n.as_f64() == Some(0.0) => {}
+            Some(_) => return Err(()),
         }
     }
-
-    /// Clear KILL_ON_JOB_CLOSE so dropping the guard leaves descendants alone.
-    fn disarm(&mut self) {
-        use windows_sys::Win32::System::JobObjects::*;
-        unsafe {
-            let info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-            SetInformationJobObject(
-                self.0,
-                JobObjectExtendedLimitInformation,
-                &info as *const _ as *const _,
-                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            );
-        }
-    }
+    Ok(String::new())
 }
 
-#[cfg(target_os = "windows")]
-impl Drop for TreeGuard {
-    fn drop(&mut self) {
-        unsafe {
-            windows_sys::Win32::Foundation::CloseHandle(self.0);
-        }
-    }
+/// The fraction left in a bucket (`remaining_fraction` or `remainingFraction`), in 0..=1.
+fn remaining_fraction(bucket: &Value) -> Option<f64> {
+    let value = if bucket.get("remaining_fraction").is_some() {
+        bucket.get("remaining_fraction")
+    } else {
+        bucket.get("remainingFraction")
+    };
+    percentage(value.and_then(Value::as_f64), 1.0)
 }
 
-#[cfg(not(target_os = "windows"))]
-struct TreeGuard {
-    pgid: u32,
-    armed: bool,
+/// The reset time of a bucket (`reset_time` or `resetTime`).
+fn reset_time(bucket: &Value) -> Option<DateTime<Utc>> {
+    let value = bucket
+        .get("reset_time")
+        .filter(|v| !is_falsy(v))
+        .or_else(|| bucket.get("resetTime"))?;
+    agy_statusline::parse_utc(&Value::String(value.as_str()?.replace('Z', "+00:00")))
 }
 
-#[cfg(not(target_os = "windows"))]
-impl TreeGuard {
-    fn new(child: &std::process::Child) -> Option<Self> {
-        Some(Self {
-            pgid: child.id(),
-            armed: true,
-        })
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
+fn is_falsy(value: &Value) -> bool {
+    matches!(value, Value::Null | Value::Bool(false))
+        || value.as_str().is_some_and(str::is_empty)
 }
 
-#[cfg(not(target_os = "windows"))]
-impl Drop for TreeGuard {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        // Child was started as its own process-group leader.
-        let _ = Command::new("kill")
-            .args(["-KILL", "--", &format!("-{}", self.pgid)])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+/// Python `_parse_model_buckets`: the most used Gemini bucket of `retrieveUserQuota` is `GEMINI 5H`.
+fn parse_model_buckets(raw: &Value, now: &str) -> UsageMetrics {
+    if !raw.is_object() {
+        return format_error(now);
     }
-}
-
-/// Run `cmd` with piped stdout/stderr. On timeout the whole process tree is
-/// killed and reader threads are detached, never joined unboundedly.
-fn run_command(mut cmd: Command, timeout: Duration) -> Result<CmdOutcome, String> {
-    use std::sync::mpsc;
-    const READER_GRACE: Duration = Duration::from_secs(2);
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    cmd.stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    let started = Instant::now();
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("無法啟動 agy，請確認安裝與執行權限: {e}"))?;
-    let guard = TreeGuard::new(&child);
-    if guard.is_none() {
-        warn!("agy: process-tree guard setup failed; timeout will only kill the direct child");
-    }
-
-    fn drain<R: std::io::Read + Send + 'static>(mut pipe: R) -> mpsc::Receiver<Vec<u8>> {
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = pipe.read_to_end(&mut buf);
-            let _ = tx.send(buf);
-        });
-        rx
-    }
-    let out_rx = drain(child.stdout.take().unwrap());
-    let err_rx = drain(child.stderr.take().unwrap());
-
-    // Timeout/error path only: killing the tree is the guard's drop.
-    let kill_tree = |child: &mut std::process::Child, guard: Option<TreeGuard>| {
-        let _ = child.kill();
-        drop(guard); // kills descendants holding the pipes
-        let _ = child.wait();
+    let buckets = match raw.get("buckets") {
+        None => &NO_ITEMS,
+        Some(Value::Array(list)) => list,
+        Some(_) => return format_error(now),
     };
 
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(st)) => break st,
-            Ok(None) => {
-                if started.elapsed() >= timeout {
-                    kill_tree(&mut child, guard);
-                    return Ok(CmdOutcome::TimedOut);
+    let mut m1_used: Option<f64> = None;
+    let mut m1_reset: Option<DateTime<Utc>> = None;
+    for bucket in buckets {
+        if !bucket.is_object() {
+            return format_error(now);
+        }
+        let Ok(model_id) = text_of(bucket, &["modelId", "model_id"]) else {
+            return format_error(now);
+        };
+        if !model_id.to_lowercase().contains("gemini") {
+            continue;
+        }
+        let Some(remaining) = remaining_fraction(bucket) else {
+            continue;
+        };
+        let used = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
+        if m1_used.is_none_or(|current| used > current) {
+            m1_used = Some(used);
+            m1_reset = reset_time(bucket);
+        }
+    }
+
+    let missing = m1_used.is_none();
+    UsageMetrics {
+        provider_name: "Antigravity".to_owned(),
+        provider_id: "agy".to_owned(),
+        metric1_title: "GEMINI 5H".to_owned(),
+        metric1_val: m1_used,
+        metric1_text: percent_text(m1_used),
+        metric1_reset: m1_reset,
+        metric2_title: "GEMINI 7D".to_owned(),
+        metric2_val: None,
+        metric2_text: "--".to_owned(),
+        metric2_reset: None,
+        metric2_subtext: "Gemini 週額度來源未知".to_owned(),
+        badge2_text: "Gemini Models".to_owned(),
+        last_updated_time: now.to_owned(),
+        error: missing.then(|| NO_DATA_MESSAGE.to_owned()),
+        error_code: if missing { "schema" } else { "" }.to_owned(),
+        extra_metrics: if missing { Vec::new() } else { empty_rows() },
+        ..Default::default()
+    }
+}
+
+/// Python `_parse_agy_json`: the groups of `retrieveUserQuotaSummary`. Gemini buckets give the main
+/// pair, Claude/GPT buckets give `C/G 5H` and `C/G 7D`.
+fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
+    if !raw.is_object() {
+        return format_error(now);
+    }
+    let from_command = raw.pointer("/command/data/groups");
+    let groups = match from_command {
+        Some(Value::Array(list)) if !list.is_empty() => Some(list),
+        _ => match raw.get("groups") {
+            Some(Value::Array(list)) => Some(list),
+            Some(Value::Null) | None => None,
+            Some(_) => return format_error(now),
+        },
+    };
+    let Some(groups) = groups.filter(|g| !g.is_empty()) else {
+        return UsageMetrics {
+            provider_name: "Antigravity".to_owned(),
+            provider_id: "agy".to_owned(),
+            metric1_val: None,
+            metric1_text: "--".to_owned(),
+            metric2_val: None,
+            metric2_text: "--".to_owned(),
+            metric2_subtext: "Gemini 週額度來源未知".to_owned(),
+            last_updated_time: now.to_owned(),
+            error: Some(NO_DATA_MESSAGE.to_owned()),
+            error_code: "schema".to_owned(),
+            ..Default::default()
+        };
+    };
+
+    let mut m1_used: Option<f64> = None;
+    let mut m1_reset: Option<DateTime<Utc>> = None;
+    let mut m2_used: Option<f64> = None;
+    let mut m2_reset: Option<DateTime<Utc>> = None;
+    let mut third_party_remaining: Option<f64> = None;
+    let mut rows = empty_rows();
+
+    for group in groups {
+        if !group.is_object() {
+            return format_error(now);
+        }
+        let Ok(name) = text_of(group, &["name", "displayName"]) else {
+            return format_error(now);
+        };
+        let lower = name.to_lowercase();
+        let buckets = match group.get("buckets") {
+            None => &NO_ITEMS,
+            Some(Value::Array(list)) => list,
+            Some(_) => return format_error(now),
+        };
+        if lower.contains("gemini") && !lower.contains("argon") {
+            for bucket in buckets {
+                if !bucket.is_object() {
+                    return format_error(now);
                 }
-                std::thread::sleep(Duration::from_millis(10));
+                let (Ok(id), Ok(window)) = (
+                    text_of(bucket, &["id", "bucketId"]),
+                    text_of(bucket, &["window"]),
+                ) else {
+                    return format_error(now);
+                };
+                let (id, window) = (id.to_lowercase(), window.to_lowercase());
+                let Some(remaining) = remaining_fraction(bucket) else {
+                    continue;
+                };
+                let used = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
+                let reset = reset_time(bucket);
+                if (id.contains("5h") || window.contains("5h"))
+                    && m1_used.is_none_or(|current| used > current)
+                {
+                    m1_used = Some(used);
+                    m1_reset = reset;
+                } else if (id.contains("week") || window.contains("week"))
+                    && m2_used.is_none_or(|current| used > current)
+                {
+                    m2_used = Some(used);
+                    m2_reset = reset;
+                }
             }
-            Err(e) => {
-                kill_tree(&mut child, guard);
-                return Err(format!("agy 等待錯誤: {e}"));
+        } else if (lower.contains("claude") || lower.contains("gpt")) && !lower.contains("argon") {
+            for bucket in buckets {
+                if !bucket.is_object() {
+                    return format_error(now);
+                }
+                let Ok(id) = text_of(bucket, &["id", "bucketId"]) else {
+                    return format_error(now);
+                };
+                let id = id.to_lowercase();
+                let index = if id.contains("week") {
+                    1
+                } else if id.contains("5h") {
+                    0
+                } else {
+                    continue;
+                };
+                let Some(remaining) = remaining_fraction(bucket) else {
+                    continue;
+                };
+                let used = (1.0 - remaining) * 100.0;
+                let row = &mut rows[index];
+                if row.val.is_none_or(|current| used > current) {
+                    row.val = Some(used);
+                    row.text = percent_text(Some(used));
+                    row.reset = reset_time(bucket);
+                }
+                if index == 1 {
+                    third_party_remaining = row.val.map(|val| 100.0 - val);
+                }
             }
+        } else {
+            info!("[AgyProvider] unknown quota group: {name}");
         }
-    };
-    // Direct child exited normally: leave any descendants alone. If one still
-    // holds the pipes, the bounded waits below give up with empty output.
-    if let Some(mut g) = guard {
-        g.disarm();
     }
-    let out = out_rx.recv_timeout(READER_GRACE).unwrap_or_default();
-    let err = err_rx.recv_timeout(READER_GRACE).unwrap_or_default();
-    Ok(CmdOutcome::Done(status, out, err))
+
+    let has_error = m1_used.is_none() && m2_used.is_none() && rows.iter().all(|r| r.val.is_none());
+    UsageMetrics {
+        provider_name: "Antigravity".to_owned(),
+        provider_id: "agy".to_owned(),
+        metric1_title: "GEMINI 5H".to_owned(),
+        metric1_val: m1_used,
+        metric1_text: percent_text(m1_used),
+        metric1_reset: m1_reset,
+        metric2_title: "GEMINI 7D".to_owned(),
+        metric2_val: m2_used,
+        metric2_text: percent_text(m2_used),
+        metric2_reset: m2_reset,
+        metric2_subtext: if m2_used.is_none() {
+            "Gemini 週額度來源未知".to_owned()
+        } else {
+            String::new()
+        },
+        badge1_text: format!("C/G 剩餘: {}", percent_text(third_party_remaining)),
+        badge2_text: "Gemini Models".to_owned(),
+        last_updated_time: now.to_owned(),
+        error: has_error.then(|| NO_DATA_MESSAGE.to_owned()),
+        error_code: if has_error { "schema" } else { "" }.to_owned(),
+        extra_metrics: if has_error { Vec::new() } else { rows },
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agy_statusline::CacheBucket;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::{Arc, Mutex};
 
-    #[test]
-    fn test_try_parse_json() {
-        // Direct parse
-        let pure = r#"{"hello": "world"}"#;
-        let val = try_parse_json(pure).expect("should parse pure json");
-        assert_eq!(val["hello"], "world");
+    const SUMMARY_FIXTURE: &str = r#"{"groups":[{"name":"Claude and GPT models","buckets":[
+        {"id":"3p-weekly","remainingFraction":0.8449,"resetTime":"2026-10-23T12:00:00Z"},
+        {"id":"3p-5h","remainingFraction":0.694,"resetTime":"2026-10-16T14:00:00Z"}]}]}"#;
 
-        // With CLI headers/footers
-        let banner = "Welcome to AGY CLI v2.0\nInfo: fetching quota\n{\"status\": \"ok\", \"count\": 42}\nDone in 0.2s";
-        let val2 = try_parse_json(banner).expect("should parse json inside banner");
-        assert_eq!(val2["status"], "ok");
-        assert_eq!(val2["count"], 42);
+    const QUOTA_FIXTURE: &str = r#"{"buckets":[
+        {"modelId":"gemini-3.8-flash-tiered","remainingFraction":0.9743,"resetTime":"2026-10-16T13:41:00Z","tokenType":"WTUS"},
+        {"modelId":"gemini-3.8-flash-low","remainingFraction":0.9743,"resetTime":"2026-10-16T13:41:00Z"},
+        {"modelId":"claude-sonnet-5-5-high","remainingFraction":0.694,"resetTime":"2026-10-16T14:00:00Z"}]}"#;
 
-        // Invalid
-        assert!(try_parse_json("not json at all").is_none());
-        assert!(try_parse_json("").is_none());
+    type Script = VecDeque<Result<(u16, String), String>>;
+
+    /// A provider whose POSTs answer from `script` in order; `requests` records `(url, token)`.
+    fn provider(
+        script: Vec<Result<(u16, String), String>>,
+        token: Option<&str>,
+        cache: Option<QuotaCache>,
+    ) -> (AgyProvider, Arc<Mutex<Vec<(String, String)>>>) {
+        let script: Arc<Mutex<Script>> = Arc::new(Mutex::new(script.into()));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&requests);
+        let token = token.map(str::to_owned);
+        let provider = AgyProvider::from_parts(
+            Box::new(move |url, token| {
+                log.lock().unwrap().push((url.to_owned(), token.to_owned()));
+                script
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .unwrap_or_else(|| Err("no more replies".to_owned()))
+            }),
+            Box::new(move || token.clone()),
+            Box::new(move || cache.clone()),
+        );
+        (provider, requests)
+    }
+
+    fn ok(body: &str) -> Result<(u16, String), String> {
+        Ok((200, body.to_owned()))
+    }
+
+    fn status(code: u16) -> Result<(u16, String), String> {
+        Ok((code, String::new()))
+    }
+
+    fn full_cache() -> QuotaCache {
+        let reset = Utc::now() + chrono::Duration::days(7);
+        let fractions = [
+            ("gemini-5h", 1.0),
+            ("gemini-weekly", 0.9914498),
+            ("3p-5h", 1.0),
+            ("3p-weekly", 0.8469924),
+            ("gemini-argon-wtu-weekly", 0.78630334),
+        ];
+        QuotaCache {
+            written_at: Utc::now(),
+            buckets: fractions
+                .iter()
+                .map(|(key, fraction)| {
+                    (
+                        (*key).to_owned(),
+                        CacheBucket {
+                            remaining_fraction: *fraction,
+                            reset_time: Some(reset),
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn near(actual: Option<f64>, expected: f64) {
+        let actual = actual.expect("a value");
+        assert!((actual - expected).abs() < 1e-6, "{actual} != {expected}");
+    }
+
+    fn iso(text: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(text).unwrap().with_timezone(&Utc)
     }
 
     #[test]
-    fn test_parse_agy_json() {
-        let json_str = r#"{
-            "command": {
-                "data": {
-                    "groups": [
-                        {
-                            "name": "Gemini Models",
-                            "buckets": [
-                                {
-                                    "id": "session",
-                                    "window": "5h",
-                                    "remainingFraction": 0.8,
-                                    "resetTime": "2030-01-01T00:00:00Z"
-                                },
-                                {
-                                    "id": "weekly",
-                                    "window": "7d",
-                                    "remainingFraction": 0.45,
-                                    "resetTime": "2030-01-07T00:00:00Z"
-                                }
-                            ]
-                        },
-                        {
-                            "name": "Claude / 3rd Party Models",
-                            "buckets": [
-                                {
-                                    "id": "third_party",
-                                    "remainingFraction": 0.92
-                                }
-                            ]
-                        }
-                    ]
-                }
-            }
-        }"#;
-
-        let val: Value = serde_json::from_str(json_str).unwrap();
-        let m = parse_agy_json(val, "12:00:00");
-
-        assert_eq!(m.provider_id, "agy");
-        assert_eq!(m.provider_name, "Antigravity");
-        // Used = (1.0 - 0.8) * 100 = 20.0%
-        assert!((m.metric1_val.unwrap() - 20.0).abs() < 0.1);
-        assert_eq!(m.metric1_text, "20%");
-        // Weekly used = (1.0 - 0.45) * 100 = 55.0%
-        assert!((m.metric2_val.unwrap() - 55.0).abs() < 0.1);
-        assert_eq!(m.metric2_text, "55%");
-        // Badge has 92%
-        assert!(m.badge1_text.contains("92%"));
-        assert!(m.error.is_none());
+    fn the_cache_complements_the_endpoints_and_the_endpoints_win() {
+        let cache = full_cache();
+        let weekly_reset = cache.buckets["gemini-weekly"].reset_time;
+        let (p, _) = provider(vec![ok(SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)], Some("token"), Some(cache));
+        let r = p.fetch_usage();
+        assert_eq!((r.error.as_deref(), r.error_code.as_str()), (None, ""));
+        near(r.metric1_val, 2.57);
+        near(r.extra_metrics[0].val, 30.6);
+        assert_eq!(r.extra_metrics[0].reset, Some(iso("2026-10-16T14:00:00+00:00")));
+        near(r.metric2_val, 0.85502);
+        assert_eq!(r.metric2_reset, weekly_reset);
+        let titles: Vec<_> = r.extra_metrics.iter().map(|row| row.title.as_str()).collect();
+        assert_eq!(titles, ["C/G 5H", "C/G 7D", "ARGON 7D"]);
+        near(r.extra_metrics[2].val, 21.369666);
+        near(r.extra_metrics[1].val, 15.51);
+        assert_eq!((r.metric1_title.as_str(), r.metric2_title.as_str()), ("GEMINI 5H", "GEMINI 7D"));
+        assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
+        assert_eq!(r.badge2_text, "Argon 剩餘: 79%");
     }
 
     #[test]
-    fn test_parse_agy_api_json() {
-        let api_json = serde_json::json!({
-            "groups": [
-                {
-                    "displayName": "Gemini Models",
-                    "buckets": [
-                        {
-                            "bucketId": "gemini-weekly",
-                            "window": "weekly",
-                            "remainingFraction": 0.25,
-                            "resetTime": "2030-01-07T00:00:00Z"
-                        },
-                        {
-                            "bucketId": "gemini-5h",
-                            "window": "5h",
-                            "remainingFraction": 0.90,
-                            "resetTime": "2030-01-01T05:00:00Z"
-                        }
-                    ]
-                },
-                {
-                    "displayName": "Claude and GPT models",
-                    "buckets": [
-                        {
-                            "bucketId": "3p-weekly",
-                            "window": "weekly",
-                            "remainingFraction": 0.70
-                        }
-                    ]
-                }
+    fn the_cache_alone_gives_complete_metrics_without_a_token() {
+        let cache = full_cache();
+        let reset = cache.buckets["gemini-5h"].reset_time;
+        let (p, requests) = provider(vec![], None, Some(cache));
+        let r = p.fetch_usage();
+        assert!(r.error.is_none() && r.error_code.is_empty());
+        assert_eq!(r.metric1_val, Some(0.0));
+        assert_eq!(r.metric1_text, "0%");
+        near(r.extra_metrics[1].val, 15.30076);
+        assert_eq!(r.metric1_reset, reset);
+        near(r.metric2_val, 0.85502);
+        assert_eq!(r.badge1_text, "C/G 剩餘: 85%");
+        assert_eq!(r.badge2_text, "Argon 剩餘: 79%");
+        assert!(requests.lock().unwrap().is_empty(), "no token, no request");
+    }
+
+    #[test]
+    fn the_cache_recovers_when_every_request_fails() {
+        let (p, _) = provider(
+            vec![Err("offline".into()), Err("offline".into())],
+            Some("token"),
+            Some(full_cache()),
+        );
+        let r = p.fetch_usage();
+        assert!(r.error.is_none());
+        assert_eq!(r.metric1_val, Some(0.0));
+        near(r.metric2_val, 0.85502);
+        assert_eq!(r.badge1_text, "C/G 剩餘: 85%");
+        assert_eq!(r.badge2_text, "Argon 剩餘: 79%");
+    }
+
+    #[test]
+    fn a_missing_weekly_bucket_asks_for_the_status_line() {
+        let mut cache = full_cache();
+        cache.buckets.remove("gemini-weekly");
+        let (p, _) = provider(vec![], None, Some(cache));
+        let r = p.fetch_usage();
+        assert_eq!(r.metric2_val, None);
+        assert_eq!(r.metric2_text, "--");
+        assert_eq!(r.metric2_subtext, "需啟用 agy statusLine");
+    }
+
+    #[test]
+    fn without_a_cache_or_token_the_failure_is_no_token() {
+        let (p, _) = provider(vec![], None, None);
+        let r = p.fetch_usage();
+        assert_eq!(r.error_code, "no_token");
+        assert_eq!(r.badge2_text, "Argon: --");
+        assert!(r.extra_metrics.is_empty());
+    }
+
+    #[test]
+    fn without_a_cache_the_http_auth_error_is_kept() {
+        let (p, _) = provider(vec![status(401)], Some("token"), None);
+        let r = p.fetch_usage();
+        assert_eq!(r.error_code, "auth");
+        assert_eq!(r.badge2_text, "Argon: --");
+        assert!(r.extra_metrics.is_empty());
+    }
+
+    #[test]
+    fn a_cache_without_buckets_is_a_schema_error() {
+        let empty = QuotaCache {
+            written_at: Utc::now(),
+            buckets: HashMap::new(),
+        };
+        let (p, _) = provider(vec![], None, Some(empty));
+        let r = p.fetch_usage();
+        assert_eq!(r.error_code, "schema");
+        assert!(r.extra_metrics.is_empty());
+        assert_eq!(r.error.as_deref(), Some("未取得有效配額資料"));
+    }
+
+    #[test]
+    fn both_endpoints_are_posted_in_order_with_the_token() {
+        let (p, requests) = provider(vec![ok(SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)], Some("token"), None);
+        let r = p.fetch_usage();
+        assert!(r.error.is_none());
+        near(r.metric1_val, 2.57);
+        near(r.extra_metrics[0].val, 30.6);
+        assert_eq!(r.extra_metrics[0].reset, Some(iso("2026-10-16T14:00:00+00:00")));
+        assert_eq!(r.metric1_text, "3%");
+        assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
+        assert_eq!(r.badge2_text, "Argon: --");
+        assert_eq!(r.extra_metrics[2].val, None);
+        assert_eq!(r.extra_metrics[2].subtext, "需啟用 agy statusLine");
+        assert_eq!(r.metric2_val, None);
+        assert_eq!(r.metric2_text, "--");
+        assert_eq!(r.metric2_subtext, "Gemini 週額度來源未知");
+        assert_eq!(
+            *requests.lock().unwrap(),
+            [
+                (SUMMARY_URL.to_owned(), "token".to_owned()),
+                (QUOTA_URL.to_owned(), "token".to_owned())
             ]
-        });
-
-        let m = parse_agy_json(api_json, "12:00:00");
-        assert_eq!(m.provider_id, "agy");
-        assert_eq!(m.provider_name, "Antigravity");
-        // 5h used = (1.0 - 0.90) * 100 = 10.0%
-        assert!((m.metric1_val.unwrap() - 10.0).abs() < 0.1);
-        assert_eq!(m.metric1_text, "10%");
-        // Weekly used = (1.0 - 0.25) * 100 = 75.0%
-        assert!((m.metric2_val.unwrap() - 75.0).abs() < 0.1);
-        assert_eq!(m.metric2_text, "75%");
-        // Badge has 70%
-        assert!(m.badge1_text.contains("70%"));
-        assert!(m.error.is_none());
+        );
     }
 
-    /// Smoke test: reading the Windows credential store returns, token or not, without panicking.
     #[test]
-    #[cfg(target_os = "windows")]
+    fn the_most_constrained_gemini_bucket_is_the_five_hour_row() {
+        let quota = r#"{"buckets":[
+            {"modelId":"gemini-3.8-flash-low","remainingFraction":0.9,"resetTime":"2026-10-16T13:00:00Z"},
+            {"modelId":"gemini-3.8-pro-high","remainingFraction":0.25,"resetTime":"2026-10-16T15:00:00Z"}]}"#;
+        let (p, _) = provider(vec![ok(SUMMARY_FIXTURE), ok(quota)], None, None);
+        let r = p.fetch_via_http("token", "12:00:00");
+        assert!(r.error.is_none());
+        near(r.metric1_val, 75.0);
+        assert_eq!(r.metric1_text, "75%");
+        assert_eq!(r.metric1_reset, Some(iso("2026-10-16T15:00:00+00:00")));
+    }
+
+    #[test]
+    fn an_unknown_group_is_ignored() {
+        let summary = r#"{"groups":[
+            {"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","remainingFraction":0.8449,"resetTime":"2026-10-23T12:00:00Z"}]},
+            {"name":"Gemini 4 Argon","buckets":[{"id":"argon-5h","remainingFraction":0.1}]}]}"#;
+        let (p, _) = provider(vec![ok(summary), ok(QUOTA_FIXTURE)], None, None);
+        let r = p.fetch_via_http("token", "12:00:00");
+        assert!(r.error.is_none());
+        near(r.metric1_val, 2.57);
+        assert_eq!(r.extra_metrics[0].val, None);
+        assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
+    }
+
+    #[test]
+    fn a_401_from_the_first_endpoint_stops_at_once() {
+        let (p, requests) = provider(vec![status(401)], None, None);
+        let r = p.fetch_via_http("token", "12:00:00");
+        assert_eq!(r.error_code, "auth");
+        assert!(r.error.is_some());
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_failing_quota_endpoint_leaves_a_partial_result() {
+        let (p, _) = provider(vec![ok(SUMMARY_FIXTURE), status(503)], None, None);
+        let r = p.fetch_via_http("token", "12:00:00");
+        assert!(r.error.is_none());
+        assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
+        assert_eq!(r.metric1_val, None);
+        assert_eq!(r.metric1_text, "--");
+    }
+
+    #[test]
+    fn both_endpoints_failing_is_a_schema_error() {
+        let (p, _) = provider(vec![status(503), status(503)], None, None);
+        let r = p.fetch_via_http("token", "12:00:00");
+        assert!(r.error.is_some());
+        assert_eq!(r.error_code, "schema");
+        assert!(r.extra_metrics.is_empty());
+    }
+
+    #[test]
+    fn a_body_of_the_wrong_shape_is_a_format_error_not_a_panic() {
+        for body in [
+            "[]",
+            r#"{"groups":"x"}"#,
+            r#"{"groups":[1]}"#,
+            r#"{"groups":[{"name":3}]}"#,
+            r#"{"groups":[{"name":"gemini","buckets":{"a":1}}]}"#,
+            r#"{"groups":[{"name":"gemini","buckets":[7]}]}"#,
+        ] {
+            let r = parse_agy_json(&serde_json::from_str(body).unwrap(), "12:00:00");
+            assert_eq!((r.error_code.as_str(), r.error.as_deref()), ("schema", Some("配額資料格式不相容")), "{body}");
+        }
+        let r = parse_model_buckets(&serde_json::from_str(r#"{"buckets":{}}"#).unwrap(), "12:00:00");
+        assert_eq!(r.error_code, "schema");
+    }
+
+    #[test]
+    fn groups_under_command_data_are_read_too() {
+        let wrapped = format!(r#"{{"command":{{"data":{SUMMARY_FIXTURE}}}}}"#);
+        let r = parse_agy_json(&serde_json::from_str(&wrapped).unwrap(), "12:00:00");
+        assert!(r.error.is_none());
+        near(r.extra_metrics[1].val, 15.51);
+    }
+
+    #[test]
+    fn gemini_week_buckets_fill_the_weekly_row() {
+        let summary = r#"{"groups":[{"name":"Gemini models","buckets":[
+            {"id":"g-5h","remainingFraction":0.5},
+            {"id":"g-week","remainingFraction":0.75,"resetTime":"2026-10-23T12:00:00Z"}]}]}"#;
+        let r = parse_agy_json(&serde_json::from_str(summary).unwrap(), "12:00:00");
+        near(r.metric1_val, 50.0);
+        near(r.metric2_val, 25.0);
+        assert_eq!(r.metric2_subtext, "");
+        assert_eq!(r.metric2_reset, Some(iso("2026-10-23T12:00:00+00:00")));
+    }
+
+    #[test]
     fn os_cred_token_lookup_does_not_panic() {
-        let tok = os_cred::get_gemini_token();
-        println!("Gemini token discovered: {}", tok.is_some());
-    }
-
-    /// Manual integration test against the live Antigravity CLI and quota API; parsing is covered
-    /// offline by `test_parse_agy_json` and `test_parse_agy_api_json`. The elapsed time is only
-    /// logged. Run with `cargo test test_fetch_usage_live_benchmark -- --ignored`.
-    #[test]
-    #[ignore = "needs network, the Antigravity CLI and a valid login"]
-    fn test_fetch_usage_live_benchmark() {
-        let provider = AgyProvider::new();
-        let start = std::time::Instant::now();
-        let metrics = provider.fetch_usage();
-        let elapsed = start.elapsed();
-        eprintln!("Live agy fetch took: {:.2?}", elapsed);
-        assert_ne!(
-            metrics.error_code, "cli_not_found",
-            "precondition not met: the Antigravity CLI is not installed"
-        );
-        eprintln!("Provider error: {:?}", metrics.error);
-        eprintln!(
-            "Metric 1: {} = {}",
-            metrics.metric1_title, metrics.metric1_text
-        );
-        eprintln!(
-            "Metric 2: {} = {}",
-            metrics.metric2_title, metrics.metric2_text
-        );
-        eprintln!("Badge 1: {}", metrics.badge1_text);
-        assert!(
-            metrics.error.is_none(),
-            "live fetch failed: {:?} ({})",
-            metrics.error,
-            metrics.error_code
-        );
-    }
-
-    /// Spawns (via the platform shell) a long-lived grandchild and writes its
-    /// PID to `marker`. With `wait` the shell stays alive until it exits.
-    fn grandchild_cmd(marker: &std::path::Path, wait: bool) -> Command {
-        let m = marker.to_string_lossy().to_string();
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            let (style, tail) = if wait {
-                ("-NoNewWindow", "\n$p.WaitForExit()")
-            } else {
-                ("-WindowStyle Hidden", "")
-            };
-            let ps = format!(
-                "$p = Start-Process -PassThru {style} ping -ArgumentList '-n','40','127.0.0.1'\nSet-Content -Path '{m}' -Value $p.Id{tail}\n"
-            );
-            let script = marker.with_extension("ps1");
-            std::fs::write(&script, ps).unwrap();
-            let mut c = Command::new("cmd.exe");
-            c.creation_flags(0x08000000);
-            c.args(["/d", "/s", "/c", "call", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
-            c.arg(&script);
-            c
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let inner = format!("sh -c 'echo $$ > {m}; exec sleep 40'");
-            let script = if wait {
-                format!("{inner} & wait")
-            } else {
-                format!("({inner} >/dev/null 2>&1 &)")
-            };
-            let mut c = Command::new("sh");
-            c.args(["-c", &script]);
-            c
-        }
-    }
-
-    fn read_pid(marker: &std::path::Path) -> u32 {
-        for _ in 0..600 {
-            if let Ok(t) = std::fs::read_to_string(marker) {
-                if let Ok(p) = t.trim_start_matches('\u{feff}').trim().parse() {
-                    return p;
-                }
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        panic!("grandchild never reported its pid");
-    }
-
-    fn pid_alive(pid: u32) -> bool {
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            let out = Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-                .creation_flags(0x08000000)
-                .output()
-                .unwrap();
-            String::from_utf8_lossy(&out.stdout).contains(&format!("\"{pid}\""))
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            Command::new("kill")
-                .args(["-0", &pid.to_string()])
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
-    }
-
-    fn kill_pid(pid: u32) {
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            let _ = Command::new("taskkill")
-                .args(["/F", "/PID", &pid.to_string()])
-                .creation_flags(0x08000000)
-                .output();
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).status();
-        }
-    }
-
-    fn marker_path(tag: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("agy_{tag}_{}", std::process::id()));
-        let _ = std::fs::remove_file(&p);
-        p
-    }
-
-    #[test]
-    fn run_command_timeout_kills_grandchild_tree() {
-        use std::sync::mpsc;
-        let marker = marker_path("tree");
-        let cmd = grandchild_cmd(&marker, true);
-
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(run_command(cmd, Duration::from_secs(4)));
-        });
-        // Guard: grandchild lives 40s, so an unbounded join would blow this.
-        let res = rx
-            .recv_timeout(Duration::from_secs(15))
-            .expect("run_command blocked past timeout");
-        assert!(matches!(res, Ok(CmdOutcome::TimedOut)));
-
-        // Grandchild had started before the timeout fired.
-        let pid = read_pid(&marker);
-        let mut alive = true;
-        for _ in 0..60 {
-            alive = pid_alive(pid);
-            if !alive {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        if alive {
-            kill_pid(pid);
-        }
-        let _ = std::fs::remove_file(&marker);
-        let _ = std::fs::remove_file(marker.with_extension("ps1"));
-        assert!(!alive, "grandchild survived timeout");
-    }
-
-    #[test]
-    fn run_command_normal_exit_leaves_detached_child_alone() {
-        let marker = marker_path("detached");
-        let cmd = grandchild_cmd(&marker, false);
-        let res = run_command(cmd, Duration::from_secs(30));
-        assert!(matches!(res, Ok(CmdOutcome::Done(..))));
-        let pid = read_pid(&marker);
-        let alive = pid_alive(pid);
-        kill_pid(pid);
-        let _ = std::fs::remove_file(&marker);
-        let _ = std::fs::remove_file(marker.with_extension("ps1"));
-        assert!(alive, "normal exit must not kill descendants");
+        let _ = get_access_token();
     }
 }

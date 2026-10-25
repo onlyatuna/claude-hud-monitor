@@ -118,6 +118,13 @@ python main.py --install-agy-statusline      # 先備份 ~/.gemini/antigravity-c
 python main.py --uninstall-agy-statusline    # 移除
 ```
 
+Rust 版用同樣的旗標，並與 Python 版共用同一支 hook 與快取檔：
+
+```
+ClaudeHUD --install-agy-statusline
+ClaudeHUD --uninstall-agy-statusline
+```
+
 安裝後重開 agy 互動模式即可。注意：
 
 * 需要 `python`（Windows）或 `python3` 在 PATH 上，agy 會用它執行 hook。

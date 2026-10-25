@@ -2,6 +2,7 @@
 #![allow(clippy::upper_case_acronyms)]
 
 mod agy_rows;
+mod agy_statusline;
 mod autostart;
 mod config;
 mod hotkey;
@@ -127,7 +128,31 @@ fn run_smoke_test(isolation: &config::SmokeIsolation) -> std::process::ExitCode 
     std::process::ExitCode::SUCCESS
 }
 
+/// The HUD is a windowed program, so a started-from-a-shell run has no console to print to; the
+/// one-line result of the status line commands goes to the parent's.
+#[cfg(target_os = "windows")]
+fn attach_parent_console() {
+    // SAFETY: plain Win32 call; failing (no parent console) only means nothing is printed.
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(
+            windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+        );
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn attach_parent_console() {}
+
 fn main() -> std::process::ExitCode {
+    // `--install-agy-statusline` / `--uninstall-agy-statusline` (Python `main`): print one line and
+    // exit, before logging, the config and the window exist.
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a.ends_with("-agy-statusline")) {
+        attach_parent_console();
+    }
+    if let Some(code) = agy_statusline::cli(&args) {
+        return std::process::ExitCode::from(code as u8);
+    }
     // Isolation must exist before logging: the logger resolves its directory from APPDATA. The
     // guard lives until `main` returns, so HUD objects (dropped earlier) never outlive it.
     let smoke_isolation = std::env::args().any(|a| a == "--smoke-test").then(|| {
