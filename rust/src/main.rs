@@ -363,6 +363,7 @@ fn main() -> std::process::ExitCode {
     info!("HUD Window created and shown");
 
     let hud = Rc::new(RefCell::new(hud));
+    ui::hud_window::register_hud(&hud);
     MAIN_HUD.with(|cell| {
         *cell.borrow_mut() = Some(Rc::clone(&hud));
     });

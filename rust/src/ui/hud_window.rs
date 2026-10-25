@@ -13,6 +13,7 @@ use chrono::Local;
 use ferrokit_core::event::EventKind;
 use ferrokit_core::QObject;
 use ferrokit_gui::geometry::primitives::{Margins, Rect, RectF};
+use ferrokit_gui::geometry::Region;
 use ferrokit_gui::paint::{Brush, RenderHint};
 use ferrokit_platform::backdrop::BackdropType;
 use ferrokit_platform::WindowFlags;
@@ -26,6 +27,7 @@ use super::styles::{get_theme, Theme};
 use super::table_layout::{
     compact_min_size, table_state, COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W,
 };
+use super::round_mask::rounded_rects;
 use super::usage_table::{TableViews, UsageTable, PROVIDER_ORDER};
 use crate::config::{
     Config, ResizeDebouncer, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH,
@@ -338,6 +340,60 @@ fn install_backdrop(
     }
 }
 
+/// Python `theme["radius"]` of the table panel, also the window mask's.
+const TABLE_RADIUS: i32 = 12;
+/// Python `_blur_resume_timer.setInterval(220)`.
+const BLUR_RESUME_MS: u64 = 220;
+
+/// Python `vibrancy.mask_needed`: only Windows' Acrylic needs the window clipped to rounded corners.
+fn mask_needed(blur_applied: bool) -> bool {
+    blur_applied && cfg!(windows)
+}
+
+/// Python `_refresh_mask`: clip the table window to rounded corners where native blur would otherwise
+/// show square corners; `key` is `_mask_key`, the `(width, height, radius)` last applied. Works on the
+/// window's root widget, as `Window::set_mask` does.
+fn refresh_mask(
+    root: &WidgetRef,
+    in_table: bool,
+    blur_active: bool,
+    key: &Cell<Option<(i32, i32, i32)>>,
+    size: (i32, i32),
+) {
+    if in_table && mask_needed(blur_active) {
+        let wanted = (size.0, size.1, TABLE_RADIUS);
+        if key.get() != Some(wanted) {
+            let mut region = Region::default();
+            for (x, y, w, h) in rounded_rects(wanted.0, wanted.1, wanted.2) {
+                region = region.united_rect(&Rect::new(x, y, w, h));
+            }
+            root.borrow().set_mask(&region);
+            key.set(Some(wanted));
+        }
+    } else if key.take().is_some() {
+        root.borrow().clear_mask();
+    }
+}
+
+thread_local! {
+    /// The HUD as the window handlers reach it (they hold no `&mut Window`); set by `register_hud`.
+    static HUD: RefCell<std::rc::Weak<RefCell<HUDWindow>>> = const { RefCell::new(std::rc::Weak::new()) };
+}
+
+/// Lets the window's press handler and the blur timer reach the HUD (the Qt `self`).
+pub fn register_hud(hud: &Rc<RefCell<HUDWindow>>) {
+    HUD.with(|h| *h.borrow_mut() = Rc::downgrade(hud));
+}
+
+/// Runs `f` on the registered HUD unless it is already borrowed (a handler re-entered from a HUD call).
+fn with_hud(f: impl FnOnce(&mut HUDWindow)) {
+    if let Some(hud) = HUD.with(|h| h.borrow().upgrade()) {
+        if let Ok(mut hud) = hud.try_borrow_mut() {
+            f(&mut hud);
+        }
+    }
+}
+
 pub struct HUDWindow {
     pub config: Arc<Mutex<Config>>,
     pub refresh_ctrl: Arc<Mutex<RefreshController>>,
@@ -371,6 +427,12 @@ pub struct HUDWindow {
     vibrant: Rc<Cell<bool>>,
     set_backdrop: BackdropFn,
     chrome: TableChrome,
+    /// Python `_mask_key`.
+    mask_key: Rc<Cell<Option<(i32, i32, i32)>>>,
+    /// Python `_blur_suspended`: the blur is paused while the window is moved or resized.
+    blur_suspended: Rc<Cell<bool>>,
+    /// Python `_blur_resume_timer`.
+    blur_resume_timer: Rc<ferrokit_core::timer::Timer>,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -627,15 +689,26 @@ impl HUDWindow {
             let _ = shape;
         });
 
+        let mask_key: Rc<Cell<Option<(i32, i32, i32)>>> = Rc::new(Cell::new(None));
+        let blur_suspended = Rc::new(Cell::new(false));
+        let blur_resume_timer = Rc::new(ferrokit_core::timer::Timer::new());
+        blur_resume_timer.set_single_shot(true);
+        blur_resume_timer.set_interval(BLUR_RESUME_MS);
+        blur_resume_timer
+            .timeout
+            .connect(move |()| with_hud(|hud| hud.resume_blur()));
+
         let cfg_press = Arc::clone(&config);
         window.set_mouse_press_handler(move |pos, button| {
             if button == ferrokit_platform::MouseButton::Left {
                 let locked = cfg_press.lock().locked;
                 let edges = ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked);
                 if !edges.is_empty() {
+                    with_hud(|hud| hud.suspend_blur());
                     ferrokit_platform::window::post_system_resize(hwnd, edges);
                     return true;
                 } else if !locked {
+                    with_hud(|hud| hud.suspend_blur());
                     ferrokit_platform::window::post_system_move(hwnd);
                     return true;
                 }
@@ -645,6 +718,11 @@ impl HUDWindow {
         let cfg_resize = Arc::clone(&config);
         let debouncer_resize = Arc::clone(&debouncer);
         let chrome_resize = chrome.clone();
+        let root_resize = Rc::clone(&root);
+        let vibrant_resize = Rc::clone(&vibrant);
+        let mask_key_resize = Rc::clone(&mask_key);
+        let suspended_resize = Rc::clone(&blur_suspended);
+        let timer_resize = Rc::clone(&blur_resume_timer);
         // The window's current geometry as the events report it: the window event handler below
         // cannot reach `window.geometry()`, and Python reads `self.pos()`/`self.size()` instead.
         let geom_now = Rc::new(Cell::new(window.geometry()));
@@ -654,10 +732,21 @@ impl HUDWindow {
             g.width = size.width;
             g.height = size.height;
             geom_resize.set(g);
-            // Python `resizeEvent`: `_sync_table_state`, then the save. The handler runs before the layout pass, so the view the table collapses to is
+            // Python `resizeEvent`: `_sync_table_state`, `_refresh_mask`, the blur pause timer, then the save. The handler runs before the layout pass, so the view the table collapses to is
             // the one that gets laid out.
             if !debouncer_resize.is_restoring() {
                 chrome_resize.sync_state(size.width, size.height);
+            }
+            let in_table = cfg_resize.lock().ui_mode == "table";
+            refresh_mask(
+                &root_resize,
+                in_table,
+                vibrant_resize.get(),
+                &mask_key_resize,
+                (size.width, size.height),
+            );
+            if suspended_resize.get() {
+                timer_resize.start();
             }
             if debouncer_resize.is_restoring() {
                 return;
@@ -671,6 +760,8 @@ impl HUDWindow {
             crate::memory::trim_memory,
         )));
         let trim_events = Arc::clone(&trim);
+        let suspended_events = Rc::clone(&blur_suspended);
+        let timer_events = Rc::clone(&blur_resume_timer);
         let cfg_events = Arc::clone(&config);
         let debouncer_events = Arc::clone(&debouncer);
         window.set_window_event_handler(move |event| match event.kind {
@@ -679,6 +770,10 @@ impl HUDWindow {
                 g.x = x;
                 g.y = y;
                 geom_now.set(g);
+                // Python `moveEvent`: a paused blur waits for the movement to stop.
+                if suspended_events.get() {
+                    timer_events.start();
+                }
                 if debouncer_events.is_restoring() {
                     return;
                 }
@@ -730,6 +825,9 @@ impl HUDWindow {
             vibrant,
             set_backdrop,
             chrome,
+            mask_key,
+            blur_suspended,
+            blur_resume_timer,
         };
         debouncer.set_restoring(false);
 
@@ -821,6 +919,43 @@ impl HUDWindow {
             blur,
         );
         self.vibrant.set(vibrant);
+        // Python `_apply_theme`: `_blur_active, _blur_suspended = vibrant, False`, then `_refresh_mask()`.
+        self.blur_suspended.set(false);
+        self.refresh_mask(ui_mode == "table");
+    }
+
+    /// Python `_refresh_mask`.
+    fn refresh_mask(&self, in_table: bool) {
+        let g = self.window.geometry();
+        refresh_mask(
+            &self.window.root_widget(),
+            in_table,
+            self.vibrant.get(),
+            &self.mask_key,
+            (g.width, g.height),
+        );
+    }
+
+    /// Python `_suspend_blur`: Acrylic makes dragging and resizing stutter, so drop the blur until the
+    /// movement stops.
+    fn suspend_blur(&mut self) {
+        if !self.vibrant.get() || self.config.lock().ui_mode != "table" {
+            return;
+        }
+        if !self.blur_suspended.get() {
+            self.blur_suspended.set(self.window.suspend_backdrop());
+        }
+        if self.blur_suspended.get() {
+            self.blur_resume_timer.start();
+        }
+    }
+
+    /// Python `_resume_blur`.
+    fn resume_blur(&mut self) {
+        if self.blur_suspended.get() && self.vibrant.get() {
+            self.window.resume_backdrop();
+        }
+        self.blur_suspended.set(false);
     }
 
     /// Python `toggle_table_blur`: the `table_blur` switch, applied at once.

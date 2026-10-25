@@ -5,11 +5,9 @@
 //! edge is not anti-aliased.
 
 /// `(x, y, width, height)`.
-#[allow(dead_code)] // consumed by `_refresh_mask` once ferrokit has `QWidget::setMask`
 pub type MaskRect = (i32, i32, i32, i32);
 
 /// Non-overlapping rectangles that cover a `width` x `height` box with rounded corners.
-#[allow(dead_code)] // see `MaskRect`
 pub fn rounded_rects(width: i32, height: i32, radius: i32) -> Vec<MaskRect> {
     if width <= 0 || height <= 0 {
         return Vec::new();
