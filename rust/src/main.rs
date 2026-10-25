@@ -508,6 +508,22 @@ fn main() -> std::process::ExitCode {
                 );
             });
         });
+    // Python `self.sidebar.contextMenuRequested.connect(self._show_sidebar_menu)`: a right click on
+    // the flyout (its own window) shows the same menu.
+    let config_clone3 = Arc::clone(&config);
+    hud.borrow()
+        .sidebar
+        .context_menu_requested()
+        .connect(move |global_pos: &Point| {
+            let (global_pos, cfg_clone) = (*global_pos, Arc::clone(&config_clone3));
+            Timer::single_shot(0, move || {
+                show_hud_popup_menu(
+                    global_pos,
+                    &cfg_clone,
+                    ui::tray_icon::build_hud_context_menu,
+                );
+            });
+        });
 
     // Global hotkey manager
     let hotkey_enabled = { config.lock().hotkey_enabled };

@@ -21,6 +21,7 @@ pub const ACTION_REFRESH_ALL: u32 = 2;
 
 pub const ACTION_MODE_CARDS: u32 = 10;
 pub const ACTION_MODE_TABLE: u32 = 11;
+pub const ACTION_MODE_SIDEBAR: u32 = 12;
 
 pub const ACTION_LAYOUT_HORIZONTAL: u32 = 20;
 pub const ACTION_LAYOUT_VERTICAL: u32 = 21;
@@ -58,6 +59,19 @@ pub const ACTION_CLAUDE_PROFILE_AUTO: u32 = 100;
 pub const ACTION_CLAUDE_PROFILE_BASE: u32 = 1000;
 
 pub const ACTION_EXIT: u32 = 99;
+
+// Sidebar style (Python `hud_menu.py`: SIDEBAR_FORMS, SIDEBAR_SCALES, IDLE_LEVELS, IDLE_DELAYS_MS).
+pub const ACTION_SIDEBAR_STRIP: u32 = 110;
+pub const ACTION_SIDEBAR_PANEL: u32 = 111;
+pub const ACTION_SIDEBAR_SCALE_BASE: u32 = 4000; // + percent
+pub const ACTION_IDLE_FADE_TOGGLE: u32 = 130;
+pub const ACTION_IDLE_LEVEL_BASE: u32 = 2000; // + percent
+pub const ACTION_IDLE_DELAY_BASE: u32 = 100_000; // + milliseconds
+pub const ACTION_AGY_ORDER_RESET: u32 = 150;
+
+pub const SIDEBAR_SCALES: [u32; 6] = [60, 80, 100, 125, 150, 200];
+pub const IDLE_LEVELS: [u32; 4] = [80, 60, 40, 25];
+pub const IDLE_DELAYS_MS: [u32; 4] = [500, 900, 2000, 5000];
 
 /// Python `SCHEME_LABELS` (`hud_window.py:25`) in `SCHEMES` order (`styles.py:20`).
 const SCHEME_CHOICES: [(&str, u32, &str); 2] = [
@@ -229,6 +243,7 @@ pub fn build_hud_context_menu(cfg: &Config, root: &ferrokit_widgets::widget::Wid
     // UI Style, Layout, Colors/Appearance (shared with the tray menu)
     add_ui_style_menu(&mut menu, cfg);
     add_layout_menu(&mut menu, cfg);
+    add_sidebar_menu(&mut menu, cfg);
     add_theme_menus(&mut menu, cfg);
 
     // Ghost Mode
@@ -333,6 +348,7 @@ pub fn build_hud_tray_menu(cfg: &Config, root: &ferrokit_widgets::widget::Widget
     menu.add_separator();
     add_ui_style_menu(&mut menu, cfg);
     add_layout_menu(&mut menu, cfg);
+    add_sidebar_menu(&mut menu, cfg);
     add_theme_menus(&mut menu, cfg);
     add_check(
         &mut menu,
@@ -402,8 +418,111 @@ fn add_ui_style_menu(menu: &mut Menu, cfg: &Config) {
             "📊 儀表表格 (Modern Table)",
             cfg.ui_mode == "table",
         );
+        add_check(
+            &mut s,
+            ACTION_MODE_SIDEBAR,
+            "📍 側邊欄 (Sidebar)",
+            cfg.ui_mode == "sidebar",
+        );
     }
     menu.add_menu_ref(&sub);
+}
+
+/// A disabled plain-text row (Python `QAction.setEnabled(False)`).
+fn add_disabled(menu: &mut Menu, text: &str) {
+    let act = Action::new_ref(text);
+    act.borrow_mut().set_enabled(false);
+    menu.add_action(act);
+}
+
+/// Python `hud_menu._build_interface` (the sidebar entries), `_build_agy_rows` and
+/// `_build_idle_fade`: visible only in the sidebar style.
+fn add_sidebar_menu(menu: &mut Menu, cfg: &Config) {
+    let sub = new_submenu("📍 側邊欄 (Sidebar)", cfg);
+    {
+        let mut s = sub.borrow_mut();
+        for (value, id, label) in [
+            ("strip", ACTION_SIDEBAR_STRIP, "細條 (Strip)"),
+            ("panel", ACTION_SIDEBAR_PANEL, "固定窄欄 (Panel)"),
+        ] {
+            add_check(&mut s, id, label, cfg.sidebar_state == value);
+        }
+        s.add_separator();
+        let size_menu = new_submenu("大小 (Ctrl＋滾輪)", cfg);
+        {
+            let mut sz = size_menu.borrow_mut();
+            let current = (cfg.sidebar_scale_setting() * 100.0).round() as u32;
+            for pct in SIDEBAR_SCALES {
+                add_check(&mut sz, ACTION_SIDEBAR_SCALE_BASE + pct, &format!("{pct}%"), pct == current);
+            }
+        }
+        s.add_menu_ref(&size_menu);
+        s.add_separator();
+        // AGY row order: shown here, changed by dragging rows in the detail page
+        let order = crate::agy_rows::normalize_order(&cfg.agy_order);
+        let agy = new_submenu("AGY 項目順序 (Row order)", cfg);
+        {
+            let mut a = agy.borrow_mut();
+            add_disabled(&mut a, "在詳細頁面拖拉標題可調整，前兩條為主要顯示");
+            a.add_separator();
+            for (index, title) in order.iter().enumerate() {
+                add_disabled(&mut a, &format!("{}. {title}", index + 1));
+            }
+            a.add_separator();
+            let reset = Action::new_ref("還原預設順序");
+            {
+                let mut r = reset.borrow_mut();
+                r.set_data(Variant::uint(ACTION_AGY_ORDER_RESET as u64));
+                r.set_enabled(order.iter().map(String::as_str).ne(crate::agy_rows::DEFAULT_ORDER));
+            }
+            a.add_action(reset);
+        }
+        s.add_menu_ref(&agy);
+        s.add_separator();
+        // idle fade
+        let fade = new_submenu("閒置時淡化 (Idle fade)", cfg);
+        {
+            let mut f = fade.borrow_mut();
+            add_check(&mut f, ACTION_IDLE_FADE_TOGGLE, "啟用", cfg.sidebar_idle_fade);
+            f.add_separator();
+            let level_menu = new_submenu("淡化到 (Dim to)", cfg);
+            {
+                let mut l = level_menu.borrow_mut();
+                let level = (cfg.idle_fade_level_setting() * 100.0).round() as u32;
+                let mut levels: Vec<u32> = IDLE_LEVELS.to_vec();
+                if !levels.contains(&level) {
+                    levels.push(level);
+                }
+                levels.sort_unstable_by(|a, b| b.cmp(a));
+                for pct in levels {
+                    add_check(&mut l, ACTION_IDLE_LEVEL_BASE + pct, &format!("{pct}%"), pct == level);
+                }
+            }
+            f.add_menu_ref(&level_menu);
+            let delay_menu = new_submenu("多久後淡化 (Delay)", cfg);
+            {
+                let mut d = delay_menu.borrow_mut();
+                let delay = cfg.idle_fade_delay_setting() as u32;
+                let mut delays: Vec<u32> = IDLE_DELAYS_MS.to_vec();
+                if !delays.contains(&delay) {
+                    delays.push(delay);
+                }
+                delays.sort_unstable();
+                for ms in delays {
+                    add_check(
+                        &mut d,
+                        ACTION_IDLE_DELAY_BASE + ms,
+                        &format!("{} 秒", crate::ui::sidebar::format_g(ms as f64 / 1000.0)),
+                        ms == delay,
+                    );
+                }
+            }
+            f.add_menu_ref(&delay_menu);
+        }
+        s.add_menu_ref(&fade);
+    }
+    let action = menu.add_menu_ref(&sub);
+    action.borrow_mut().set_visible(cfg.ui_mode == "sidebar");
 }
 
 /// Python `layout_menu` (`tray_icon.py:79-90`). Visible only in cards mode, as
@@ -553,6 +672,41 @@ impl HUDTrayIcon {
             }
             ACTION_MODE_TABLE => {
                 hud.apply_ui_mode("table");
+                self.update_menu_state();
+            }
+            ACTION_MODE_SIDEBAR => {
+                hud.apply_ui_mode("sidebar");
+                self.update_menu_state();
+            }
+            ACTION_SIDEBAR_STRIP => {
+                hud.set_sidebar_state("strip");
+                self.update_menu_state();
+            }
+            ACTION_SIDEBAR_PANEL => {
+                hud.set_sidebar_state("panel");
+                self.update_menu_state();
+            }
+            id if SIDEBAR_SCALES
+                .iter()
+                .any(|pct| ACTION_SIDEBAR_SCALE_BASE + pct == id) =>
+            {
+                hud.set_sidebar_scale((id - ACTION_SIDEBAR_SCALE_BASE) as f64 / 100.0);
+                self.update_menu_state();
+            }
+            ACTION_IDLE_FADE_TOGGLE => {
+                hud.toggle_idle_fade();
+                self.update_menu_state();
+            }
+            id if (ACTION_IDLE_LEVEL_BASE + 20..=ACTION_IDLE_LEVEL_BASE + 95).contains(&id) => {
+                hud.set_idle_fade_level((id - ACTION_IDLE_LEVEL_BASE) as i32);
+                self.update_menu_state();
+            }
+            id if (ACTION_IDLE_DELAY_BASE + 200..=ACTION_IDLE_DELAY_BASE + 30_000).contains(&id) => {
+                hud.set_idle_fade_delay((id - ACTION_IDLE_DELAY_BASE) as i64);
+                self.update_menu_state();
+            }
+            ACTION_AGY_ORDER_RESET => {
+                hud.reset_agy_order();
                 self.update_menu_state();
             }
             ACTION_LAYOUT_HORIZONTAL => {
@@ -1174,5 +1328,86 @@ mod menu_parity_tests {
                 "{text}"
             );
         }
+    }
+
+    /// The sidebar entries exist only in the sidebar style (Python `hud_menu._build_interface`).
+    #[test]
+    fn sidebar_submenu_is_visible_only_in_the_sidebar_style() {
+        let sidebar = Config {
+            ui_mode: "sidebar".to_string(),
+            ..Config::default()
+        };
+        let menu = build_hud_context_menu(&sidebar, &test_hud_root());
+        assert!(visible_top_level(&menu).contains(&"📍 側邊欄 (Sidebar)".to_string()));
+        let tray = build_hud_tray_menu(&sidebar, &test_hud_root());
+        assert!(visible_top_level(&tray).contains(&"📍 側邊欄 (Sidebar)".to_string()));
+        for mode in ["cards", "table"] {
+            let cfg = Config {
+                ui_mode: mode.to_string(),
+                ..Config::default()
+            };
+            let menu = build_hud_context_menu(&cfg, &test_hud_root());
+            assert!(!visible_top_level(&menu).contains(&"📍 側邊欄 (Sidebar)".to_string()), "{mode}");
+        }
+    }
+
+    #[test]
+    fn sidebar_submenu_lists_forms_sizes_row_order_and_idle_fade() {
+        let cfg = Config {
+            ui_mode: "sidebar".to_string(),
+            sidebar_state: "strip".to_string(),
+            sidebar_scale: 1.25,
+            sidebar_idle_level: 0.5,
+            sidebar_idle_delay_ms: 1200,
+            ..Config::default()
+        };
+        let menu = build_hud_context_menu(&cfg, &test_hud_root());
+        let labels = submenu_visible_labels(&menu, "(Sidebar)");
+        assert_eq!(labels[0], "細條 (Strip)");
+        assert_eq!(labels[1], "固定窄欄 (Panel)");
+        assert!(labels.iter().any(|l| l.contains("大小")));
+        assert!(labels.iter().any(|l| l.contains("AGY 項目順序")));
+        assert!(labels.iter().any(|l| l.contains("閒置時淡化")));
+        // the chosen form and size are the checked ones
+        assert!(submenu_action(&menu, "(Sidebar)", "細條 (Strip)").borrow().is_checked());
+        assert!(!submenu_action(&menu, "(Sidebar)", "固定窄欄 (Panel)").borrow().is_checked());
+        let sidebar_menu = menu
+            .actions()
+            .iter()
+            .find(|a| a.borrow().text().contains("(Sidebar)"))
+            .and_then(|a| a.borrow().menu())
+            .expect("sidebar submenu");
+        let size = sidebar_menu
+            .borrow()
+            .actions()
+            .iter()
+            .find(|a| a.borrow().text().contains("大小"))
+            .and_then(|a| a.borrow().menu())
+            .expect("size submenu");
+        let checked: Vec<String> = size
+            .borrow()
+            .actions()
+            .iter()
+            .filter(|a| a.borrow().is_checked())
+            .map(|a| a.borrow().text().to_string())
+            .collect();
+        assert_eq!(checked, vec!["125%".to_string()]);
+        // a value that is not one of the presets is added to its list (Python `set(IDLE_LEVELS) | {level}`)
+        let fade = sidebar_menu
+            .borrow()
+            .actions()
+            .iter()
+            .find(|a| a.borrow().text().contains("閒置時淡化"))
+            .and_then(|a| a.borrow().menu())
+            .expect("idle fade submenu");
+        let delay = fade
+            .borrow()
+            .actions()
+            .iter()
+            .find(|a| a.borrow().text().contains("多久後淡化"))
+            .and_then(|a| a.borrow().menu())
+            .expect("delay submenu");
+        let delays: Vec<String> = delay.borrow().actions().iter().map(|a| a.borrow().text().to_string()).collect();
+        assert_eq!(delays, ["0.5 秒", "0.9 秒", "1.2 秒", "2 秒", "5 秒"]);
     }
 }

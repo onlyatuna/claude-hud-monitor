@@ -2896,3 +2896,97 @@ mod tests {
         assert_eq!(panel_alpha(&hud), alpha(hud.theme.panel_bg));
     }
 }
+
+/// The pure maths of the sidebar's edge / corner resize and idle fade (Python `_resize_zone`,
+/// `_resize_to`, `_apply_opacity`); nothing here creates a window.
+#[cfg(test)]
+mod sidebar_geometry_tests {
+    use super::*;
+
+    const G: Rect = Rect {
+        x: 100,
+        y: 100,
+        width: 64,
+        height: 200,
+    };
+
+    #[test]
+    fn grips_are_seven_pixels_wide_and_corners_combine() {
+        // QRect edges are inclusive: right() == 163, bottom() == 299
+        assert_eq!(resize_zone(G, Point::new(100, 200)).as_deref(), Some("l"));
+        assert_eq!(resize_zone(G, Point::new(106, 200)).as_deref(), Some("l"));
+        assert_eq!(resize_zone(G, Point::new(107, 200)), None);
+        assert_eq!(resize_zone(G, Point::new(163, 200)).as_deref(), Some("r"));
+        assert_eq!(resize_zone(G, Point::new(157, 200)).as_deref(), Some("r"));
+        assert_eq!(resize_zone(G, Point::new(130, 100)).as_deref(), Some("t"));
+        assert_eq!(resize_zone(G, Point::new(130, 299)).as_deref(), Some("b"));
+        assert_eq!(resize_zone(G, Point::new(100, 100)).as_deref(), Some("lt"));
+        assert_eq!(resize_zone(G, Point::new(163, 100)).as_deref(), Some("rt"));
+        assert_eq!(resize_zone(G, Point::new(100, 299)).as_deref(), Some("lb"));
+        assert_eq!(resize_zone(G, Point::new(163, 299)).as_deref(), Some("rb"));
+    }
+
+    #[test]
+    fn the_grip_reaches_two_pixels_outside_the_window_only() {
+        assert_eq!(resize_zone(G, Point::new(98, 200)).as_deref(), Some("l"));
+        assert_eq!(resize_zone(G, Point::new(97, 200)), None);
+        assert_eq!(resize_zone(G, Point::new(165, 200)).as_deref(), Some("r"));
+        assert_eq!(resize_zone(G, Point::new(166, 200)), None);
+        assert_eq!(resize_zone(G, Point::new(130, 301)).as_deref(), Some("b"));
+        assert_eq!(resize_zone(G, Point::new(130, 302)), None);
+        assert_eq!(resize_zone(G, Point::new(130, 200)), None);
+    }
+
+    #[test]
+    fn cursors_follow_the_zone() {
+        assert_eq!(zone_cursor("l"), CursorShape::SizeHor);
+        assert_eq!(zone_cursor("r"), CursorShape::SizeHor);
+        assert_eq!(zone_cursor("t"), CursorShape::SizeVer);
+        assert_eq!(zone_cursor("b"), CursorShape::SizeVer);
+        assert_eq!(zone_cursor("lt"), CursorShape::SizeFDiag);
+        assert_eq!(zone_cursor("rb"), CursorShape::SizeFDiag);
+        assert_eq!(zone_cursor("rt"), CursorShape::SizeBDiag);
+        assert_eq!(zone_cursor("lb"), CursorShape::SizeBDiag);
+    }
+
+    #[test]
+    fn dragging_an_edge_scales_by_the_ratio_of_the_size() {
+        assert_eq!(resize_scale("r", G, 1.0, 32, 0), 1.5);
+        assert_eq!(resize_scale("l", G, 1.0, -32, 0), 1.5);
+        assert_eq!(resize_scale("b", G, 1.0, 0, 100), 1.5);
+        assert_eq!(resize_scale("t", G, 1.0, 0, -100), 1.5);
+        // the start scale is the base
+        assert_eq!(resize_scale("r", G, 1.2, 32, 0), 1.8);
+        // held to 0.6 - 2.0
+        assert_eq!(resize_scale("b", G, 1.0, 0, -150), 0.6);
+        assert_eq!(resize_scale("r", G, 1.5, 640, 0), 2.0);
+    }
+
+    #[test]
+    fn a_corner_uses_the_edge_that_moved_the_furthest() {
+        // right grew by 5 %, bottom by 50 %
+        assert_eq!(resize_scale("rb", G, 1.0, 3, 100), 1.5);
+        // width shrank (0.5) further from 1 than the height grew (1.1)
+        assert_eq!(resize_scale("rb", G, 1.0, -32, 20), 0.6);
+    }
+
+    #[test]
+    fn the_opposite_edge_or_centre_stays_put() {
+        // 128 x 400 after doubling
+        // a right grip keeps the left edge and centres vertically (centre y 199 - 400 / 2)
+        assert_eq!(resize_origin("r", G, 128, 400), (100, -1));
+        assert_eq!(resize_origin("rb", G, 128, 400), (100, 100));
+        // left grip: the right edge (x + width) stays
+        assert_eq!(resize_origin("l", G, 128, 200).0, 164 - 128);
+        assert_eq!(resize_origin("t", G, 64, 400).1, 300 - 400);
+        // a grip without a horizontal part keeps the centre
+        assert_eq!(resize_origin("b", G, 128, 200).0, 131 - 64);
+    }
+
+    #[test]
+    fn the_idle_fade_multiplies_the_chosen_opacity() {
+        assert_eq!(faded_opacity(0.88, 0.6, false), 0.88);
+        assert!((faded_opacity(0.88, 0.6, true) - 0.528).abs() < 1e-6);
+        assert!((faded_opacity(1.0, 0.2, true) - 0.2).abs() < 1e-6);
+    }
+}

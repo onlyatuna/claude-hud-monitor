@@ -2604,3 +2604,37 @@ mod tests {
         assert_eq!(wheel_steps(-100, -50), (vec![-1], -30));
     }
 }
+
+/// Python's `re.sub(r'([\d.]+)px', ...)` of `_relayout` and `f'{x:g}'`.
+#[cfg(test)]
+mod qss_scale_tests {
+    use super::*;
+
+    #[test]
+    fn every_px_length_of_a_sheet_is_scaled() {
+        let sheet = "QLabel#MetricTitle { font-size: 10px; border: 1px solid red; padding: 1px 4px; } QProgressBar { border-radius: 3px; } QLabel#SubDetail { font-size: 9.5px; color: rgba(255, 255, 255, 0.08); }";
+        assert_eq!(
+            scale_px_in_qss(sheet, 1.5),
+            "QLabel#MetricTitle { font-size: 15px; border: 1.5px solid red; padding: 1.5px 6px; } QProgressBar { border-radius: 4.5px; } QLabel#SubDetail { font-size: 14.25px; color: rgba(255, 255, 255, 0.08); }"
+        );
+        assert_eq!(scale_px_in_qss(sheet, 1.0).replace("1.0", "1"), sheet.replace("1.0", "1"));
+    }
+
+    #[test]
+    fn non_length_numbers_and_text_are_untouched() {
+        let sheet = "font-family: 'Segoe UI'; font-weight: 800; letter-spacing: 1.0px; 側邊欄 2em";
+        assert_eq!(scale_px_in_qss(sheet, 2.0), "font-family: 'Segoe UI'; font-weight: 800; letter-spacing: 2px; 側邊欄 2em");
+    }
+
+    #[test]
+    fn g_format_has_six_significant_digits_and_no_trailing_zeros() {
+        assert_eq!(format_g(15.0), "15");
+        assert_eq!(format_g(14.25), "14.25");
+        assert_eq!(format_g(0.5), "0.5");
+        assert_eq!(format_g(6.0), "6");
+        assert_eq!(format_g(11.875), "11.875");
+        assert_eq!(format_g(1.0 / 3.0), "0.333333");
+        assert_eq!(format_g(1234.5678), "1234.57");
+        assert_eq!(format_g(0.0), "0");
+    }
+}
