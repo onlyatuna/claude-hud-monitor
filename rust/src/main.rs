@@ -1,6 +1,7 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 #![allow(clippy::upper_case_acronyms)]
 
+mod agy_rows;
 mod autostart;
 mod config;
 mod hotkey;
@@ -172,6 +173,7 @@ fn main() -> std::process::ExitCode {
             retry_after: None,
             stale: false,
             last_success: Some(chrono::Utc::now()),
+            ..Default::default()
         };
         hud.on_data_fetched(&claude_metrics);
 
@@ -197,6 +199,7 @@ fn main() -> std::process::ExitCode {
             retry_after: None,
             stale: false,
             last_success: Some(chrono::Utc::now()),
+            ..Default::default()
         };
         hud.on_data_fetched(&agy_metrics);
 
@@ -220,6 +223,7 @@ fn main() -> std::process::ExitCode {
             retry_after: None,
             stale: false,
             last_success: Some(chrono::Utc::now()),
+            ..Default::default()
         };
         hud.on_data_fetched(&codex_metrics);
 

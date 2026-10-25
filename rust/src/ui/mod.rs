@@ -10,6 +10,8 @@ mod geometry_persist_tests;
 mod header_row_tests;
 #[cfg(all(test, windows))]
 mod hover_state_tests;
+pub mod dock_geometry;
+pub mod gauge;
 pub mod hud_window;
 pub mod placement;
 pub mod provider_card;

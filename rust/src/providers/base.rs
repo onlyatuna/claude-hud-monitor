@@ -27,6 +27,34 @@ pub fn percent_text(value: Option<f64>) -> String {
     }
 }
 
+/// One extra quota row (Python `MetricRow`): agy's five buckets beyond the main pair.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricRow {
+    pub title: String,
+    pub val: Option<f64>,
+    pub text: String,
+    pub reset: Option<DateTime<Utc>>,
+    pub subtext: String,
+}
+
+impl MetricRow {
+    pub fn new(title: &str, val: Option<f64>, text: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            val,
+            text: text.to_owned(),
+            reset: None,
+            subtext: String::new(),
+        }
+    }
+}
+
+impl Default for MetricRow {
+    fn default() -> Self {
+        Self::new("", None, "--")
+    }
+}
+
 /// Core data contract shared by all providers.
 /// `metric1_val` / `metric2_val` are Some(0.0..=100.0) or None (shown as "--").
 #[derive(Debug, Clone)]
@@ -39,11 +67,13 @@ pub struct UsageMetrics {
     pub metric1_val: Option<f64>,
     pub metric1_text: String,
     pub metric1_reset: Option<DateTime<Utc>>,
+    pub metric1_subtext: String,
 
     pub metric2_title: String,
     pub metric2_val: Option<f64>,
     pub metric2_text: String,
     pub metric2_reset: Option<DateTime<Utc>>,
+    pub metric2_subtext: String,
 
     pub badge1_text: String,
     pub badge2_text: String,
@@ -54,6 +84,8 @@ pub struct UsageMetrics {
     pub retry_after: Option<f64>,
     pub stale: bool,
     pub last_success: Option<DateTime<Utc>>,
+    /// Rows beyond the main pair (agy's other quota buckets); empty for providers with two rows.
+    pub extra_metrics: Vec<MetricRow>,
 }
 impl Default for UsageMetrics {
     fn default() -> Self {
@@ -64,10 +96,12 @@ impl Default for UsageMetrics {
             metric1_val: None,
             metric1_text: "--".to_string(),
             metric1_reset: None,
+            metric1_subtext: String::new(),
             metric2_title: "WEEKLY 7D".to_string(),
             metric2_val: None,
             metric2_text: "--".to_string(),
             metric2_reset: None,
+            metric2_subtext: String::new(),
             badge1_text: String::new(),
             badge2_text: String::new(),
             last_updated_time: String::new(),
@@ -76,6 +110,7 @@ impl Default for UsageMetrics {
             retry_after: None,
             stale: false,
             last_success: None,
+            extra_metrics: Vec::new(),
         }
     }
 }

@@ -9,6 +9,7 @@
 
 use log::{error, info};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -48,6 +49,44 @@ pub struct Config {
     pub opacity: f32,
     #[serde(default)]
     pub click_through: bool,
+    // ---- Sidebar style (Python `DEFAULT_CONFIG`, `config_manager.py`). Read leniently: a wrong
+    // type in a hand-edited file falls back to the default instead of discarding the whole file.
+    #[serde(default = "default_sidebar_state", deserialize_with = "lenient_sidebar_state")]
+    pub sidebar_state: String,
+    #[serde(default = "default_sidebar_edge", deserialize_with = "lenient_sidebar_edge")]
+    pub sidebar_edge: String,
+    #[serde(
+        default = "default_sidebar_orientation",
+        deserialize_with = "lenient_sidebar_orientation"
+    )]
+    pub sidebar_orientation: String,
+    #[serde(default, deserialize_with = "lenient_sidebar_offset")]
+    pub sidebar_offset: Option<SidebarOffset>,
+    #[serde(default, deserialize_with = "lenient_sidebar_coord")]
+    pub sidebar_x: Option<i32>,
+    #[serde(default, deserialize_with = "lenient_sidebar_coord")]
+    pub sidebar_y: Option<i32>,
+    #[serde(default = "default_true", deserialize_with = "lenient_sidebar_idle_fade")]
+    pub sidebar_idle_fade: bool,
+    #[serde(
+        default = "default_sidebar_idle_level",
+        deserialize_with = "lenient_sidebar_idle_level"
+    )]
+    pub sidebar_idle_level: f64,
+    #[serde(
+        default = "default_sidebar_idle_delay_ms",
+        deserialize_with = "lenient_sidebar_idle_delay_ms"
+    )]
+    pub sidebar_idle_delay_ms: i64,
+    #[serde(default = "default_sidebar_scale", deserialize_with = "lenient_sidebar_scale")]
+    pub sidebar_scale: f64,
+    /// Per provider: row titles in the order dragged in the detail page (agy uses `agy_order`).
+    #[serde(default, deserialize_with = "lenient_row_order")]
+    pub row_order: BTreeMap<String, Vec<String>>,
+    #[serde(default = "default_agy_order", deserialize_with = "lenient_agy_order")]
+    pub agy_order: Vec<String>,
+    #[serde(default = "default_provider_order", deserialize_with = "lenient_provider_order")]
+    pub provider_order: Vec<String>,
     #[serde(default = "default_refresh_interval")]
     pub refresh_interval_sec: u64,
     #[serde(default = "default_true")]
@@ -125,6 +164,34 @@ fn default_claude_profile() -> String {
     "auto".to_owned()
 }
 
+// ---- Sidebar style defaults (Python `DEFAULT_CONFIG`).
+fn default_sidebar_state() -> String {
+    "panel".to_owned()
+}
+fn default_sidebar_edge() -> String {
+    "right".to_owned()
+}
+fn default_sidebar_orientation() -> String {
+    "vertical".to_owned()
+}
+fn default_sidebar_idle_level() -> f64 {
+    SIDEBAR_IDLE_FADE_FACTOR
+}
+fn default_sidebar_idle_delay_ms() -> i64 {
+    SIDEBAR_IDLE_FADE_DELAY_MS
+}
+fn default_sidebar_scale() -> f64 {
+    1.0
+}
+fn default_agy_order() -> Vec<String> {
+    ["C/G 5H", "ARGON 7D", "GEMINI 5H", "GEMINI 7D", "C/G 7D"]
+        .map(str::to_owned)
+        .to_vec()
+}
+fn default_provider_order() -> Vec<String> {
+    PROVIDER_ORDER_DEFAULT.map(str::to_owned).to_vec()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -143,6 +210,19 @@ impl Default for Config {
             always_on_top: true,
             opacity: default_opacity(),
             click_through: false,
+            sidebar_state: default_sidebar_state(),
+            sidebar_edge: default_sidebar_edge(),
+            sidebar_orientation: default_sidebar_orientation(),
+            sidebar_offset: None,
+            sidebar_x: None,
+            sidebar_y: None,
+            sidebar_idle_fade: true,
+            sidebar_idle_level: default_sidebar_idle_level(),
+            sidebar_idle_delay_ms: default_sidebar_idle_delay_ms(),
+            sidebar_scale: default_sidebar_scale(),
+            row_order: BTreeMap::new(),
+            agy_order: default_agy_order(),
+            provider_order: default_provider_order(),
             refresh_interval_sec: default_refresh_interval(),
             hotkey_enabled: true,
             hotkey: default_hotkey(),
@@ -150,6 +230,107 @@ impl Default for Config {
             autostart: false,
             claude_profile: default_claude_profile(),
         }
+    }
+}
+
+// ---- Sidebar style: constants, offset type, lenient readers and validated accessors ---------
+
+/// Python `DEFAULT_ORDER` of `ui/sidebar.py`: tile / card / column order.
+pub const PROVIDER_ORDER_DEFAULT: [&str; 3] = ["claude", "agy", "codex"];
+/// Python `IDLE_FADE_FACTOR` / `IDLE_FADE_DELAY_MS` (`hud_window.py`).
+pub const SIDEBAR_IDLE_FADE_FACTOR: f64 = 0.6;
+pub const SIDEBAR_IDLE_FADE_DELAY_MS: i64 = 900;
+
+/// `sidebar_offset`: the distance along the docked edge from its start, or the far end of it
+/// (`"end"`, a corner). A JSON number or the string `"end"`; `None` in the config is the default
+/// spot (bottom / right).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarOffset {
+    At(i32),
+    End,
+}
+
+impl Serialize for SidebarOffset {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            SidebarOffset::At(n) => serializer.serialize_i32(*n),
+            SidebarOffset::End => serializer.serialize_str("end"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SidebarOffset {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::String(s) if s == "end" => Ok(SidebarOffset::End),
+            serde_json::Value::Number(n) => n
+                .as_i64()
+                .and_then(|v| i32::try_from(v).ok())
+                .map(SidebarOffset::At)
+                .ok_or_else(|| D::Error::custom("sidebar_offset out of range")),
+            _ => Err(D::Error::custom("sidebar_offset must be a number or \"end\"")),
+        }
+    }
+}
+
+/// A reader that keeps the field's default when the stored value has the wrong type (Python
+/// validates each value where it is used; a bad one never blocks the other settings).
+macro_rules! lenient_field {
+    ($name:ident, $ty:ty, $default:expr) => {
+        fn $name<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<$ty, D::Error> {
+            let value = serde_json::Value::deserialize(deserializer)?;
+            Ok(serde_json::from_value::<$ty>(value).unwrap_or_else(|_| $default))
+        }
+    };
+}
+lenient_field!(lenient_sidebar_state, String, default_sidebar_state());
+lenient_field!(lenient_sidebar_edge, String, default_sidebar_edge());
+lenient_field!(lenient_sidebar_orientation, String, default_sidebar_orientation());
+lenient_field!(lenient_sidebar_offset, Option<SidebarOffset>, None);
+lenient_field!(lenient_sidebar_coord, Option<i32>, None);
+lenient_field!(lenient_sidebar_idle_fade, bool, true);
+lenient_field!(lenient_sidebar_idle_level, f64, default_sidebar_idle_level());
+lenient_field!(lenient_sidebar_idle_delay_ms, i64, default_sidebar_idle_delay_ms());
+lenient_field!(lenient_sidebar_scale, f64, default_sidebar_scale());
+lenient_field!(lenient_row_order, BTreeMap<String, Vec<String>>, BTreeMap::new());
+lenient_field!(lenient_agy_order, Vec<String>, default_agy_order());
+lenient_field!(lenient_provider_order, Vec<String>, default_provider_order());
+
+impl Config {
+    /// Python `_sidebar_scale`: the stored scale rounded to 2 decimals and held to 0.6 - 2.0;
+    /// anything unusable is 1.0.
+    pub fn sidebar_scale_setting(&self) -> f64 {
+        if !self.sidebar_scale.is_finite() {
+            return 1.0;
+        }
+        ((self.sidebar_scale * 100.0).round() / 100.0).clamp(0.6, 2.0)
+    }
+
+    /// Python `provider_order`: the stored order when it is a permutation of the three providers.
+    pub fn provider_order_setting(&self) -> Vec<String> {
+        let mut sorted = self.provider_order.clone();
+        sorted.sort();
+        let mut expected: Vec<String> = PROVIDER_ORDER_DEFAULT.map(str::to_owned).to_vec();
+        expected.sort();
+        if sorted == expected {
+            self.provider_order.clone()
+        } else {
+            default_provider_order()
+        }
+    }
+
+    /// Python `idle_fade_level`: fraction of the chosen opacity the idle sidebar dims to, 0.2 - 0.95.
+    pub fn idle_fade_level_setting(&self) -> f64 {
+        if !self.sidebar_idle_level.is_finite() {
+            return SIDEBAR_IDLE_FADE_FACTOR;
+        }
+        self.sidebar_idle_level.clamp(0.2, 0.95)
+    }
+
+    /// Python `idle_fade_delay`: milliseconds after the mouse left before dimming, 200 - 30000.
+    pub fn idle_fade_delay_setting(&self) -> i64 {
+        self.sidebar_idle_delay_ms.clamp(200, 30000)
     }
 }
 

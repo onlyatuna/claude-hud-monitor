@@ -69,6 +69,9 @@ pub fn short_window(title: &str) -> String {
         .replace("WINDOW ", "")
         .replace("SESSION ", "")
         .replace("WEEKLY ", "")
+        .replace("GEMINI ", "")
+        .replace("C/G ", "")
+        .replace("ARGON ", "")
 }
 
 pub fn window_caption(title: &str, expected: &str) -> String {
