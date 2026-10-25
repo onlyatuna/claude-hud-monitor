@@ -1120,7 +1120,9 @@ mod tests {
     /// RC-14 / G12.8.a. Expected values are PySide6 measurements (`rust/tools/geometry_audit/results/
     /// py_horizontal.json`, DPR 1.25, Windows fonts): the card's `sizeHint` height is 109 and the metric
     /// value label's is 17, because the Python label sets a widget-local `font-size: 14px` that wins
-    /// over the application sheet's 16px.
+    /// over the application sheet's 16px. Since the metric blocks became RowCells (margins 4, 2, 4, 2,
+    /// `provider_card.py` `_make_cell`) the card is 8 px taller: PySide6 now measures 117 (probe:
+    /// `ProviderCardWidget('claude')` polished under the cards sheet at DPR 1.25, same fonts).
     #[cfg(windows)]
     #[test]
     fn test_card_size_hint_matches_pyside6() {
@@ -1130,7 +1132,7 @@ mod tests {
         let value_height = card.m1_val.borrow().size_hint().height;
         assert_eq!(value_height, 17, "metric value label height (PySide6: 17)");
         let card_height = card.widget().borrow().size_hint().height;
-        assert_eq!(card_height, 109, "card height (PySide6: 109)");
+        assert_eq!(card_height, 117, "card height (PySide6: 117)");
     }
 
     /// RC-15. PySide6's `QLabel#Badge` has no `max-height`; its `sizeHint` height is 14 at DPR 1.0
@@ -1208,7 +1210,8 @@ mod tests {
         {
             let mut cfg = hud.config.lock();
             cfg.vertical_width = crate::config::DEFAULT_VERTICAL_WIDTH;
-            cfg.vertical_height = crate::config::DEFAULT_VERTICAL_HEIGHT;
+            // 24 px (3 cards x 8) taller than the old default: the card is 117 high now
+            cfg.vertical_height = crate::config::DEFAULT_VERTICAL_HEIGHT + 24;
         }
         hud.apply_cards_layout_mode("vertical");
         let stack_geom_v = hud.stack.borrow().geometry();
@@ -1224,7 +1227,7 @@ mod tests {
         );
         let c_claude = hud.cards["claude"].container.borrow().geometry();
         let c_agy = hud.cards["agy"].container.borrow().geometry();
-        // PySide6 keeps each vertical card at its size hint (109 at DPR 1.25, 108 at 1.0).
+        // PySide6 keeps each vertical card at its size hint (117 at DPR 1.25, 116 at 1.0).
         assert_eq!(
             c_claude.height,
             hud.cards["claude"].container.borrow().size_hint().height,

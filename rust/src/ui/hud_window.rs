@@ -2552,6 +2552,9 @@ mod tests {
         }
     }
 
+    /// Since the provider card became 117 high (RowCell blocks, `provider_card.py`) every cards-mode
+    /// oracle below uses a window 24 px (3 cards x 8) taller than the PySide6 measurement it comes
+    /// from, so the header still gets the same extra height; the card sizes are the new measured ones.
     /// RC-24 guard. The HUD keeps the table page in its `StackedWidget` while the cards page is
     /// shown, and `QStackedLayout::sizeHint`/`minimumSize` cover every page, so the stack's hint
     /// now includes the table. PySide6 (no stack, `py_geom.py vertical`, `VH=410`, DPR 1.25) at the
@@ -2566,6 +2569,7 @@ mod tests {
         cfg.appearance = "dark".into();
         cfg.window_x = Some(0);
         cfg.window_y = Some(0);
+        cfg.vertical_height = crate::config::DEFAULT_VERTICAL_HEIGHT + 24;
         let cfg = Arc::new(Mutex::new(cfg));
         let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
         let hud =
@@ -2586,14 +2590,14 @@ mod tests {
                 (g.x, g.y, g.width, g.height)
             })
             .collect();
-        // Card geometry is relative to the cards container, so compare sizes and the 122 px pitch.
+        // Card geometry is relative to the cards container, so compare sizes and the 130 px pitch.
         assert!(
-            cards.iter().all(|c| c.3 == 109 && c.2 == 256),
-            "cards {cards:?} (PySide6 256x109)"
+            cards.iter().all(|c| c.3 == 117 && c.2 == 256),
+            "cards {cards:?} (PySide6 256x117)"
         );
         assert_eq!(
             (cards[1].1 - cards[0].1, cards[2].1 - cards[1].1),
-            (122, 122)
+            (130, 130)
         );
     }
 
@@ -2638,7 +2642,7 @@ mod tests {
         cfg.window_x = Some(0);
         cfg.window_y = Some(0);
         cfg.vertical_width = 280;
-        cfg.vertical_height = 463;
+        cfg.vertical_height = 463 + 24;
         let cfg = Arc::new(Mutex::new(cfg));
         let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
         let hud =
@@ -2669,14 +2673,14 @@ mod tests {
             .iter()
             .map(|id| hud.cards[*id].widget().borrow().geometry().height)
             .collect();
-        assert_eq!(heights, [109, 109, 109], "card heights (PySide6: 109 each)");
+        assert_eq!(heights, [117, 117, 117], "card heights (PySide6: 117 each)");
         let ys: Vec<i32> = ["claude", "agy", "codex"]
             .iter()
             .map(|id| hud.cards[*id].widget().borrow().geometry().y)
             .collect();
         assert_eq!(
             ys,
-            [0, 122, 244],
+            [0, 130, 260],
             "card y inside the container (PySide6: 100/222/344 in the window)"
         );
     }
@@ -2725,7 +2729,7 @@ mod tests {
         cfg.window_x = Some(0);
         cfg.window_y = Some(0);
         cfg.vertical_width = 280;
-        cfg.vertical_height = 463;
+        cfg.vertical_height = 463 + 24;
         cfg.table_width = 400;
         cfg.table_height = 500;
         let cfg = Arc::new(Mutex::new(cfg));
@@ -2754,7 +2758,7 @@ mod tests {
         );
         assert_eq!(
             hud.stack.borrow().geometry().height,
-            353,
+            377,
             "cards mode stack height"
         );
         assert!(
@@ -2785,7 +2789,7 @@ mod tests {
         cfg.window_x = Some(0);
         cfg.window_y = Some(0);
         cfg.vertical_width = 280;
-        cfg.vertical_height = 463;
+        cfg.vertical_height = 463 + 24;
         cfg.table_width = 400;
         cfg.table_height = 500;
         let cfg = Arc::new(Mutex::new(cfg));
@@ -2847,7 +2851,7 @@ mod tests {
             final_cards_geom, init_cards_geom,
             "cards container geometry preserved across roundtrip"
         );
-        assert_eq!(hud.stack.borrow().geometry().height, 353);
+        assert_eq!(hud.stack.borrow().geometry().height, 377);
     }
 
     /// TI-01: a window built with injected providers fetches from exactly those providers — one

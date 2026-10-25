@@ -38,7 +38,8 @@ fn hud() -> HUDWindow {
         window_x: Some(0),
         window_y: Some(0),
         vertical_width: 280,
-        vertical_height: 463,
+        // 24 px (3 cards x 8) more than the PySide6 measurement: the card is 117 high now
+        vertical_height: 463 + 24,
         ..Config::default()
     };
     let cfg = Arc::new(Mutex::new(cfg));

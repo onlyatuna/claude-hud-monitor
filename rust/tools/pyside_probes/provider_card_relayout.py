@@ -31,6 +31,8 @@ from pathlib import Path
 PY_ROOT = str(Path(__file__).resolve().parents[3] / "python")
 sys.path.insert(0, PY_ROOT)
 
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from core.providers.base import UsageMetrics
@@ -44,11 +46,17 @@ NAMES = (
 )
 
 
+CARD = None
+HEIGHT = int(__import__("os").environ.get("CARD_HEIGHT", "117"))
+
+
 def rect(w):
+    # relative to the card: the rows sit in RowCell blocks since the sidebar card
     if w.isHidden():
         return "-"
     g = w.geometry()
-    return f"{g.x()},{g.y()},{g.width()},{g.height()}"
+    p = w.mapTo(CARD, QPoint(0, 0)) if CARD is not None else QPoint(g.x(), g.y())
+    return f"{p.x()},{p.y()},{g.width()},{g.height()}"
 
 
 def main():
@@ -56,18 +64,25 @@ def main():
     app.setStyleSheet(get_cards_stylesheet(True, dark=True))
 
     owner = QWidget()
+    global CARD
     card = ProviderCardWidget("codex", owner)
+    CARD = card
     outer = QVBoxLayout(owner)
     outer.setContentsMargins(0, 0, 0, 0)
     outer.addWidget(card)
     owner.setMinimumSize(100, 0)
+    # shown but never painted on screen: the RowCell layouts only run for a shown widget tree
+    owner.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+    owner.show()
 
     def show(step, width):
-        owner.resize(width, 140)
+        owner.resize(width, HEIGHT)
         outer.invalidate()
         outer.activate()
         card.layout().invalidate()
         card.layout().activate()
+        # the RowCell children lay themselves out on their own LayoutRequest / Resize events
+        app.processEvents()
         hint = card.sizeHint()
         print(f"{step} hint={hint.width()}x{hint.height()} "
               + " ".join(f"{n}={rect(getattr(card, n))}" for n in NAMES))
