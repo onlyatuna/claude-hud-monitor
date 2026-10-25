@@ -1306,25 +1306,53 @@ impl ProviderColumn {
 /// one to flip the view while the table itself is owned elsewhere.
 #[derive(Clone)]
 pub struct TableViews {
-    full: WidgetRef,
-    compact_view: WidgetRef,
+    /// `(full_view, compact_view)`; a rebuilt table hands its pages to the same handle
+    /// (`adopt_pages`), so the resize handler's clone keeps working.
+    pages: Rc<RefCell<(WidgetRef, WidgetRef)>>,
     compact: Rc<Cell<bool>>,
 }
 
 impl TableViews {
+    fn new(full: WidgetRef, compact_view: WidgetRef) -> Self {
+        Self {
+            pages: Rc::new(RefCell::new((full, compact_view))),
+            compact: Rc::new(Cell::new(false)),
+        }
+    }
+
+    /// Python `full_view`.
+    pub fn full(&self) -> WidgetRef {
+        self.pages.borrow().0.clone()
+    }
+
+    /// Python `compact_view`.
+    pub fn compact_view(&self) -> WidgetRef {
+        self.pages.borrow().1.clone()
+    }
+
     pub fn is_compact(&self) -> bool {
         self.compact.get()
     }
 
     pub fn set_compact(&self, compact: bool) {
         self.compact.set(compact);
-        self.full.borrow().set_visible(!compact);
-        self.compact_view.borrow().set_visible(compact);
+        let (full, compact_view) = self.pages.borrow().clone();
+        full.borrow().set_visible(!compact);
+        compact_view.borrow().set_visible(compact);
+    }
+
+    /// Takes the pages of `other` (a rebuilt table) and shows the one this handle's state asks for.
+    fn adopt_pages(&self, other: &TableViews) {
+        let pages = other.pages.borrow().clone();
+        *self.pages.borrow_mut() = pages;
+        self.set_compact(self.is_compact());
     }
 }
 
 pub struct UsageTable {
     pub container: WidgetRef,
+    /// Python `provider_ids`: the column order.
+    pub order: Vec<String>,
     pub columns: HashMap<String, ProviderColumn>,
     pub theme: Theme,
     pub scheme: String,
@@ -1335,7 +1363,14 @@ pub struct UsageTable {
 }
 
 impl UsageTable {
+    /// Python `UsageTable(theme, scheme)`: `provider_ids` defaults to `PROVIDER_ORDER`.
     pub fn new(theme: Theme, scheme: &str) -> Self {
+        let order: Vec<String> = PROVIDER_ORDER.iter().map(|p| p.to_string()).collect();
+        Self::with_order(theme, scheme, &order)
+    }
+
+    /// Python `UsageTable(theme, scheme, provider_ids=...)`.
+    pub fn with_order(theme: Theme, scheme: &str, order: &[String]) -> Self {
         let container = make_widget(EmptyWidget::new());
         let mut grid = GridLayout::new();
         grid.set_margins(Margins::new(0, 0, 0, 0));
@@ -1343,7 +1378,7 @@ impl UsageTable {
         grid.set_vertical_spacing(4);
 
         let mut columns = HashMap::new();
-        for pid in PROVIDER_ORDER {
+        for pid in order {
             columns.insert(
                 pid.to_string(),
                 ProviderColumn::new(pid, theme.clone(), scheme),
@@ -1409,9 +1444,9 @@ impl UsageTable {
         grid.add_widget(make_sub_label("剩餘"), 9, 0);
 
         // Populate provider columns
-        for (col_idx, pid) in PROVIDER_ORDER.iter().enumerate() {
+        for (col_idx, pid) in order.iter().enumerate() {
             let col = col_idx + 1;
-            if let Some(c) = columns.get(*pid) {
+            if let Some(c) = columns.get(pid) {
                 grid.add_widget(c.header.clone(), 0, col);
                 grid.add_widget(c.m1_reset.clone(), 3, col);
                 grid.add_widget(c.m1_countdown.clone(), 4, col);
@@ -1441,7 +1476,7 @@ impl UsageTable {
         let mut row = BoxLayout::horizontal();
         row.set_margins(Margins::new(0, 0, 0, 0));
         row.set_spacing(COMPACT_GAP);
-        for pid in PROVIDER_ORDER {
+        for pid in order {
             if let Some(c) = columns.get(pid) {
                 row.add_widget_with_stretch(c.compact_dial.clone(), 1);
             }
@@ -1469,17 +1504,14 @@ impl UsageTable {
 
         Self {
             container,
+            order: order.to_vec(),
             columns,
             theme,
             scheme: scheme.to_string(),
             sep1,
             sep2,
             glyphs,
-            views: TableViews {
-                full: full_view,
-                compact_view,
-                compact: Rc::new(Cell::new(false)),
-            },
+            views: TableViews::new(full_view, compact_view),
         }
     }
 
@@ -1496,6 +1528,13 @@ impl UsageTable {
         self.views.set_compact(compact);
     }
 
+    /// Python `_rebuild_table` keeps one collapse state for the window: this table shows the pages
+    /// of its own views through `shared`, the handle the window's chrome holds.
+    pub fn adopt_views(&mut self, shared: &TableViews) {
+        shared.adopt_pages(&self.views);
+        self.views = shared.clone();
+    }
+
     /// A handle that flips the view without borrowing the table (the window's resize handler).
     pub fn views(&self) -> TableViews {
         self.views.clone()
@@ -1504,9 +1543,9 @@ impl UsageTable {
     /// Python `compact_dials`: the collapsed row, in column order.
     #[cfg(test)]
     pub fn compact_dials(&self) -> Vec<WidgetRef> {
-        PROVIDER_ORDER
+        self.order
             .iter()
-            .filter_map(|pid| self.columns.get(*pid))
+            .filter_map(|pid| self.columns.get(pid))
             .map(|c| c.compact_dial.clone())
             .collect()
     }
@@ -2007,21 +2046,57 @@ mod tests {
     }
 
     #[test]
+    fn columns_follow_the_provider_order_it_is_given() {
+        let order: Vec<String> = ["claude", "agy", "codex"].map(String::from).to_vec();
+        let table = UsageTable::with_order(Theme::dark(), "scale", &order);
+        assert_eq!(table.order, order);
+        let ids: Vec<_> = table.compact_dials().iter().map(|d| d.borrow().id()).collect();
+        let expected: Vec<_> = order
+            .iter()
+            .map(|p| table.columns.get(p).unwrap().compact_dial.borrow().id())
+            .collect();
+        assert_eq!(ids, expected);
+        // the default is the Python `PROVIDER_ORDER`
+        let default = UsageTable::new(Theme::dark(), "scale");
+        assert_eq!(default.order, ["claude", "codex", "agy"]);
+    }
+
+    #[test]
+    fn a_rebuilt_table_keeps_the_window_s_collapse_state_and_handle() {
+        let first = UsageTable::new(Theme::dark(), "scale");
+        let shared = first.views();
+        shared.set_compact(true);
+        let order: Vec<String> = ["agy", "codex", "claude"].map(String::from).to_vec();
+        let mut second = UsageTable::with_order(Theme::dark(), "scale", &order);
+        assert!(!second.is_compact(), "a fresh table starts expanded");
+        second.adopt_views(&shared);
+        // the handle the window kept now drives the new pages, collapsed as before
+        assert!(second.is_compact());
+        assert!(shared.is_compact());
+        assert_eq!(shared.full().borrow().id(), second.views.full().borrow().id());
+        assert!(!second.views.full().borrow().is_visible());
+        assert!(second.views.compact_view().borrow().is_visible());
+        shared.set_compact(false);
+        assert!(second.views.full().borrow().is_visible());
+        assert!(!second.views.compact_view().borrow().is_visible());
+    }
+
+    #[test]
     fn collapsing_swaps_the_views_and_expanding_restores_them() {
         let table = UsageTable::new(Theme::dark(), "scale");
         assert!(!table.is_compact());
-        assert!(table.views.full.borrow().is_visible());
-        assert!(!table.views.compact_view.borrow().is_visible());
+        assert!(table.views.full().borrow().is_visible());
+        assert!(!table.views.compact_view().borrow().is_visible());
 
         table.set_compact(true);
         assert!(table.is_compact());
-        assert!(!table.views.full.borrow().is_visible());
-        assert!(table.views.compact_view.borrow().is_visible());
+        assert!(!table.views.full().borrow().is_visible());
+        assert!(table.views.compact_view().borrow().is_visible());
 
         table.views().set_compact(false);
         assert!(!table.is_compact());
-        assert!(table.views.full.borrow().is_visible());
-        assert!(!table.views.compact_view.borrow().is_visible());
+        assert!(table.views.full().borrow().is_visible());
+        assert!(!table.views.compact_view().borrow().is_visible());
     }
 
     #[test]

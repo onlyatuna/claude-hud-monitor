@@ -675,7 +675,7 @@ impl HUDWindow {
 
         // Page 1: Table mode
         let scheme = { config.lock().color_scheme.clone() };
-        let table = UsageTable::new(theme.clone(), &scheme);
+        let table = UsageTable::with_order(theme.clone(), &scheme, &config.lock().provider_order_setting());
 
         // Stacked container
         let stack: WidgetRef = make_widget(StackedWidget::new());
@@ -2238,6 +2238,35 @@ impl HUDWindow {
         let order = order.to_vec();
         ConfigManager::update_and_save(&self.config, |cfg| cfg.provider_order = order.clone());
         self.sidebar.set_order(&order);
+        // Python: `if ui_mode == "table": self._rebuild_table()`. The table follows the order in
+        // every style here, so switching to it later never shows a stale one.
+        self.rebuild_table();
+    }
+
+    /// Python `_rebuild_table`: a new `UsageTable` in the saved `provider_order`, fed the latest
+    /// metrics, in place of the old one. The collapse state is the window's, so it carries over.
+    fn rebuild_table(&mut self) {
+        let in_table = self.config.lock().ui_mode == "table";
+        if in_table {
+            self.persist_geometry();
+        }
+        let scheme = self.config.lock().color_scheme.clone();
+        let order = self.provider_order();
+        let mut table = UsageTable::with_order(self.theme.clone(), &scheme, &order);
+        table.adopt_views(&self.chrome.views);
+        let raws: Vec<UsageMetrics> = self.raw_metrics.values().cloned().collect();
+        for raw in &raws {
+            table.update_metrics(&self.arranged(raw));
+        }
+        StackedWidget::remove_widget(&self.stack, 1);
+        StackedWidget::insert_widget(&self.stack, 1, table.widget());
+        self.table = table;
+        if in_table {
+            self.apply_ui_mode_internal("table");
+        } else {
+            let page = if self.sidebar_layout { SIDEBAR_PAGE } else { 0 };
+            StackedWidget::set_current_index(&self.stack, page);
+        }
     }
 
     // ================= Idle fade =================
