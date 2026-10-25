@@ -15,6 +15,7 @@ autostart.rs             — Windows registry / macOS LaunchAgent
 logger.rs                — logging setup, open log directory
 memory.rs                — process working-set trimming
 pace.rs                  — time and pace helpers for the usage table
+agy_rows.rs              — agy row order (agy_order / row_order), port of core/agy_rows.py
 providers/
   mod.rs                 — provider registry
   base.rs                — UsageMetrics, Provider trait, helpers
@@ -24,8 +25,12 @@ providers/
   stub.rs                — test-only stub provider
 ui/
   mod.rs                 — UI module root
-  hud_window.rs          — main HUD window (header, cards/table stack, ghost mode)
-  provider_card.rs       — provider metric card
+  hud_window.rs          — main HUD window (header, cards/table/sidebar stack, ghost mode, sidebar docking, snap, resize, idle fade)
+  sidebar.rs             — sidebar style: strip / panel / flyout tiles (port of ui/sidebar.py)
+  dock_geometry.rs       — pure dock / snap / scale geometry (port of ui/dock_geometry.py)
+  gauge.rs               — green-to-red gauge colours and GaugeBar (port of ui/gauge.py)
+  brand.rs               — service identity colours
+  provider_card.rs       — provider metric card (gauge bars, drag-reorderable rows)
   usage_table.rs         — usage table view
   styles.rs              — style constants
   tray_icon.rs           — system tray icon
@@ -35,6 +40,10 @@ docs/qt_parity/         — Qt parity contract and specs
 tests/                  — HUD-specific comparison tests against PySide6 and their recorded data
 tools/                  — PySide6 probes, measurement and audit scripts
 ```
+
+## Sidebar style
+
+`ui_mode = "sidebar"` is selectable from the UI Style menu (the Classic Cards style is still the default here; the Python HUD retired it). The bar docks to a screen edge (`sidebar_edge`, `sidebar_offset`, or a free `sidebar_x`/`sidebar_y` when the edge is `none`), snaps to edges and corners when dragged, resizes by dragging any edge or corner or with Ctrl+wheel (`sidebar_scale`, 0.6–2.0), shows tiles (`strip`) or full cards (`panel`) per `sidebar_state`, opens a flyout on hover or click, and lets you reorder tiles (press-hold and drag; `provider_order`) and card rows (drag a row; `row_order`, `agy_order`). While idle it dims to `sidebar_idle_level` of the chosen opacity after `sidebar_idle_delay_ms` (`sidebar_idle_fade`). The keys, their names and defaults are those of the Python `config.json`, so the two builds share one file.
 
 ## Features
 
