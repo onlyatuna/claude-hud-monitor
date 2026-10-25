@@ -191,7 +191,10 @@ fn a_resize_is_saved_once_with_the_size_the_window_has() {
     // 180-300 ms, longer than the 250 ms deadline, so a burst here would legitimately save per
     // resize. The restart/coalescing semantics are `config.rs::test_resize_debounce_*`.
     let f = fx();
-    resize_to(&f, 430, 530);
+    // Physical pixels, large enough that the window stays above the full table's minimum (380x280
+    // logical) at any display scale; a smaller window collapses to the dial row and is stored under
+    // the collapsed keys (`a_size_below_the_minimum_is_stored_clamped`).
+    resize_to(&f, 860, 640);
     wait_until(|| f.hud.debouncer.save_count() > 0);
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(f.hud.debouncer.save_count(), 1);
@@ -203,7 +206,7 @@ fn a_resize_is_saved_once_with_the_size_the_window_has() {
 fn the_debounced_save_holds_the_latest_position_and_size() {
     let f = fx();
     move_to(&f, 300, 40);
-    resize_to(&f, 450, 540);
+    resize_to(&f, 900, 660);
     move_to(&f, 310, 45);
     wait_until(|| f.hud.debouncer.save_count() > 0);
     assert_eq!(stored(&f), expected(&f));
