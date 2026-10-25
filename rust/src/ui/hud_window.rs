@@ -15,6 +15,7 @@ use ferrokit_core::object::{register_owned_qobject, ObjectData, ObjectDataMut, O
 use ferrokit_core::timer::Timer;
 use ferrokit_core::QObject;
 use ferrokit_gui::geometry::primitives::{Margins, Point, Rect, RectF};
+use ferrokit_gui::geometry::Region;
 use ferrokit_gui::paint::{Brush, RenderHint};
 use ferrokit_platform::backdrop::BackdropType;
 use ferrokit_platform::cursor::CursorShape;
@@ -33,7 +34,11 @@ use super::provider_card::ProviderCardWidget;
 use super::sidebar::{Orientation, Scheme, SidebarWidget, State, DEFAULT_ORDER};
 use super::UiThread;
 use super::styles::{get_theme, Theme};
-use super::usage_table::UsageTable;
+use super::table_layout::{
+    compact_min_size, table_state, COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W,
+};
+use super::round_mask::rounded_rects;
+use super::usage_table::{TableViews, UsageTable, PROVIDER_ORDER};
 use crate::config::{
     Config, ConfigManager, ResizeDebouncer, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH,
     DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH, DEFAULT_VERTICAL_HEIGHT, DEFAULT_VERTICAL_WIDTH,
@@ -44,6 +49,48 @@ use crate::providers::base::UsageMetrics;
 use crate::providers::Provider;
 use crate::refresh_controller::RefreshController;
 
+/// The root layout's margins and spacing: `(12, 8, 12, 10)` and 6 for the full table.
+const FULL_MARGINS: (i32, i32, i32, i32) = (12, 8, 12, 10);
+const FULL_SPACING: i32 = 6;
+
+/// Smallest table window: it holds the collapsed dial row, and the full table may be dragged down to it
+/// (Python `compact_min_size(len(self.table.columns))`).
+fn table_min_size() -> (i32, i32) {
+    compact_min_size(PROVIDER_ORDER.len() as i32)
+}
+
+/// Python `_saved_table_size`: the remembered window size of the collapsed or the full table; an
+/// undersized value falls back to the default.
+fn saved_table_size(cfg: &Config, compact: bool) -> (i32, i32) {
+    if compact {
+        let (min_w, min_h) = table_min_size();
+        let (w, h) = (cfg.table_compact_width as i32, cfg.table_compact_height as i32);
+        (
+            if w >= min_w { w } else { DEF_COMPACT_W },
+            if h >= min_h { h } else { DEF_COMPACT_H },
+        )
+    } else {
+        let (w, h) = (cfg.table_width, cfg.table_height);
+        (
+            if w >= MIN_TABLE_WIDTH { w } else { DEFAULT_TABLE_WIDTH } as i32,
+            if h >= MIN_TABLE_HEIGHT { h } else { DEFAULT_TABLE_HEIGHT } as i32,
+        )
+    }
+}
+
+/// Python `_persist_geometry`'s table size: into the collapsed or the full keys, never below the minimum.
+fn apply_table_size(cfg: &mut Config, width: i32, height: i32) {
+    let (w, h) = (width as u32, height as u32);
+    if cfg.table_compact {
+        let (min_w, min_h) = table_min_size();
+        cfg.table_compact_width = w.max(min_w as u32);
+        cfg.table_compact_height = h.max(min_h as u32);
+    } else {
+        cfg.table_width = w.max(MIN_TABLE_WIDTH);
+        cfg.table_height = h.max(MIN_TABLE_HEIGHT);
+    }
+}
+
 /// Python `_persist_geometry`'s size part: the active mode's width and height, never below the
 /// mode's minimum.
 fn apply_size(cfg: &mut Config, width: i32, height: i32) {
@@ -53,14 +100,89 @@ fn apply_size(cfg: &mut Config, width: i32, height: i32) {
     }
     let (w, h) = (width as u32, height as u32);
     if cfg.ui_mode == "table" {
-        cfg.table_width = w.max(MIN_TABLE_WIDTH);
-        cfg.table_height = h.max(MIN_TABLE_HEIGHT);
+        apply_table_size(cfg, width, height);
     } else if cfg.layout_mode == "horizontal" {
         cfg.horizontal_width = w.max(MIN_HORIZONTAL_WIDTH);
         cfg.horizontal_height = h.max(MIN_HORIZONTAL_HEIGHT);
     } else {
         cfg.vertical_width = w.max(MIN_VERTICAL_WIDTH);
         cfg.vertical_height = h.max(MIN_VERTICAL_HEIGHT);
+    }
+}
+
+/// What the header and the root layout look like around the table: the collapsed dial row hides the
+/// header widgets and shrinks the margins (Python `_set_table_compact`, `_sync_header`,
+/// `_sync_table_state`). Cloneable so the window's resize handler can run it without the HUD.
+#[derive(Clone)]
+struct TableChrome {
+    config: Arc<Mutex<Config>>,
+    views: TableViews,
+    root: WidgetRef,
+    /// Status dot, title, time.
+    header: [WidgetRef; 3],
+    ghost: WidgetRef,
+}
+
+impl TableChrome {
+    /// Python `_sync_header`: the collapsed table shows no header widgets.
+    fn sync_header(&self) {
+        let (in_table, click_through) = {
+            let cfg = self.config.lock();
+            (cfg.ui_mode == "table", cfg.click_through)
+        };
+        let show = !(in_table && self.views.is_compact());
+        for w in &self.header {
+            w.borrow().set_visible(show);
+        }
+        self.ghost.borrow().set_visible(show && click_through);
+    }
+
+    fn set_margins(&self, compact: bool) {
+        let (m, spacing) = if compact {
+            ((COMPACT_MARGIN, COMPACT_MARGIN, COMPACT_MARGIN, COMPACT_MARGIN), 0)
+        } else {
+            (FULL_MARGINS, FULL_SPACING)
+        };
+        // The resize handler can run while the root is borrowed by a layout pass: skip then, the
+        // layout pass that follows the resize picks the margins up on the next sync.
+        let Ok(mut root) = self.root.try_borrow_mut() else {
+            return;
+        };
+        if let Some(layout) = root.layout_mut() {
+            layout.set_margins(Margins::new(m.0, m.1, m.2, m.3));
+            layout.set_spacing(spacing);
+        }
+    }
+
+    /// Python `_set_table_compact`: collapse the table to one dial per service (or restore it) and
+    /// adapt the window chrome.
+    fn set_compact(&self, compact: bool) {
+        self.views.set_compact(compact);
+        self.set_margins(compact);
+        self.config.lock().table_compact = compact;
+        self.sync_header();
+    }
+
+    /// Python `_sync_table_state`: collapse or expand for the window's new size.
+    fn sync_state(&self, width: i32, height: i32) {
+        if self.config.lock().ui_mode != "table" {
+            return;
+        }
+        let was = self.views.is_compact();
+        let now = table_state(width, height, was);
+        if now != was {
+            self.set_compact(now);
+        }
+    }
+
+    /// Leaving the table style: the full margins and the header again.
+    fn leave_table(&self) {
+        self.set_margins(false);
+        self.sync_header();
+    }
+
+    fn relayout(&self) {
+        self.root.borrow().update_layout();
     }
 }
 
@@ -222,15 +344,97 @@ type TrimFn = Arc<dyn Fn() + Send + Sync>;
 type BackdropFn = fn(&mut Window, BackdropType, bool) -> bool;
 
 /// The backdrop half of Python `_apply_theme` (`hud_window.py:240-252`): table mode asks for the
-/// Acrylic blur only while the window is visible (`self.isVisible() and vibrancy.apply(...)`) and
-/// is vibrant only if that succeeded; cards mode clears the blur (`vibrancy.clear`).
-fn install_backdrop(window: &mut Window, set: BackdropFn, ui_mode: &str, dark: bool) -> bool {
-    if ui_mode == "table" {
+/// Acrylic blur only while the window is visible and the `table_blur` switch is on
+/// (`blur and self.isVisible() and vibrancy.apply(...)`) and is vibrant only if that succeeded;
+/// without the switch, and in cards mode, the blur is cleared (`vibrancy.clear`).
+fn install_backdrop(
+    window: &mut Window,
+    set: BackdropFn,
+    ui_mode: &str,
+    dark: bool,
+    blur: bool,
+) -> bool {
+    if ui_mode == "table" && blur {
         window.is_visible() && set(window, BackdropType::Acrylic, dark)
     } else {
         set(window, BackdropType::None, dark);
         false
     }
+}
+
+/// Python `theme["radius"]` of the table panel, also the window mask's.
+const TABLE_RADIUS: i32 = 12;
+/// Python `_blur_resume_timer.setInterval(220)`.
+const BLUR_RESUME_MS: u64 = 220;
+
+/// Python `vibrancy.mask_needed`: only Windows' Acrylic needs the window clipped to rounded corners.
+fn mask_needed(blur_applied: bool) -> bool {
+    blur_applied && cfg!(windows)
+}
+
+/// Python `_refresh_mask`: clip the table window to rounded corners where native blur would otherwise
+/// show square corners; `key` is `_mask_key`, the `(width, height, radius)` last applied. Works on the
+/// window's root widget, as `Window::set_mask` does.
+fn refresh_mask(
+    root: &WidgetRef,
+    in_table: bool,
+    blur_active: bool,
+    key: &Cell<Option<(i32, i32, i32)>>,
+    size: (i32, i32),
+) {
+    if in_table && mask_needed(blur_active) {
+        let wanted = (size.0, size.1, TABLE_RADIUS);
+        if key.get() != Some(wanted) {
+            let mut region = Region::default();
+            for (x, y, w, h) in rounded_rects(wanted.0, wanted.1, wanted.2) {
+                region = region.united_rect(&Rect::new(x, y, w, h));
+            }
+            root.borrow().set_mask(&region);
+            key.set(Some(wanted));
+        }
+    } else if key.take().is_some() {
+        root.borrow().clear_mask();
+    }
+}
+
+thread_local! {
+    /// The HUD as the window handlers reach it (they hold no `&mut Window`); set by `register_hud`.
+    static HUD: RefCell<std::rc::Weak<RefCell<HUDWindow>>> = const { RefCell::new(std::rc::Weak::new()) };
+}
+
+/// Lets the window's press handler and the blur timer reach the HUD (the Qt `self`).
+pub fn register_hud(hud: &Rc<RefCell<HUDWindow>>) {
+    HUD.with(|h| *h.borrow_mut() = Rc::downgrade(hud));
+}
+
+/// Runs `f` on the registered HUD unless it is already borrowed (a handler re-entered from a HUD
+/// call). Returns whether `f` ran; with no HUD registered there is nothing to retry, so that counts as run.
+fn with_hud(f: impl FnOnce(&mut HUDWindow)) -> bool {
+    let Some(hud) = HUD.with(|h| h.borrow().upgrade()) else {
+        return true;
+    };
+    let ran = match hud.try_borrow_mut() {
+        Ok(mut hud) => {
+            f(&mut hud);
+            true
+        }
+        Err(_) => false,
+    };
+    ran
+}
+
+/// The resume step of the blur pause: runs `resume_blur`, and while the HUD is busy tries again
+/// `BLUR_RESUME_MS` later.
+fn resume_blur_or_retry() {
+    if blur_resume_needs_retry(with_hud(|hud| hud.resume_blur())) {
+        ferrokit_core::timer::Timer::single_shot(BLUR_RESUME_MS, resume_blur_or_retry);
+    }
+}
+
+/// The resume timer is single-shot: when the HUD was busy it must arm itself again, or the blur would
+/// stay suspended for good.
+fn blur_resume_needs_retry(hud_was_available: bool) -> bool {
+    !hud_was_available
 }
 
 pub struct HUDWindow {
@@ -277,6 +481,13 @@ pub struct HUDWindow {
     hud_filter: Option<OwnedObject<HudFilter>>,
     /// The root layout is the sidebar's (no header, no margins) rather than the cards / table one.
     sidebar_layout: bool,
+    chrome: TableChrome,
+    /// Python `_mask_key`.
+    mask_key: Rc<Cell<Option<(i32, i32, i32)>>>,
+    /// Python `_blur_suspended`: the blur is paused while the window is moved or resized.
+    blur_suspended: Rc<Cell<bool>>,
+    /// Python `_blur_resume_timer`.
+    blur_resume_timer: Rc<ferrokit_core::timer::Timer>,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -332,12 +543,9 @@ impl HUDWindow {
                 // docked by `dock_sidebar` right after construction; Python sets no minimum
                 (72, 222, 0, 0)
             } else if cfg.ui_mode == "table" {
-                (
-                    cfg.table_width.max(MIN_TABLE_WIDTH) as i32,
-                    cfg.table_height.max(MIN_TABLE_HEIGHT) as i32,
-                    MIN_TABLE_WIDTH as i32,
-                    MIN_TABLE_HEIGHT as i32,
-                )
+                let (w, h) = saved_table_size(&cfg, cfg.table_compact);
+                let (min_w, min_h) = table_min_size();
+                (w, h, min_w, min_h)
             } else if cfg.layout_mode == "horizontal" {
                 (
                     cfg.horizontal_width.max(MIN_HORIZONTAL_WIDTH) as i32,
@@ -401,11 +609,13 @@ impl HUDWindow {
         // The window is not shown yet, so table mode starts on the solid panel; `show` installs the
         // blur (Python: `showEvent` -> `_apply_theme`).
         let set_backdrop: BackdropFn = Window::set_backdrop;
+        let table_blur = config.lock().table_blur;
         let vibrant = Rc::new(Cell::new(install_backdrop(
             &mut window,
             set_backdrop,
             &ui_mode,
             dark,
+            table_blur,
         )));
         let sheet = style_sheet_for(&ui_mode, dark);
         window.set_style_sheet(sheet);
@@ -501,10 +711,27 @@ impl HUDWindow {
         StackedWidget::set_current_index(&stack, active_index);
 
         // Root layout
-        let root_layout = Self::build_root_layout(ui_mode == "sidebar", &header, &stack);
+        let compact_start = ui_mode == "table" && config.lock().table_compact;
+        let mut root_layout = Self::build_root_layout(ui_mode == "sidebar", &header, &stack);
+        if compact_start {
+            let m = COMPACT_MARGIN;
+            root_layout.set_margins(Margins::new(m, m, m, m));
+            root_layout.set_spacing(0);
+        }
         let root = window.root_widget();
         install_panel_painter(&root, &theme, Arc::clone(&config), Rc::clone(&vibrant));
         root.borrow_mut().set_layout(Box::new(root_layout));
+        let chrome = TableChrome {
+            config: Arc::clone(&config),
+            views: table.views(),
+            root: Rc::clone(&root),
+            header: [status_dot.clone(), title_label.clone(), time_label.clone()],
+            ghost: ghost_label.clone(),
+        };
+        if ui_mode == "table" {
+            table.set_compact(compact_start);
+        }
+        chrome.sync_header();
         // Connect frameless window dragging and edge resizing
         let hwnd = window.native_handle();
         let cfg_move = Arc::clone(&config);
@@ -541,6 +768,15 @@ impl HUDWindow {
             let _ = shape;
         });
 
+        let mask_key: Rc<Cell<Option<(i32, i32, i32)>>> = Rc::new(Cell::new(None));
+        let blur_suspended = Rc::new(Cell::new(false));
+        let blur_resume_timer = Rc::new(ferrokit_core::timer::Timer::new());
+        blur_resume_timer.set_single_shot(true);
+        blur_resume_timer.set_interval(BLUR_RESUME_MS);
+        blur_resume_timer
+            .timeout
+            .connect(move |()| resume_blur_or_retry());
+
         let cfg_press = Arc::clone(&config);
         window.set_mouse_press_handler(move |pos, button| {
             if button == ferrokit_platform::MouseButton::Left {
@@ -555,9 +791,11 @@ impl HUDWindow {
                     ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked)
                 };
                 if !edges.is_empty() {
+                    with_hud(|hud| hud.suspend_blur());
                     ferrokit_platform::window::post_system_resize(hwnd, edges);
                     return true;
                 } else if !locked {
+                    with_hud(|hud| hud.suspend_blur());
                     ferrokit_platform::window::post_system_move(hwnd);
                     return true;
                 }
@@ -566,6 +804,12 @@ impl HUDWindow {
         });
         let cfg_resize = Arc::clone(&config);
         let debouncer_resize = Arc::clone(&debouncer);
+        let chrome_resize = chrome.clone();
+        let root_resize = Rc::clone(&root);
+        let vibrant_resize = Rc::clone(&vibrant);
+        let mask_key_resize = Rc::clone(&mask_key);
+        let suspended_resize = Rc::clone(&blur_suspended);
+        let timer_resize = Rc::clone(&blur_resume_timer);
         // The window's current geometry as the events report it: the window event handler below
         // cannot reach `window.geometry()`, and Python reads `self.pos()`/`self.size()` instead.
         let geom_now = Rc::new(Cell::new(window.geometry()));
@@ -573,10 +817,14 @@ impl HUDWindow {
         let snap_timer = Timer::new();
         snap_timer.set_single_shot(true);
         snap_timer.set_interval(SIDEBAR_SNAP_DELAY_MS);
-        snap_timer.timeout.connect(|()| with_hud(|hud| hud.finish_sidebar_move()));
+        snap_timer.timeout.connect(|()| {
+            with_hud(|hud| hud.finish_sidebar_move());
+        });
         let fade_timer = Timer::new();
         fade_timer.set_single_shot(true);
-        fade_timer.timeout.connect(|()| with_hud(|hud| hud.apply_opacity()));
+        fade_timer.timeout.connect(|()| {
+            with_hud(|hud| hud.apply_opacity());
+        });
         let sidebar_hud = Rc::new(SidebarHud {
             docking: Cell::new(false),
             resize: RefCell::new(None),
@@ -592,6 +840,22 @@ impl HUDWindow {
             g.width = size.width;
             g.height = size.height;
             geom_resize.set(g);
+            // Python `resizeEvent`: `_sync_table_state`, `_refresh_mask`, the blur pause timer, then the save. The handler runs before the layout pass, so the view the table collapses to is
+            // the one that gets laid out.
+            if !debouncer_resize.is_restoring() {
+                chrome_resize.sync_state(size.width, size.height);
+            }
+            let in_table = cfg_resize.lock().ui_mode == "table";
+            refresh_mask(
+                &root_resize,
+                in_table,
+                vibrant_resize.get(),
+                &mask_key_resize,
+                (size.width, size.height),
+            );
+            if suspended_resize.get() {
+                timer_resize.start();
+            }
             if debouncer_resize.is_restoring() {
                 return;
             }
@@ -604,6 +868,8 @@ impl HUDWindow {
             crate::memory::trim_memory,
         )));
         let trim_events = Arc::clone(&trim);
+        let suspended_events = Rc::clone(&blur_suspended);
+        let timer_events = Rc::clone(&blur_resume_timer);
         let cfg_events = Arc::clone(&config);
         let debouncer_events = Arc::clone(&debouncer);
         let hud_state_events = Rc::clone(&sidebar_hud);
@@ -613,6 +879,10 @@ impl HUDWindow {
                 g.x = x;
                 g.y = y;
                 geom_now.set(g);
+                // Python `moveEvent`: a paused blur waits for the movement to stop.
+                if suspended_events.get() {
+                    timer_events.start();
+                }
                 if debouncer_events.is_restoring() {
                     return;
                 }
@@ -677,6 +947,10 @@ impl HUDWindow {
             sidebar_hud: Rc::clone(&sidebar_hud),
             hud_filter: None,
             sidebar_layout: ui_mode == "sidebar",
+            chrome,
+            mask_key,
+            blur_suspended,
+            blur_resume_timer,
         };
         hud.connect_sidebar_signals();
         if ui_mode == "sidebar" {
@@ -764,8 +1038,61 @@ impl HUDWindow {
 
     /// Installs or clears the blur for `ui_mode` and records whether the panel sits on it.
     fn refresh_backdrop(&mut self, ui_mode: &str) {
-        let vibrant = install_backdrop(&mut self.window, self.set_backdrop, ui_mode, self.is_dark);
+        let blur = self.config.lock().table_blur;
+        let vibrant = install_backdrop(
+            &mut self.window,
+            self.set_backdrop,
+            ui_mode,
+            self.is_dark,
+            blur,
+        );
         self.vibrant.set(vibrant);
+        // Python `_apply_theme`: `_blur_active, _blur_suspended = vibrant, False`, then `_refresh_mask()`.
+        self.blur_suspended.set(false);
+        self.refresh_mask(ui_mode == "table");
+    }
+
+    /// Python `_refresh_mask`.
+    fn refresh_mask(&self, in_table: bool) {
+        let g = self.window.geometry();
+        refresh_mask(
+            &self.window.root_widget(),
+            in_table,
+            self.vibrant.get(),
+            &self.mask_key,
+            (g.width, g.height),
+        );
+    }
+
+    /// Python `_suspend_blur`: Acrylic makes dragging and resizing stutter, so drop the blur until the
+    /// movement stops.
+    fn suspend_blur(&mut self) {
+        if !self.vibrant.get() || self.config.lock().ui_mode != "table" {
+            return;
+        }
+        if !self.blur_suspended.get() {
+            self.blur_suspended.set(self.window.suspend_backdrop());
+        }
+        if self.blur_suspended.get() {
+            self.blur_resume_timer.start();
+        }
+    }
+
+    /// Python `_resume_blur`.
+    fn resume_blur(&mut self) {
+        if self.blur_suspended.get() && self.vibrant.get() {
+            self.window.resume_backdrop();
+        }
+        self.blur_suspended.set(false);
+    }
+
+    /// Python `toggle_table_blur`: the `table_blur` switch, applied at once.
+    pub fn toggle_table_blur(&mut self) {
+        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
+            cfg.table_blur = !cfg.table_blur;
+        });
+        self.set_theme(self.is_dark);
+        self.window.render_and_present();
     }
 
     pub fn hide(&mut self) {
@@ -837,8 +1164,9 @@ impl HUDWindow {
     pub fn set_click_through(&mut self, enabled: bool) {
         self.is_click_through = enabled;
         self.window.set_click_through(enabled);
-        self.ghost_label.borrow_mut().set_visible(enabled);
         self.config.lock().click_through = enabled;
+        // Python `_sync_header`: the ghost shows only where the header does.
+        self.chrome.sync_header();
         self.window.render_and_present();
     }
 
@@ -866,8 +1194,7 @@ impl HUDWindow {
                 cfg.window_x = Some(geom.x);
                 cfg.window_y = Some(geom.y);
                 if old_mode == "table" {
-                    cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
-                    cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+                    apply_table_size(cfg, geom.width, geom.height);
                 } else if old_layout == "horizontal" {
                     cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
                     cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
@@ -918,13 +1245,13 @@ impl HUDWindow {
                 .set_size_policy(Self::stack_policy(true));
             set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
             self.layout_toggle_btn.borrow().set_visible(false);
-            self.window
-                .set_minimum_size(MIN_TABLE_WIDTH as i32, MIN_TABLE_HEIGHT as i32);
-            let cfg = self.config.lock();
-            (
-                cfg.table_width.max(MIN_TABLE_WIDTH) as i32,
-                cfg.table_height.max(MIN_TABLE_HEIGHT) as i32,
-            )
+            // Python `_rebuild_table`: the collapsed or the full table, as last left.
+            let (min_w, min_h) = table_min_size();
+            self.window.set_minimum_size(min_w, min_h);
+            let compact = self.config.lock().table_compact;
+            self.chrome.set_compact(compact);
+            let size = saved_table_size(&self.config.lock(), compact);
+            size
         } else {
             StackedWidget::set_current_index(&self.stack, 0);
             self.stack
@@ -932,6 +1259,7 @@ impl HUDWindow {
                 .set_size_policy(Self::stack_policy(false));
             set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
             self.layout_toggle_btn.borrow().set_visible(true);
+            self.chrome.leave_table();
             let cfg = self.config.lock();
             if cfg.layout_mode == "horizontal" {
                 self.window
@@ -964,6 +1292,7 @@ impl HUDWindow {
         );
         self.window.set_geometry(Rect::new(nx, ny, w, h));
         self.cards_container.borrow().update_layout();
+        self.chrome.relayout();
         self.republish_all();
         self.apply_opacity();
     }
@@ -979,8 +1308,7 @@ impl HUDWindow {
                 cfg.window_x = Some(geom.x);
                 cfg.window_y = Some(geom.y);
                 if old_mode == "table" {
-                    cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
-                    cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+                    apply_table_size(cfg, geom.width, geom.height);
                 } else if old_layout == "horizontal" {
                     cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
                     cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
@@ -1275,6 +1603,15 @@ impl HUDWindow {
             self.dock_sidebar();
             return;
         }
+        // Python `_reset_geometry`: reset size expands a collapsed table first.
+        let collapsed = {
+            let cfg = self.config.lock();
+            cfg.ui_mode == "table" && self.table.is_compact()
+        };
+        if collapsed {
+            self.chrome.set_compact(false);
+            self.chrome.relayout();
+        }
         let (w, h) = {
             let cfg = self.config.lock();
             if cfg.ui_mode == "table" {
@@ -1440,21 +1777,11 @@ pub fn faded_opacity(base: f32, level: f64, active: bool) -> f32 {
     }
 }
 
-/// Runs `f` on the HUD when it is not borrowed (timers and queued tasks; the HUD lives in
-/// `MAIN_HUD`, as `main.rs` does for its own callbacks).
-pub(crate) fn with_hud(f: impl FnOnce(&mut HUDWindow)) {
-    crate::MAIN_HUD.with(|cell| {
-        if let Some(hud) = cell.borrow().as_ref() {
-            if let Ok(mut hud) = hud.try_borrow_mut() {
-                f(&mut hud);
-            }
-        }
-    });
-}
-
 /// `with_hud` once the event that is being dispatched is done.
 fn with_hud_later(f: impl FnOnce(&mut HUDWindow) + 'static) {
-    ferrokit_widgets::WidgetCommandQueue::post_task(move || with_hud(f));
+    ferrokit_widgets::WidgetCommandQueue::post_task(move || {
+        with_hud(f);
+    });
 }
 
 impl SidebarHud {
@@ -1809,7 +2136,9 @@ impl HUDWindow {
         }
         if self.sidebar.state() == State::Panel {
             self.dock_sidebar();
-            Timer::single_shot(0, || with_hud(|hud| hud.settle_sidebar()));
+            Timer::single_shot(0, || {
+                with_hud(|hud| hud.settle_sidebar());
+            });
         }
     }
 
@@ -1994,6 +2323,83 @@ impl Drop for HUDWindow {
         }
         self.sidebar.close_flyout();
         self.debouncer.shutdown();
+    }
+}
+
+/// The pure size rules of the collapsible table (no window involved).
+#[cfg(test)]
+mod table_size_tests {
+    use super::*;
+
+    #[test]
+    fn a_busy_hud_makes_the_resume_timer_arm_itself_again() {
+        assert!(blur_resume_needs_retry(false));
+        assert!(!blur_resume_needs_retry(true));
+        // No HUD registered (or the borrow free) counts as run: `with_hud` returns true.
+        assert!(with_hud(|_| unreachable!()));
+    }
+
+    fn table_cfg(compact: bool) -> Config {
+        Config {
+            ui_mode: "table".to_string(),
+            table_compact: compact,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn full_and_collapsed_sizes_are_stored_under_their_own_keys() {
+        let mut cfg = table_cfg(false);
+        apply_size(&mut cfg, 500, 400);
+        assert_eq!((cfg.table_width, cfg.table_height), (500, 400));
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (240, 96)
+        );
+
+        cfg.table_compact = true;
+        apply_size(&mut cfg, 300, 120);
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (300, 120)
+        );
+        assert_eq!((cfg.table_width, cfg.table_height), (500, 400), "survives");
+    }
+
+    #[test]
+    fn stored_sizes_never_go_below_the_minimum_of_their_view() {
+        let mut cfg = table_cfg(false);
+        apply_size(&mut cfg, 10, 10);
+        assert_eq!((cfg.table_width, cfg.table_height), (380, 280));
+        cfg.table_compact = true;
+        apply_size(&mut cfg, 10, 10);
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (174, 62)
+        );
+    }
+
+    #[test]
+    fn saved_sizes_fall_back_to_the_defaults_when_undersized() {
+        let mut cfg = table_cfg(false);
+        cfg.table_width = 100;
+        cfg.table_height = 400;
+        assert_eq!(saved_table_size(&cfg, false), (450, 400));
+        cfg.table_width = 500;
+        cfg.table_height = 200;
+        assert_eq!(saved_table_size(&cfg, false), (500, 350));
+
+        cfg.table_compact_width = 100;
+        cfg.table_compact_height = 70;
+        assert_eq!(saved_table_size(&cfg, true), (240, 70));
+        cfg.table_compact_width = 200;
+        cfg.table_compact_height = 30;
+        assert_eq!(saved_table_size(&cfg, true), (200, 96));
+    }
+
+    #[test]
+    fn the_table_window_may_shrink_to_the_collapsed_minimum() {
+        assert_eq!(table_min_size(), (174, 62));
     }
 }
 

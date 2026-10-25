@@ -48,36 +48,7 @@ pub fn get_progress_color(percent: f64, dark: bool) -> Color {
 
 #[allow(dead_code)]
 pub fn provider_accent_color(provider_id: &str, dark: bool) -> Color {
-    match provider_id {
-        "claude" => {
-            if dark {
-                Color::from_rgba8(56, 189, 248, 255)
-            } else {
-                Color::from_rgba8(3, 105, 161, 255)
-            }
-        }
-        "agy" => {
-            if dark {
-                Color::from_rgba8(16, 185, 129, 255)
-            } else {
-                Color::from_rgba8(4, 120, 87, 255)
-            }
-        }
-        "codex" => {
-            if dark {
-                Color::from_rgba8(168, 85, 247, 255)
-            } else {
-                Color::from_rgba8(126, 34, 206, 255)
-            }
-        }
-        _ => {
-            if dark {
-                Color::from_rgba8(56, 189, 248, 255)
-            } else {
-                Color::from_rgba8(3, 105, 161, 255)
-            }
-        }
-    }
+    brand_color(provider_id, dark)
 }
 
 pub fn default_provider_name(provider_id: &str) -> &'static str {

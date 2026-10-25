@@ -173,11 +173,16 @@ fn a_size_below_the_minimum_is_stored_clamped() {
     // The HUD's own minimum keeps the OS from sending such a size; lift it to deliver one.
     f.hud.window.set_minimum_size(1, 1);
     resize_to(&f, 50, 40);
+    // Below the full table's minimum the table collapses to its dial row, and the collapsed size is
+    // stored (clamped to the collapsed minimum) under its own keys; the full size is left alone.
+    let (min_w, min_h) = crate::ui::table_layout::compact_min_size(3);
     let c = f.cfg.lock();
+    assert!(c.table_compact);
     assert_eq!(
-        (c.table_width, c.table_height),
-        (MIN_TABLE_WIDTH, MIN_TABLE_HEIGHT)
+        (c.table_compact_width, c.table_compact_height),
+        (min_w as u32, min_h as u32)
     );
+    assert!(c.table_width >= MIN_TABLE_WIDTH && c.table_height >= MIN_TABLE_HEIGHT);
 }
 
 #[test]

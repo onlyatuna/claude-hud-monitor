@@ -7,7 +7,7 @@
 //!   - outer ring = weekly usage
 //!   - pace tick  = even-pace benchmark
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::rc::Rc;
@@ -47,12 +47,69 @@ fn join_tip(parts: &[&str]) -> String {
         .join("\n")
 }
 
+/// Python `PROVIDER_NAMES`.
+fn display_name(provider_id: &str) -> &str {
+    match provider_id {
+        "claude" => "Claude Code",
+        "codex" => "Codex",
+        "agy" => "Antigravity",
+        other => other,
+    }
+}
+
+/// Python `ProviderColumn._compact_tip`: everything the collapsed view no longer shows, in one tooltip.
+fn compact_tip(provider_id: &str, data: &UsageMetrics, tip1: &str, tip2: &str) -> String {
+    let mut lines = vec![display_name(provider_id).to_string()];
+    for (label, text, reset, countdown, run_out, with_day) in [
+        (
+            "5 小時",
+            &data.metric1_text,
+            data.metric1_reset,
+            format_countdown_hm(data.metric1_reset),
+            tip1,
+            false,
+        ),
+        (
+            "1 週",
+            &data.metric2_text,
+            data.metric2_reset,
+            format_countdown_dhm(data.metric2_reset),
+            tip2,
+            true,
+        ),
+    ] {
+        lines.push(format!(
+            "{label}  {text}  重設 {}  剩餘 {countdown}",
+            format_reset_time(reset, with_day)
+        ));
+        if !run_out.is_empty() {
+            lines.push(format!("  {run_out}"));
+        }
+    }
+    if data.stale {
+        let stamp = match data.last_success {
+            Some(t) => t
+                .with_timezone(&chrono::Local)
+                .format("%m/%d %H:%M:%S")
+                .to_string(),
+            None => "--".to_string(),
+        };
+        lines.push(format!("STALE 舊資料 {stamp}"));
+        if let Some(e) = data.error.as_deref().filter(|e| !e.is_empty()) {
+            lines.push(e.to_string());
+        }
+    }
+    lines.join("\n")
+}
+
 fn set_label_text(w: &WidgetRef, text: impl Into<String>) {
     if let Some(lbl) = w.borrow_mut().as_any_mut().downcast_mut::<Label>() {
         lbl.set_text(text);
     }
 }
 
+use super::brand::brand_color;
+use super::table_layout::{COMPACT_DIAL_MIN, COMPACT_GAP};
 use crate::ui::{round_pen, set_label_color};
 
 /// Custom dial drawing matching Python `UsageDial`.
@@ -64,11 +121,17 @@ pub struct UsageDial {
     inner_text: String,
     caption: String,
     muted: bool,
+    /// Python `setMinimumSize(min_size, min_size)`: 84 in the full table, `COMPACT_DIAL_MIN` collapsed.
+    min_size: i32,
 }
 
 impl UsageDial {
     pub fn new(theme: Theme) -> Self {
-        let base = WidgetBase::with_geometry(Rect::new(0, 0, 84, 84));
+        Self::with_min_size(theme, 84)
+    }
+
+    pub fn with_min_size(theme: Theme, min_size: i32) -> Self {
+        let base = WidgetBase::with_geometry(Rect::new(0, 0, min_size, min_size));
         base.set_size_policy(ferrokit_widgets::QSizePolicy::new(
             ferrokit_widgets::Policy::Expanding,
             ferrokit_widgets::Policy::Expanding,
@@ -82,6 +145,7 @@ impl UsageDial {
             inner_text: "--".to_string(),
             caption: String::new(),
             muted: false,
+            min_size,
         }
     }
 
@@ -169,12 +233,12 @@ impl Widget for UsageDial {
         self.base.set_geometry(rect);
     }
     fn size_hint(&self) -> ferrokit_gui::geometry::primitives::Size {
-        ferrokit_gui::geometry::primitives::Size::new(84, 84)
+        ferrokit_gui::geometry::primitives::Size::new(self.min_size, self.min_size)
     }
     fn minimum_size(&self) -> ferrokit_gui::geometry::primitives::Size {
-        // Python `setMinimumSize(84, 84)`: a floor only. The Expanding policy still lets the grid
-        // row and column stretch the dial past it; only a maximum size would cap it.
-        ferrokit_gui::geometry::primitives::Size::new(84, 84)
+        // Python `setMinimumSize(min_size, min_size)`: a floor only. The Expanding policy still lets
+        // the grid row and column stretch the dial past it; only a maximum size would cap it.
+        ferrokit_gui::geometry::primitives::Size::new(self.min_size, self.min_size)
     }
     fn is_visible(&self) -> bool {
         self.base.is_visible()
@@ -922,6 +986,8 @@ pub struct ProviderColumn {
     pub provider_id: String,
     pub theme: Theme,
     pub scheme: String,
+    /// The service's identity colour (name, icon); usage state stays on the scale colours.
+    pub brand: Color,
     pub current_metrics: UsageMetrics,
 
     pub header: WidgetRef,
@@ -931,6 +997,8 @@ pub struct ProviderColumn {
     pub m1_reset: WidgetRef,
     pub m1_countdown: WidgetRef,
     pub dial: WidgetRef,
+    /// The dial of the collapsed view (Python `compact_dial`).
+    pub compact_dial: WidgetRef,
     pub m2_val: WidgetRef,
     pub m2_reset: WidgetRef,
     pub m2_countdown: WidgetRef,
@@ -947,18 +1015,15 @@ impl ProviderColumn {
         top.set_spacing(5);
         top.add_stretch(1);
 
-        let icon = make_widget(ProviderIconWidget::new(provider_id, theme.text, 18.0));
+        let brand = brand_color(provider_id, theme.is_dark);
+        let icon = make_widget(ProviderIconWidget::new(provider_id, brand, 18.0));
         top.add_widget(icon.clone());
 
-        let display_name = match provider_id {
-            "claude" => "Claude Code",
-            "codex" => "Codex",
-            "agy" => "Antigravity",
-            _ => provider_id,
-        };
-        let mut name_lbl = Label::new(display_name);
+        let mut name_lbl = Label::new(display_name(provider_id));
         name_lbl.set_object_name("HeaderName");
         let name = make_widget(name_lbl);
+        // Python `self.name.setStyleSheet(f"color: {self.brand};")`.
+        set_label_color(&name, brand);
         top.add_widget(name.clone());
         top.add_stretch(1);
 
@@ -980,6 +1045,8 @@ impl ProviderColumn {
         let m1_reset = make_value_cell("--:--", "Cell");
         let m1_countdown = make_value_cell("--:--", "Cell");
         let dial = make_widget(UsageDial::new(theme.clone()));
+        // The collapsed view's dial (Python `compact_dial`).
+        let compact_dial = make_widget(UsageDial::with_min_size(theme.clone(), COMPACT_DIAL_MIN));
         let m2_val = make_value_cell("--", "Pill");
         let m2_reset = make_value_cell("--:--", "Cell");
         let m2_countdown = make_value_cell("--:--:--", "Cell");
@@ -988,6 +1055,7 @@ impl ProviderColumn {
             provider_id: provider_id.to_string(),
             theme,
             scheme: scheme.to_string(),
+            brand,
             current_metrics: UsageMetrics {
                 provider_id: provider_id.to_string(),
                 ..Default::default()
@@ -999,6 +1067,7 @@ impl ProviderColumn {
             m1_reset,
             m1_countdown,
             dial,
+            compact_dial,
             m2_val,
             m2_reset,
             m2_countdown,
@@ -1008,24 +1077,52 @@ impl ProviderColumn {
     pub fn set_theme(&mut self, theme: Theme, scheme: &str) {
         self.theme = theme.clone();
         self.scheme = scheme.to_string();
+        // Python rebuilds the table on a theme change, which recomputes the brand colour.
+        self.brand = brand_color(&self.provider_id, theme.is_dark);
+        set_label_color(&self.name, self.brand);
         if let Some(ic) = self
             .icon
             .borrow_mut()
             .as_any_mut()
             .downcast_mut::<ProviderIconWidget>()
         {
-            ic.set_color(theme.text);
+            ic.set_color(self.brand);
         }
+        for dial in [&self.dial, &self.compact_dial] {
+            if let Some(d) = dial.borrow_mut().as_any_mut().downcast_mut::<UsageDial>() {
+                d.set_theme(theme.clone());
+            }
+        }
+        let metrics = self.current_metrics.clone();
+        self.update_metrics(&metrics);
+    }
+
+    /// Python `_set_dials`: the full table's dial and the collapsed one show the same values; the
+    /// collapsed one has no room for the window caption.
+    fn set_dials(
+        &self,
+        inner: (Option<f64>, Option<f64>, Color),
+        inner_text: &str,
+        outer: (Option<f64>, Option<f64>, Color),
+        caption: impl Into<String>,
+        muted: bool,
+    ) {
         if let Some(d) = self
             .dial
             .borrow_mut()
             .as_any_mut()
             .downcast_mut::<UsageDial>()
         {
-            d.set_theme(theme);
+            d.set_values(inner, inner_text, outer, caption, muted);
         }
-        let metrics = self.current_metrics.clone();
-        self.update_metrics(&metrics);
+        if let Some(d) = self
+            .compact_dial
+            .borrow_mut()
+            .as_any_mut()
+            .downcast_mut::<UsageDial>()
+        {
+            d.set_values(inner, inner_text, outer, "", muted);
+        }
     }
 
     pub fn update_metrics(&mut self, data: &UsageMetrics) {
@@ -1068,21 +1165,18 @@ impl ProviderColumn {
                 ic.set_color(self.theme.text3);
             }
             set_label_text(&self.badge, "OFFLINE");
-            if let Some(d) = self
-                .dial
-                .borrow_mut()
-                .as_any_mut()
-                .downcast_mut::<UsageDial>()
-            {
-                d.set_values(
-                    (None, None, Color::TRANSPARENT),
-                    "ERR",
-                    (None, None, Color::TRANSPARENT),
-                    "",
-                    true,
-                );
-            }
+            self.set_dials(
+                (None, None, Color::TRANSPARENT),
+                "ERR",
+                (None, None, Color::TRANSPARENT),
+                "",
+                true,
+            );
             self.dial.borrow_mut().set_tool_tip(error_tip);
+            let name = display_name(&self.provider_id);
+            self.compact_dial
+                .borrow_mut()
+                .set_tool_tip(&join_tip(&[name, error_tip]));
             set_label_text(&self.m2_val, "--");
             // Python `self.m2_val.setStyleSheet("")`: back to the sheet's colour.
             self.m2_val.borrow().set_style_sheet("");
@@ -1093,13 +1187,14 @@ impl ProviderColumn {
             return;
         }
 
+        // Python `self.icon.setEnabled(True)`: the glyph is back in the service colour.
         if let Some(ic) = self
             .icon
             .borrow_mut()
             .as_any_mut()
             .downcast_mut::<ProviderIconWidget>()
         {
-            ic.set_color(self.theme.text);
+            ic.set_color(self.brand);
         }
 
         let badge_text = if data.stale {
@@ -1158,21 +1253,13 @@ impl ProviderColumn {
             scale_colors(&self.theme, data.metric2_val)
         };
 
-        let cap1 = window_caption(&data.metric1_title, "5H");
-        if let Some(d) = self
-            .dial
-            .borrow_mut()
-            .as_any_mut()
-            .downcast_mut::<UsageDial>()
-        {
-            d.set_values(
-                (data.metric1_val, mark1, fill1),
-                &data.metric1_text,
-                (data.metric2_val, mark2, fill2),
-                cap1,
-                false,
-            );
-        }
+        self.set_dials(
+            (data.metric1_val, mark1, fill1),
+            &data.metric1_text,
+            (data.metric2_val, mark2, fill2),
+            window_caption(&data.metric1_title, "5H"),
+            false,
+        );
 
         let mut pct_text = data.metric2_text.replace("%", " %");
         let cap2 = window_caption(&data.metric2_title, "7D");
@@ -1209,6 +1296,30 @@ impl ProviderColumn {
         self.dial
             .borrow_mut()
             .set_tool_tip(&join_tip(&[&dial1, &dial2, stale_tip]));
+        let tip = compact_tip(&self.provider_id, data, &tip1, &tip2);
+        self.compact_dial.borrow_mut().set_tool_tip(&tip);
+    }
+}
+
+/// The full table and the collapsed dial row, and which of the two shows (Python
+/// `UsageTable._compact`, `full_view`, `compact_view`). Cloneable: the window's resize handler holds
+/// one to flip the view while the table itself is owned elsewhere.
+#[derive(Clone)]
+pub struct TableViews {
+    full: WidgetRef,
+    compact_view: WidgetRef,
+    compact: Rc<Cell<bool>>,
+}
+
+impl TableViews {
+    pub fn is_compact(&self) -> bool {
+        self.compact.get()
+    }
+
+    pub fn set_compact(&self, compact: bool) {
+        self.compact.set(compact);
+        self.full.borrow().set_visible(!compact);
+        self.compact_view.borrow().set_visible(compact);
     }
 }
 
@@ -1220,6 +1331,7 @@ pub struct UsageTable {
     pub sep1: WidgetRef,
     pub sep2: WidgetRef,
     pub glyphs: Vec<WidgetRef>,
+    views: TableViews,
 }
 
 impl UsageTable {
@@ -1314,7 +1426,42 @@ impl UsageTable {
         grid.set_row_minimum_height(2, 18);
         grid.set_row_stretch(5, 1);
 
-        container.borrow_mut().set_layout(Box::new(grid));
+        // Python: the grid lives in `full_view`; `compact_view` (one dial per service) sits next
+        // to it in a margin-free vertical layout and only one of the two is visible.
+        let full_view = make_widget(EmptyWidget::new());
+        full_view.borrow_mut().set_layout(Box::new(grid));
+        full_view
+            .borrow_mut()
+            .set_size_policy(ferrokit_widgets::QSizePolicy::new(
+                ferrokit_widgets::Policy::Expanding,
+                ferrokit_widgets::Policy::Expanding,
+            ));
+
+        let compact_view = make_widget(EmptyWidget::new());
+        let mut row = BoxLayout::horizontal();
+        row.set_margins(Margins::new(0, 0, 0, 0));
+        row.set_spacing(COMPACT_GAP);
+        for pid in PROVIDER_ORDER {
+            if let Some(c) = columns.get(pid) {
+                row.add_widget_with_stretch(c.compact_dial.clone(), 1);
+            }
+        }
+        compact_view.borrow_mut().set_layout(Box::new(row));
+        compact_view
+            .borrow_mut()
+            .set_size_policy(ferrokit_widgets::QSizePolicy::new(
+                ferrokit_widgets::Policy::Expanding,
+                ferrokit_widgets::Policy::Expanding,
+            ));
+        compact_view.borrow().set_visible(false);
+
+        let mut outer = BoxLayout::vertical();
+        outer.set_margins(Margins::new(0, 0, 0, 0));
+        outer.set_spacing(0);
+        outer.add_widget(full_view.clone());
+        outer.add_widget(compact_view.clone());
+
+        container.borrow_mut().set_layout(Box::new(outer));
         container
             .borrow_mut()
             .set_style_sheet(crate::ui::styles::get_table_stylesheet(theme.is_dark));
@@ -1328,11 +1475,40 @@ impl UsageTable {
             sep1,
             sep2,
             glyphs,
+            views: TableViews {
+                full: full_view,
+                compact_view,
+                compact: Rc::new(Cell::new(false)),
+            },
         }
     }
 
     pub fn widget(&self) -> WidgetRef {
         self.container.clone()
+    }
+
+    pub fn is_compact(&self) -> bool {
+        self.views.is_compact()
+    }
+
+    /// Python `UsageTable.set_compact`: collapse to one dial per service (or restore the full table).
+    pub fn set_compact(&self, compact: bool) {
+        self.views.set_compact(compact);
+    }
+
+    /// A handle that flips the view without borrowing the table (the window's resize handler).
+    pub fn views(&self) -> TableViews {
+        self.views.clone()
+    }
+
+    /// Python `compact_dials`: the collapsed row, in column order.
+    #[cfg(test)]
+    pub fn compact_dials(&self) -> Vec<WidgetRef> {
+        PROVIDER_ORDER
+            .iter()
+            .filter_map(|pid| self.columns.get(*pid))
+            .map(|c| c.compact_dial.clone())
+            .collect()
     }
 
     pub fn set_theme(&mut self, theme: Theme, scheme: &str) {
@@ -1757,6 +1933,9 @@ mod tests {
         let table = table_mode_table();
         let col = table.columns.get("claude").unwrap();
         assert_eq!(col.name.borrow().size_hint().width, 86);
+        // Flush the table's pending layout first, or it runs after the header is placed and
+        // re-lays the header out inside the unshown, zero-sized table.
+        ferrokit_widgets::LayoutScheduler::activate_pending();
         col.header
             .borrow_mut()
             .set_geometry(Rect::new(0, 0, 110, 31));
@@ -1821,5 +2000,113 @@ mod tests {
             measured.map(|(_, _, hint)| (hint.width, hint.height)),
             [(71, 20), (121, 20), (89, 20)]
         );
+    }
+
+    fn tip_of(w: &WidgetRef) -> String {
+        w.borrow().tool_tip().to_string()
+    }
+
+    #[test]
+    fn collapsing_swaps_the_views_and_expanding_restores_them() {
+        let table = UsageTable::new(Theme::dark(), "scale");
+        assert!(!table.is_compact());
+        assert!(table.views.full.borrow().is_visible());
+        assert!(!table.views.compact_view.borrow().is_visible());
+
+        table.set_compact(true);
+        assert!(table.is_compact());
+        assert!(!table.views.full.borrow().is_visible());
+        assert!(table.views.compact_view.borrow().is_visible());
+
+        table.views().set_compact(false);
+        assert!(!table.is_compact());
+        assert!(table.views.full.borrow().is_visible());
+        assert!(!table.views.compact_view.borrow().is_visible());
+    }
+
+    #[test]
+    fn collapsed_view_has_one_dial_per_service_in_column_order() {
+        let table = UsageTable::new(Theme::dark(), "scale");
+        let dials = table.compact_dials();
+        assert_eq!(dials.len(), 3);
+        for (dial, pid) in dials.iter().zip(PROVIDER_ORDER) {
+            assert!(Rc::ptr_eq(dial, &table.columns[pid].compact_dial));
+            assert_eq!(dial.borrow().minimum_size().width, COMPACT_DIAL_MIN);
+        }
+        assert_eq!(table.columns["claude"].dial.borrow().minimum_size().width, 84);
+    }
+
+    #[test]
+    fn collapsed_dials_follow_the_full_dials_and_carry_the_details_in_their_tooltip() {
+        let mut table = UsageTable::new(Theme::dark(), "scale");
+        table.update_metrics(&UsageMetrics {
+            provider_id: "codex".to_string(),
+            metric1_val: Some(42.0),
+            metric1_text: "42%".to_string(),
+            metric2_val: Some(10.0),
+            metric2_text: "10%".to_string(),
+            ..Default::default()
+        });
+        let col = &table.columns["codex"];
+        let compact = col.compact_dial.borrow();
+        let compact = compact.as_any().downcast_ref::<UsageDial>().unwrap();
+        assert_eq!(compact.inner_text, "42%");
+        assert_eq!(compact.inner.0, Some(42.0));
+        assert_eq!(compact.outer.0, Some(10.0));
+        assert_eq!(compact.caption, "", "no room for the window caption");
+
+        let tip = tip_of(&col.compact_dial);
+        let lines: Vec<&str> = tip.lines().collect();
+        assert_eq!(lines[0], "Codex");
+        assert!(lines[1].starts_with("5 小時  42%  重設 --:--  剩餘 --:--"), "{tip}");
+        assert!(lines[2].starts_with("1 週  10%  重設 --:--  剩餘 --:--:--"), "{tip}");
+    }
+
+    #[test]
+    fn collapsed_tooltip_lists_stale_state_and_the_error() {
+        let data = UsageMetrics {
+            provider_id: "agy".to_string(),
+            error: Some("timeout".to_string()),
+            stale: true,
+            ..Default::default()
+        };
+        let tip = compact_tip("agy", &data, "照目前速度，重設前不會用完", "");
+        let lines: Vec<&str> = tip.lines().collect();
+        assert_eq!(lines[0], "Antigravity");
+        assert_eq!(lines[2], "  照目前速度，重設前不會用完");
+        assert_eq!(lines[lines.len() - 2], "STALE 舊資料 --");
+        assert_eq!(lines[lines.len() - 1], "timeout");
+    }
+
+    #[test]
+    fn offline_collapsed_dial_is_muted_with_the_error_in_its_tooltip() {
+        let mut table = UsageTable::new(Theme::dark(), "scale");
+        table.update_metrics(&UsageMetrics {
+            provider_id: "agy".to_string(),
+            error: Some("timeout".to_string()),
+            ..Default::default()
+        });
+        let col = &table.columns["agy"];
+        assert_eq!(tip_of(&col.compact_dial), "Antigravity\ntimeout");
+        let compact = col.compact_dial.borrow();
+        let compact = compact.as_any().downcast_ref::<UsageDial>().unwrap();
+        assert!(compact.muted);
+        assert_eq!(compact.inner_text, "ERR");
+    }
+
+    #[test]
+    fn names_and_icons_use_the_brand_colour_and_follow_the_theme() {
+        let mut table = UsageTable::new(Theme::dark(), "scale");
+        for pid in PROVIDER_ORDER {
+            assert_eq!(table.columns[pid].brand, brand_color(pid, true));
+        }
+        table.set_theme(Theme::light(), "scale");
+        for pid in PROVIDER_ORDER {
+            assert_eq!(table.columns[pid].brand, brand_color(pid, false));
+        }
+        let col = &table.columns["claude"];
+        let icon = col.icon.borrow();
+        let icon = icon.as_any().downcast_ref::<ProviderIconWidget>().unwrap();
+        assert_eq!(icon.color, brand_color("claude", false));
     }
 }
