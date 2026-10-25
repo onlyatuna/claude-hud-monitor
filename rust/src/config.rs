@@ -481,7 +481,8 @@ impl ConfigManager {
             cfg.opacity = cfg.opacity.clamp(0.1, 1.0);
         }
         if cfg.refresh_interval_sec < 20 {
-            cfg.refresh_interval_sec = default_refresh_interval();
+            // Python `RefreshController` clamps `max(20, interval)`.
+            cfg.refresh_interval_sec = 20;
         }
         // Python parity (config_manager.py:DEFAULT_CONFIG, hud_window.py:313, 403-424; G11.4.f):
         // coordinate values are preserved as-is. Visibility validation and primary-screen
@@ -548,7 +549,12 @@ impl ConfigManager {
         let _save = SAVE_LOCK.lock();
         let snapshot = {
             let mut cfg = config.lock();
+            let before = serde_json::to_value(&*cfg).ok();
             mutate(&mut cfg);
+            // Python `set`/`set_many` return early when nothing changed.
+            if before.is_some() && before == serde_json::to_value(&*cfg).ok() {
+                return;
+            }
             cfg.clone()
         };
         Self::save_unlocked(&snapshot);
@@ -574,11 +580,24 @@ impl ConfigManager {
                 return;
             }
         }
-        let tmp_path = path.with_extension("tmp");
+        // Unique temp name beside the target (Python `.config-*.tmp`), so two writers never share it.
+        static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let tmp_name = format!(
+            ".config-{}-{}.tmp",
+            std::process::id(),
+            TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        let tmp_path = path.with_file_name(tmp_name);
         match serde_json::to_string_pretty(cfg) {
             Ok(text) => {
-                if let Err(e) = fs::write(&tmp_path, &text) {
+                let written = fs::File::create(&tmp_path).and_then(|mut f| {
+                    use std::io::Write;
+                    f.write_all(text.as_bytes())?;
+                    f.sync_all()
+                });
+                if let Err(e) = written {
                     error!("[Config] Write temp error: {e}");
+                    let _ = fs::remove_file(&tmp_path);
                     return;
                 }
                 if let Err(e) = fs::rename(&tmp_path, path) {
@@ -1257,7 +1276,7 @@ mod tests {
         };
         ConfigManager::sanitize(&mut cfg);
         assert_eq!(cfg.opacity, 0.88);
-        assert_eq!(cfg.refresh_interval_sec, 60);
+        assert_eq!(cfg.refresh_interval_sec, 20);
         // Test non-finite and negative opacity
         let mut cfg_neg = Config {
             opacity: -0.5,

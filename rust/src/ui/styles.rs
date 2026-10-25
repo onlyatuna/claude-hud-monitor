@@ -307,7 +307,7 @@ pub fn get_cards_stylesheet(dark: bool) -> &'static str {
 
         QLabel#Badge {
             background-color: rgba(15, 23, 42, 0.05);
-            border: 1px solid rgba(15, 23, 42, 0.08);
+            border: 1px solid rgba(15, 23, 42, 0.10);
             border-radius: 3px;
             padding: 1px 4px;
             font-size: 9px;

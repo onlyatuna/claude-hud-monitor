@@ -518,6 +518,15 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
     if !raw.is_object() {
         return format_error(now);
     }
+    // Python `raw.get("command", {}).get("data", {})`: present but not an object is a schema error.
+    match raw.get("command") {
+        None => {}
+        Some(Value::Object(command)) => match command.get("data") {
+            None | Some(Value::Object(_)) => {}
+            Some(_) => return format_error(now),
+        },
+        Some(_) => return format_error(now),
+    }
     let from_command = raw.pointer("/command/data/groups");
     let groups = match from_command {
         Some(Value::Array(list)) if !list.is_empty() => Some(list),
@@ -947,6 +956,8 @@ mod tests {
     fn a_body_of_the_wrong_shape_is_a_format_error_not_a_panic() {
         for body in [
             "[]",
+            r#"{"command":null}"#,
+            r#"{"command":{"data":3}}"#,
             r#"{"groups":"x"}"#,
             r#"{"groups":[1]}"#,
             r#"{"groups":[{"name":3}]}"#,

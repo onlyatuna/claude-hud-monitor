@@ -4,7 +4,10 @@
 // Calls https://api.anthropic.com/api/oauth/usage
 // Mirrors Python core/providers/claude_provider.py
 
-use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
+use super::base::{
+    format_error, now_str, object_field, percent_text, percentage, retry_delay, Provider,
+    UsageMetrics,
+};
 use crate::config::Config;
 use chrono::{DateTime, Utc};
 use log::error;
@@ -189,8 +192,14 @@ pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
             .filter(|p| p.credentials_path.exists())
             .collect();
 
-        if let Some(best) = candidates.iter().max_by_key(|p| p.last_activity) {
-            return ((*best).clone(), true);
+        let mut best: Option<&ClaudeProfile> = None;
+        for p in candidates.iter().copied() {
+            if best.is_none_or(|b| p.last_activity > b.last_activity) {
+                best = Some(p);
+            }
+        }
+        if let Some(best) = best {
+            return (best.clone(), true);
         }
 
         if let Some(first) = profiles.first() {
@@ -217,7 +226,7 @@ pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
         p.id.eq_ignore_ascii_case(pref_trimmed)
             || p.short_name.eq_ignore_ascii_case(pref_trimmed)
             || (pref_trimmed.starts_with('.') && p.id.eq_ignore_ascii_case(&pref_trimmed[1..]))
-            || (pref_trimmed == ".claude" && p.id == "default")
+            || (pref_trimmed.eq_ignore_ascii_case(".claude") && p.id == "default")
     });
 
     if let Some(p) = matched {
@@ -239,7 +248,7 @@ pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
         .unwrap_or_else(|| pref_trimmed.to_string());
     (
         ClaudeProfile {
-            id: pref_trimmed.to_string(),
+            id: pref_trimmed.trim_start_matches('.').to_string(),
             display_name: format!("{} (~/{})", pref_trimmed, fallback_name),
             short_name: pref_trimmed.trim_start_matches('.').to_string(),
             dir_path: fallback_dir,
@@ -408,7 +417,7 @@ impl Provider for ClaudeProvider {
                     return UsageMetrics::error_result(
                         "claude",
                         &display_title,
-                        &format!("API 回應異常: HTTP {}", status),
+                        &format!("配額查詢 HTTP {}", status),
                         "http",
                     );
                 }
@@ -440,25 +449,36 @@ impl Provider for ClaudeProvider {
 }
 
 fn parse_claude_response(data: Value, now_str: &str) -> UsageMetrics {
-    let five_hour = data.get("five_hour").cloned().unwrap_or(Value::Null);
-    let seven_day = data.get("seven_day").cloned().unwrap_or(Value::Null);
-    let breakdown = data
-        .get("seven_day_breakdown")
-        .cloned()
-        .unwrap_or(Value::Null);
+    if !data.is_object() {
+        return format_error("claude", "Claude", now_str);
+    }
+    let (Some(five_hour), Some(seven_day), Some(breakdown)) = (
+        object_field(&data, "five_hour"),
+        object_field(&data, "seven_day"),
+        object_field(&data, "seven_day_breakdown"),
+    ) else {
+        return format_error("claude", "Claude", now_str);
+    };
 
     let mut code_pct: Option<f64> = None;
     let mut chat_pct: Option<f64> = None;
 
-    if let Some(rows) = breakdown.get("rows").and_then(|v| v.as_array()) {
-        for r in rows {
-            let key = r.get("key").and_then(|v| v.as_str()).unwrap_or("");
-            let pct_val = r.get("percent").and_then(|v| v.as_f64());
-            if key == "claude_code" {
-                code_pct = percentage(pct_val, 100.0);
-            } else if key == "chat" {
-                chat_pct = percentage(pct_val, 100.0);
-            }
+    let empty = Vec::new();
+    let rows = match breakdown.get("rows") {
+        None => &empty,
+        Some(Value::Array(rows)) => rows,
+        Some(_) => return format_error("claude", "Claude", now_str),
+    };
+    for r in rows {
+        if !r.is_object() {
+            return format_error("claude", "Claude", now_str);
+        }
+        let key = r.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        let pct_val = r.get("percent").and_then(|v| v.as_f64());
+        if key == "claude_code" {
+            code_pct = percentage(pct_val, 100.0);
+        } else if key == "chat" {
+            chat_pct = percentage(pct_val, 100.0);
         }
     }
 
@@ -505,7 +525,7 @@ fn parse_iso_datetime(s: Option<&str>) -> Option<DateTime<Utc>> {
 }
 
 fn parse_retry_after(resp: &ureq::Response) -> Option<f64> {
-    resp.header("Retry-After")?.parse::<f64>().ok()
+    retry_delay(resp.header("Retry-After")?)
 }
 
 #[cfg(test)]
@@ -560,6 +580,19 @@ mod tests {
         let (default_alias, is_auto4) = resolve_active_profile(".claude");
         assert!(!is_auto4);
         assert_eq!(default_alias.id, "default");
+    }
+
+    #[test]
+    fn test_malformed_schema_is_reported() {
+        for bad in [
+            serde_json::json!([]),
+            serde_json::json!({"five_hour": "x"}),
+            serde_json::json!({"seven_day_breakdown": {"rows": [1]}}),
+        ] {
+            let m = parse_claude_response(bad, "10:00:00");
+            assert_eq!(m.error.as_deref(), Some("配額資料格式不相容"));
+            assert_eq!(m.error_code, "schema");
+        }
     }
 
     #[test]

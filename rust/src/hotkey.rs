@@ -43,6 +43,16 @@ pub struct HotkeyRegistration {
 }
 
 impl HotkeyRegistration {
+    /// No registration confirmed and none failed: no backend, or the worker did not report in time.
+    pub fn unconfirmed() -> Self {
+        Self {
+            toggle: HotkeyStatus::Unsupported,
+            toggle_label: String::new(),
+            clickthrough: HotkeyStatus::Unsupported,
+            clickthrough_label: String::new(),
+        }
+    }
+
     /// Python `clickthrough_registered`.
     pub fn clickthrough_registered(&self) -> bool {
         self.clickthrough == HotkeyStatus::Registered
@@ -244,11 +254,17 @@ impl HotkeyManager {
                     )
                 })
                 .map_err(|e| format!("Failed to start hotkey thread: {e}"))?;
-            // The worker reports once both `RegisterHotKey` calls are done (Python waits on
-            // `_ready_event`). The channel closes if the thread ends before reporting.
-            let registration = registered_rx
-                .recv_timeout(Self::START_TIMEOUT)
-                .map_err(|e| format!("hotkey thread registration failed or timed out: {e}"))?;
+            // Python waits up to 1.5 s and carries on when the worker has not reported: nothing is
+            // confirmed registered (so click-through startup stays blocked), but the manager still
+            // exists. A worker that ended without reporting is a real failure.
+            let registration = match registered_rx.recv_timeout(Self::START_TIMEOUT) {
+                Ok(registration) => registration,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    warn!("[Hotkey] registration not confirmed within the start timeout");
+                    HotkeyRegistration::unconfirmed()
+                }
+                Err(e) => return Err(format!("hotkey thread registration failed: {e}")),
+            };
             Ok(Self {
                 registration,
                 toggle_flag,
@@ -263,12 +279,7 @@ impl HotkeyManager {
         {
             warn!("[Hotkey] Global hotkeys not implemented on this platform");
             Ok(Self {
-                registration: HotkeyRegistration {
-                    toggle: HotkeyStatus::Unsupported,
-                    toggle_label: String::new(),
-                    clickthrough: HotkeyStatus::Unsupported,
-                    clickthrough_label: String::new(),
-                },
+                registration: HotkeyRegistration::unconfirmed(),
                 toggle_flag,
                 clickthrough_flag: ct_flag,
                 notify_cb,
@@ -688,5 +699,12 @@ mod tests {
     fn test_hotkey_start_timeout_constant() {
         // Verifies timeout configuration matching Python's 1.5s (_ready_event.wait(timeout=1.5), hotkey.py:116)
         assert_eq!(HotkeyManager::START_TIMEOUT.as_millis(), 1500);
+    }
+
+    #[test]
+    fn test_unconfirmed_registration_is_degraded_not_failed() {
+        let r = HotkeyRegistration::unconfirmed();
+        assert!(!r.clickthrough_registered());
+        assert!(r.failure_notices().is_empty());
     }
 }

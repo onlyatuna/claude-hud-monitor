@@ -252,7 +252,8 @@ pub fn clamp_scale(scale: f64) -> f64 {
         return 1.0;
     }
     let clamped = SCALE_MIN.max(scale.min(SCALE_MAX));
-    (clamped * 10.0).round() / 10.0
+    // Python `round(x, 1)`: correctly rounded decimal of the exact value, ties to even.
+    format!("{clamped:.1}").parse().unwrap_or(clamped)
 }
 
 /// Python `step_scale`.
@@ -505,6 +506,13 @@ mod tests {
 
         assert_eq!(scale_size(64, 68, 1.5), (96, 102));
         assert_eq!(scale_size(64, 68, 0.1), (38, 41));
+    }
+
+    #[test]
+    fn clamp_scale_rounds_like_python_round() {
+        assert_eq!(clamp_scale(0.85), 0.8);
+        assert_eq!(clamp_scale(1.25), 1.2);
+        assert_eq!(clamp_scale(1.35), 1.4);
     }
 
     #[test]

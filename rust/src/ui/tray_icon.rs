@@ -456,6 +456,12 @@ fn build_behaviour(menu: &mut Menu, cfg: &Config) {
     });
 }
 
+thread_local! {
+    /// Profile ids of the last built Claude account submenu, indexed by the action offset, so a
+    /// click selects the profile that was shown even if discovery changed since.
+    static MENU_PROFILE_IDS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Python `hud_menu._build_claude_accounts`.
 fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
     add_submenu(menu, "Claude 帳號 (Claude Account)", cfg, |sub| {
@@ -469,11 +475,11 @@ fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
         };
         add_check(sub, ACTION_CLAUDE_PROFILE_AUTO, &title, is_auto);
         sub.add_separator();
-        for (i, prof) in crate::providers::claude::discover_profiles()
-            .iter()
-            .take(40)
-            .enumerate()
-        {
+        let profiles = crate::providers::claude::discover_profiles();
+        MENU_PROFILE_IDS.with(|ids| {
+            *ids.borrow_mut() = profiles.iter().take(40).map(|p| p.id.clone()).collect();
+        });
+        for (i, prof) in profiles.iter().take(40).enumerate() {
             let selected = !is_auto
                 && (current.eq_ignore_ascii_case(&prof.id)
                     || (current == ".claude" && prof.id == "default"));
@@ -744,9 +750,9 @@ impl HUDTrayIcon {
             }
             id if (ACTION_CLAUDE_PROFILE_BASE..ACTION_CLAUDE_PROFILE_BASE + 100).contains(&id) => {
                 let idx = (id - ACTION_CLAUDE_PROFILE_BASE) as usize;
-                let profiles = crate::providers::claude::discover_profiles();
-                if let Some(prof) = profiles.get(idx) {
-                    hud.set_claude_profile(&prof.id);
+                let id = MENU_PROFILE_IDS.with(|ids| ids.borrow().get(idx).cloned());
+                if let Some(id) = id {
+                    hud.set_claude_profile(&id);
                     self.update_menu_state();
                 }
             }

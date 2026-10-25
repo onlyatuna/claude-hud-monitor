@@ -227,7 +227,7 @@ pub fn window_reset(previous: &RowState, current: &RowState) -> bool {
         else {
             continue;
         };
-        if (*reset - *old_reset).num_seconds() > 600 && val < old_val {
+        if (*reset - *old_reset).num_milliseconds() > 600_000 && val < old_val {
             return true;
         }
     }
@@ -1769,9 +1769,13 @@ impl SidebarWidget {
     }
 
     /// Python `set_dock_edge(edge)`: the edge the bar is docked to (`None` = floating).
-    pub fn set_dock_edge(&self, edge: Option<&str>) {
+    /// An unknown edge name is refused (`None`; Python raises).
+    pub fn set_dock_edge(&self, edge: Option<&str>) -> Option<()> {
+        if !matches!(edge, None | Some("left" | "right" | "top" | "bottom")) {
+            return None;
+        }
         if edge.map(str::to_owned) == *self.inner.dock_edge.borrow() {
-            return;
+            return Some(());
         }
         *self.inner.dock_edge.borrow_mut() = edge.map(str::to_owned);
         let active = self.inner.active.borrow().clone();
@@ -1780,6 +1784,7 @@ impl SidebarWidget {
             self.inner.animation.borrow_mut().animation_mut().stop();
             self.inner.place_flyout(&key);
         }
+        Some(())
     }
 
     /// Python `set_scale`; a non-finite scale is refused (Python raises).
@@ -2339,10 +2344,10 @@ impl SidebarInner {
         self.close_flyout();
         self.pinned.set(pinned);
         *self.pinned_key.borrow_mut() = pinned_key;
-        *self.active.borrow_mut() = Some(key.to_owned());
         let (Some(card), Some(tile)) = (self.card(key).cloned(), self.button_rect(key)) else {
             return;
         };
+        *self.active.borrow_mut() = Some(key.to_owned());
         card.borrow_mut().set_font_scale(1.0); // `_restore_card_style`
         let widget = card.borrow().widget();
         {
@@ -2858,6 +2863,12 @@ mod tests {
         assert!(window_reset(&growth, &rolled));
         let drift = row_state(&data(40.0, now + Duration::hours(5) + Duration::minutes(2)));
         assert!(!window_reset(&rolled, &drift));
+        // 600.5 s later is a reset in Python's float compare
+        let edge = row_state(&data(
+            1.0,
+            now + Duration::hours(5) + Duration::milliseconds(600_500),
+        ));
+        assert!(window_reset(&rolled, &edge));
     }
 
     #[test]

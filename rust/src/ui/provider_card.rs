@@ -606,7 +606,6 @@ impl ProviderCardWidget {
         let mut title_lbl = Label::new(theme_name(provider_id));
         title_lbl.set_font(Font::new("Segoe UI", 9.5).with_weight(FontWeight::Bold));
         let title = make_widget(title_lbl);
-        title.borrow_mut().set_object_name("CardTitle");
         // `self.title.setSizePolicy(Minimum, Preferred)` (`provider_card.py:39`)
         title
             .borrow_mut()

@@ -92,6 +92,33 @@ fn configure_application_policy() {
     ferrokit_gui::application::GuiApplication::set_quit_on_last_window_closed(false);
 }
 
+/// Label text of a smoke-checked widget (empty when the widget is not a label).
+fn smoke_label_text(w: &ferrokit_widgets::WidgetRef) -> String {
+    w.borrow()
+        .as_any()
+        .downcast_ref::<ferrokit_widgets::Label>()
+        .map(|l| l.text().to_string())
+        .unwrap_or_default()
+}
+
+/// Python smoke asserts: after the recovery fetch neither the sidebar card's sub-text nor the
+/// table badge may still show the earlier error.
+fn smoke_recovery_check(hud: &HUDWindow) -> Result<(), &'static str> {
+    let card = hud
+        .sidebar_cards
+        .get("agy")
+        .ok_or("agy card missing")?
+        .borrow();
+    if smoke_label_text(&card.m1_sub).contains("test") {
+        return Err("Cards error survived recovery");
+    }
+    let column = hud.table.columns.get("agy").ok_or("agy column missing")?;
+    if smoke_label_text(&column.badge) == "OFFLINE" {
+        return Err("Table error survived recovery");
+    }
+    Ok(())
+}
+
 /// Offline `--smoke-test` (`python/core/smoke_check.py`). The config save/reload round trip runs
 /// first, inside the isolated directory; a failed round trip returns FAILURE.
 fn run_smoke_test(isolation: &config::SmokeIsolation) -> std::process::ExitCode {
@@ -107,10 +134,16 @@ fn run_smoke_test(isolation: &config::SmokeIsolation) -> std::process::ExitCode 
     let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
     let _app = Application::new(std::env::args().collect());
 
-    let mut hud = HUDWindow::new(config, refresh_ctrl).expect("Failed to initialize HUDWindow");
+    // Python passes `providers={}`: no provider is built, so no credentials load and nothing fetches.
+    let mut hud = HUDWindow::with_providers(
+        Arc::clone(&config),
+        refresh_ctrl,
+        std::collections::HashMap::new(),
+    )
+    .expect("Failed to initialize HUDWindow");
     hud.on_data_fetched(&crate::providers::base::UsageMetrics {
         provider_id: "agy".to_string(),
-        error: Some("test error".to_string()),
+        error: Some("test".to_string()),
         ..Default::default()
     });
     hud.on_data_fetched(&crate::providers::base::UsageMetrics {
@@ -119,8 +152,13 @@ fn run_smoke_test(isolation: &config::SmokeIsolation) -> std::process::ExitCode 
         metric1_text: "20%".to_string(),
         ..Default::default()
     });
+    if let Err(err) = smoke_recovery_check(&hud) {
+        log::error!("Smoke-test failed: {}", err);
+        return std::process::ExitCode::FAILURE;
+    }
     hud.apply_ui_mode("table");
     hud.apply_ui_mode("sidebar");
+    config.lock().color_scheme = "duo".to_string();
     hud.set_theme(true);
     hud.update_clock();
     let _ = ferrokit_core::application::CoreApplication::process_events(false);
@@ -626,6 +664,8 @@ fn main() -> std::process::ExitCode {
     let exit_code = _app.exec();
     clock_timer.stop();
     poll_timer.stop();
+    // `main.py` aboutToQuit: stop the controller so late worker results are discarded.
+    refresh_ctrl.lock().stop();
     let _ = MAIN_HUD.try_with(|cell| {
         if let Ok(mut borrow) = cell.try_borrow_mut() {
             *borrow = None;

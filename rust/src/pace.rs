@@ -97,33 +97,34 @@ pub fn window_caption(title: &str, expected: &str) -> String {
     }
 }
 
+/// Python `re.search(r"(\d+(?:\.\d+)?)\s*([DHM])$", short_window(title))`: a number, optional
+/// whitespace and one uppercase unit at the very end of the title, else `default`.
 pub fn window_seconds(title: &str, default: i64) -> i64 {
-    let short = short_window(title).trim().to_string();
-    if short.is_empty() {
-        return default;
-    }
-
-    let mut num_str = String::new();
-    let mut unit_char = None;
-    for c in short.chars() {
-        if c.is_ascii_digit() || c == '.' {
-            num_str.push(c);
-        } else if c.is_alphabetic() {
-            unit_char = Some(c.to_ascii_uppercase());
+    let short = short_window(title);
+    let mult = match short.chars().last() {
+        Some('D') => 86400.0,
+        Some('H') => 3600.0,
+        Some('M') => 60.0,
+        _ => return default,
+    };
+    let body = short[..short.len() - 1].trim_end();
+    let run_start = body
+        .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map_or(0, |i| i + 1);
+    let is_number = |s: &str| {
+        let mut parts = s.splitn(2, '.');
+        let all_digits = |p: &str| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit());
+        match (parts.next(), parts.next()) {
+            (Some(int), None) => all_digits(int),
+            (Some(int), Some(frac)) => all_digits(int) && all_digits(frac),
+            _ => false,
         }
-    }
-
-    if let (Ok(num), Some(unit)) = (num_str.parse::<f64>(), unit_char) {
-        let mult = match unit {
-            'D' => 86400.0,
-            'H' => 3600.0,
-            'M' => 60.0,
-            _ => return default,
-        };
-        (num * mult) as i64
-    } else {
-        default
-    }
+    };
+    // The regex is unanchored at the start, so the leftmost start that fits wins.
+    (run_start..body.len())
+        .find(|&i| is_number(&body[i..]))
+        .and_then(|i| body[i..].parse::<f64>().ok())
+        .map_or(default, |num| (num * mult) as i64)
 }
 
 pub fn elapsed_fraction(reset: Option<DateTime<Utc>>, window_sec: i64) -> Option<f64> {
@@ -242,6 +243,11 @@ mod tests {
         assert_eq!(window_caption("WEEKLY 7D", "7D"), "");
         assert_eq!(window_caption("WINDOW 7D", "7D"), "");
         assert_eq!(window_caption("WINDOW 1D", "5H"), "1D");
+        assert_eq!(window_seconds("H5", 7), 7);
+        assert_eq!(window_seconds("5h", 7), 7);
+        assert_eq!(window_seconds("5H ", 7), 7);
+        assert_eq!(window_seconds("WINDOW 1.5 H", 0), 5400);
+        assert_eq!(window_seconds("1.2.3H", 0), 8280);
     }
 
     #[test]

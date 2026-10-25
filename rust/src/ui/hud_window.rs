@@ -875,6 +875,11 @@ impl HUDWindow {
                 persist_rect(&debouncer_events, geom_now.get());
             }
             EventKind::Hide => schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS),
+            // Python `mouseDoubleClickEvent` (left): refresh now
+            EventKind::MouseButtonDblClick { button: 1, .. } => {
+                event.accept();
+                with_hud_later(|hud| hud.trigger_refresh());
+            }
             _ => {}
         });
         {

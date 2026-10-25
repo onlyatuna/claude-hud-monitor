@@ -57,6 +57,7 @@ pub struct RefreshController {
     pub result_rx: Receiver<WorkerResult>,
     pub updated: ferrokit_core::signal::Signal<UsageMetrics>,
     notify_callback: NotifyCallback,
+    closed: bool,
 }
 
 impl RefreshController {
@@ -69,6 +70,7 @@ impl RefreshController {
             result_rx: rx,
             updated: ferrokit_core::signal::Signal::new(),
             notify_callback: Arc::new(parking_lot::Mutex::new(None)),
+            closed: false,
         }
     }
 
@@ -76,6 +78,14 @@ impl RefreshController {
     #[allow(dead_code)]
     pub fn set_notify_callback<F: Fn() + Send + Sync + 'static>(&mut self, cb: F) {
         *self.notify_callback.lock() = Some(Arc::new(cb));
+    }
+
+    /// Python `stop()`: after shutdown nothing launches and late worker results are discarded.
+    pub fn stop(&mut self) {
+        self.closed = true;
+        for state in self.states.values_mut() {
+            state.generation += 1;
+        }
     }
     /// Returns true if any provider worker is currently running.
     #[allow(dead_code)]
@@ -89,6 +99,9 @@ impl RefreshController {
         &mut self,
         providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
     ) -> Drained {
+        if self.closed {
+            return Drained::default();
+        }
         let drained = self.drain_results(providers);
         let now = Instant::now();
         let ids: Vec<String> = self.states.keys().cloned().collect();
@@ -106,6 +119,9 @@ impl RefreshController {
 
     /// Manual refresh: invalidate in-flight or schedule immediately.
     pub fn refresh(&mut self, providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>) {
+        if self.closed {
+            return;
+        }
         let ids: Vec<String> = self.states.keys().cloned().collect();
         for id in ids {
             let state = self.states.get_mut(&id).unwrap();
@@ -215,7 +231,10 @@ impl RefreshController {
         providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
     ) -> Drained {
         let mut drained = Drained::default();
-        while let Ok(item) = self.result_rx.try_recv() {
+        while !self.closed {
+            let Ok(item) = self.result_rx.try_recv() else {
+                break;
+            };
             if let Some(result) = self.complete(item, providers) {
                 self.updated.emit(&result);
                 drained.updates.push(result);
@@ -232,6 +251,9 @@ impl RefreshController {
         item: WorkerResult,
         providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
     ) -> Option<UsageMetrics> {
+        if self.closed {
+            return None;
+        }
         let state = self.states.get_mut(&item.provider_id)?;
         state.running = false;
 
@@ -289,6 +311,34 @@ impl RefreshController {
         }
 
         Some(result)
+    }
+}
+
+#[cfg(test)]
+mod stop_tests {
+    use super::*;
+
+    #[test]
+    fn test_stop_ignores_late_results() {
+        let mut ctrl = RefreshController::new(60);
+        ctrl.states
+            .insert("test".to_owned(), ProviderState::default());
+        let generation = 1;
+        ctrl.states.get_mut("test").unwrap().generation = generation;
+        ctrl.states.get_mut("test").unwrap().running = true;
+        ctrl.stop();
+        ctrl.result_tx
+            .send(WorkerResult {
+                provider_id: "test".to_owned(),
+                generation,
+                metrics: UsageMetrics::default(),
+            })
+            .unwrap();
+        let providers = HashMap::new();
+        let drained = ctrl.drain_results(&providers);
+        assert!(drained.updates.is_empty());
+        assert!(ctrl.poll(&providers).updates.is_empty());
+        assert!(ctrl.states["test"].generation > generation);
     }
 }
 

@@ -47,6 +47,25 @@ fn join_tip(parts: &[&str]) -> String {
         .join("\n")
 }
 
+/// Python `UsageColumn._badge_text`: agy shows both badges joined, others the first non-empty.
+fn badge_text(data: &UsageMetrics) -> String {
+    if data.provider_id == "agy" && !data.badge1_text.is_empty() && !data.badge2_text.is_empty() {
+        let compact = |t: &str| t.replace(" 剩餘:", ":").replace("剩餘:", ":");
+        return format!(
+            "{} · {}",
+            compact(&data.badge1_text),
+            compact(&data.badge2_text)
+        );
+    }
+    if !data.badge1_text.is_empty() {
+        data.badge1_text.clone()
+    } else if !data.badge2_text.is_empty() {
+        data.badge2_text.clone()
+    } else {
+        " ".to_string()
+    }
+}
+
 /// Python `PROVIDER_NAMES`.
 fn display_name(provider_id: &str) -> &str {
     match provider_id {
@@ -289,7 +308,7 @@ impl Widget for UsageDial {
         let geo = self.base.geometry();
         let w = geo.width as f32;
         let h = geo.height as f32;
-        let side = (w.min(h) - 2.0).max(10.0);
+        let side = w.min(h) - 2.0;
         let outer_x = (w - side) / 2.0;
         let outer_y = (h - side) / 2.0;
         let center = PointF::new(outer_x + side / 2.0, outer_y + side / 2.0);
@@ -460,7 +479,11 @@ impl Widget for UsageDial {
             let origin = PointF::new(center.x - cap_w / 2.0, center.y + inner_side * 0.32);
             if let Some(path) = Painter::text_path(origin, &self.caption, &cap_font) {
                 painter.set_brush(Brush::NoBrush);
-                painter.set_pen(round_pen(self.theme.halo, 2.5));
+                painter.set_pen(
+                    round_pen(self.theme.halo, 2.5)
+                        .with_cap(LineCap::Square)
+                        .with_join(ferrokit_gui::tiny_skia::LineJoin::Bevel),
+                );
                 painter.stroke_path(&path);
                 painter.set_pen(None);
                 painter.set_brush(Brush::Color(self.theme.text));
@@ -789,13 +812,24 @@ impl Widget for GlyphWidget {
                     (r.height - 2.0).max(1.0),
                 );
                 painter.set_brush(Brush::NoBrush);
-                painter.set_pen(round_pen(self.theme.track, 2.2));
+                painter.set_pen(
+                    round_pen(self.theme.track, 2.2)
+                        .with_cap(LineCap::Square)
+                        .with_join(ferrokit_gui::tiny_skia::LineJoin::Bevel),
+                );
                 painter.draw_ellipse(inset);
-                painter.set_pen(round_pen(self.color, 2.2));
+                painter.set_pen(
+                    round_pen(self.color, 2.2)
+                        .with_cap(LineCap::Square)
+                        .with_join(ferrokit_gui::tiny_skia::LineJoin::Bevel),
+                );
                 painter.draw_arc(inset, 90.0, -250.0);
             }
             "tick" => {
-                let pen = round_pen(self.theme.text, 1.4).with_dash_pattern(vec![1.5, 1.3]);
+                let pen = round_pen(self.theme.text, 1.4)
+                    .with_cap(LineCap::Square)
+                    .with_join(ferrokit_gui::tiny_skia::LineJoin::Bevel)
+                    .with_dash_pattern(vec![1.5 * 1.4, 1.3 * 1.4]);
                 painter.set_pen(pen);
                 painter.set_brush(Brush::NoBrush);
                 painter.draw_line(
@@ -1127,7 +1161,7 @@ impl ProviderColumn {
 
     pub fn update_metrics(&mut self, data: &UsageMetrics) {
         self.current_metrics = data.clone();
-        let is_offline = data.error.is_some() && !data.stale;
+        let is_offline = data.error.as_deref().is_some_and(|e| !e.is_empty()) && !data.stale;
 
         // `for w in self.value_cells + [self.header]: w.setToolTip(data.error or "")`
         let error_tip = data.error.as_deref().unwrap_or("");
@@ -1198,15 +1232,11 @@ impl ProviderColumn {
         }
 
         let badge_text = if data.stale {
-            "⏱ STALE"
-        } else if !data.badge1_text.is_empty() {
-            &data.badge1_text
-        } else if !data.badge2_text.is_empty() {
-            &data.badge2_text
+            "⏱ STALE".to_string()
         } else {
-            " "
+            badge_text(data)
         };
-        set_label_text(&self.badge, badge_text);
+        set_label_text(&self.badge, &badge_text);
 
         if data.stale {
             let stamp = match data.last_success {
@@ -1224,7 +1254,12 @@ impl ProviderColumn {
     }
 
     pub fn update_countdown(&mut self) {
-        let is_offline = self.current_metrics.error.is_some() && !self.current_metrics.stale;
+        let is_offline = self
+            .current_metrics
+            .error
+            .as_deref()
+            .is_some_and(|e| !e.is_empty())
+            && !self.current_metrics.stale;
         if is_offline {
             return;
         }
@@ -1399,7 +1434,7 @@ impl UsageTable {
 
         // Row 1: Separator under header spanning all 4 columns
         let sep1 = make_widget(SeparatorWidget::new(theme.separator));
-        grid.add_widget_with_span(sep1.clone(), 1, 0, 1, 4);
+        grid.add_widget_with_span(sep1.clone(), 1, 0, 1, order.len() + 1);
 
         // Row 2: Section title "5 小時" with 13px pie glyph
         let (row2_w, row2_g, _) =
@@ -1435,7 +1470,7 @@ impl UsageTable {
 
         // Row 6: Separator under dials spanning all 4 columns
         let sep2 = make_widget(SeparatorWidget::new(theme.separator));
-        grid.add_widget_with_span(sep2.clone(), 6, 0, 1, 4);
+        grid.add_widget_with_span(sep2.clone(), 6, 0, 1, order.len() + 1);
 
         // Row 7: Section title "1 週" with 13px ring glyph
         let (row7_w, row7_g, _) =
@@ -1614,6 +1649,37 @@ impl UsageTable {
 mod tests {
     use super::*;
     use chrono::{Duration, Utc};
+
+    #[test]
+    fn agy_badge_joins_both_badges_and_others_show_the_first() {
+        let mut d = UsageMetrics {
+            provider_id: "agy".to_string(),
+            badge1_text: "Pro 剩餘:3".to_string(),
+            badge2_text: "Flash 剩餘:5".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(badge_text(&d), "Pro:3 · Flash:5");
+        d.provider_id = "claude".to_string();
+        assert_eq!(badge_text(&d), "Pro 剩餘:3");
+        d.badge1_text.clear();
+        assert_eq!(badge_text(&d), "Flash 剩餘:5");
+        d.badge2_text.clear();
+        assert_eq!(badge_text(&d), " ");
+    }
+
+    #[test]
+    fn empty_error_string_is_not_offline() {
+        let mut table = UsageTable::new(Theme::dark(), "scale");
+        table.update_metrics(&UsageMetrics {
+            provider_id: "agy".to_string(),
+            error: Some(String::new()),
+            badge1_text: "ok".to_string(),
+            ..Default::default()
+        });
+        let col = table.columns.get("agy").unwrap();
+        let badge = col.badge.borrow();
+        assert_eq!(badge.as_any().downcast_ref::<Label>().unwrap().text(), "ok");
+    }
 
     #[test]
     fn test_error_recovery_clears_offline_state() {

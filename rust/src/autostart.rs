@@ -78,6 +78,24 @@ fn windows_set(enable: bool) -> bool {
     }
 }
 
+/// XML text escaping for plist values (Python `plistlib` escapes `&`, `<`, `>`).
+#[cfg(any(target_os = "macos", test))]
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xml_escape;
+
+    #[test]
+    fn plist_values_are_xml_escaped() {
+        assert_eq!(xml_escape("/a&b/<c>"), "/a&amp;b/&lt;c&gt;");
+    }
+}
+
 // ── macOS ─────────────────────────────────────────────────────────────────────
 #[cfg(target_os = "macos")]
 fn macos_plist_path() -> std::path::PathBuf {
@@ -108,7 +126,7 @@ fn macos_set(enable: bool) -> bool {
     <true/>
 </dict>
 </plist>"#,
-            exe
+            xml_escape(&exe)
         );
         if let Some(dir) = plist_path.parent() {
             let _ = std::fs::create_dir_all(dir);

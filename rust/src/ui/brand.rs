@@ -63,4 +63,15 @@ mod tests {
             assert_eq!(hexes.len(), 3);
         }
     }
+
+    #[test]
+    fn names_read_on_the_tile_background() {
+        for dark in [true, false] {
+            let background = crate::ui::sidebar::tokens(dark).background;
+            for (id, _, _) in BRAND.iter() {
+                let ratio = crate::ui::gauge::contrast(brand_color(id, dark), background);
+                assert!(ratio >= 4.5, "{id}/{dark}: {ratio:.2}");
+            }
+        }
+    }
 }
