@@ -5,27 +5,38 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::Local;
-use ferrokit_core::event::EventKind;
+use ferrokit_core::event::{Event, EventKind};
+use ferrokit_core::object::{register_owned_qobject, ObjectData, ObjectDataMut, ObjectId, OwnedObject};
+use ferrokit_core::timer::Timer;
 use ferrokit_core::QObject;
-use ferrokit_gui::geometry::primitives::{Margins, Rect, RectF};
+use ferrokit_gui::geometry::primitives::{Margins, Point, Rect, RectF};
 use ferrokit_gui::paint::{Brush, RenderHint};
 use ferrokit_platform::backdrop::BackdropType;
+use ferrokit_platform::cursor::CursorShape;
 use ferrokit_platform::WindowFlags;
+use ferrokit_widgets::cursor::Cursor;
+use ferrokit_widgets::focus::find_widget_by_id;
 use ferrokit_widgets::{
     BoxLayout, Button, EmptyWidget, Label, Layout, StackedWidget, Widget, WidgetRef, Window,
 };
 use parking_lot::Mutex;
 
+use super::dock_geometry::{
+    dock_to_edge, orientation_for_edge, pick_work_area, snap_rect, snap_rect_corner, step_scale,
+    Offset, Rect as GeoRect, DEFAULT_MARGIN, EDGES,
+};
 use super::provider_card::ProviderCardWidget;
+use super::sidebar::{Orientation, Scheme, SidebarWidget, State, DEFAULT_ORDER};
+use super::UiThread;
 use super::styles::{get_theme, Theme};
 use super::usage_table::UsageTable;
 use crate::config::{
-    Config, ResizeDebouncer, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH,
+    Config, ConfigManager, ResizeDebouncer, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH,
     DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH, DEFAULT_VERTICAL_HEIGHT, DEFAULT_VERTICAL_WIDTH,
     MIN_HORIZONTAL_HEIGHT, MIN_HORIZONTAL_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH,
     MIN_VERTICAL_HEIGHT, MIN_VERTICAL_WIDTH,
@@ -37,6 +48,10 @@ use crate::refresh_controller::RefreshController;
 /// Python `_persist_geometry`'s size part: the active mode's width and height, never below the
 /// mode's minimum.
 fn apply_size(cfg: &mut Config, width: i32, height: i32) {
+    if cfg.ui_mode == "sidebar" {
+        // Python `_persist_geometry`: the sidebar is placed by `_finish_sidebar_move`, not saved here
+        return;
+    }
     let (w, h) = (width as u32, height as u32);
     if cfg.ui_mode == "table" {
         cfg.table_width = w.max(MIN_TABLE_WIDTH);
@@ -54,6 +69,9 @@ fn apply_size(cfg: &mut Config, width: i32, height: i32) {
 /// SAVE_LOCK -> Config lock; the Config lock is released before the file write.
 fn persist_rect(debouncer: &ResizeDebouncer, geom: Rect) {
     debouncer.update_and_save_now(|cfg| {
+        if cfg.ui_mode == "sidebar" {
+            return;
+        }
         cfg.window_x = Some(geom.x);
         cfg.window_y = Some(geom.y);
         apply_size(cfg, geom.width, geom.height);
@@ -250,6 +268,16 @@ pub struct HUDWindow {
     set_backdrop: BackdropFn,
     /// What each provider last reported, before any row order is applied (Python `_raw_metrics`).
     raw_metrics: HashMap<String, UsageMetrics>,
+    /// Python `self.sidebar`: the docked strip / panel (a page of `stack`).
+    pub sidebar: SidebarWidget,
+    /// Python `self.sidebar_cards`: the provider cards of the sidebar's panel and flyout.
+    pub sidebar_cards: HashMap<String, Rc<RefCell<ProviderCardWidget>>>,
+    /// The sidebar style's window state (`_docking`, `_resize`, `_snap_timer`, `_fade_timer`).
+    sidebar_hud: Rc<SidebarHud>,
+    /// Python `QApplication.instance().installEventFilter(self)`.
+    hud_filter: Option<OwnedObject<HudFilter>>,
+    /// The root layout is the sidebar's (no header, no margins) rather than the cards / table one.
+    sidebar_layout: bool,
 }
 
 /// The real providers. Test builds must not reach them: building a window launches a live fetch per
@@ -301,7 +329,10 @@ impl HUDWindow {
         let (init_x, init_y, init_w, init_h, min_w, min_h, opacity, aot, ct, ui_mode, dark) = {
             let cfg = config.lock();
             let is_dark = crate::ui::resolve_is_dark(&cfg.appearance);
-            let (w, h, min_w, min_h) = if cfg.ui_mode == "table" {
+            let (w, h, min_w, min_h) = if cfg.ui_mode == "sidebar" {
+                // docked by `dock_sidebar` right after construction; Python sets no minimum
+                (72, 222, 0, 0)
+            } else if cfg.ui_mode == "table" {
                 (
                     cfg.table_width.max(MIN_TABLE_WIDTH) as i32,
                     cfg.table_height.max(MIN_TABLE_HEIGHT) as i32,
@@ -412,18 +443,15 @@ impl HUDWindow {
         let mut time_lbl = Label::new("--:--:--");
         time_lbl.set_object_name("HeaderStatus");
         let time_label = make_widget(time_lbl);
-        // Header layout
-        let mut header_layout = BoxLayout::horizontal();
-        header_layout.set_spacing(6);
-        header_layout.add_widget(status_dot.clone());
-        header_layout.add_widget(title_label.clone());
-        header_layout.add_widget(ghost_label.clone());
-        header_layout.add_widget(layout_toggle_btn.clone());
-        header_layout.add_stretch(1);
-        header_layout.add_widget(time_label.clone());
-
-        // Python `inner_layout.addLayout(header_layout)` (`hud_window.py:288`): the header is a nested
-        // layout item, sized by its own children (`QBoxLayout::addLayout`).
+        // Header layout: `HeaderWidgets` builds it again whenever the root layout is rebuilt
+        // (Python `_clear_layout(inner_layout)` + `_apply_ui_mode`).
+        let header = HeaderWidgets {
+            status_dot: status_dot.clone(),
+            title_label: title_label.clone(),
+            ghost_label: ghost_label.clone(),
+            layout_toggle_btn: layout_toggle_btn.clone(),
+            time_label: time_label.clone(),
+        };
 
         // Page 0: Cards mode
         // Python sets no size policy and no stretch on the cards container (`hud_window.py:141-145`).
@@ -447,15 +475,34 @@ impl HUDWindow {
             .set_size_policy(Self::stack_policy(ui_mode == "table"));
         StackedWidget::add_widget(&stack, cards_container.clone());
         StackedWidget::add_widget(&stack, table.widget());
-        let active_index = if ui_mode == "table" { 1 } else { 0 };
+
+        // Page 2: the sidebar (Python `self.sidebar`, built hidden in `__init__`), its cards and the
+        // tool window of its flyout (`_Flyout(owner)`, a child top-level of the HUD window).
+        let sidebar_cards: Vec<(String, Rc<RefCell<ProviderCardWidget>>)> = DEFAULT_ORDER
+            .iter()
+            .map(|id| (id.to_string(), Rc::new(RefCell::new(ProviderCardWidget::new(id)))))
+            .collect();
+        let flyout = Window::with_parent(
+            &window,
+            "",
+            Rect::new(0, 0, 260, 100),
+            WindowFlags::FRAMELESS
+                | WindowFlags::TOOL
+                | WindowFlags::STAYS_ON_TOP
+                | WindowFlags::LAYERED
+                | WindowFlags::TOOLTIP,
+        )?;
+        let sidebar = SidebarWidget::new(sidebar_cards.clone(), flyout);
+        StackedWidget::add_widget(&stack, sidebar.widget());
+        let active_index = match ui_mode.as_str() {
+            "table" => 1,
+            "sidebar" => SIDEBAR_PAGE,
+            _ => 0,
+        };
         StackedWidget::set_current_index(&stack, active_index);
 
         // Root layout
-        let mut root_layout = BoxLayout::vertical();
-        root_layout.set_margins(Margins::new(12, 8, 12, 10));
-        root_layout.set_spacing(6);
-        root_layout.add_layout(Box::new(header_layout), 0);
-        root_layout.add_widget(stack.clone());
+        let root_layout = Self::build_root_layout(ui_mode == "sidebar", &header, &stack);
         let root = window.root_widget();
         install_panel_painter(&root, &theme, Arc::clone(&config), Rc::clone(&vibrant));
         root.borrow_mut().set_layout(Box::new(root_layout));
@@ -463,7 +510,14 @@ impl HUDWindow {
         let hwnd = window.native_handle();
         let cfg_move = Arc::clone(&config);
         window.set_mouse_move_handler(move |pos| {
-            let locked = cfg_move.lock().locked;
+            let (locked, sidebar) = {
+                let cfg = cfg_move.lock();
+                (cfg.locked, cfg.ui_mode == "sidebar")
+            };
+            if sidebar {
+                // the sidebar has its own edge / corner resize (`HudFilter`), not the native one
+                return;
+            }
             let edges = ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked);
             let shape = if edges.is_empty() {
                 ferrokit_platform::cursor::CursorShape::Arrow
@@ -491,8 +545,16 @@ impl HUDWindow {
         let cfg_press = Arc::clone(&config);
         window.set_mouse_press_handler(move |pos, button| {
             if button == ferrokit_platform::MouseButton::Left {
-                let locked = cfg_press.lock().locked;
-                let edges = ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked);
+                let (locked, sidebar) = {
+                    let cfg = cfg_press.lock();
+                    (cfg.locked, cfg.ui_mode == "sidebar")
+                };
+                // Python `_calc_edge` is `None` in the sidebar style: a press only moves the window
+                let edges = if sidebar {
+                    ferrokit_platform::platform_window::WindowEdges::empty()
+                } else {
+                    ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked)
+                };
                 if !edges.is_empty() {
                     ferrokit_platform::window::post_system_resize(hwnd, edges);
                     return true;
@@ -508,6 +570,24 @@ impl HUDWindow {
         // The window's current geometry as the events report it: the window event handler below
         // cannot reach `window.geometry()`, and Python reads `self.pos()`/`self.size()` instead.
         let geom_now = Rc::new(Cell::new(window.geometry()));
+        // Python `_snap_timer` (single shot, 180 ms) and `_fade_timer` (single shot).
+        let snap_timer = Timer::new();
+        snap_timer.set_single_shot(true);
+        snap_timer.set_interval(SIDEBAR_SNAP_DELAY_MS);
+        snap_timer.timeout.connect(|()| with_hud(|hud| hud.finish_sidebar_move()));
+        let fade_timer = Timer::new();
+        fade_timer.set_single_shot(true);
+        fade_timer.timeout.connect(|()| with_hud(|hud| hud.apply_opacity()));
+        let sidebar_hud = Rc::new(SidebarHud {
+            docking: Cell::new(false),
+            resize: RefCell::new(None),
+            grip_cursor: Cell::new(false),
+            snap_timer,
+            fade_timer,
+            geom: Rc::clone(&geom_now),
+            root: root.clone(),
+            root_id: root.borrow().id(),
+        });
         let geom_resize = Rc::clone(&geom_now);
         window.set_resize_handler(move |size| {
             let mut g = geom_resize.get();
@@ -528,6 +608,7 @@ impl HUDWindow {
         let trim_events = Arc::clone(&trim);
         let cfg_events = Arc::clone(&config);
         let debouncer_events = Arc::clone(&debouncer);
+        let hud_state_events = Rc::clone(&sidebar_hud);
         window.set_window_event_handler(move |event| match event.kind {
             EventKind::Move { x, y, .. } => {
                 let mut g = geom_now.get();
@@ -535,6 +616,14 @@ impl HUDWindow {
                 g.y = y;
                 geom_now.set(g);
                 if debouncer_events.is_restoring() {
+                    return;
+                }
+                if cfg_events.lock().ui_mode == "sidebar" {
+                    // Python `moveEvent`: a move that is not the docking itself settles in
+                    // `_finish_sidebar_move`; the position is saved there, not here
+                    if !hud_state_events.docking.get() {
+                        hud_state_events.snap_timer.start();
+                    }
                     return;
                 }
                 {
@@ -560,8 +649,8 @@ impl HUDWindow {
         // Release initialization cold pages after UI and DirectWrite/fonts stabilize
         // (mirrors Python HUDWindow.__init__ QTimer.singleShot(2500, trim_memory), hud_window.py:114; G12.5.h).
         schedule_trim(&trim, INITIAL_TRIM_DELAY_MS);
-        let hud = Self {
-            config,
+        let mut hud = Self {
+            config: Arc::clone(&config),
             refresh_ctrl,
             providers,
             last_tick: None,
@@ -585,7 +674,17 @@ impl HUDWindow {
             vibrant,
             set_backdrop,
             raw_metrics: HashMap::new(),
+            sidebar,
+            sidebar_cards: sidebar_cards.into_iter().collect(),
+            sidebar_hud: Rc::clone(&sidebar_hud),
+            hud_filter: None,
+            sidebar_layout: ui_mode == "sidebar",
         };
+        hud.connect_sidebar_signals();
+        if ui_mode == "sidebar" {
+            hud.apply_sidebar_mode();
+            hud.window.set_opacity(opacity);
+        }
         debouncer.set_restoring(false);
 
         Ok(hud)
@@ -675,6 +774,7 @@ impl HUDWindow {
         self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
+        self.sidebar.close_flyout();
     }
 
     #[allow(dead_code)]
@@ -764,17 +864,19 @@ impl HUDWindow {
         };
         let geom = self.window.geometry();
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
-            cfg.window_x = Some(geom.x);
-            cfg.window_y = Some(geom.y);
-            if old_mode == "table" {
-                cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
-                cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
-            } else if old_layout == "horizontal" {
-                cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
-                cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
-            } else {
-                cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
-                cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
+            if old_mode != "sidebar" {
+                cfg.window_x = Some(geom.x);
+                cfg.window_y = Some(geom.y);
+                if old_mode == "table" {
+                    cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
+                    cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+                } else if old_layout == "horizontal" {
+                    cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
+                    cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
+                } else {
+                    cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
+                    cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
+                }
             }
             cfg.ui_mode = mode.to_string();
         });
@@ -794,6 +896,23 @@ impl HUDWindow {
         let sheet = style_sheet_for(mode, self.is_dark);
         self.window.set_style_sheet(sheet);
         ferrokit_widgets::application::Application::set_style_sheet(sheet);
+        if mode == "sidebar" {
+            // Python `_apply_ui_mode("sidebar")`: the flyout goes, the bar is sized by its content
+            self.sidebar.close_flyout();
+            self.refresh_backdrop(mode);
+            self.window.set_minimum_size(0, 0);
+            self.apply_sidebar_mode();
+            self.republish_all();
+            self.apply_opacity();
+            return;
+        }
+        if self.sidebar_layout {
+            // leaving the sidebar: back to the header + page layout and a resizable window
+            self.sidebar.close_flyout();
+            self.install_root_layout(false);
+            self.window
+                .set_maximum_size(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        }
         let (w, h) = if mode == "table" {
             StackedWidget::set_current_index(&self.stack, 1);
             self.stack
@@ -847,6 +966,8 @@ impl HUDWindow {
         );
         self.window.set_geometry(Rect::new(nx, ny, w, h));
         self.cards_container.borrow().update_layout();
+        self.republish_all();
+        self.apply_opacity();
     }
 
     pub fn apply_cards_layout_mode(&mut self, mode: &str) {
@@ -856,17 +977,19 @@ impl HUDWindow {
         };
         let geom = self.window.geometry();
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
-            cfg.window_x = Some(geom.x);
-            cfg.window_y = Some(geom.y);
-            if old_mode == "table" {
-                cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
-                cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
-            } else if old_layout == "horizontal" {
-                cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
-                cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
-            } else {
-                cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
-                cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
+            if old_mode != "sidebar" {
+                cfg.window_x = Some(geom.x);
+                cfg.window_y = Some(geom.y);
+                if old_mode == "table" {
+                    cfg.table_width = (geom.width as u32).max(MIN_TABLE_WIDTH);
+                    cfg.table_height = (geom.height as u32).max(MIN_TABLE_HEIGHT);
+                } else if old_layout == "horizontal" {
+                    cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
+                    cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
+                } else {
+                    cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
+                    cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
+                }
             }
             cfg.layout_mode = mode.to_string();
             cfg.ui_mode = "cards".to_string();
@@ -900,6 +1023,13 @@ impl HUDWindow {
 
         for card in self.cards.values_mut() {
             card.set_appearance(dark);
+        }
+        if ui_mode == "sidebar" {
+            // Python `_apply_theme`: status colours only; the duo scheme is for the table
+            self.sidebar.set_appearance(dark, Scheme::Scale);
+            for card in self.sidebar_cards.values() {
+                card.borrow_mut().set_appearance(dark);
+            }
         }
 
         let scheme = { self.config.lock().color_scheme.clone() };
@@ -941,6 +1071,11 @@ impl HUDWindow {
         if let Some(card) = self.cards.get_mut(&data.provider_id) {
             card.update_metrics(data);
         }
+        if let Some(card) = self.sidebar_cards.get(&data.provider_id) {
+            card.borrow_mut().update_metrics(data);
+        }
+        self.sidebar.update_metrics(data);
+        self.fit_sidebar();
         self.table.update_metrics(data);
         // Python `_on_data_fetched`: the header time is the time of the last fetch, and the
         // status dot is amber while any provider reports an error, green otherwise.
@@ -1049,6 +1184,10 @@ impl HUDWindow {
         for card in self.cards.values_mut() {
             card.update_countdown();
         }
+        for card in self.sidebar_cards.values() {
+            card.borrow_mut().update_countdown();
+        }
+        self.sidebar.update_countdown();
         self.table.update_countdowns();
     }
 
@@ -1099,7 +1238,12 @@ impl HUDWindow {
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.opacity = val;
         });
-        self.window.set_opacity(val);
+        if self.is_sidebar_mode() {
+            // Python `_set_opacity`: the idle fade multiplies the chosen opacity
+            self.apply_opacity();
+        } else {
+            self.window.set_opacity(val);
+        }
     }
 
     pub fn set_refresh_interval(&mut self, seconds: u64) {
@@ -1117,6 +1261,22 @@ impl HUDWindow {
     }
 
     pub fn reset_geometry(&mut self) {
+        if self.is_sidebar_mode() {
+            // Python `_reset_geometry` in the sidebar style
+            ConfigManager::update_and_save(&self.config, |cfg| {
+                cfg.sidebar_edge = "right".to_owned();
+                cfg.sidebar_orientation = "vertical".to_owned();
+                cfg.sidebar_offset = None;
+                cfg.sidebar_x = None;
+                cfg.sidebar_y = None;
+                cfg.sidebar_scale = 1.0;
+            });
+            self.sidebar.set_scale(1.0);
+            self.sidebar.set_orientation(Orientation::Vertical);
+            self.sidebar.set_dock_edge(Some("right"));
+            self.dock_sidebar();
+            return;
+        }
         let (w, h) = {
             let cfg = self.config.lock();
             if cfg.ui_mode == "table" {
@@ -1144,11 +1304,681 @@ impl HUDWindow {
     }
 }
 
+// ---- Sidebar style (Python `hud_window.py`: the "Sidebar mode" and idle-fade parts) -------------
+
+/// Python `SIDEBAR_SNAP_PX`, `RESIZE_GRIP_PX`, `IDLE_FADE_FACTOR`, `IDLE_FADE_DELAY_MS`.
+pub const SIDEBAR_SNAP_PX: i32 = 24;
+pub const RESIZE_GRIP_PX: i32 = 7;
+/// Python `QWIDGETSIZE_MAX`.
+const QWIDGETSIZE_MAX: i32 = 16_777_215;
+/// The stack page of the sidebar (cards = 0, table = 1).
+const SIDEBAR_PAGE: usize = 2;
+/// Python `QTimer.start(1500)` in `_apply_sidebar_mode`: fully visible for a moment after the mode
+/// is chosen.
+const SIDEBAR_FADE_GRACE_MS: u64 = 1500;
+/// Python `self._snap_timer.setInterval(180)`.
+const SIDEBAR_SNAP_DELAY_MS: u64 = 180;
+
+/// Python `self._resize`: the state of an edge / corner drag.
+#[derive(Clone, Debug)]
+struct ResizeState {
+    start: Point,
+    geom: Rect,
+    scale: f64,
+    zone: String,
+}
+
+/// What the sidebar style keeps on `HUDWindow` that its timers, the application event filter and
+/// the window's event handler reach: one `Rc` shared with all of them.
+pub struct SidebarHud {
+    /// Python `_docking`: the window is being placed by `_dock_sidebar` / `_resize_to`.
+    docking: Cell<bool>,
+    resize: RefCell<Option<ResizeState>>,
+    grip_cursor: Cell<bool>,
+    /// Python `_snap_timer`.
+    snap_timer: Timer,
+    /// Python `_fade_timer`.
+    fade_timer: Timer,
+    /// The window geometry as the window's events report it.
+    geom: Rc<Cell<Rect>>,
+    root: WidgetRef,
+    root_id: ObjectId,
+}
+
+/// Python `HUDWindow._resize_zone`: `"l"`, `"r"`, `"t"`, `"b"` or a corner (`"lt"`, `"rt"`, ...) when
+/// `pos` (global) is within `RESIZE_GRIP_PX` of an edge of the window, `None` elsewhere. `QRect`
+/// edges are inclusive (`right() == x + width - 1`).
+pub fn resize_zone(g: Rect, pos: Point) -> Option<String> {
+    let (left, top) = (g.x, g.y);
+    let (right, bottom) = (g.x + g.width - 1, g.y + g.height - 1);
+    if pos.x < left - 2 || pos.x > right + 2 || pos.y < top - 2 || pos.y > bottom + 2 {
+        return None;
+    }
+    let m = RESIZE_GRIP_PX;
+    let mut zone = String::new();
+    if pos.x - left < m {
+        zone.push('l');
+    } else if right - pos.x < m {
+        zone.push('r');
+    }
+    if pos.y - top < m {
+        zone.push('t');
+    } else if bottom - pos.y < m {
+        zone.push('b');
+    }
+    (!zone.is_empty()).then_some(zone)
+}
+
+/// Python `_set_grip_cursor`'s shape for a zone.
+pub fn zone_cursor(zone: &str) -> CursorShape {
+    match zone {
+        "l" | "r" => CursorShape::SizeHor,
+        "t" | "b" => CursorShape::SizeVer,
+        "lt" | "rb" => CursorShape::SizeFDiag,
+        _ => CursorShape::SizeBDiag,
+    }
+}
+
+/// Python `QRect.center()`.
+fn qt_center(g: Rect) -> Point {
+    Point::new((2 * g.x + g.width - 1) / 2, (2 * g.y + g.height - 1) / 2)
+}
+
+/// Python `_resize_to`'s scale: the start scale times the ratio the drag changed the grabbed
+/// edge(s) by (the one furthest from 1), rounded to 2 decimals and held to 0.6 - 2.0.
+pub fn resize_scale(zone: &str, g: Rect, start_scale: f64, dx: i32, dy: i32) -> f64 {
+    let (gw, gh) = (g.width as f64, g.height as f64);
+    let mut ratios = Vec::new();
+    if zone.contains('r') {
+        ratios.push((gw + dx as f64) / gw);
+    }
+    if zone.contains('l') {
+        ratios.push((gw - dx as f64) / gw);
+    }
+    if zone.contains('b') {
+        ratios.push((gh + dy as f64) / gh);
+    }
+    if zone.contains('t') {
+        ratios.push((gh - dy as f64) / gh);
+    }
+    let ratio = ratios
+        .into_iter()
+        .fold(None::<f64>, |best, v| match best {
+            Some(b) if (b - 1.0).abs() >= (v - 1.0).abs() => Some(b),
+            _ => Some(v),
+        })
+        .unwrap_or(1.0);
+    ((start_scale * ratio * 100.0).round() / 100.0).clamp(0.6, 2.0)
+}
+
+/// Python `_resize_to`'s new window origin: the fixed edge stays where it was.
+pub fn resize_origin(zone: &str, g: Rect, w: i32, h: i32) -> (i32, i32) {
+    let right = g.x + g.width - 1;
+    let bottom = g.y + g.height - 1;
+    let center = qt_center(g);
+    let x = if zone.contains('r') {
+        g.x
+    } else if zone.contains('l') {
+        right + 1 - w
+    } else {
+        center.x - w / 2
+    };
+    let y = if zone.contains('b') {
+        g.y
+    } else if zone.contains('t') {
+        bottom + 1 - h
+    } else {
+        center.y - h / 2
+    };
+    (x, y)
+}
+
+/// Python `idle_fade_level` / the opacity the window gets: the chosen opacity, dimmed while the
+/// sidebar is idle.
+pub fn faded_opacity(base: f32, level: f64, active: bool) -> f32 {
+    if active {
+        base * level as f32
+    } else {
+        base
+    }
+}
+
+/// Runs `f` on the HUD when it is not borrowed (timers and queued tasks; the HUD lives in
+/// `MAIN_HUD`, as `main.rs` does for its own callbacks).
+pub(crate) fn with_hud(f: impl FnOnce(&mut HUDWindow)) {
+    crate::MAIN_HUD.with(|cell| {
+        if let Some(hud) = cell.borrow().as_ref() {
+            if let Ok(mut hud) = hud.try_borrow_mut() {
+                f(&mut hud);
+            }
+        }
+    });
+}
+
+/// `with_hud` once the event that is being dispatched is done.
+fn with_hud_later(f: impl FnOnce(&mut HUDWindow) + 'static) {
+    ferrokit_widgets::WidgetCommandQueue::post_task(move || with_hud(f));
+}
+
+impl SidebarHud {
+    /// Python `_set_grip_cursor`.
+    fn set_grip_cursor(&self, zone: Option<&str>) {
+        use ferrokit_widgets::application::Application;
+        match zone {
+            None => {
+                if self.grip_cursor.replace(false) {
+                    Application::restore_override_cursor();
+                }
+            }
+            Some(zone) => {
+                let shape = zone_cursor(zone);
+                if self.grip_cursor.get() {
+                    Application::change_override_cursor(shape);
+                } else {
+                    Application::set_override_cursor(shape);
+                    self.grip_cursor.set(true);
+                }
+            }
+        }
+    }
+}
+
+/// Python `HUDWindow.eventFilter` (installed application-wide) and `enterEvent` / `leaveEvent`.
+struct HudFilter {
+    data: ObjectData,
+    state: UiThread<Weak<SidebarHud>>,
+    config: Arc<Mutex<Config>>,
+}
+
+impl QObject for HudFilter {
+    fn object_data(&self) -> &ObjectData {
+        &self.data
+    }
+    fn object_data_mut(&mut self) -> ObjectDataMut<'_> {
+        ObjectDataMut::new(&mut self.data)
+    }
+
+    fn event_filter(&mut self, watched: ObjectId, event: &mut Event) -> bool {
+        let Some(hud) = self.state.get().and_then(|w| w.upgrade()) else {
+            return false;
+        };
+        let (sidebar_mode, locked) = {
+            let cfg = self.config.lock();
+            (cfg.ui_mode == "sidebar", cfg.locked)
+        };
+        if !sidebar_mode {
+            return false;
+        }
+        // enterEvent / leaveEvent of the window: stop / start the idle-fade timer. Deferred: the
+        // `WA_UnderMouse` bit that `_idle_fade_active` reads is toggled after the filters.
+        if watched == hud.root_id {
+            match &event.kind {
+                EventKind::Enter { .. } => with_hud_later(|hud| {
+                    hud.sidebar_hud.fade_timer.stop();
+                    hud.apply_opacity();
+                }),
+                EventKind::Leave => with_hud_later(|hud| {
+                    let delay = hud.idle_fade_delay() as u64;
+                    hud.sidebar_hud.fade_timer.start_with_interval(delay);
+                }),
+                _ => {}
+            }
+        }
+        if hud.resize.borrow().is_some() {
+            return match &event.kind {
+                EventKind::MouseMove { .. } => {
+                    let pos = Cursor::pos();
+                    with_hud_later(move |hud| hud.resize_to(pos));
+                    true
+                }
+                EventKind::MouseButtonRelease { .. } => {
+                    with_hud_later(|hud| hud.end_resize());
+                    true
+                }
+                _ => false,
+            };
+        }
+        if locked {
+            return false;
+        }
+        match &event.kind {
+            EventKind::Leave if watched == hud.root_id => {
+                hud.set_grip_cursor(None);
+                false
+            }
+            EventKind::MouseMove { .. } | EventKind::MouseButtonPress { .. } => {
+                if find_widget_by_id(&hud.root, watched).is_none() {
+                    return false;
+                }
+                let pos = Cursor::pos();
+                let zone = resize_zone(hud.geom.get(), pos);
+                match &event.kind {
+                    EventKind::MouseMove { .. } => {
+                        if ferrokit_widgets::application::Application::mouse_buttons().is_empty() {
+                            hud.set_grip_cursor(zone.as_deref());
+                        }
+                        false
+                    }
+                    EventKind::MouseButtonPress { button: 1, .. } if zone.is_some() => {
+                        let zone = zone.unwrap_or_default();
+                        let scale = self.config.lock().sidebar_scale_setting();
+                        *hud.resize.borrow_mut() = Some(ResizeState {
+                            start: pos,
+                            geom: hud.geom.get(),
+                            scale,
+                            zone,
+                        });
+                        // `self._snap_timer.stop(); self.grabMouse()`
+                        with_hud_later(|hud| hud.begin_resize());
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+impl HUDWindow {
+    // ================= Sidebar mode =================
+    fn is_sidebar_mode(&self) -> bool {
+        self.config.lock().ui_mode == "sidebar"
+    }
+
+    /// Python `_apply_sidebar_mode` (the inner-layout and window-size parts are in
+    /// `install_root_layout` / `dock_sidebar`).
+    fn apply_sidebar_mode(&mut self) {
+        self.install_root_layout(true);
+        StackedWidget::set_current_index(&self.stack, SIDEBAR_PAGE);
+        self.sidebar_hud
+            .fade_timer
+            .start_with_interval(SIDEBAR_FADE_GRACE_MS); // stay fully visible for a moment
+        let (scale, orientation, edge, state, dark) = {
+            let cfg = self.config.lock();
+            (
+                cfg.sidebar_scale_setting(),
+                self.sidebar_orientation_of(&cfg),
+                self.sidebar_edge_of(&cfg),
+                cfg.sidebar_state.clone(),
+                self.is_dark,
+            )
+        };
+        self.sidebar.set_scale(scale);
+        self.sidebar
+            .set_orientation(Orientation::parse(orientation).unwrap_or(Orientation::Vertical));
+        self.sidebar.set_dock_edge(edge);
+        self.sidebar
+            .set_state(State::parse(&state).unwrap_or(State::Strip));
+        // `_apply_theme`: status colours only; the duo scheme is for the table
+        self.sidebar.set_appearance(dark, Scheme::Scale);
+        for card in self.sidebar_cards.values() {
+            card.borrow_mut().set_appearance(dark);
+        }
+        self.dock_sidebar();
+    }
+
+    fn sidebar_edge_of(&self, cfg: &Config) -> Option<&'static str> {
+        EDGES.iter().copied().find(|e| *e == cfg.sidebar_edge)
+    }
+
+    fn sidebar_orientation_of(&self, cfg: &Config) -> &'static str {
+        let current = if cfg.sidebar_orientation == "horizontal" { "horizontal" } else { "vertical" };
+        orientation_for_edge(self.sidebar_edge_of(cfg), current)
+    }
+
+    /// Python `_sidebar_work_area`: the work area of the screen the window's centre is on.
+    fn sidebar_work_area(&self) -> Option<GeoRect> {
+        let screens = super::placement::Screens::current();
+        let areas: Vec<GeoRect> = screens
+            .available
+            .iter()
+            .map(|r| (r.x, r.y, r.width, r.height))
+            .collect();
+        let c = qt_center(self.window.geometry());
+        pick_work_area((c.x, c.y), &areas)
+    }
+
+    /// Python `_dock_sidebar`: places the bar on its saved edge (or saved free position) of the
+    /// current screen.
+    fn dock_sidebar(&mut self) {
+        let Some(work) = self.sidebar_work_area() else { return };
+        let (w, h) = self.sidebar.preferred_size();
+        let rect = {
+            let cfg = self.config.lock();
+            match self.sidebar_edge_of(&cfg) {
+                Some(edge) => {
+                    let offset = cfg.sidebar_offset.map(|o| match o {
+                        crate::config::SidebarOffset::At(n) => Offset::Start(n),
+                        crate::config::SidebarOffset::End => Offset::End,
+                    });
+                    dock_to_edge(work, edge, w, h, offset, DEFAULT_MARGIN)
+                }
+                None => {
+                    let (x, y) = match (cfg.sidebar_x, cfg.sidebar_y) {
+                        (Some(x), Some(y)) => (x, y),
+                        _ => (work.0 + work.2, work.1 + work.3),
+                    };
+                    Some(snap_rect((x, y, w, h), work, -1_000_000).0)
+                }
+            }
+        };
+        let Some((x, y, w, h)) = rect else { return };
+        self.sidebar_hud.docking.set(true);
+        self.window.set_fixed_size(w, h);
+        self.window.set_geometry(Rect::new(x, y, w, h));
+        self.sidebar_hud.docking.set(false);
+    }
+
+    /// Python `_finish_sidebar_move`: after a drag, snap to the nearest screen edge (or stay free)
+    /// and remember the position.
+    pub fn finish_sidebar_move(&mut self) {
+        if !self.is_sidebar_mode() || self.sidebar_hud.docking.get() {
+            return;
+        }
+        if !ferrokit_widgets::application::Application::mouse_buttons().is_empty() {
+            self.sidebar_hud.snap_timer.start();
+            return;
+        }
+        let Some(work) = self.sidebar_work_area() else { return };
+        let g = self.window.geometry();
+        let current = {
+            let cfg = self.config.lock();
+            if cfg.sidebar_orientation == "horizontal" { "horizontal" } else { "vertical" }
+        };
+        // near a corner the bar keeps its orientation and sticks to the corner instead of turning sideways
+        let (rect, edge, offset) = snap_rect_corner(
+            (g.x, g.y, g.width, g.height),
+            work,
+            SIDEBAR_SNAP_PX,
+            Some(current),
+        );
+        let orientation = orientation_for_edge(edge, current);
+        ConfigManager::update_and_save(&self.config, |cfg| {
+            cfg.sidebar_edge = edge.unwrap_or("none").to_owned();
+            cfg.sidebar_orientation = orientation.to_owned();
+            if edge.is_some() {
+                cfg.sidebar_offset = offset.map(|o| match o {
+                    Offset::Start(n) => crate::config::SidebarOffset::At(n),
+                    Offset::End => crate::config::SidebarOffset::End,
+                });
+            } else {
+                cfg.sidebar_x = Some(rect.0);
+                cfg.sidebar_y = Some(rect.1);
+            }
+        });
+        self.sidebar
+            .set_orientation(Orientation::parse(orientation).unwrap_or(Orientation::Vertical));
+        self.sidebar.set_dock_edge(edge);
+        self.dock_sidebar();
+    }
+
+    /// Python `_start_sidebar_drag`.
+    fn start_sidebar_drag(&self) {
+        if self.config.lock().locked {
+            return;
+        }
+        self.window.start_system_move();
+    }
+
+    /// Python `_begin_resize` after the press (the state is set by the filter).
+    fn begin_resize(&mut self) {
+        self.sidebar.close_flyout();
+        self.sidebar_hud.snap_timer.stop();
+        self.window.root_widget().borrow().grab_mouse();
+    }
+
+    /// Python `_resize_to`.
+    fn resize_to(&mut self, pos: Point) {
+        let Some(r) = self.sidebar_hud.resize.borrow().clone() else { return };
+        let scale = resize_scale(&r.zone, r.geom, r.scale, pos.x - r.start.x, pos.y - r.start.y);
+        if Some(scale) == Some(self.sidebar.scale()) {
+            return;
+        }
+        self.sidebar.set_scale(scale);
+        let (w, h) = self.sidebar.preferred_size();
+        let (x, y) = resize_origin(&r.zone, r.geom, w, h);
+        self.sidebar_hud.docking.set(true);
+        self.window.set_fixed_size(w, h);
+        self.window.set_geometry(Rect::new(x, y, w, h));
+        self.sidebar_hud.docking.set(false);
+    }
+
+    /// Python `_end_resize`.
+    fn end_resize(&mut self) {
+        self.window.root_widget().borrow().release_mouse();
+        *self.sidebar_hud.resize.borrow_mut() = None;
+        self.sidebar_hud.set_grip_cursor(None);
+        let scale = (self.sidebar.scale() * 100.0).round() / 100.0;
+        ConfigManager::update_and_save(&self.config, |cfg| cfg.sidebar_scale = scale);
+        self.finish_sidebar_move();
+    }
+
+    /// Python `set_sidebar_scale`.
+    pub fn set_sidebar_scale(&mut self, scale: f64) {
+        let scale = if scale.is_finite() {
+            ((scale * 100.0).round() / 100.0).clamp(0.6, 2.0)
+        } else {
+            1.0
+        };
+        ConfigManager::update_and_save(&self.config, |cfg| cfg.sidebar_scale = scale);
+        if self.is_sidebar_mode() {
+            let scale = self.config.lock().sidebar_scale_setting();
+            self.sidebar.set_scale(scale);
+            self.dock_sidebar();
+        }
+    }
+
+    /// Python `_on_sidebar_scale_step`.
+    fn on_sidebar_scale_step(&mut self, steps: i32) {
+        let current = self.config.lock().sidebar_scale_setting();
+        self.set_sidebar_scale(step_scale(current, steps));
+    }
+
+    /// Python `set_sidebar_state`.
+    pub fn set_sidebar_state(&mut self, state: &str) {
+        let Some(parsed) = State::parse(state) else { return };
+        if !self.is_sidebar_mode() {
+            return;
+        }
+        ConfigManager::update_and_save(&self.config, |cfg| cfg.sidebar_state = state.to_owned());
+        self.sidebar.set_state(parsed);
+        self.dock_sidebar();
+    }
+
+    /// Python `_fit_sidebar`: keeps the docked window exactly as big as the panel needs (agy shows
+    /// five bars once its data arrives). New rows are measured before their style is applied, so
+    /// the window is docked again once the event loop has polished them.
+    fn fit_sidebar(&mut self) {
+        if !self.is_sidebar_mode() || self.sidebar_hud.resize.borrow().is_some() {
+            return;
+        }
+        if self.sidebar.state() == State::Panel {
+            self.dock_sidebar();
+            Timer::single_shot(0, || with_hud(|hud| hud.settle_sidebar()));
+        }
+    }
+
+    /// Python `_settle_sidebar`.
+    fn settle_sidebar(&mut self) {
+        if !self.is_sidebar_mode()
+            || self.sidebar_hud.resize.borrow().is_some()
+            || self.sidebar.state() != State::Panel
+        {
+            return;
+        }
+        let g = self.window.geometry();
+        if (g.width, g.height) != self.sidebar.preferred_size() {
+            self.dock_sidebar();
+        }
+    }
+
+    /// Python `set_provider_order`.
+    pub fn set_provider_order(&mut self, order: &[String]) {
+        if crate::ui::sidebar::valid_order(order).is_none() || order == self.provider_order() {
+            return;
+        }
+        let order = order.to_vec();
+        ConfigManager::update_and_save(&self.config, |cfg| cfg.provider_order = order.clone());
+        self.sidebar.set_order(&order);
+    }
+
+    // ================= Idle fade =================
+    /// Python `_idle_fade_active`.
+    fn idle_fade_active(&self) -> bool {
+        let cfg = self.config.lock();
+        cfg.ui_mode == "sidebar"
+            && cfg.sidebar_idle_fade
+            && !cfg.click_through
+            && !self.window.root_widget().borrow().under_mouse()
+            && self.sidebar_hud.resize.borrow().is_none()
+            && self.sidebar.active().is_none()
+    }
+
+    /// Python `_apply_opacity`: window opacity = the user's setting, dimmed while the sidebar is idle
+    /// (no hover, no open detail page).
+    pub fn apply_opacity(&mut self) {
+        let base = self.config.lock().opacity;
+        let level = self.idle_fade_level();
+        let opacity = faded_opacity(base, level, self.idle_fade_active());
+        self.window.set_opacity(opacity);
+    }
+
+    /// Python `idle_fade_level`: fraction of the chosen opacity the idle sidebar dims to (0.2 - 0.95).
+    pub fn idle_fade_level(&self) -> f64 {
+        self.config.lock().idle_fade_level_setting()
+    }
+
+    /// Python `idle_fade_delay`.
+    pub fn idle_fade_delay(&self) -> i64 {
+        self.config.lock().idle_fade_delay_setting()
+    }
+
+    /// Python `toggle_idle_fade`.
+    pub fn toggle_idle_fade(&mut self) {
+        ConfigManager::update_and_save(&self.config, |cfg| cfg.sidebar_idle_fade = !cfg.sidebar_idle_fade);
+        self.apply_opacity();
+    }
+
+    /// Python `set_idle_fade_level(percent)`.
+    pub fn set_idle_fade_level(&mut self, percent: i32) {
+        let level = percent.clamp(20, 95) as f64 / 100.0;
+        ConfigManager::update_and_save(&self.config, |cfg| cfg.sidebar_idle_level = level);
+        self.apply_opacity();
+    }
+
+    /// Python `set_idle_fade_delay(milliseconds)`.
+    pub fn set_idle_fade_delay(&mut self, milliseconds: i64) {
+        let delay = milliseconds.clamp(200, 30000);
+        ConfigManager::update_and_save(&self.config, |cfg| cfg.sidebar_idle_delay_ms = delay);
+    }
+
+    /// Python `__init__`: the sidebar's signals, the cards' `rowOrderChanged`, and the
+    /// application-wide event filter. Every slot reaches the HUD through `MAIN_HUD` once the event
+    /// that raised it is done.
+    fn connect_sidebar_signals(&mut self) {
+        let sidebar = self.sidebar.clone();
+        sidebar.state_change_requested().connect(|state: &String| {
+            let state = state.clone();
+            with_hud_later(move |hud| hud.set_sidebar_state(&state));
+        });
+        sidebar.scale_step_requested().connect(|steps: &i32| {
+            let steps = *steps;
+            with_hud_later(move |hud| hud.on_sidebar_scale_step(steps));
+        });
+        sidebar.drag_requested().connect(|()| {
+            with_hud_later(|hud| hud.start_sidebar_drag());
+        });
+        sidebar.order_changed().connect(|order: &Vec<String>| {
+            let order = order.clone();
+            with_hud_later(move |hud| hud.set_provider_order(&order));
+        });
+        for (pid, card) in &self.sidebar_cards {
+            let pid = pid.clone();
+            card.borrow().row_order_changed().connect(move |titles: &Vec<String>| {
+                let (pid, titles) = (pid.clone(), titles.clone());
+                with_hud_later(move |hud| hud.set_row_order(&pid, &titles));
+            });
+        }
+        let order = self.provider_order();
+        self.sidebar.set_order(&order);
+        // QApplication.instance().installEventFilter(self)
+        let filter = HudFilter {
+            data: ObjectData::with_auto_id(),
+            state: UiThread::new(Rc::downgrade(&self.sidebar_hud)),
+            config: Arc::clone(&self.config),
+        };
+        // SAFETY: the owner stays in `self.hud_filter` on the UI thread and never reads the
+        // object; its callback runs only from event dispatch.
+        let owner = unsafe { register_owned_qobject(filter) };
+        ferrokit_core::application::CoreApplication::install_event_filter(OwnedObject::object_id(&owner));
+        self.hud_filter = Some(owner);
+    }
+
+    /// Python `_clear_layout(inner_layout)` + the header / margins of `_apply_ui_mode`: the root
+    /// layout of the sidebar style (the stack only, no margins) or of cards / table (header + stack).
+    fn build_root_layout(sidebar: bool, header: &HeaderWidgets, stack: &WidgetRef) -> BoxLayout {
+        let mut root_layout = BoxLayout::vertical();
+        if sidebar {
+            root_layout.set_margins(Margins::new(0, 0, 0, 0));
+            root_layout.set_spacing(0);
+            root_layout.add_widget(stack.clone());
+            return root_layout;
+        }
+        root_layout.set_margins(Margins::new(12, 8, 12, 10));
+        root_layout.set_spacing(6);
+        // Python `inner_layout.addLayout(header_layout)` (`hud_window.py:288`): the header is a nested
+        // layout item, sized by its own children (`QBoxLayout::addLayout`).
+        let mut header_layout = BoxLayout::horizontal();
+        header_layout.set_spacing(6);
+        header_layout.add_widget(header.status_dot.clone());
+        header_layout.add_widget(header.title_label.clone());
+        header_layout.add_widget(header.ghost_label.clone());
+        header_layout.add_widget(header.layout_toggle_btn.clone());
+        header_layout.add_stretch(1);
+        header_layout.add_widget(header.time_label.clone());
+        root_layout.add_layout(Box::new(header_layout), 0);
+        root_layout.add_widget(stack.clone());
+        root_layout
+    }
+
+    /// Rebuilds the root layout for the style that is about to show.
+    fn install_root_layout(&mut self, sidebar: bool) {
+        if self.sidebar_layout == sidebar {
+            return;
+        }
+        self.sidebar_layout = sidebar;
+        let header = HeaderWidgets {
+            status_dot: self.status_dot.clone(),
+            title_label: self.title_label.clone(),
+            ghost_label: self.ghost_label.clone(),
+            layout_toggle_btn: self.layout_toggle_btn.clone(),
+            time_label: self.time_label.clone(),
+        };
+        let layout = Self::build_root_layout(sidebar, &header, &self.stack);
+        self.window.root_widget().borrow_mut().set_layout(Box::new(layout));
+    }
+}
+
+/// The widgets of the header bar (Python `status_dot`, `title_label`, `ghost_label`,
+/// `layout_toggle_btn`, `time_label`).
+struct HeaderWidgets {
+    status_dot: WidgetRef,
+    title_label: WidgetRef,
+    ghost_label: WidgetRef,
+    layout_toggle_btn: WidgetRef,
+    time_label: WidgetRef,
+}
+
 /// Drop guarantees flush and worker thread join during normal object destruction and clean shutdown.
 /// Note: Drop cannot run during abnormal termination (e.g. process::abort, SIGKILL, TerminateProcess,
 /// unhandled access violations, OS crash, or power loss).
 impl Drop for HUDWindow {
     fn drop(&mut self) {
+        if let Some(filter) = self.hud_filter.take() {
+            ferrokit_core::application::CoreApplication::remove_event_filter(OwnedObject::object_id(&filter));
+        }
+        self.sidebar.close_flyout();
         self.debouncer.shutdown();
     }
 }
