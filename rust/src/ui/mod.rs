@@ -157,3 +157,63 @@ pub(crate) fn resolve_is_dark(appearance: &str) -> bool {
         ),
     }
 }
+
+/// A Qt signal of the HUD's own widgets (`Signal(str)`, `Signal(list)`, ...): plain callbacks on the
+/// UI thread. `ferrokit_core::signal::Signal::connect` needs `Send + Sync` slots, which the HUD's
+/// `Rc`-held widgets can never be, so signals between HUD classes are callbacks like these.
+pub struct Notifier<T> {
+    slots: std::cell::RefCell<Vec<std::rc::Rc<dyn Fn(&T)>>>,
+}
+
+impl<T> Default for Notifier<T> {
+    fn default() -> Self {
+        Self {
+            slots: std::cell::RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl<T> Notifier<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// `signal.connect(slot)`.
+    pub fn connect(&self, slot: impl Fn(&T) + 'static) {
+        self.slots.borrow_mut().push(std::rc::Rc::new(slot));
+    }
+
+    /// `signal.emit(value)`. Slots run in connection order; a slot may connect or emit again.
+    pub fn emit(&self, value: &T) {
+        let slots: Vec<_> = self.slots.borrow().clone();
+        for slot in slots {
+            slot(value);
+        }
+    }
+}
+
+/// A value that only the thread that made it may touch, made `Send + Sync` so that a
+/// `ferrokit_core::timer::Timer::timeout` slot (which has to be) can hold the HUD's `Rc` state.
+/// Every HUD timer fires on the UI thread; `get` returns `None` anywhere else.
+pub struct UiThread<T> {
+    value: T,
+    thread: std::thread::ThreadId,
+}
+
+// SAFETY: `value` is only reachable through `get`, which refuses every thread but the one that
+// made it; a `UiThread` is dropped on that thread as well (timers and widgets live there).
+unsafe impl<T> Send for UiThread<T> {}
+unsafe impl<T> Sync for UiThread<T> {}
+
+impl<T> UiThread<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            value,
+            thread: std::thread::current().id(),
+        }
+    }
+
+    pub fn get(&self) -> Option<&T> {
+        (std::thread::current().id() == self.thread).then_some(&self.value)
+    }
+}
