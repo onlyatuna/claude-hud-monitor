@@ -26,9 +26,17 @@ fn rgb8(c: Color) -> (u8, u8, u8) {
 /// Python `SURFACES[dark]`: the surfaces the gauge must read on.
 pub fn surfaces(dark: bool) -> [Color; 3] {
     if dark {
-        [rgb(0x0e, 0x11, 0x17), rgb(0x1e, 0x1e, 0x24), rgb(0x30, 0x30, 0x3a)]
+        [
+            rgb(0x0e, 0x11, 0x17),
+            rgb(0x1e, 0x1e, 0x24),
+            rgb(0x30, 0x30, 0x3a),
+        ]
     } else {
-        [rgb(0xf8, 0xfa, 0xfc), rgb(0xf6, 0xf4, 0xfa), rgb(0xe6, 0xe4, 0xed)]
+        [
+            rgb(0xf8, 0xfa, 0xfc),
+            rgb(0xf6, 0xf4, 0xfa),
+            rgb(0xe6, 0xe4, 0xed),
+        ]
     }
 }
 
@@ -81,7 +89,11 @@ pub fn to_hsl(c: Color) -> (f64, f64, f64) {
     if d == 0.0 {
         return (0.0, 0.0, l);
     }
-    let s = if l <= 0.5 { d / (max + min) } else { d / (2.0 - max - min) };
+    let s = if l <= 0.5 {
+        d / (max + min)
+    } else {
+        d / (2.0 - max - min)
+    };
     let h = if max == r {
         ((g - b) / d).rem_euclid(6.0)
     } else if max == g {
@@ -100,7 +112,11 @@ pub fn from_hsl(h: f64, s: f64, l: f64) -> Color {
         let v = q8(l);
         return rgb(v, v, v);
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let p = 2.0 * l - q;
     let chan = |mut t: f64| {
         if t < 0.0 {
@@ -119,12 +135,21 @@ pub fn from_hsl(h: f64, s: f64, l: f64) -> Color {
             p
         }
     };
-    rgb(q8(chan(h + 1.0 / 3.0)), q8(chan(h)), q8(chan(h - 1.0 / 3.0)))
+    rgb(
+        q8(chan(h + 1.0 / 3.0)),
+        q8(chan(h)),
+        q8(chan(h - 1.0 / 3.0)),
+    )
 }
 
 /// Python `readable`: `color` unchanged when it reads on every surface, otherwise lighter (dark) /
 /// darker (light) in the same hue.
-pub fn readable(color: Color, dark: bool, surfaces_override: Option<&[Color]>, minimum: f64) -> Color {
+pub fn readable(
+    color: Color,
+    dark: bool,
+    surfaces_override: Option<&[Color]>,
+    minimum: f64,
+) -> Color {
     let default = surfaces(dark);
     let surf: &[Color] = match surfaces_override {
         Some(s) if !s.is_empty() => s,
@@ -170,7 +195,15 @@ pub fn ramp_stops(dark: bool, surfaces_override: Option<&[Color]>) -> Vec<(u32, 
     STOPS
         .iter()
         .map(|&(pos, name)| {
-            (pos, readable(scale_color(dark, name), dark, surfaces_override, MIN_CONTRAST))
+            (
+                pos,
+                readable(
+                    scale_color(dark, name),
+                    dark,
+                    surfaces_override,
+                    MIN_CONTRAST,
+                ),
+            )
         })
         .collect()
 }
@@ -183,7 +216,11 @@ pub fn ramp_color(value: f64, dark: bool, surfaces_override: Option<&[Color]>) -
         let (p0, c0) = w[0];
         let (p1, c1) = w[1];
         if value <= p1 as f64 {
-            let f = if p1 > p0 { (value - p0 as f64) / (p1 - p0) as f64 } else { 0.0 };
+            let f = if p1 > p0 {
+                (value - p0 as f64) / (p1 - p0) as f64
+            } else {
+                0.0
+            };
             let (a, b) = (rgb8(c0), rgb8(c1));
             let mix = |a: u8, b: u8| {
                 let a = a as f64;
@@ -442,7 +479,10 @@ mod tests {
         let pixmap = grab(&mut bar, 200);
         let left = pixmap.pixel(8, 3).unwrap();
         let right = pixmap.pixel(192, 3).unwrap();
-        assert_ne!((left.red(), left.green(), left.blue()), (right.red(), right.green(), right.blue()));
+        assert_ne!(
+            (left.red(), left.green(), left.blue()),
+            (right.red(), right.green(), right.blue())
+        );
         assert!(right.red() > left.red(), "warmer on the right");
     }
 
@@ -460,10 +500,7 @@ mod tests {
             for value in (0..=100).step_by(5) {
                 let color = ramp_color(value as f64, dark, None);
                 for surface in surfaces(dark) {
-                    assert!(
-                        contrast(color, surface) >= 3.0,
-                        "{value}% dark={dark}"
-                    );
+                    assert!(contrast(color, surface) >= 3.0, "{value}% dark={dark}");
                 }
             }
         }

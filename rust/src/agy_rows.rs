@@ -32,7 +32,10 @@ pub fn normalize_primary(value: &[String]) -> [String; 2] {
         let first = titles.pop().unwrap();
         return [first, second];
     }
-    [DEFAULT_PRIMARY[0].to_string(), DEFAULT_PRIMARY[1].to_string()]
+    [
+        DEFAULT_PRIMARY[0].to_string(),
+        DEFAULT_PRIMARY[1].to_string(),
+    ]
 }
 
 /// Python `normalize_order`: a full ordering of the five rows; a legacy pair keeps its rows first.
@@ -124,15 +127,25 @@ pub fn arrange_agy(metrics: &UsageMetrics, primary: &[String]) -> UsageMetrics {
     // Insertion-ordered map keyed by uppercased title; later rows overwrite earlier ones.
     let mut rows: Vec<(String, MetricRow)> = Vec::new();
     let [r1, r2] = main_rows(metrics);
-    for row in [r1, r2].into_iter().chain(metrics.extra_metrics.iter().cloned()) {
+    for row in [r1, r2]
+        .into_iter()
+        .chain(metrics.extra_metrics.iter().cloned())
+    {
         let key = row.title.to_uppercase();
         match rows.iter_mut().find(|(k, _)| *k == key) {
             Some(slot) => slot.1 = row,
             None => rows.push((key, row)),
         }
     }
-    let find = |title: &str| rows.iter().find(|(k, _)| k == title).map(|(_, r)| r.clone());
-    if !AGY_ROW_TITLES.iter().all(|t| rows.iter().any(|(k, _)| k == t)) {
+    let find = |title: &str| {
+        rows.iter()
+            .find(|(k, _)| k == title)
+            .map(|(_, r)| r.clone())
+    };
+    if !AGY_ROW_TITLES
+        .iter()
+        .all(|t| rows.iter().any(|(k, _)| k == t))
+    {
         return metrics.clone();
     }
     let order = normalize_order(primary);
@@ -145,7 +158,10 @@ pub fn arrange_agy(metrics: &UsageMetrics, primary: &[String]) -> UsageMetrics {
 /// Returns an unchanged clone when the arrangement does not change the titles.
 pub fn arrange_by_order(metrics: &UsageMetrics, order: &[String]) -> UsageMetrics {
     let [r1, r2] = main_rows(metrics);
-    let rows: Vec<MetricRow> = [r1, r2].into_iter().chain(metrics.extra_metrics.iter().cloned()).collect();
+    let rows: Vec<MetricRow> = [r1, r2]
+        .into_iter()
+        .chain(metrics.extra_metrics.iter().cloned())
+        .collect();
     let wanted: Vec<String> = order.iter().map(|t| t.to_uppercase()).collect();
     let rank = |row: &MetricRow| {
         let t = row.title.to_uppercase();
@@ -157,7 +173,10 @@ pub fn arrange_by_order(metrics: &UsageMetrics, order: &[String]) -> UsageMetric
     let rows: Vec<MetricRow> = ranked.into_iter().map(|(_, r)| r).collect();
     let unchanged = rows[0].title == metrics.metric1_title
         && rows[1].title == metrics.metric2_title
-        && rows[2..].iter().map(|r| &r.title).eq(metrics.extra_metrics.iter().map(|r| &r.title));
+        && rows[2..]
+            .iter()
+            .map(|r| &r.title)
+            .eq(metrics.extra_metrics.iter().map(|r| &r.title));
     if unchanged {
         return metrics.clone();
     }
@@ -194,7 +213,10 @@ mod tests {
     fn same(a: &UsageMetrics, b: &UsageMetrics) -> bool {
         let rows = |m: &UsageMetrics| {
             let [r1, r2] = main_rows(m);
-            [r1, r2].into_iter().chain(m.extra_metrics.iter().cloned()).collect::<Vec<_>>()
+            [r1, r2]
+                .into_iter()
+                .chain(m.extra_metrics.iter().cloned())
+                .collect::<Vec<_>>()
         };
         a.provider_id == b.provider_id && a.error == b.error && rows(a) == rows(b)
     }
@@ -202,9 +224,19 @@ mod tests {
     #[test]
     fn default_pair_is_cg_and_argon() {
         let result = arrange_agy(&agy_metrics(), &[]);
-        assert_eq!((result.metric1_title.as_str(), result.metric1_val), ("C/G 5H", Some(3.0)));
-        assert_eq!((result.metric2_title.as_str(), result.metric2_val), ("ARGON 7D", Some(21.0)));
-        let extras: Vec<&str> = result.extra_metrics.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(
+            (result.metric1_title.as_str(), result.metric1_val),
+            ("C/G 5H", Some(3.0))
+        );
+        assert_eq!(
+            (result.metric2_title.as_str(), result.metric2_val),
+            ("ARGON 7D", Some(21.0))
+        );
+        let extras: Vec<&str> = result
+            .extra_metrics
+            .iter()
+            .map(|r| r.title.as_str())
+            .collect();
         assert_eq!(extras, ["GEMINI 5H", "GEMINI 7D", "C/G 7D"]);
         assert_eq!(result.provider_id, "agy");
     }
@@ -223,7 +255,10 @@ mod tests {
                 let mut expected = s(&AGY_ROW_TITLES);
                 expected.sort();
                 assert_eq!(titles, expected);
-                assert_eq!((result.metric1_title.as_str(), result.metric2_title.as_str()), (first, second));
+                assert_eq!(
+                    (result.metric1_title.as_str(), result.metric2_title.as_str()),
+                    (first, second)
+                );
             }
         }
     }
@@ -255,16 +290,31 @@ mod tests {
         for bad in bads {
             assert_eq!(normalize_primary(&bad).to_vec(), default);
         }
-        assert_eq!(normalize_primary(&s(&["argon 7d", "gemini 5h"])).to_vec(), s(&["ARGON 7D", "GEMINI 5H"]));
+        assert_eq!(
+            normalize_primary(&s(&["argon 7d", "gemini 5h"])).to_vec(),
+            s(&["ARGON 7D", "GEMINI 5H"])
+        );
     }
 
     #[test]
     fn toggle_replaces_oldest_or_moves_to_top() {
         let cur = s(&["C/G 5H", "ARGON 7D"]);
-        assert_eq!(toggle_primary(&cur, "GEMINI 7D").to_vec(), s(&["ARGON 7D", "GEMINI 7D"]));
-        assert_eq!(toggle_primary(&cur, "ARGON 7D").to_vec(), s(&["ARGON 7D", "C/G 5H"]));
-        assert_eq!(toggle_primary(&cur, "C/G 5H").to_vec(), s(&["C/G 5H", "ARGON 7D"]));
-        assert_eq!(toggle_primary(&cur, "bogus").to_vec(), s(&["C/G 5H", "ARGON 7D"]));
+        assert_eq!(
+            toggle_primary(&cur, "GEMINI 7D").to_vec(),
+            s(&["ARGON 7D", "GEMINI 7D"])
+        );
+        assert_eq!(
+            toggle_primary(&cur, "ARGON 7D").to_vec(),
+            s(&["ARGON 7D", "C/G 5H"])
+        );
+        assert_eq!(
+            toggle_primary(&cur, "C/G 5H").to_vec(),
+            s(&["C/G 5H", "ARGON 7D"])
+        );
+        assert_eq!(
+            toggle_primary(&cur, "bogus").to_vec(),
+            s(&["C/G 5H", "ARGON 7D"])
+        );
     }
 
     #[test]
@@ -310,8 +360,15 @@ mod tests {
     fn arrange_uses_the_full_order() {
         let order = s(&["GEMINI 7D", "C/G 7D", "ARGON 7D", "C/G 5H", "GEMINI 5H"]);
         let result = arrange_agy(&agy_metrics(), &order);
-        assert_eq!((result.metric1_title.as_str(), result.metric2_title.as_str()), ("GEMINI 7D", "C/G 7D"));
-        let extras: Vec<&str> = result.extra_metrics.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(
+            (result.metric1_title.as_str(), result.metric2_title.as_str()),
+            ("GEMINI 7D", "C/G 7D")
+        );
+        let extras: Vec<&str> = result
+            .extra_metrics
+            .iter()
+            .map(|r| r.title.as_str())
+            .collect();
         assert_eq!(extras, ["ARGON 7D", "C/G 5H", "GEMINI 5H"]);
     }
 
@@ -327,11 +384,21 @@ mod tests {
         };
         let swapped = arrange_by_order(&data, &s(&["WEEKLY 7D", "SESSION 5H"]));
         assert_eq!(
-            (swapped.metric1_title.as_str(), swapped.metric1_val, swapped.metric2_title.as_str()),
+            (
+                swapped.metric1_title.as_str(),
+                swapped.metric1_val,
+                swapped.metric2_title.as_str()
+            ),
             ("WEEKLY 7D", Some(9.0), "SESSION 5H")
         );
-        assert!(same(&arrange_by_order(&data, &s(&["SESSION 5H", "WEEKLY 7D"])), &data));
+        assert!(same(
+            &arrange_by_order(&data, &s(&["SESSION 5H", "WEEKLY 7D"])),
+            &data
+        ));
         assert!(same(&arrange_by_order(&data, &[]), &data));
-        assert_eq!(arrange_by_order(&data, &s(&["unknown"])).metric1_title, "SESSION 5H");
+        assert_eq!(
+            arrange_by_order(&data, &s(&["unknown"])).metric1_title,
+            "SESSION 5H"
+        );
     }
 }

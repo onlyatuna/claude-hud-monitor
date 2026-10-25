@@ -103,7 +103,8 @@ pub const NAMES: [(&str, &str); 3] = [("claude", "Claude"), ("agy", "AGY"), ("co
 pub const DEFAULT_ORDER: [&str; 3] = ["claude", "agy", "codex"];
 pub const HOLD_MS: u64 = 350;
 /// Same bands as the status scale.
-pub const RAMP_STOPS: [(u32, &str); 4] = [(0, "green"), (50, "yellow"), (75, "orange"), (90, "red")];
+pub const RAMP_STOPS: [(u32, &str); 4] =
+    [(0, "green"), (50, "yellow"), (75, "orange"), (90, "red")];
 /// A row at or above this used % marks the tile.
 pub const ALERT_PCT: f64 = 90.0;
 /// How long a tile glows after one of its windows reset.
@@ -156,7 +157,13 @@ pub enum Which {
     Outer,
 }
 
-pub fn status_color(dark: bool, scheme: Scheme, value: Option<f64>, which: Which, force_scale: bool) -> Color {
+pub fn status_color(
+    dark: bool,
+    scheme: Scheme,
+    value: Option<f64>,
+    which: Which,
+    force_scale: bool,
+) -> Color {
     let theme = get_theme(dark);
     if scheme == Scheme::Duo && !force_scale {
         return match which {
@@ -178,10 +185,22 @@ pub type RowValue = (String, Option<f64>, Option<DateTime<Utc>>);
 
 pub fn row_values(data: &UsageMetrics) -> Vec<RowValue> {
     let mut rows = vec![
-        (data.metric1_title.clone(), data.metric1_val, data.metric1_reset),
-        (data.metric2_title.clone(), data.metric2_val, data.metric2_reset),
+        (
+            data.metric1_title.clone(),
+            data.metric1_val,
+            data.metric1_reset,
+        ),
+        (
+            data.metric2_title.clone(),
+            data.metric2_val,
+            data.metric2_reset,
+        ),
     ];
-    rows.extend(data.extra_metrics.iter().map(|r| (r.title.clone(), r.val, r.reset)));
+    rows.extend(
+        data.extra_metrics
+            .iter()
+            .map(|r| (r.title.clone(), r.val, r.reset)),
+    );
     rows
 }
 
@@ -203,7 +222,9 @@ pub fn window_reset(previous: &RowState, current: &RowState) -> bool {
         let Some((old_val, old_reset)) = previous.get(title) else {
             continue;
         };
-        let (Some(val), Some(reset), Some(old_val), Some(old_reset)) = (val, reset, old_val, old_reset) else {
+        let (Some(val), Some(reset), Some(old_val), Some(old_reset)) =
+            (val, reset, old_val, old_reset)
+        else {
             continue;
         };
         if (*reset - *old_reset).num_seconds() > 600 && val < old_val {
@@ -245,7 +266,10 @@ pub fn refresh_tile(key: &str, data: &UsageMetrics, dark: bool, scheme: Scheme) 
     } else {
         [data.metric1_val, data.metric2_val]
     };
-    let labels = [row_label(&data.metric1_title), row_label(&data.metric2_title)];
+    let labels = [
+        row_label(&data.metric1_title),
+        row_label(&data.metric2_title),
+    ];
     let rows = labels
         .iter()
         .zip(values)
@@ -288,7 +312,11 @@ pub fn tooltip_text(key: &str, data: &UsageMetrics, alert: bool) -> String {
     let mut lines = vec![name_of(key).unwrap_or("").to_owned()];
     for (title, value, reset) in row_values(data) {
         let text = value.map_or_else(|| "--".to_owned(), |v| format!("{v:.0}%"));
-        let label = if key != "agy" { row_label(&title) } else { title.clone() };
+        let label = if key != "agy" {
+            row_label(&title)
+        } else {
+            title.clone()
+        };
         let stamp = reset_stamp(reset, &title);
         let when = if stamp.is_empty() {
             format_countdown(reset)
@@ -375,7 +403,12 @@ pub fn scaled(base: i32, scale: f64) -> i32 {
 }
 
 /// Python `preferred_size` of the strip: `QSize(w, h)`.
-pub fn strip_preferred_size(scale: f64, orientation: Orientation, spacing: i32, count: i32) -> (i32, i32) {
+pub fn strip_preferred_size(
+    scale: f64,
+    orientation: Orientation,
+    spacing: i32,
+    count: i32,
+) -> (i32, i32) {
     let pad = scaled(spacing, scale) * 2;
     let button_w = scaled(BASE_BUTTON_W, scale);
     let button_h = scaled(BASE_BUTTON_H, scale);
@@ -410,7 +443,12 @@ pub fn panel_preferred_size(
 
 /// Python `_flyout_position`: where the flyout opens beside a tile (`tile` in global coordinates,
 /// the flyout `size`, the screen `area`), kept inside the area.
-pub fn flyout_position(tile: GeoRect, size: (i32, i32), area: GeoRect, dock_edge: Option<&str>) -> (i32, i32) {
+pub fn flyout_position(
+    tile: GeoRect,
+    size: (i32, i32),
+    area: GeoRect,
+    dock_edge: Option<&str>,
+) -> (i32, i32) {
     let (tx, ty, tw, th) = tile;
     let (w, h) = size;
     let (ax, ay, aw, ah) = area;
@@ -432,7 +470,12 @@ pub fn flyout_position(tile: GeoRect, size: (i32, i32), area: GeoRect, dock_edge
 /// Python `_move_reorder`: the provider order after dragging `key` to the cursor coordinate `coordinate`
 /// (y when vertical, x when horizontal) in strip coordinates; `centers` gives each key's tile centre
 /// along the same axis.
-pub fn reorder(order: &[String], key: &str, coordinate: i32, centers: &HashMap<String, i32>) -> Vec<String> {
+pub fn reorder(
+    order: &[String],
+    key: &str,
+    coordinate: i32,
+    centers: &HashMap<String, i32>,
+) -> Vec<String> {
     let others: Vec<&String> = order.iter().filter(|k| k.as_str() != key).collect();
     let index = others
         .iter()
@@ -469,7 +512,6 @@ pub fn wheel_steps(remainder: i32, delta: i32) -> (Vec<i32>, i32) {
     }
     (steps, remainder)
 }
-
 
 // ---- widgets ---------------------------------------------------------------------------------
 //
@@ -637,7 +679,9 @@ impl ButtonData {
 
     /// Python `_begin_reorder` (the hold timer fired).
     fn begin_reorder(&self) {
-        let Some(owner) = self.owner.upgrade() else { return };
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
         if self.press_pos.get().is_none()
             || self.dragged.get()
             || !self.is_provider()
@@ -737,7 +781,9 @@ impl Widget for Indicators {
 
     /// Python `_Indicators.paintEvent`.
     fn paint_event(&mut self, p: &mut Painter) {
-        let Some(owner) = self.owner.upgrade() else { return };
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
         let t = owner.tokens();
         let scale = owner.scale.get() as f32;
         p.set_render_hint(RenderHint::Antialiasing, true);
@@ -771,7 +817,12 @@ impl Widget for Indicators {
         if tile.stale {
             p.set_pen(None);
             p.set_brush(Brush::Color(t.stale));
-            p.draw_ellipse(RectF::new(right - 10.0 * scale, 0.0, 6.0 * scale, 6.0 * scale));
+            p.draw_ellipse(RectF::new(
+                right - 10.0 * scale,
+                0.0,
+                6.0 * scale,
+                6.0 * scale,
+            ));
         }
         if self.data.kind == "agy" {
             let count = tile.dot_colors.len() as f32;
@@ -809,7 +860,10 @@ pub struct SidebarButton {
 
 impl SidebarButton {
     /// Builds the button and its indicators child; returns the widget and the shared data.
-    pub fn create(kind: &str, owner: &Rc<SidebarInner>) -> (WidgetRef, Rc<ButtonData>, Rc<Notifier<()>>) {
+    pub fn create(
+        kind: &str,
+        owner: &Rc<SidebarInner>,
+    ) -> (WidgetRef, Rc<ButtonData>, Rc<Notifier<()>>) {
         let hold = Timer::new();
         hold.set_single_shot(true);
         let data = Rc::new(ButtonData {
@@ -856,7 +910,9 @@ impl SidebarButton {
             let name = name_of(kind).unwrap_or("Toggle sidebar");
             w.set_accessible_name(name);
         }
-        widget.borrow_mut().set_tool_tip(name_of(kind).unwrap_or("Toggle sidebar"));
+        widget
+            .borrow_mut()
+            .set_tool_tip(name_of(kind).unwrap_or("Toggle sidebar"));
         (widget, data, clicked)
     }
 
@@ -889,8 +945,16 @@ fn initial_tile() -> TileState {
     let neutral = get_theme(true).neutral;
     TileState {
         rows: vec![
-            TileRow { label: "5H".into(), value: None, color: neutral },
-            TileRow { label: "7D".into(), value: None, color: neutral },
+            TileRow {
+                label: "5H".into(),
+                value: None,
+                color: neutral,
+            },
+            TileRow {
+                label: "7D".into(),
+                value: None,
+                color: neutral,
+            },
         ],
         display: ["--".to_owned(), "--".to_owned()],
         dot_colors: vec![neutral; 3],
@@ -913,7 +977,9 @@ impl QObject for SidebarButton {
         match &event.kind {
             EventKind::ToolTip { .. } => {
                 // The flyout already shows the details; a native tooltip on top of it only flickers.
-                self.owner.upgrade().is_some_and(|o| o.active.borrow().is_some())
+                self.owner
+                    .upgrade()
+                    .is_some_and(|o| o.active.borrow().is_some())
             }
             EventKind::Enter { .. } => {
                 self.enter_event(Point::new(0, 0));
@@ -946,7 +1012,11 @@ impl QObject for SidebarButton {
                 self.update();
                 true
             }
-            EventKind::KeyPress { key, modifiers, is_repeat } => {
+            EventKind::KeyPress {
+                key,
+                modifiers,
+                is_repeat,
+            } => {
                 self.key_press_event(*key, *modifiers, *is_repeat);
                 true
             }
@@ -1131,7 +1201,9 @@ impl Widget for SidebarButton {
 
     /// Python `_Button.paintEvent`.
     fn paint_event(&mut self, p: &mut Painter) {
-        let Some(owner) = self.owner.upgrade() else { return };
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
         let t = owner.tokens();
         let dark = owner.dark.get();
         let scale = owner.scale.get();
@@ -1155,7 +1227,10 @@ impl Widget for SidebarButton {
         let provider = self.data.is_provider();
         let flash = self.data.flash.get();
         if flash > 0.0 && provider {
-            let glow = rgba(t.provider(&self.data.kind, dark), (0.45 * flash).min(0.45) as f32);
+            let glow = rgba(
+                t.provider(&self.data.kind, dark),
+                (0.45 * flash).min(0.45) as f32,
+            );
             p.set_pen(None);
             p.set_brush(Brush::Color(glow));
             p.draw_rounded_rect(inner, radius, radius);
@@ -1163,7 +1238,11 @@ impl Widget for SidebarButton {
         if provider {
             // identity stripe: the service colour, never a usage colour
             p.set_pen(None);
-            let stripe = if tile.offline { t.muted } else { t.provider(&self.data.kind, dark) };
+            let stripe = if tile.offline {
+                t.muted
+            } else {
+                t.provider(&self.data.kind, dark)
+            };
             p.set_brush(Brush::Color(stripe));
             p.draw_rounded_rect(
                 RectF::new(1.5 * s, 7.0 * s, 2.5 * s, h - 14.0 * s),
@@ -1173,7 +1252,11 @@ impl Widget for SidebarButton {
         }
         if self.has_focus() {
             p.set_brush(Brush::NoBrush);
-            let color = if provider { t.provider(&self.data.kind, dark) } else { t.focus };
+            let color = if provider {
+                t.provider(&self.data.kind, dark)
+            } else {
+                t.focus
+            };
             p.set_pen(Some(round_pen(color, t.focus_width as f32 * s)));
             p.draw_rounded_rect(
                 RectF::new(2.0 * s, 2.0 * s, w - 4.0 * s, h - 4.0 * s),
@@ -1183,12 +1266,31 @@ impl Widget for SidebarButton {
         }
         let family = t.font;
         if self.data.kind == "toggle" {
-            let font = font_px(family, (8.0f32).max((t.font_size as f32 * s).round()), false);
-            let glyph = if owner.state.get() == State::Strip { "\u{2261}" } else { "\u{25a5}" };
-            draw_text_in(p, RectF::new(0.0, 0.0, w, h), Align::Center, glyph, &font, t.text);
+            let font = font_px(
+                family,
+                (8.0f32).max((t.font_size as f32 * s).round()),
+                false,
+            );
+            let glyph = if owner.state.get() == State::Strip {
+                "\u{2261}"
+            } else {
+                "\u{25a5}"
+            };
+            draw_text_in(
+                p,
+                RectF::new(0.0, 0.0, w, h),
+                Align::Center,
+                glyph,
+                &font,
+                t.text,
+            );
             return;
         }
-        let name_color = if tile.offline { t.muted } else { t.provider(&self.data.kind, dark) };
+        let name_color = if tile.offline {
+            t.muted
+        } else {
+            t.provider(&self.data.kind, dark)
+        };
         let title_width = if self.data.kind == "agy" { 30.0 } else { 52.0 };
         let font = font_px(family, (8.0f32).max((t.font_size as f32 * s).round()), true);
         draw_text_in(
@@ -1205,7 +1307,14 @@ impl Widget for SidebarButton {
             let y = (19 + index as i32 * 21) as f32 * s;
             if self.data.show_labels.get() {
                 let label_font = font_px(family, (8.0f32).max((10.0 * s).round()), false);
-                draw_text_in(p, RectF::new(6.0 * s, y, 30.0 * s, 15.0 * s), Align::Left, &row.label, &label_font, t.muted);
+                draw_text_in(
+                    p,
+                    RectF::new(6.0 * s, y, 30.0 * s, 15.0 * s),
+                    Align::Left,
+                    &row.label,
+                    &label_font,
+                    t.muted,
+                );
             }
             let shown = row_color(row, dark, scheme);
             let value_font = font_px(family, (8.0f32).max((12.0 * s).round()), true);
@@ -1327,7 +1436,8 @@ fn box_layout_widget(direction: Direction) -> WidgetRef {
 }
 
 fn box_index_of(layout: &BoxLayout, widget: &WidgetRef) -> Option<usize> {
-    (0..layout.count()).find(|&i| Layout::item_at(layout, i).is_some_and(|w| Rc::ptr_eq(&w, widget)))
+    (0..layout.count())
+        .find(|&i| Layout::item_at(layout, i).is_some_and(|w| Rc::ptr_eq(&w, widget)))
 }
 
 fn layout_remove(owner: &WidgetRef, widget: &WidgetRef) {
@@ -1339,7 +1449,9 @@ fn layout_remove(owner: &WidgetRef, widget: &WidgetRef) {
 }
 
 fn layout_add(owner: &WidgetRef, widget: &WidgetRef) {
-    owner.borrow().with_box_layout(|l| Layout::add_widget(l, Rc::clone(widget)));
+    owner
+        .borrow()
+        .with_box_layout(|l| Layout::add_widget(l, Rc::clone(widget)));
 }
 
 /// Python `re.sub(r'([\d.]+)px', lambda m: f'{float(m[1])*s:g}px', sheet)`.
@@ -1452,20 +1564,33 @@ impl SidebarWidget {
             provider_clicks.push((key.to_owned(), clicked));
         }
         let _ = inner.toggle.set(toggle_widget);
-        let _ = inner.buttons.set(built.into_iter().filter(|(k, _, _)| k != "toggle").collect());
+        let _ = inner.buttons.set(
+            built
+                .into_iter()
+                .filter(|(k, _, _)| k != "toggle")
+                .collect(),
+        );
         let this = SidebarWidget { inner };
         this.wire(toggle_clicked, provider_clicks);
         this
     }
 
-    fn wire(&self, toggle_clicked: Rc<Notifier<()>>, provider_clicks: Vec<(String, Rc<Notifier<()>>)>) {
+    fn wire(
+        &self,
+        toggle_clicked: Rc<Notifier<()>>,
+        provider_clicks: Vec<(String, Rc<Notifier<()>>)>,
+    ) {
         let inner = &self.inner;
         // toggle: stateChangeRequested.emit('panel' if strip else 'strip')
         {
             let weak = Rc::downgrade(inner);
             toggle_clicked.connect(move |()| {
                 if let Some(inner) = weak.upgrade() {
-                    let next = if inner.state.get() == State::Strip { "panel" } else { "strip" };
+                    let next = if inner.state.get() == State::Strip {
+                        "panel"
+                    } else {
+                        "strip"
+                    };
                     inner.state_change_requested.emit(&next.to_owned());
                 }
             });
@@ -1536,11 +1661,14 @@ impl SidebarWidget {
         {
             // `ContextMenu` on the flyout window (not on a tile): the HUD shows its menu
             let weak = Rc::downgrade(inner);
-            inner.flyout.borrow_mut().set_context_menu_handler(move |pos| {
-                if let Some(inner) = weak.upgrade() {
-                    inner.context_menu_requested.emit(&pos);
-                }
-            });
+            inner
+                .flyout
+                .borrow_mut()
+                .set_context_menu_handler(move |pos| {
+                    if let Some(inner) = weak.upgrade() {
+                        inner.context_menu_requested.emit(&pos);
+                    }
+                });
         }
         {
             // Python `_Flyout.paintEvent`: the rounded surface painted by the flyout itself
@@ -1707,7 +1835,9 @@ impl SidebarInner {
     }
 
     fn toggle(&self) -> &WidgetRef {
-        self.toggle.get().expect("toggle is set in SidebarWidget::new")
+        self.toggle
+            .get()
+            .expect("toggle is set in SidebarWidget::new")
     }
 
     fn button(&self, key: &str) -> Option<&(String, WidgetRef, Rc<ButtonData>)> {
@@ -1785,10 +1915,16 @@ impl SidebarInner {
                     }
                 });
                 let Some(Some(widget)) = taken else { break };
-                if self.cards.iter().any(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget)) {
+                if self
+                    .cards
+                    .iter()
+                    .any(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget))
+                {
                     // `_restore_card_style`
-                    if let Some((_, card)) =
-                        self.cards.iter().find(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget))
+                    if let Some((_, card)) = self
+                        .cards
+                        .iter()
+                        .find(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget))
                     {
                         card.borrow_mut().set_font_scale(1.0);
                     }
@@ -1846,7 +1982,11 @@ impl SidebarInner {
                 let g = w.geometry();
                 centers.insert(
                     k.clone(),
-                    if vertical { g.y + g.height / 2 } else { g.x + g.width / 2 },
+                    if vertical {
+                        g.y + g.height / 2
+                    } else {
+                        g.x + g.width / 2
+                    },
                 );
             }
         }
@@ -1875,7 +2015,11 @@ impl SidebarInner {
     fn relayout(self: &Rc<Self>) {
         let s = self.scale.get();
         let vertical = self.orientation.get() == Orientation::Vertical;
-        let direction = if vertical { Direction::TopToBottom } else { Direction::LeftToRight };
+        let direction = if vertical {
+            Direction::TopToBottom
+        } else {
+            Direction::LeftToRight
+        };
         let t = self.tokens();
         let padding = py_round(t.spacing as f64 * s);
         self.container.borrow().with_box_layout(|l| {
@@ -1883,7 +2027,9 @@ impl SidebarInner {
             l.set_margins(Margins::new(padding, padding, padding, padding));
             l.set_spacing(0);
         });
-        self.strip.borrow().with_box_layout(|l| l.set_direction(direction));
+        self.strip
+            .borrow()
+            .with_box_layout(|l| l.set_direction(direction));
         self.panel.borrow().with_box_layout(|l| {
             l.set_direction(direction);
             l.set_spacing(py_round(4.0 * s));
@@ -1893,12 +2039,16 @@ impl SidebarInner {
         {
             let toggle = self.toggle().borrow();
             if vertical {
-                self.container.borrow().with_box_layout(|l| l.insert_widget(0, Rc::clone(self.toggle()), 0));
+                self.container
+                    .borrow()
+                    .with_box_layout(|l| l.insert_widget(0, Rc::clone(self.toggle()), 0));
                 toggle.set_minimum_size(Size::new(0, 0));
                 toggle.set_maximum_size(Size::new(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
                 toggle.set_fixed_size(Size::new(scaled(BASE_BUTTON_W, s), handle));
             } else {
-                self.container.borrow().with_box_layout(|l| Layout::add_widget(l, Rc::clone(self.toggle())));
+                self.container
+                    .borrow()
+                    .with_box_layout(|l| Layout::add_widget(l, Rc::clone(self.toggle())));
                 toggle.set_minimum_size(Size::new(handle, handle));
                 toggle.set_maximum_size(Size::new(handle, QWIDGETSIZE_MAX));
                 toggle.set_size_policy(QSizePolicy::new(Policy::Fixed, Policy::Expanding));
@@ -1917,17 +2067,30 @@ impl SidebarInner {
             w.update();
         }
         let panel_sheet = get_cards_stylesheet(self.dark.get());
-        self.panel.borrow().set_style_sheet(&scale_px_in_qss(panel_sheet, s));
+        self.panel
+            .borrow()
+            .set_style_sheet(&scale_px_in_qss(panel_sheet, s));
         let panel_vertical_width = scaled(BASE_PANEL_W, s) - 2 * padding;
         for (_, card) in &self.cards {
             let widget = card.borrow().widget();
             if self.state.get() == State::Panel {
                 // side by side, cards keep their natural height instead of stretching to the tallest one
                 self.panel.borrow().with_box_layout(|l| {
-                    l.set_alignment(&widget, if vertical { Alignment::NONE } else { Alignment::TOP });
+                    l.set_alignment(
+                        &widget,
+                        if vertical {
+                            Alignment::NONE
+                        } else {
+                            Alignment::TOP
+                        },
+                    );
                 });
                 card.borrow_mut().set_font_scale(s);
-                let width = if vertical { panel_vertical_width } else { scaled(BASE_PANEL_W, s) };
+                let width = if vertical {
+                    panel_vertical_width
+                } else {
+                    scaled(BASE_PANEL_W, s)
+                };
                 let w = widget.borrow();
                 w.set_minimum_size(Size::new(width, 0));
                 w.set_maximum_size(Size::new(width, QWIDGETSIZE_MAX));
@@ -1972,9 +2135,9 @@ impl SidebarInner {
             format_g(t.radius as f64 * self.scale.get()),
             gauge::to_hex(t.separator),
         ));
-        self.flyout
-            .borrow_mut()
-            .set_style_sheet(&format!("{cards_sheet}QWidget {{background-color: transparent;}}"));
+        self.flyout.borrow_mut().set_style_sheet(&format!(
+            "{cards_sheet}QWidget {{background-color: transparent;}}"
+        ));
         self.relayout();
         let keys: Vec<String> = self.metrics.borrow().keys().cloned().collect();
         for key in &keys {
@@ -1987,20 +2150,26 @@ impl SidebarInner {
 
     /// Python `update_metrics`.
     fn update_metrics(self: &Rc<Self>, data: &Metrics) {
-        let Some((_, _, button)) = self.button(&data.provider_id) else { return };
+        let Some((_, _, button)) = self.button(&data.provider_id) else {
+            return;
+        };
         let previous = self
             .row_state
             .borrow()
             .get(&data.provider_id)
             .cloned()
             .unwrap_or_default();
-        self.metrics.borrow_mut().insert(data.provider_id.clone(), data.clone());
+        self.metrics
+            .borrow_mut()
+            .insert(data.provider_id.clone(), data.clone());
         let current = row_state(data);
         let offline = is_offline(data);
         if !offline && window_reset(&previous, &current) {
             self.flash(button);
         }
-        self.row_state.borrow_mut().insert(data.provider_id.clone(), current);
+        self.row_state
+            .borrow_mut()
+            .insert(data.provider_id.clone(), current);
         self.refresh_tile(&data.provider_id);
         self.refresh_tooltip(&data.provider_id);
         if self.state.get() == State::Panel {
@@ -2010,7 +2179,8 @@ impl SidebarInner {
 
     /// Python `_refresh_tile`.
     fn refresh_tile(&self, key: &str) {
-        let (Some((_, widget, data)), Some(metrics)) = (self.button(key), self.metrics.borrow().get(key).cloned())
+        let (Some((_, widget, data)), Some(metrics)) =
+            (self.button(key), self.metrics.borrow().get(key).cloned())
         else {
             return;
         };
@@ -2025,7 +2195,8 @@ impl SidebarInner {
 
     /// Python `_refresh_tooltip`.
     fn refresh_tooltip(&self, key: &str) {
-        let (Some((_, widget, data)), Some(metrics)) = (self.button(key), self.metrics.borrow().get(key).cloned())
+        let (Some((_, widget, data)), Some(metrics)) =
+            (self.button(key), self.metrics.borrow().get(key).cloned())
         else {
             return;
         };
@@ -2055,8 +2226,12 @@ impl SidebarInner {
             return;
         }
         fn tick(handle: Arc<UiThread<Weak<ButtonData>>>, steps: f64) {
-            let Some(button) = handle.get().and_then(|w| w.upgrade()) else { return };
-            button.flash.set((button.flash.get() - 1.0 / steps).max(0.0));
+            let Some(button) = handle.get().and_then(|w| w.upgrade()) else {
+                return;
+            };
+            button
+                .flash
+                .set((button.flash.get() - 1.0 / steps).max(0.0));
             button.update();
             if button.flash.get() > 0.0 {
                 Timer::single_shot(FLASH_STEP_MS, move || tick(handle, steps));
@@ -2134,7 +2309,9 @@ impl SidebarInner {
 
     /// Python `_flyout_position` for the open flyout: moves it beside its tile.
     fn place_flyout(&self, key: &str) {
-        let Some(tile) = self.button_rect(key) else { return };
+        let Some(tile) = self.button_rect(key) else {
+            return;
+        };
         let area = self.screen_area(tile);
         let g = self.flyout.borrow().geometry();
         let edge = self.dock_edge.borrow().clone();
@@ -2144,7 +2321,9 @@ impl SidebarInner {
             (area.x, area.y, area.width, area.height),
             edge.as_deref(),
         );
-        self.flyout.borrow_mut().set_geometry(Rect::new(x, y, g.width, g.height));
+        self.flyout
+            .borrow_mut()
+            .set_geometry(Rect::new(x, y, g.width, g.height));
     }
 
     /// Python `_open_flyout`.
@@ -2161,7 +2340,9 @@ impl SidebarInner {
         self.pinned.set(pinned);
         *self.pinned_key.borrow_mut() = pinned_key;
         *self.active.borrow_mut() = Some(key.to_owned());
-        let (Some(card), Some(tile)) = (self.card(key).cloned(), self.button_rect(key)) else { return };
+        let (Some(card), Some(tile)) = (self.card(key).cloned(), self.button_rect(key)) else {
+            return;
+        };
         card.borrow_mut().set_font_scale(1.0); // `_restore_card_style`
         let widget = card.borrow().widget();
         {
@@ -2170,7 +2351,9 @@ impl SidebarInner {
             w.set_maximum_size(Size::new(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
         }
         layout_add(&self.flyout_root, &widget);
-        widget.borrow().set_window_id(Some(self.flyout.borrow().id()));
+        widget
+            .borrow()
+            .set_window_id(Some(self.flyout.borrow().id()));
         ferrokit_widgets::widget::set_widget_visible(&widget, true);
         let area = self.screen_area(tile);
         let hint = self
@@ -2224,8 +2407,13 @@ impl SidebarInner {
             .animation_clock
             .replace(Some(now))
             .map_or(16, |last| now.duration_since(last).as_millis() as u64);
-        let Ok(mut flyout) = self.flyout.try_borrow_mut() else { return };
-        let running = self.animation.borrow_mut().step_target(delta.max(1), &mut *flyout);
+        let Ok(mut flyout) = self.flyout.try_borrow_mut() else {
+            return;
+        };
+        let running = self
+            .animation
+            .borrow_mut()
+            .step_target(delta.max(1), &mut *flyout);
         if !running {
             self.animation_timer.stop();
         }
@@ -2298,7 +2486,11 @@ impl QObject for SidebarFilter {
             return false;
         };
         match &event.kind {
-            EventKind::Wheel { angle_delta_y, modifiers, .. } if modifiers & CONTROL_MODIFIER != 0 => {
+            EventKind::Wheel {
+                angle_delta_y,
+                modifiers,
+                ..
+            } if modifiers & CONTROL_MODIFIER != 0 => {
                 let (steps, remainder) = wheel_steps(inner.wheel_remainder.get(), *angle_delta_y);
                 inner.wheel_remainder.set(remainder);
                 if !steps.is_empty() {
@@ -2330,7 +2522,6 @@ impl QObject for SidebarFilter {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2356,7 +2547,14 @@ mod tests {
         assert_eq!(tokens(true).stale, gauge::parse_hex("#f59e0b"));
         assert_eq!(tokens(false).stale, gauge::parse_hex("#92400e"));
         assert_eq!(tokens(true).background, gauge::parse_hex("#1e1e24"));
-        assert_eq!((tokens(true).hover_ms, tokens(true).leave_ms, tokens(true).animation_ms), (300, 600, 160));
+        assert_eq!(
+            (
+                tokens(true).hover_ms,
+                tokens(true).leave_ms,
+                tokens(true).animation_ms
+            ),
+            (300, 600, 160)
+        );
     }
 
     #[test]
@@ -2370,16 +2568,34 @@ mod tests {
         let tile = refresh_tile("claude", &data, true, Scheme::Scale);
         assert_eq!(tile.display, ["20%", "8%"]);
         assert_eq!(tile.rows[0].label, "5H");
-        assert_eq!(tile.rows[0].color, status_color(true, Scheme::Scale, Some(20.0), Which::Inner, false));
-        assert_eq!(tile.rows[1].color, status_color(true, Scheme::Scale, Some(8.0), Which::Outer, false));
+        assert_eq!(
+            tile.rows[0].color,
+            status_color(true, Scheme::Scale, Some(20.0), Which::Inner, false)
+        );
+        assert_eq!(
+            tile.rows[1].color,
+            status_color(true, Scheme::Scale, Some(8.0), Which::Outer, false)
+        );
 
-        let blank = refresh_tile("claude", &UsageMetrics { provider_id: "claude".into(), ..Default::default() }, true, Scheme::Scale);
+        let blank = refresh_tile(
+            "claude",
+            &UsageMetrics {
+                provider_id: "claude".into(),
+                ..Default::default()
+            },
+            true,
+            Scheme::Scale,
+        );
         assert_eq!(blank.display, ["--", "--"]);
         assert!(blank.rows.iter().all(|r| r.value.is_none()));
 
         let offline = refresh_tile(
             "claude",
-            &UsageMetrics { error: Some("offline".into()), metric1_val: Some(20.0), ..Default::default() },
+            &UsageMetrics {
+                error: Some("offline".into()),
+                metric1_val: Some(20.0),
+                ..Default::default()
+            },
             true,
             Scheme::Scale,
         );
@@ -2401,7 +2617,15 @@ mod tests {
         );
         assert!(stale.stale && !stale.offline);
         assert_eq!(stale.display, ["0%", "--"]);
-        let tip = tooltip_text("claude", &UsageMetrics { stale: true, error: Some("timeout".into()), ..Default::default() }, false);
+        let tip = tooltip_text(
+            "claude",
+            &UsageMetrics {
+                stale: true,
+                error: Some("timeout".into()),
+                ..Default::default()
+            },
+            false,
+        );
         assert!(tip.contains("STALE"));
     }
 
@@ -2409,7 +2633,10 @@ mod tests {
     fn agy_dots_follow_the_extra_rows() {
         let data = UsageMetrics {
             provider_id: "agy".into(),
-            extra_metrics: vec![MetricRow::new("C/G 7D", Some(15.0), "15%"), MetricRow::new("ARGON 7D", Some(21.0), "21%")],
+            extra_metrics: vec![
+                MetricRow::new("C/G 7D", Some(15.0), "15%"),
+                MetricRow::new("ARGON 7D", Some(21.0), "21%"),
+            ],
             ..Default::default()
         };
         let tile = refresh_tile("agy", &data, true, Scheme::Scale);
@@ -2419,11 +2646,22 @@ mod tests {
         // the duo scheme never changes the dots
         let light = refresh_tile("agy", &data, false, Scheme::Duo);
         assert_eq!(light.dot_colors, vec![get_theme(false).scale_green; 2]);
-        let none = refresh_tile("agy", &UsageMetrics { provider_id: "agy".into(), ..Default::default() }, false, Scheme::Duo);
+        let none = refresh_tile(
+            "agy",
+            &UsageMetrics {
+                provider_id: "agy".into(),
+                ..Default::default()
+            },
+            false,
+            Scheme::Duo,
+        );
         assert!(none.dot_colors.is_empty());
         let unknown = refresh_tile(
             "agy",
-            &UsageMetrics { extra_metrics: vec![MetricRow::new("C/G 7D", None, "--")], ..Default::default() },
+            &UsageMetrics {
+                extra_metrics: vec![MetricRow::new("C/G 7D", None, "--")],
+                ..Default::default()
+            },
             false,
             Scheme::Duo,
         );
@@ -2445,7 +2683,14 @@ mod tests {
             true,
             Scheme::Scale,
         );
-        assert_eq!(three.rows.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["CG 5H", "Ar 7D"]);
+        assert_eq!(
+            three
+                .rows
+                .iter()
+                .map(|r| r.label.as_str())
+                .collect::<Vec<_>>(),
+            ["CG 5H", "Ar 7D"]
+        );
         assert_eq!(three.dot_colors.len(), 3);
     }
 
@@ -2455,7 +2700,10 @@ mod tests {
             provider_id: "agy".into(),
             metric1_val: Some(21.0),
             metric2_val: Some(1.0),
-            extra_metrics: vec![MetricRow::new("C/G 7D", Some(15.0), "15%"), MetricRow::new("ARGON 7D", Some(21.0), "21%")],
+            extra_metrics: vec![
+                MetricRow::new("C/G 7D", Some(15.0), "15%"),
+                MetricRow::new("ARGON 7D", Some(21.0), "21%"),
+            ],
             ..Default::default()
         };
         let tip = tooltip_text("agy", &data, false);
@@ -2469,9 +2717,16 @@ mod tests {
     fn tile_colors_read_on_every_tile_surface() {
         for dark in dark_themes() {
             for scheme in [Scheme::Scale, Scheme::Duo] {
-                let data = UsageMetrics { metric1_val: Some(95.0), metric2_val: Some(10.0), ..Default::default() };
+                let data = UsageMetrics {
+                    metric1_val: Some(95.0),
+                    metric2_val: Some(10.0),
+                    ..Default::default()
+                };
                 let tile = refresh_tile("claude", &data, dark, scheme);
-                assert_eq!(tile.rows[0].color, status_color(dark, scheme, Some(95.0), Which::Inner, false));
+                assert_eq!(
+                    tile.rows[0].color,
+                    status_color(dark, scheme, Some(95.0), Which::Inner, false)
+                );
                 assert_ne!(tile.rows[0].color, tile.rows[1].color);
                 for row in &tile.rows {
                     let shown = text_color(row.color, dark);
@@ -2481,8 +2736,26 @@ mod tests {
                 }
             }
         }
-        let scale = refresh_tile("claude", &UsageMetrics { metric1_val: Some(95.0), metric2_val: Some(10.0), ..Default::default() }, true, Scheme::Scale);
-        let duo = refresh_tile("claude", &UsageMetrics { metric1_val: Some(95.0), metric2_val: Some(10.0), ..Default::default() }, true, Scheme::Duo);
+        let scale = refresh_tile(
+            "claude",
+            &UsageMetrics {
+                metric1_val: Some(95.0),
+                metric2_val: Some(10.0),
+                ..Default::default()
+            },
+            true,
+            Scheme::Scale,
+        );
+        let duo = refresh_tile(
+            "claude",
+            &UsageMetrics {
+                metric1_val: Some(95.0),
+                metric2_val: Some(10.0),
+                ..Default::default()
+            },
+            true,
+            Scheme::Duo,
+        );
         assert_ne!(
             scale.rows.iter().map(|r| r.color).collect::<Vec<_>>(),
             duo.rows.iter().map(|r| r.color).collect::<Vec<_>>()
@@ -2494,7 +2767,11 @@ mod tests {
         for dark in dark_themes() {
             for scheme in [Scheme::Scale, Scheme::Duo] {
                 for value in [0.0, 30.0, 60.0, 85.0, 95.0] {
-                    let data = UsageMetrics { metric1_val: Some(value), metric2_val: Some(value), ..Default::default() };
+                    let data = UsageMetrics {
+                        metric1_val: Some(value),
+                        metric2_val: Some(value),
+                        ..Default::default()
+                    };
                     let tile = refresh_tile("codex", &data, dark, scheme);
                     for row in &tile.rows {
                         let shown = row_color(row, dark, scheme);
@@ -2513,7 +2790,10 @@ mod tests {
     #[test]
     fn scale_bars_are_a_green_to_red_gauge() {
         let stops = ramp_stops(true);
-        assert_eq!(stops.iter().map(|(p, _)| *p).collect::<Vec<_>>(), [0, 50, 75, 90]);
+        assert_eq!(
+            stops.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
+            [0, 50, 75, 90]
+        );
         assert_eq!(ramp(0.0, true), stops[0].1);
         assert_eq!(ramp(100.0, true), stops[3].1);
         let mid = gauge::to_hex(ramp(25.0, true));
@@ -2536,14 +2816,25 @@ mod tests {
         let tile = refresh_tile("claude", &metrics(90.0, None), true, Scheme::Scale);
         assert!(tile.alert);
         assert!(tooltip_text("claude", &metrics(90.0, None), tile.alert).contains("90%"));
-        assert!(!refresh_tile("claude", &metrics(95.0, Some("offline")), true, Scheme::Scale).alert);
+        assert!(
+            !refresh_tile(
+                "claude",
+                &metrics(95.0, Some("offline")),
+                true,
+                Scheme::Scale
+            )
+            .alert
+        );
         let agy = UsageMetrics {
             metric1_val: Some(1.0),
             metric2_val: Some(2.0),
             extra_metrics: vec![MetricRow::new("ARGON 7D", Some(93.0), "93%")],
             ..Default::default()
         };
-        assert!(refresh_tile("agy", &agy, true, Scheme::Scale).alert, "extra rows count too");
+        assert!(
+            refresh_tile("agy", &agy, true, Scheme::Scale).alert,
+            "extra rows count too"
+        );
     }
 
     #[test]
@@ -2572,11 +2863,20 @@ mod tests {
     #[test]
     fn geometry_of_the_strip_and_panel() {
         // the Python test: a 1.0 vertical strip is 72 wide (64 + 2 * 4)
-        assert_eq!(strip_preferred_size(1.0, Orientation::Vertical, 4, 3), (72, 22 + 3 * 64 + 8));
-        assert_eq!(strip_preferred_size(1.0, Orientation::Horizontal, 4, 3), (3 * 64 + 22 + 8, 72));
+        assert_eq!(
+            strip_preferred_size(1.0, Orientation::Vertical, 4, 3),
+            (72, 22 + 3 * 64 + 8)
+        );
+        assert_eq!(
+            strip_preferred_size(1.0, Orientation::Horizontal, 4, 3),
+            (3 * 64 + 22 + 8, 72)
+        );
         let (w, h) = strip_preferred_size(1.5, Orientation::Vertical, 4, 3);
         assert!((w as f64 - 72.0 * 1.5).abs() <= 3.0 && (h as f64 - 222.0 * 1.5).abs() <= 3.0);
-        assert_eq!(panel_preferred_size(1.0, Orientation::Vertical, 4, 3, 500).0, 220);
+        assert_eq!(
+            panel_preferred_size(1.0, Orientation::Vertical, 4, 3, 500).0,
+            220
+        );
         let (w, h) = panel_preferred_size(1.0, Orientation::Horizontal, 4, 3, 100);
         assert_eq!((w, h), (22 + 3 * 220 + 2 * (8 + 1) + 8, 22.max(100) + 8));
         assert_eq!(clamp_scale(0.5), Some(0.6));
@@ -2589,7 +2889,13 @@ mod tests {
         let tile = (500, 400, 64, 64);
         let size = (260, 200);
         let area = (0, 0, 2000, 1500);
-        for edge in [Some("right"), Some("left"), Some("top"), Some("bottom"), None] {
+        for edge in [
+            Some("right"),
+            Some("left"),
+            Some("top"),
+            Some("bottom"),
+            None,
+        ] {
             let (x, y) = flyout_position(tile, size, area, edge);
             assert!(x >= 0 && y >= 0 && x + size.0 <= 2000 && y + size.1 <= 1500);
             match edge {
@@ -2608,18 +2914,34 @@ mod tests {
     #[test]
     fn press_hold_drag_reorders() {
         let order: Vec<String> = ["claude", "agy", "codex"].map(String::from).to_vec();
-        let centers: HashMap<String, i32> =
-            [("claude".to_owned(), 55), ("agy".to_owned(), 119), ("codex".to_owned(), 183)].into();
+        let centers: HashMap<String, i32> = [
+            ("claude".to_owned(), 55),
+            ("agy".to_owned(), 119),
+            ("codex".to_owned(), 183),
+        ]
+        .into();
         // dragged below codex's centre: claude goes last
-        assert_eq!(reorder(&order, "claude", 200, &centers), ["agy", "codex", "claude"]);
-        assert_eq!(reorder(&order, "claude", 0, &centers), ["claude", "agy", "codex"]);
-        assert_eq!(reorder(&order, "codex", 100, &centers), ["claude", "codex", "agy"]);
+        assert_eq!(
+            reorder(&order, "claude", 200, &centers),
+            ["agy", "codex", "claude"]
+        );
+        assert_eq!(
+            reorder(&order, "claude", 0, &centers),
+            ["claude", "agy", "codex"]
+        );
+        assert_eq!(
+            reorder(&order, "codex", 100, &centers),
+            ["claude", "codex", "agy"]
+        );
     }
 
     #[test]
     fn order_rejects_bad_values() {
         let v = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(valid_order(&v(&["codex", "claude", "agy"])), Some(v(&["codex", "claude", "agy"])));
+        assert_eq!(
+            valid_order(&v(&["codex", "claude", "agy"])),
+            Some(v(&["codex", "claude", "agy"]))
+        );
         assert_eq!(valid_order(&v(&["claude", "agy"])), None);
         assert_eq!(valid_order(&v(&["claude", "agy", "agy"])), None);
     }
@@ -2646,13 +2968,19 @@ mod qss_scale_tests {
             scale_px_in_qss(sheet, 1.5),
             "QLabel#MetricTitle { font-size: 15px; border: 1.5px solid red; padding: 1.5px 6px; } QProgressBar { border-radius: 4.5px; } QLabel#SubDetail { font-size: 14.25px; color: rgba(255, 255, 255, 0.08); }"
         );
-        assert_eq!(scale_px_in_qss(sheet, 1.0).replace("1.0", "1"), sheet.replace("1.0", "1"));
+        assert_eq!(
+            scale_px_in_qss(sheet, 1.0).replace("1.0", "1"),
+            sheet.replace("1.0", "1")
+        );
     }
 
     #[test]
     fn non_length_numbers_and_text_are_untouched() {
         let sheet = "font-family: 'Segoe UI'; font-weight: 800; letter-spacing: 1.0px; 側邊欄 2em";
-        assert_eq!(scale_px_in_qss(sheet, 2.0), "font-family: 'Segoe UI'; font-weight: 800; letter-spacing: 2px; 側邊欄 2em");
+        assert_eq!(
+            scale_px_in_qss(sheet, 2.0),
+            "font-family: 'Segoe UI'; font-weight: 800; letter-spacing: 2px; 側邊欄 2em"
+        );
     }
 
     #[test]

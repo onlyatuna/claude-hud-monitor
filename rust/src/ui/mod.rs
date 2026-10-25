@@ -3,10 +3,10 @@
 pub mod brand;
 #[cfg(all(test, windows))]
 mod button_hover_tests;
-#[cfg(all(test, windows))]
-mod geometry_persist_tests;
 pub mod dock_geometry;
 pub mod gauge;
+#[cfg(all(test, windows))]
+mod geometry_persist_tests;
 pub mod hud_window;
 pub mod placement;
 pub mod provider_card;
@@ -14,8 +14,8 @@ pub mod provider_card;
 mod provider_card_relayout_tests;
 #[cfg(test)]
 mod qss_box_audit;
-pub mod sidebar;
 pub mod round_mask;
+pub mod sidebar;
 pub mod styles;
 pub mod table_layout;
 #[cfg(test)]
@@ -251,6 +251,10 @@ mod ui_thread_tests {
             // dropped here, on the wrong thread: leaked, so the count is not touched
         });
         moved.join().unwrap();
-        assert_eq!(Rc::strong_count(&rc), 2, "the Rc count must not change off-thread");
+        assert_eq!(
+            Rc::strong_count(&rc),
+            2,
+            "the Rc count must not change off-thread"
+        );
     }
 }

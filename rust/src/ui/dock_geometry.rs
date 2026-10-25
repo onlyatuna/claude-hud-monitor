@@ -145,8 +145,16 @@ pub fn snap_rect_corner(
         return (snapped, None, None);
     }
     if let Some(p @ ("vertical" | "horizontal")) = prefer {
-        let axis: [&str; 2] = if p == "vertical" { ["left", "right"] } else { ["top", "bottom"] };
-        let preferred: Vec<_> = candidates.iter().copied().filter(|(e, _)| axis.contains(e)).collect();
+        let axis: [&str; 2] = if p == "vertical" {
+            ["left", "right"]
+        } else {
+            ["top", "bottom"]
+        };
+        let preferred: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|(e, _)| axis.contains(e))
+            .collect();
         if !preferred.is_empty() {
             candidates = preferred;
         }
@@ -297,9 +305,15 @@ mod tests {
     fn dock_rect_clamps_oversized_dimensions_and_offset() {
         let wa = (100, 50, 800, 600);
         assert_eq!(dock_rect(wa, 92, 900, 12), (100 + 800 - 92, 50, 92, 600));
-        assert_eq!(dock_rect(wa, 1200, 200, 12), (100, 50 + 600 - 12 - 200, 800, 200));
+        assert_eq!(
+            dock_rect(wa, 1200, 200, 12),
+            (100, 50 + 600 - 12 - 200, 800, 200)
+        );
         assert_eq!(dock_rect(wa, 92, 200, 9999), (100 + 800 - 92, 50, 92, 200));
-        assert_eq!(dock_rect(wa, 0, -10, -5), (100 + 800 - 1, 50 + 600 - 1, 1, 1));
+        assert_eq!(
+            dock_rect(wa, 0, -10, -5),
+            (100 + 800 - 1, 50 + 600 - 1, 1, 1)
+        );
     }
 
     #[test]
@@ -324,10 +338,22 @@ mod tests {
     #[test]
     fn constrain_to_edge_cases() {
         let wa = (0, 40, 1920, 1000);
-        assert_eq!(constrain_to_edge((500, 300, 92, 270), wa), (1828, 300, 92, 270));
-        assert_eq!(constrain_to_edge((500, -20, 92, 270), wa), (1828, 40, 92, 270));
-        assert_eq!(constrain_to_edge((500, 900, 92, 270), wa), (1828, 1040 - 270, 92, 270));
-        assert_eq!(constrain_to_edge((10, 10, 3000, 2000), wa), (0, 40, 1920, 1000));
+        assert_eq!(
+            constrain_to_edge((500, 300, 92, 270), wa),
+            (1828, 300, 92, 270)
+        );
+        assert_eq!(
+            constrain_to_edge((500, -20, 92, 270), wa),
+            (1828, 40, 92, 270)
+        );
+        assert_eq!(
+            constrain_to_edge((500, 900, 92, 270), wa),
+            (1828, 1040 - 270, 92, 270)
+        );
+        assert_eq!(
+            constrain_to_edge((10, 10, 3000, 2000), wa),
+            (0, 40, 1920, 1000)
+        );
     }
 
     #[test]
@@ -357,42 +383,87 @@ mod tests {
     #[test]
     fn snap_rect_cases() {
         let t = DEFAULT_SNAP_THRESHOLD;
-        assert_eq!(snap_rect((1900, 300, 64, 200), WA, t), ((1856, 300, 64, 200), Some("right")));
-        assert_eq!(snap_rect((10, 500, 64, 200), WA, t), ((0, 500, 64, 200), Some("left")));
-        assert_eq!(snap_rect((500, 8, 200, 64), WA, t), ((500, 0, 200, 64), Some("top")));
-        assert_eq!(snap_rect((500, 980, 200, 64), WA, t), ((500, 976, 200, 64), Some("bottom")));
-        assert_eq!(snap_rect((800, 400, 64, 200), WA, t), ((800, 400, 64, 200), None));
-        assert_eq!(snap_rect((5, 5, 64, 200), WA, t), ((0, 5, 64, 200), Some("left")));
-        assert_eq!(snap_rect((-500, -100, 64, 200), WA, t), ((0, 0, 64, 200), Some("left")));
+        assert_eq!(
+            snap_rect((1900, 300, 64, 200), WA, t),
+            ((1856, 300, 64, 200), Some("right"))
+        );
+        assert_eq!(
+            snap_rect((10, 500, 64, 200), WA, t),
+            ((0, 500, 64, 200), Some("left"))
+        );
+        assert_eq!(
+            snap_rect((500, 8, 200, 64), WA, t),
+            ((500, 0, 200, 64), Some("top"))
+        );
+        assert_eq!(
+            snap_rect((500, 980, 200, 64), WA, t),
+            ((500, 976, 200, 64), Some("bottom"))
+        );
+        assert_eq!(
+            snap_rect((800, 400, 64, 200), WA, t),
+            ((800, 400, 64, 200), None)
+        );
+        assert_eq!(
+            snap_rect((5, 5, 64, 200), WA, t),
+            ((0, 5, 64, 200), Some("left"))
+        );
+        assert_eq!(
+            snap_rect((-500, -100, 64, 200), WA, t),
+            ((0, 0, 64, 200), Some("left"))
+        );
         let wa_sec = (1920, 0, 1920, 1080);
-        assert_eq!(snap_rect((1930, 200, 64, 200), wa_sec, t), ((1920, 200, 64, 200), Some("left")));
-        assert_eq!(snap_rect((3800, 200, 64, 200), wa_sec, t), ((3776, 200, 64, 200), Some("right")));
+        assert_eq!(
+            snap_rect((1930, 200, 64, 200), wa_sec, t),
+            ((1920, 200, 64, 200), Some("left"))
+        );
+        assert_eq!(
+            snap_rect((3800, 200, 64, 200), wa_sec, t),
+            ((3776, 200, 64, 200), Some("right"))
+        );
     }
 
     #[test]
     fn orientation_for_edge_cases() {
         assert_eq!(orientation_for_edge(Some("left"), "vertical"), "vertical");
-        assert_eq!(orientation_for_edge(Some("right"), "horizontal"), "vertical");
+        assert_eq!(
+            orientation_for_edge(Some("right"), "horizontal"),
+            "vertical"
+        );
         assert_eq!(orientation_for_edge(Some("top"), "vertical"), "horizontal");
-        assert_eq!(orientation_for_edge(Some("bottom"), "vertical"), "horizontal");
+        assert_eq!(
+            orientation_for_edge(Some("bottom"), "vertical"),
+            "horizontal"
+        );
         assert_eq!(orientation_for_edge(None, "vertical"), "vertical");
         assert_eq!(orientation_for_edge(None, "horizontal"), "horizontal");
-        assert_eq!(orientation_for_edge(Some("unknown"), "horizontal"), "horizontal");
-        assert_eq!(orientation_for_edge(Some("invalid"), "vertical"), "vertical");
+        assert_eq!(
+            orientation_for_edge(Some("unknown"), "horizontal"),
+            "horizontal"
+        );
+        assert_eq!(
+            orientation_for_edge(Some("invalid"), "vertical"),
+            "vertical"
+        );
     }
 
     #[test]
     fn dock_to_edge_cases() {
         assert_eq!(dte(WA, "right", 92, 270, None), dock_rect(WA, 92, 270, 12));
         let wa_offset = (100, 50, 1920, 1040);
-        assert_eq!(dte(wa_offset, "left", 92, 270, Some(Offset::Start(100))), (100, 150, 92, 270));
+        assert_eq!(
+            dte(wa_offset, "left", 92, 270, Some(Offset::Start(100))),
+            (100, 150, 92, 270)
+        );
         assert_eq!(dte(WA, "top", 270, 64, None), (1920 - 270 - 12, 0, 270, 64));
         assert_eq!(
             dte(WA, "bottom", 270, 64, Some(Offset::Start(99999))),
             (1920 - 270, 1040 - 64, 270, 64)
         );
         assert_eq!(dte(WA, "left", 5000, 5000, None), (0, 0, 1920, 1040));
-        assert_eq!(dock_to_edge(WA, "center", 92, 270, None, DEFAULT_MARGIN), None);
+        assert_eq!(
+            dock_to_edge(WA, "center", 92, 270, None, DEFAULT_MARGIN),
+            None
+        );
 
         for wa in [(0, 0, 1536, 816), (0, 0, 1280, 680)] {
             for edge in EDGES {
@@ -409,7 +480,11 @@ mod tests {
     fn offset_along_edge_round_trip() {
         let wa = (100, 50, 1920, 1040);
         for edge in EDGES {
-            let (w, h) = if edge == "left" || edge == "right" { (92, 270) } else { (270, 64) };
+            let (w, h) = if edge == "left" || edge == "right" {
+                (92, 270)
+            } else {
+                (270, 64)
+            };
             let rect = dte(wa, edge, w, h, Some(Offset::Start(180)));
             assert_eq!(offset_along_edge(rect, wa, edge), Some(180));
         }
@@ -453,7 +528,8 @@ mod tests {
 
     #[test]
     fn horizontal_bar_in_bottom_right_corner_stays_horizontal() {
-        let (rect, edge, offset) = snap_rect_corner((1700, 975, 240, 64), WA, 24, Some("horizontal"));
+        let (rect, edge, offset) =
+            snap_rect_corner((1700, 975, 240, 64), WA, 24, Some("horizontal"));
         assert_eq!((edge, offset), (Some("bottom"), Some(Offset::End)));
         assert_eq!(rect, (1680, 976, 240, 64));
     }
@@ -474,7 +550,11 @@ mod tests {
         );
         assert_eq!(
             snap_rect_corner((1850, 300, 64, 240), WA, 24, Some("vertical")),
-            ((1856, 300, 64, 240), Some("right"), Some(Offset::Start(300)))
+            (
+                (1856, 300, 64, 240),
+                Some("right"),
+                Some(Offset::Start(300))
+            )
         );
     }
 
@@ -487,7 +567,13 @@ mod tests {
 
     #[test]
     fn dock_to_edge_accepts_end() {
-        assert_eq!(dte(WA, "right", 64, 240, Some(Offset::End)), (1856, 800, 64, 240));
-        assert_eq!(dte(WA, "bottom", 240, 64, Some(Offset::End)), (1680, 976, 240, 64));
+        assert_eq!(
+            dte(WA, "right", 64, 240, Some(Offset::End)),
+            (1856, 800, 64, 240)
+        );
+        assert_eq!(
+            dte(WA, "bottom", 240, 64, Some(Offset::End)),
+            (1680, 976, 240, 64)
+        );
     }
 }

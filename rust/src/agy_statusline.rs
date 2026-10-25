@@ -81,7 +81,10 @@ pub struct QuotaCache {
 
 /// `~/.gemini/antigravity-cli/settings.json`.
 pub fn agy_settings_path() -> PathBuf {
-    home_dir().join(".gemini").join("antigravity-cli").join("settings.json")
+    home_dir()
+        .join(".gemini")
+        .join("antigravity-cli")
+        .join("settings.json")
 }
 
 /// The user's home folder (`os.path.expanduser('~')`).
@@ -125,7 +128,9 @@ pub fn read_quota_cache(path: &Path, now: DateTime<Utc>) -> Option<QuotaCache> {
     let written_at = parse_utc(data.get("written_at")?)?;
     let mut buckets = HashMap::new();
     for (key, bucket) in quota {
-        let Some(bucket) = bucket.as_object() else { continue };
+        let Some(bucket) = bucket.as_object() else {
+            continue;
+        };
         // A JSON number only: `true` and `"0.5"` are not fractions.
         let Some(fraction) = bucket.get("remaining_fraction").and_then(Value::as_f64) else {
             continue;
@@ -176,7 +181,11 @@ fn backup(path: &Path) -> std::io::Result<()> {
     let mut candidate = base.clone();
     let mut suffix = 0;
     loop {
-        match OpenOptions::new().write(true).create_new(true).open(&candidate) {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
             Ok(mut target) => {
                 std::io::copy(&mut source, &mut target)?;
                 return Ok(());
@@ -192,7 +201,10 @@ fn backup(path: &Path) -> std::io::Result<()> {
 
 /// Writes `settings` next to `path` and moves it over `path`, so a reader never sees half a file.
 fn write_settings(path: &Path, settings: &Map<String, Value>) -> std::io::Result<()> {
-    let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let temporary = dir.join(format!(".settings-{}.tmp", std::process::id()));
     let text = serde_json::to_string_pretty(settings)?;
     let result = (|| {
@@ -370,8 +382,20 @@ mod tests {
     #[test]
     fn reader_returns_the_five_buckets_as_floats() {
         let dir = Dir::new("five");
-        let names = ["3p-5h", "3p-weekly", "gemini-5h", "gemini-argon-wtu-weekly", "gemini-weekly"];
-        let values = [json!(1), json!(0.8469924), json!(1), json!(0.78630334), json!(0.9914498)];
+        let names = [
+            "3p-5h",
+            "3p-weekly",
+            "gemini-5h",
+            "gemini-argon-wtu-weekly",
+            "gemini-weekly",
+        ];
+        let values = [
+            json!(1),
+            json!(0.8469924),
+            json!(1),
+            json!(0.78630334),
+            json!(0.9914498),
+        ];
         let mut quota = Map::new();
         for (name, value) in names.iter().zip(&values) {
             quota.insert(
@@ -404,7 +428,10 @@ mod tests {
             cache.buckets,
             HashMap::from([(
                 "valid".to_owned(),
-                CacheBucket { remaining_fraction: 0.5, reset_time: None }
+                CacheBucket {
+                    remaining_fraction: 0.5,
+                    reset_time: None
+                }
             )])
         );
     }
@@ -414,14 +441,24 @@ mod tests {
         let dir = Dir::new("bad");
         let path = dir.path().join(QUOTA_CACHE_FILENAME);
         assert_eq!(read_quota_cache(&path, now()), None);
-        for content in ["{", "[]", "{}", r#"{"quota":{}}"#, r#"{"quota":{"x":null}}"#] {
+        for content in [
+            "{",
+            "[]",
+            "{}",
+            r#"{"quota":{}}"#,
+            r#"{"quota":{"x":null}}"#,
+        ] {
             fs::write(&path, content).unwrap();
             assert_eq!(read_quota_cache(&path, now()), None, "{content}");
         }
     }
 
     fn install(dir: &Dir, settings: &Path) -> Outcome {
-        install_statusline(Some(settings), Some(&dir.path().join("config")), Some("python"))
+        install_statusline(
+            Some(settings),
+            Some(&dir.path().join("config")),
+            Some("python"),
+        )
     }
 
     #[test]
@@ -438,12 +475,19 @@ mod tests {
             json!({"model": "x", "statusLine": {
                 "type": "command", "command": format!("python {}", hook.display()), "enabled": true}})
         );
-        assert!(!data["statusLine"]["command"].as_str().unwrap().contains('"'));
+        assert!(!data["statusLine"]["command"]
+            .as_str()
+            .unwrap()
+            .contains('"'));
         assert_eq!(fs::read_to_string(&hook).unwrap(), HOOK_SOURCE);
         let backups: Vec<_> = fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with("settings.json.bak-hud-"))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("settings.json.bak-hud-")
+            })
             .collect();
         assert_eq!(backups.len(), 1);
         assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), original);

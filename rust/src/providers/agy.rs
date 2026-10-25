@@ -367,10 +367,16 @@ impl Provider for AgyProvider {
         let now = now_str();
         let cache = (self.cache)();
         let token = (self.token)();
-        let res = token.as_deref().map(|token| self.fetch_via_http(token, &now));
+        let res = token
+            .as_deref()
+            .map(|token| self.fetch_via_http(token, &now));
         let Some(cache) = cache else {
             let mut res = res.unwrap_or_else(|| {
-                failure(&now, "no_token", "未找到 Antigravity 登入憑證\n請先登入 Antigravity")
+                failure(
+                    &now,
+                    "no_token",
+                    "未找到 Antigravity 登入憑證\n請先登入 Antigravity",
+                )
             });
             res.badge2_text = "Argon: --".to_owned();
             return res;
@@ -448,8 +454,7 @@ fn reset_time(bucket: &Value) -> Option<DateTime<Utc>> {
 }
 
 fn is_falsy(value: &Value) -> bool {
-    matches!(value, Value::Null | Value::Bool(false))
-        || value.as_str().is_some_and(str::is_empty)
+    matches!(value, Value::Null | Value::Bool(false)) || value.as_str().is_some_and(str::is_empty)
 }
 
 /// Python `_parse_model_buckets`: the most used Gemini bucket of `retrieveUserQuota` is `GEMINI 5H`.
@@ -738,26 +743,42 @@ mod tests {
     }
 
     fn iso(text: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(text).unwrap().with_timezone(&Utc)
+        DateTime::parse_from_rfc3339(text)
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     #[test]
     fn the_cache_complements_the_endpoints_and_the_endpoints_win() {
         let cache = full_cache();
         let weekly_reset = cache.buckets["gemini-weekly"].reset_time;
-        let (p, _) = provider(vec![ok(SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)], Some("token"), Some(cache));
+        let (p, _) = provider(
+            vec![ok(SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)],
+            Some("token"),
+            Some(cache),
+        );
         let r = p.fetch_usage();
         assert_eq!((r.error.as_deref(), r.error_code.as_str()), (None, ""));
         near(r.metric1_val, 2.57);
         near(r.extra_metrics[0].val, 30.6);
-        assert_eq!(r.extra_metrics[0].reset, Some(iso("2026-10-16T14:00:00+00:00")));
+        assert_eq!(
+            r.extra_metrics[0].reset,
+            Some(iso("2026-10-16T14:00:00+00:00"))
+        );
         near(r.metric2_val, 0.85502);
         assert_eq!(r.metric2_reset, weekly_reset);
-        let titles: Vec<_> = r.extra_metrics.iter().map(|row| row.title.as_str()).collect();
+        let titles: Vec<_> = r
+            .extra_metrics
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect();
         assert_eq!(titles, ["C/G 5H", "C/G 7D", "ARGON 7D"]);
         near(r.extra_metrics[2].val, 21.369666);
         near(r.extra_metrics[1].val, 15.51);
-        assert_eq!((r.metric1_title.as_str(), r.metric2_title.as_str()), ("GEMINI 5H", "GEMINI 7D"));
+        assert_eq!(
+            (r.metric1_title.as_str(), r.metric2_title.as_str()),
+            ("GEMINI 5H", "GEMINI 7D")
+        );
         assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
         assert_eq!(r.badge2_text, "Argon 剩餘: 79%");
     }
@@ -838,12 +859,19 @@ mod tests {
 
     #[test]
     fn both_endpoints_are_posted_in_order_with_the_token() {
-        let (p, requests) = provider(vec![ok(SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)], Some("token"), None);
+        let (p, requests) = provider(
+            vec![ok(SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)],
+            Some("token"),
+            None,
+        );
         let r = p.fetch_usage();
         assert!(r.error.is_none());
         near(r.metric1_val, 2.57);
         near(r.extra_metrics[0].val, 30.6);
-        assert_eq!(r.extra_metrics[0].reset, Some(iso("2026-10-16T14:00:00+00:00")));
+        assert_eq!(
+            r.extra_metrics[0].reset,
+            Some(iso("2026-10-16T14:00:00+00:00"))
+        );
         assert_eq!(r.metric1_text, "3%");
         assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
         assert_eq!(r.badge2_text, "Argon: --");
@@ -926,9 +954,16 @@ mod tests {
             r#"{"groups":[{"name":"gemini","buckets":[7]}]}"#,
         ] {
             let r = parse_agy_json(&serde_json::from_str(body).unwrap(), "12:00:00");
-            assert_eq!((r.error_code.as_str(), r.error.as_deref()), ("schema", Some("配額資料格式不相容")), "{body}");
+            assert_eq!(
+                (r.error_code.as_str(), r.error.as_deref()),
+                ("schema", Some("配額資料格式不相容")),
+                "{body}"
+            );
         }
-        let r = parse_model_buckets(&serde_json::from_str(r#"{"buckets":{}}"#).unwrap(), "12:00:00");
+        let r = parse_model_buckets(
+            &serde_json::from_str(r#"{"buckets":{}}"#).unwrap(),
+            "12:00:00",
+        );
         assert_eq!(r.error_code, "schema");
     }
 

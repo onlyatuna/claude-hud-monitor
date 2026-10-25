@@ -408,11 +408,7 @@ fn main() -> std::process::ExitCode {
         });
 
     // Helper to pop up the modern, styled HUD context menu (used by both HUD body and system tray)
-    fn show_hud_popup_menu(
-        global_pos: Point,
-        config: &Arc<Mutex<Config>>,
-        tray: bool,
-    ) {
+    fn show_hud_popup_menu(global_pos: Point, config: &Arc<Mutex<Config>>, tray: bool) {
         let cfg = config.lock().clone();
         let Some(root) = MAIN_HUD.with(|h_cell| {
             h_cell
@@ -422,9 +418,9 @@ fn main() -> std::process::ExitCode {
         }) else {
             return;
         };
-        let menu = std::rc::Rc::new(std::cell::RefCell::new(
-            ui::tray_icon::build_hud_menu(&cfg, &root, tray),
-        ));
+        let menu = std::rc::Rc::new(std::cell::RefCell::new(ui::tray_icon::build_hud_menu(
+            &cfg, &root, tray,
+        )));
         if let Some(action) = ferrokit_widgets::menu::Menu::exec_popup(&menu, global_pos) {
             if let Some(id) = action.borrow().data().to_u64() {
                 let action_id = id as u32;

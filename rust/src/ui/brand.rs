@@ -48,7 +48,10 @@ mod tests {
     #[test]
     fn hex_is_parsed_into_a_colour() {
         let c = brand_color("codex", true).to_color_u8();
-        assert_eq!((c.red(), c.green(), c.blue(), c.alpha()), (0x10, 0xA3, 0x7F, 255));
+        assert_eq!(
+            (c.red(), c.green(), c.blue(), c.alpha()),
+            (0x10, 0xA3, 0x7F, 255)
+        );
     }
 
     #[test]

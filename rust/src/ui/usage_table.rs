@@ -2055,7 +2055,11 @@ mod tests {
         let order: Vec<String> = ["claude", "agy", "codex"].map(String::from).to_vec();
         let table = UsageTable::with_order(Theme::dark(), "scale", &order);
         assert_eq!(table.order, order);
-        let ids: Vec<_> = table.compact_dials().iter().map(|d| d.borrow().id()).collect();
+        let ids: Vec<_> = table
+            .compact_dials()
+            .iter()
+            .map(|d| d.borrow().id())
+            .collect();
         let expected: Vec<_> = order
             .iter()
             .map(|p| table.columns.get(p).unwrap().compact_dial.borrow().id())
@@ -2078,7 +2082,10 @@ mod tests {
         // the handle the window kept now drives the new pages, collapsed as before
         assert!(second.is_compact());
         assert!(shared.is_compact());
-        assert_eq!(shared.full().borrow().id(), second.views.full().borrow().id());
+        assert_eq!(
+            shared.full().borrow().id(),
+            second.views.full().borrow().id()
+        );
         assert!(!second.views.full().borrow().is_visible());
         assert!(second.views.compact_view().borrow().is_visible());
         shared.set_compact(false);
@@ -2113,7 +2120,10 @@ mod tests {
             assert!(Rc::ptr_eq(dial, &table.columns[pid].compact_dial));
             assert_eq!(dial.borrow().minimum_size().width, COMPACT_DIAL_MIN);
         }
-        assert_eq!(table.columns["claude"].dial.borrow().minimum_size().width, 84);
+        assert_eq!(
+            table.columns["claude"].dial.borrow().minimum_size().width,
+            84
+        );
     }
 
     #[test]
@@ -2138,8 +2148,14 @@ mod tests {
         let tip = tip_of(&col.compact_dial);
         let lines: Vec<&str> = tip.lines().collect();
         assert_eq!(lines[0], "Codex");
-        assert!(lines[1].starts_with("5 小時  42%  重設 --:--  剩餘 --:--"), "{tip}");
-        assert!(lines[2].starts_with("1 週  10%  重設 --:--  剩餘 --:--:--"), "{tip}");
+        assert!(
+            lines[1].starts_with("5 小時  42%  重設 --:--  剩餘 --:--"),
+            "{tip}"
+        );
+        assert!(
+            lines[2].starts_with("1 週  10%  重設 --:--  剩餘 --:--:--"),
+            "{tip}"
+        );
     }
 
     #[test]

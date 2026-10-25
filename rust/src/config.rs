@@ -25,13 +25,25 @@ pub struct Config {
     pub window_y: Option<i32>,
     #[serde(default = "default_ui_mode", deserialize_with = "lenient_ui_mode")]
     pub ui_mode: String,
-    #[serde(default = "default_table_width", deserialize_with = "lenient_table_width")]
+    #[serde(
+        default = "default_table_width",
+        deserialize_with = "lenient_table_width"
+    )]
     pub table_width: u32,
-    #[serde(default = "default_table_height", deserialize_with = "lenient_table_height")]
+    #[serde(
+        default = "default_table_height",
+        deserialize_with = "lenient_table_height"
+    )]
     pub table_height: u32,
-    #[serde(default = "default_color_scheme", deserialize_with = "lenient_color_scheme")]
+    #[serde(
+        default = "default_color_scheme",
+        deserialize_with = "lenient_color_scheme"
+    )]
     pub color_scheme: String,
-    #[serde(default = "default_appearance", deserialize_with = "lenient_appearance")]
+    #[serde(
+        default = "default_appearance",
+        deserialize_with = "lenient_appearance"
+    )]
     pub appearance: String,
     #[serde(default = "default_true", deserialize_with = "lenient_bool_true")]
     pub always_on_top: bool,
@@ -41,9 +53,15 @@ pub struct Config {
     pub click_through: bool,
     // ---- Sidebar style (Python `DEFAULT_CONFIG`, `config_manager.py`). Read leniently: a wrong
     // type in a hand-edited file falls back to the default instead of discarding the whole file.
-    #[serde(default = "default_sidebar_state", deserialize_with = "lenient_sidebar_state")]
+    #[serde(
+        default = "default_sidebar_state",
+        deserialize_with = "lenient_sidebar_state"
+    )]
     pub sidebar_state: String,
-    #[serde(default = "default_sidebar_edge", deserialize_with = "lenient_sidebar_edge")]
+    #[serde(
+        default = "default_sidebar_edge",
+        deserialize_with = "lenient_sidebar_edge"
+    )]
     pub sidebar_edge: String,
     #[serde(
         default = "default_sidebar_orientation",
@@ -56,7 +74,10 @@ pub struct Config {
     pub sidebar_x: Option<i32>,
     #[serde(default, deserialize_with = "lenient_sidebar_coord")]
     pub sidebar_y: Option<i32>,
-    #[serde(default = "default_true", deserialize_with = "lenient_sidebar_idle_fade")]
+    #[serde(
+        default = "default_true",
+        deserialize_with = "lenient_sidebar_idle_fade"
+    )]
     pub sidebar_idle_fade: bool,
     #[serde(
         default = "default_sidebar_idle_level",
@@ -68,16 +89,25 @@ pub struct Config {
         deserialize_with = "lenient_sidebar_idle_delay_ms"
     )]
     pub sidebar_idle_delay_ms: i64,
-    #[serde(default = "default_sidebar_scale", deserialize_with = "lenient_sidebar_scale")]
+    #[serde(
+        default = "default_sidebar_scale",
+        deserialize_with = "lenient_sidebar_scale"
+    )]
     pub sidebar_scale: f64,
     /// Per provider: row titles in the order dragged in the detail page (agy uses `agy_order`).
     #[serde(default, deserialize_with = "lenient_row_order")]
     pub row_order: BTreeMap<String, Vec<String>>,
     #[serde(default = "default_agy_order", deserialize_with = "lenient_agy_order")]
     pub agy_order: Vec<String>,
-    #[serde(default = "default_provider_order", deserialize_with = "lenient_provider_order")]
+    #[serde(
+        default = "default_provider_order",
+        deserialize_with = "lenient_provider_order"
+    )]
     pub provider_order: Vec<String>,
-    #[serde(default = "default_refresh_interval", deserialize_with = "lenient_refresh_interval")]
+    #[serde(
+        default = "default_refresh_interval",
+        deserialize_with = "lenient_refresh_interval"
+    )]
     pub refresh_interval_sec: u64,
     #[serde(default = "default_true", deserialize_with = "lenient_bool_true")]
     pub hotkey_enabled: bool,
@@ -87,7 +117,10 @@ pub struct Config {
     pub locked: bool,
     #[serde(default, deserialize_with = "lenient_bool_false")]
     pub autostart: bool,
-    #[serde(default = "default_claude_profile", deserialize_with = "lenient_claude_profile")]
+    #[serde(
+        default = "default_claude_profile",
+        deserialize_with = "lenient_claude_profile"
+    )]
     pub claude_profile: String,
 
     // --- table polish (hud-table-polish): blur switch and the collapsed dial row ---
@@ -292,7 +325,9 @@ impl<'de> Deserialize<'de> for SidebarOffset {
                 .and_then(|v| i32::try_from(v).ok())
                 .map(SidebarOffset::At)
                 .ok_or_else(|| D::Error::custom("sidebar_offset out of range")),
-            _ => Err(D::Error::custom("sidebar_offset must be a number or \"end\"")),
+            _ => Err(D::Error::custom(
+                "sidebar_offset must be a number or \"end\"",
+            )),
         }
     }
 }
@@ -318,16 +353,32 @@ lenient_field!(lenient_hotkey, String, default_hotkey());
 lenient_field!(lenient_claude_profile, String, default_claude_profile());
 lenient_field!(lenient_sidebar_state, String, default_sidebar_state());
 lenient_field!(lenient_sidebar_edge, String, default_sidebar_edge());
-lenient_field!(lenient_sidebar_orientation, String, default_sidebar_orientation());
+lenient_field!(
+    lenient_sidebar_orientation,
+    String,
+    default_sidebar_orientation()
+);
 lenient_field!(lenient_sidebar_offset, Option<SidebarOffset>, None);
 lenient_field!(lenient_sidebar_coord, Option<i32>, None);
 lenient_field!(lenient_sidebar_idle_fade, bool, true);
-lenient_field!(lenient_sidebar_idle_level, f64, default_sidebar_idle_level());
-lenient_field!(lenient_sidebar_idle_delay_ms, i64, default_sidebar_idle_delay_ms());
+lenient_field!(
+    lenient_sidebar_idle_level,
+    f64,
+    default_sidebar_idle_level()
+);
+lenient_field!(
+    lenient_sidebar_idle_delay_ms,
+    i64,
+    default_sidebar_idle_delay_ms()
+);
 lenient_field!(lenient_sidebar_scale, f64, default_sidebar_scale());
 lenient_field!(lenient_row_order, BTreeMap<String, Vec<String>>, BTreeMap::new());
 lenient_field!(lenient_agy_order, Vec<String>, default_agy_order());
-lenient_field!(lenient_provider_order, Vec<String>, default_provider_order());
+lenient_field!(
+    lenient_provider_order,
+    Vec<String>,
+    default_provider_order()
+);
 
 impl Config {
     /// Python `_sidebar_scale`: the stored scale rounded to 2 decimals and held to 0.6 - 2.0;
@@ -450,19 +501,21 @@ impl ConfigManager {
     fn load_from(path: &std::path::Path) -> Config {
         if path.exists() {
             match fs::read_to_string(path) {
-                Ok(text) => match serde_json::from_str::<serde_json::Value>(&text)
-                    .and_then(|saved| serde_json::from_value::<Config>(saved.clone()).map(|c| (saved, c)))
-                {
-                    Ok((saved, mut cfg)) => {
-                        info!("[Config] Loaded from {:?}", path);
-                        Self::sanitize(&mut cfg);
-                        if migrate_style(&mut cfg, &saved) {
-                            Self::save_to(path, &cfg);
+                Ok(text) => {
+                    match serde_json::from_str::<serde_json::Value>(&text).and_then(|saved| {
+                        serde_json::from_value::<Config>(saved.clone()).map(|c| (saved, c))
+                    }) {
+                        Ok((saved, mut cfg)) => {
+                            info!("[Config] Loaded from {:?}", path);
+                            Self::sanitize(&mut cfg);
+                            if migrate_style(&mut cfg, &saved) {
+                                Self::save_to(path, &cfg);
+                            }
+                            return cfg;
                         }
-                        return cfg;
+                        Err(e) => error!("[Config] Parse error: {e}"),
                     }
-                    Err(e) => error!("[Config] Parse error: {e}"),
-                },
+                }
                 Err(e) => error!("[Config] Read error: {e}"),
             }
         }
@@ -567,7 +620,12 @@ pub fn migrate_style(cfg: &mut Config, saved: &serde_json::Value) -> bool {
             _ => "vertical",
         }
         .to_owned();
-        let int = |key: &str| saved.get(key).and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok());
+        let int = |key: &str| {
+            saved
+                .get(key)
+                .and_then(Value::as_i64)
+                .and_then(|v| i32::try_from(v).ok())
+        };
         if let (Some(x), Some(y)) = (int("window_x"), int("window_y")) {
             cfg.sidebar_edge = "none".to_owned();
             cfg.sidebar_x = Some(x);
@@ -987,11 +1045,17 @@ mod sidebar_config_tests {
         cfg.sidebar_offset = Some(SidebarOffset::End);
         let json = serde_json::to_value(&cfg).unwrap();
         assert_eq!(json["sidebar_offset"], "end");
-        assert_eq!(parse(&json.to_string()).sidebar_offset, Some(SidebarOffset::End));
+        assert_eq!(
+            parse(&json.to_string()).sidebar_offset,
+            Some(SidebarOffset::End)
+        );
         cfg.sidebar_offset = Some(SidebarOffset::At(25));
         let json = serde_json::to_value(&cfg).unwrap();
         assert_eq!(json["sidebar_offset"], 25);
-        assert_eq!(parse(&json.to_string()).sidebar_offset, Some(SidebarOffset::At(25)));
+        assert_eq!(
+            parse(&json.to_string()).sidebar_offset,
+            Some(SidebarOffset::At(25))
+        );
         cfg.sidebar_offset = None;
         assert!(serde_json::to_value(&cfg).unwrap()["sidebar_offset"].is_null());
         assert_eq!(parse(r#"{"sidebar_offset": null}"#).sidebar_offset, None);
@@ -1048,7 +1112,13 @@ mod sidebar_config_tests {
 
     #[test]
     fn scale_setting_is_rounded_clamped_and_finite() {
-        let at = |scale: f64| Config { sidebar_scale: scale, ..Default::default() }.sidebar_scale_setting();
+        let at = |scale: f64| {
+            Config {
+                sidebar_scale: scale,
+                ..Default::default()
+            }
+            .sidebar_scale_setting()
+        };
         assert_eq!(at(1.234), 1.23);
         assert_eq!(at(0.1), 0.6);
         assert_eq!(at(9.0), 2.0);
@@ -1059,8 +1129,11 @@ mod sidebar_config_tests {
     #[test]
     fn provider_order_must_be_a_permutation() {
         let at = |order: &[&str]| {
-            Config { provider_order: order.iter().map(|s| s.to_string()).collect(), ..Default::default() }
-                .provider_order_setting()
+            Config {
+                provider_order: order.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            }
+            .provider_order_setting()
         };
         assert_eq!(at(&["codex", "claude", "agy"]), ["codex", "claude", "agy"]);
         assert_eq!(at(&["claude", "agy"]), ["claude", "agy", "codex"]);
@@ -1070,12 +1143,24 @@ mod sidebar_config_tests {
 
     #[test]
     fn idle_fade_settings_are_clamped_like_python() {
-        let level = |v: f64| Config { sidebar_idle_level: v, ..Default::default() }.idle_fade_level_setting();
+        let level = |v: f64| {
+            Config {
+                sidebar_idle_level: v,
+                ..Default::default()
+            }
+            .idle_fade_level_setting()
+        };
         assert_eq!(level(0.05), 0.2);
         assert_eq!(level(2.0), 0.95);
         assert_eq!(level(0.4), 0.4);
         assert_eq!(level(f64::NAN), 0.6);
-        let delay = |v: i64| Config { sidebar_idle_delay_ms: v, ..Default::default() }.idle_fade_delay_setting();
+        let delay = |v: i64| {
+            Config {
+                sidebar_idle_delay_ms: v,
+                ..Default::default()
+            }
+            .idle_fade_delay_setting()
+        };
         assert_eq!(delay(10), 200);
         assert_eq!(delay(99999), 30000);
         assert_eq!(delay(900), 900);
@@ -1122,7 +1207,10 @@ mod tests {
         let cfg: Config = serde_json::from_str("{}").expect("empty config");
         assert!(cfg.table_blur);
         assert!(!cfg.table_compact);
-        assert_eq!((cfg.table_compact_width, cfg.table_compact_height), (240, 96));
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (240, 96)
+        );
 
         let json = serde_json::to_value(Config::default()).expect("serialize");
         assert_eq!(json["table_blur"], true);
@@ -1135,7 +1223,10 @@ mod tests {
         )
         .expect("python config");
         assert!(!cfg.table_blur && cfg.table_compact);
-        assert_eq!((cfg.table_compact_width, cfg.table_compact_height), (300, 80));
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (300, 80)
+        );
     }
 
     /// One wrong-typed table-polish key must not reset the whole config (Python checks each key alone).
@@ -1149,7 +1240,10 @@ mod tests {
         assert_eq!(cfg.opacity, 0.5, "other keys survive");
         assert!(cfg.table_blur);
         assert!(!cfg.table_compact);
-        assert_eq!((cfg.table_compact_width, cfg.table_compact_height), (240, 96));
+        assert_eq!(
+            (cfg.table_compact_width, cfg.table_compact_height),
+            (240, 96)
+        );
         let cfg: Config = serde_json::from_str(r#"{"table_compact_width": 99999999999}"#).unwrap();
         assert_eq!(cfg.table_compact_width, 240);
     }
@@ -1929,13 +2023,18 @@ mod style_migration_tests {
     #[test]
     fn fresh_install_defaults_to_sidebar_panel() {
         let (_, cfg) = load(None);
-        assert_eq!((cfg.ui_mode.as_str(), cfg.sidebar_state.as_str()), ("sidebar", "panel"));
+        assert_eq!(
+            (cfg.ui_mode.as_str(), cfg.sidebar_state.as_str()),
+            ("sidebar", "panel")
+        );
     }
 
     #[test]
     fn cards_become_sidebar_panel_keeping_position_and_orientation() {
-        let (_, cfg) = load(Some(json!({"ui_mode": "cards", "layout_mode": "horizontal",
-            "window_x": 120, "window_y": 80, "opacity": 0.7})));
+        let (_, cfg) = load(Some(
+            json!({"ui_mode": "cards", "layout_mode": "horizontal",
+            "window_x": 120, "window_y": 80, "opacity": 0.7}),
+        ));
         assert_eq!(cfg.ui_mode, "sidebar");
         assert_eq!(cfg.sidebar_state, "panel");
         assert_eq!(cfg.sidebar_orientation, "horizontal");
@@ -1960,7 +2059,9 @@ mod style_migration_tests {
 
     #[test]
     fn legacy_file_without_ui_mode_counts_as_cards() {
-        let (_, cfg) = load(Some(json!({"layout_mode": "horizontal", "window_x": 10, "window_y": 20})));
+        let (_, cfg) = load(Some(
+            json!({"layout_mode": "horizontal", "window_x": 10, "window_y": 20}),
+        ));
         assert_eq!(cfg.ui_mode, "sidebar");
         assert_eq!(cfg.sidebar_orientation, "horizontal");
         assert_eq!((cfg.sidebar_x, cfg.sidebar_y), (Some(10), Some(20)));
@@ -1968,20 +2069,29 @@ mod style_migration_tests {
 
     #[test]
     fn table_and_sidebar_settings_are_untouched() {
-        let (_, table) = load(Some(json!({"ui_mode": "table", "window_x": 1, "window_y": 2,
-            "layout_mode": "horizontal"})));
+        let (_, table) = load(Some(
+            json!({"ui_mode": "table", "window_x": 1, "window_y": 2,
+            "layout_mode": "horizontal"}),
+        ));
         assert_eq!(table.ui_mode, "table");
         assert_eq!(table.sidebar_edge, "right");
         let (_, strip) = load(Some(json!({"ui_mode": "sidebar", "sidebar_state": "strip",
             "sidebar_edge": "left"})));
-        assert_eq!((strip.sidebar_state.as_str(), strip.sidebar_edge.as_str()), ("strip", "left"));
+        assert_eq!(
+            (strip.sidebar_state.as_str(), strip.sidebar_edge.as_str()),
+            ("strip", "left")
+        );
     }
 
     #[test]
     fn unknown_mode_falls_back_to_default_style() {
         for bad in [json!("grid"), json!(""), Value::Null, json!(3)] {
             let (_, cfg) = load(Some(json!({"ui_mode": bad})));
-            assert_eq!((cfg.ui_mode.as_str(), cfg.sidebar_state.as_str()), ("sidebar", "panel"), "{bad}");
+            assert_eq!(
+                (cfg.ui_mode.as_str(), cfg.sidebar_state.as_str()),
+                ("sidebar", "panel"),
+                "{bad}"
+            );
         }
     }
 

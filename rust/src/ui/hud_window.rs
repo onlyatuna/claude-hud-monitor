@@ -11,7 +11,9 @@ use std::time::{Duration, SystemTime};
 
 use chrono::Local;
 use ferrokit_core::event::{Event, EventKind};
-use ferrokit_core::object::{register_owned_qobject, ObjectData, ObjectDataMut, ObjectId, OwnedObject};
+use ferrokit_core::object::{
+    register_owned_qobject, ObjectData, ObjectDataMut, ObjectId, OwnedObject,
+};
 use ferrokit_core::timer::Timer;
 use ferrokit_core::QObject;
 use ferrokit_gui::geometry::primitives::{Margins, Point, Rect, RectF};
@@ -31,14 +33,14 @@ use super::dock_geometry::{
     Offset, Rect as GeoRect, DEFAULT_MARGIN, EDGES,
 };
 use super::provider_card::ProviderCardWidget;
+use super::round_mask::rounded_rects;
 use super::sidebar::{Orientation, Scheme, SidebarWidget, State, DEFAULT_ORDER};
-use super::UiThread;
 use super::styles::{get_theme, Theme};
 use super::table_layout::{
     compact_min_size, table_state, COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W,
 };
-use super::round_mask::rounded_rects;
 use super::usage_table::{TableViews, UsageTable, PROVIDER_ORDER};
+use super::UiThread;
 use crate::config::{
     Config, ConfigManager, ResizeDebouncer, DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH,
     MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH,
@@ -62,7 +64,10 @@ fn table_min_size() -> (i32, i32) {
 fn saved_table_size(cfg: &Config, compact: bool) -> (i32, i32) {
     if compact {
         let (min_w, min_h) = table_min_size();
-        let (w, h) = (cfg.table_compact_width as i32, cfg.table_compact_height as i32);
+        let (w, h) = (
+            cfg.table_compact_width as i32,
+            cfg.table_compact_height as i32,
+        );
         (
             if w >= min_w { w } else { DEF_COMPACT_W },
             if h >= min_h { h } else { DEF_COMPACT_H },
@@ -70,8 +75,16 @@ fn saved_table_size(cfg: &Config, compact: bool) -> (i32, i32) {
     } else {
         let (w, h) = (cfg.table_width, cfg.table_height);
         (
-            if w >= MIN_TABLE_WIDTH { w } else { DEFAULT_TABLE_WIDTH } as i32,
-            if h >= MIN_TABLE_HEIGHT { h } else { DEFAULT_TABLE_HEIGHT } as i32,
+            if w >= MIN_TABLE_WIDTH {
+                w
+            } else {
+                DEFAULT_TABLE_WIDTH
+            } as i32,
+            if h >= MIN_TABLE_HEIGHT {
+                h
+            } else {
+                DEFAULT_TABLE_HEIGHT
+            } as i32,
         )
     }
 }
@@ -127,7 +140,15 @@ impl TableChrome {
 
     fn set_margins(&self, compact: bool) {
         let (m, spacing) = if compact {
-            ((COMPACT_MARGIN, COMPACT_MARGIN, COMPACT_MARGIN, COMPACT_MARGIN), 0)
+            (
+                (
+                    COMPACT_MARGIN,
+                    COMPACT_MARGIN,
+                    COMPACT_MARGIN,
+                    COMPACT_MARGIN,
+                ),
+                0,
+            )
         } else {
             (FULL_MARGINS, FULL_SPACING)
         };
@@ -616,7 +637,11 @@ impl HUDWindow {
 
         // Page 0: Table mode
         let scheme = { config.lock().color_scheme.clone() };
-        let table = UsageTable::with_order(theme.clone(), &scheme, &config.lock().provider_order_setting());
+        let table = UsageTable::with_order(
+            theme.clone(),
+            &scheme,
+            &config.lock().provider_order_setting(),
+        );
 
         // Stacked container
         let stack: WidgetRef = make_widget(StackedWidget::new());
@@ -629,7 +654,12 @@ impl HUDWindow {
         // tool window of its flyout (`_Flyout(owner)`, a child top-level of the HUD window).
         let sidebar_cards: Vec<(String, Rc<RefCell<ProviderCardWidget>>)> = DEFAULT_ORDER
             .iter()
-            .map(|id| (id.to_string(), Rc::new(RefCell::new(ProviderCardWidget::new(id)))))
+            .map(|id| {
+                (
+                    id.to_string(),
+                    Rc::new(RefCell::new(ProviderCardWidget::new(id))),
+                )
+            })
             .collect();
         let flyout = Window::with_parent(
             &window,
@@ -1071,7 +1101,11 @@ impl HUDWindow {
 
     pub fn apply_ui_mode(&mut self, mode: &str) {
         // Python `_apply_ui_mode`: a style that is not offered falls back to the sidebar.
-        let mode = if crate::config::UI_MODES.contains(&mode) { mode } else { "sidebar" };
+        let mode = if crate::config::UI_MODES.contains(&mode) {
+            mode
+        } else {
+            "sidebar"
+        };
         let old_mode = self.config.lock().ui_mode.clone();
         let geom = self.window.geometry();
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
@@ -1605,7 +1639,11 @@ pub fn tree_contains(root: &WidgetRef, id: ObjectId) -> bool {
     let Ok(widget) = root.try_borrow() else {
         return true;
     };
-    widget.id() == id || widget.children().iter().any(|child| tree_contains(child, id))
+    widget.id() == id
+        || widget
+            .children()
+            .iter()
+            .any(|child| tree_contains(child, id))
 }
 
 /// A resize drag whose button is no longer held lost its release event.
@@ -1733,8 +1771,8 @@ impl QObject for HudFilter {
             EventKind::MouseMove { .. } | EventKind::MouseButtonPress { .. } => {
                 // Python: `isinstance(obj, QWidget) and (obj is self or self.isAncestorOf(obj))`
                 let pos = Cursor::pos();
-                let zone = resize_zone(hud.geom.get(), pos)
-                    .filter(|_| tree_contains(&hud.root, watched));
+                let zone =
+                    resize_zone(hud.geom.get(), pos).filter(|_| tree_contains(&hud.root, watched));
                 match &event.kind {
                     EventKind::MouseMove { .. } => {
                         if ferrokit_widgets::application::Application::mouse_buttons().is_empty() {
@@ -1744,7 +1782,8 @@ impl QObject for HudFilter {
                     }
                     EventKind::MouseButtonPress { button: 1, .. } if zone.is_some() => {
                         let zone = zone.unwrap_or_default();
-                        let Some(scale) = self.config.try_lock().map(|c| c.sidebar_scale_setting()) else {
+                        let Some(scale) = self.config.try_lock().map(|c| c.sidebar_scale_setting())
+                        else {
                             return false;
                         };
                         *hud.resize.borrow_mut() = Some(ResizeState {
@@ -1808,7 +1847,11 @@ impl HUDWindow {
     }
 
     fn sidebar_orientation_of(&self, cfg: &Config) -> &'static str {
-        let current = if cfg.sidebar_orientation == "horizontal" { "horizontal" } else { "vertical" };
+        let current = if cfg.sidebar_orientation == "horizontal" {
+            "horizontal"
+        } else {
+            "vertical"
+        };
         orientation_for_edge(self.sidebar_edge_of(cfg), current)
     }
 
@@ -1827,7 +1870,9 @@ impl HUDWindow {
     /// Python `_dock_sidebar`: places the bar on its saved edge (or saved free position) of the
     /// current screen.
     fn dock_sidebar(&mut self) {
-        let Some(work) = self.sidebar_work_area() else { return };
+        let Some(work) = self.sidebar_work_area() else {
+            return;
+        };
         let (w, h) = self.sidebar.preferred_size();
         let rect = {
             let cfg = self.config.lock();
@@ -1865,11 +1910,17 @@ impl HUDWindow {
             self.sidebar_hud.snap_timer.start();
             return;
         }
-        let Some(work) = self.sidebar_work_area() else { return };
+        let Some(work) = self.sidebar_work_area() else {
+            return;
+        };
         let g = self.window.geometry();
         let current = {
             let cfg = self.config.lock();
-            if cfg.sidebar_orientation == "horizontal" { "horizontal" } else { "vertical" }
+            if cfg.sidebar_orientation == "horizontal" {
+                "horizontal"
+            } else {
+                "vertical"
+            }
         };
         // near a corner the bar keeps its orientation and sticks to the corner instead of turning sideways
         let (rect, edge, offset) = snap_rect_corner(
@@ -1915,8 +1966,16 @@ impl HUDWindow {
 
     /// Python `_resize_to`.
     fn resize_to(&mut self, pos: Point) {
-        let Some(r) = self.sidebar_hud.resize.borrow().clone() else { return };
-        let scale = resize_scale(&r.zone, r.geom, r.scale, pos.x - r.start.x, pos.y - r.start.y);
+        let Some(r) = self.sidebar_hud.resize.borrow().clone() else {
+            return;
+        };
+        let scale = resize_scale(
+            &r.zone,
+            r.geom,
+            r.scale,
+            pos.x - r.start.x,
+            pos.y - r.start.y,
+        );
         if Some(scale) == Some(self.sidebar.scale()) {
             return;
         }
@@ -1971,7 +2030,9 @@ impl HUDWindow {
 
     /// Python `set_sidebar_state`.
     pub fn set_sidebar_state(&mut self, state: &str) {
-        let Some(parsed) = State::parse(state) else { return };
+        let Some(parsed) = State::parse(state) else {
+            return;
+        };
         if !self.is_sidebar_mode() {
             return;
         }
@@ -2043,7 +2104,11 @@ impl HUDWindow {
         if in_table {
             self.apply_ui_mode_internal("table");
         } else {
-            let page = if self.sidebar_layout { SIDEBAR_PAGE } else { TABLE_PAGE };
+            let page = if self.sidebar_layout {
+                SIDEBAR_PAGE
+            } else {
+                TABLE_PAGE
+            };
             StackedWidget::set_current_index(&self.stack, page);
         }
     }
@@ -2081,7 +2146,9 @@ impl HUDWindow {
 
     /// Python `toggle_idle_fade`.
     pub fn toggle_idle_fade(&mut self) {
-        ConfigManager::update_and_save(&self.config, |cfg| cfg.sidebar_idle_fade = !cfg.sidebar_idle_fade);
+        ConfigManager::update_and_save(&self.config, |cfg| {
+            cfg.sidebar_idle_fade = !cfg.sidebar_idle_fade
+        });
         self.apply_opacity();
     }
 
@@ -2120,10 +2187,12 @@ impl HUDWindow {
         });
         for (pid, card) in &self.sidebar_cards {
             let pid = pid.clone();
-            card.borrow().row_order_changed().connect(move |titles: &Vec<String>| {
-                let (pid, titles) = (pid.clone(), titles.clone());
-                with_hud_later(move |hud| hud.set_row_order(&pid, &titles));
-            });
+            card.borrow()
+                .row_order_changed()
+                .connect(move |titles: &Vec<String>| {
+                    let (pid, titles) = (pid.clone(), titles.clone());
+                    with_hud_later(move |hud| hud.set_row_order(&pid, &titles));
+                });
         }
         let order = self.provider_order();
         self.sidebar.set_order(&order);
@@ -2136,7 +2205,9 @@ impl HUDWindow {
         // SAFETY: the owner stays in `self.hud_filter` on the UI thread and never reads the
         // object; its callback runs only from event dispatch.
         let owner = unsafe { register_owned_qobject(filter) };
-        ferrokit_core::application::CoreApplication::install_event_filter(OwnedObject::object_id(&owner));
+        ferrokit_core::application::CoreApplication::install_event_filter(OwnedObject::object_id(
+            &owner,
+        ));
         self.hud_filter = Some(owner);
     }
 
@@ -2179,7 +2250,10 @@ impl HUDWindow {
             time_label: self.time_label.clone(),
         };
         let layout = Self::build_root_layout(sidebar, &header, &self.stack);
-        self.window.root_widget().borrow_mut().set_layout(Box::new(layout));
+        self.window
+            .root_widget()
+            .borrow_mut()
+            .set_layout(Box::new(layout));
     }
 }
 
@@ -2197,7 +2271,9 @@ struct HeaderWidgets {
 impl Drop for HUDWindow {
     fn drop(&mut self) {
         if let Some(filter) = self.hud_filter.take() {
-            ferrokit_core::application::CoreApplication::remove_event_filter(OwnedObject::object_id(&filter));
+            ferrokit_core::application::CoreApplication::remove_event_filter(
+                OwnedObject::object_id(&filter),
+            );
         }
         self.sidebar.close_flyout();
         self.debouncer.shutdown();
@@ -2338,7 +2414,10 @@ mod tests {
             claude.width >= 80 && claude.height >= 80,
             "dial must meet its minimum size, got {claude:?}"
         );
-        assert_eq!(claude.height, codex.height, "dials must have a uniform height");
+        assert_eq!(
+            claude.height, codex.height,
+            "dials must have a uniform height"
+        );
     }
 
     /// TI-01: a window built with injected providers fetches from exactly those providers — one
@@ -3002,7 +3081,10 @@ mod sidebar_geometry_tests {
         assert!(should_retry(false, 5));
         assert!(!should_retry(true, 5), "it ran");
         assert!(!should_retry(false, 0), "out of tries");
-        assert!(HUD_RETRIES as u64 * HUD_RETRY_MS >= 500, "long enough to outlast a layout pass");
+        assert!(
+            HUD_RETRIES as u64 * HUD_RETRY_MS >= 500,
+            "long enough to outlast a layout pass"
+        );
     }
 
     #[test]
@@ -3014,12 +3096,25 @@ mod sidebar_geometry_tests {
     #[test]
     fn only_input_events_reach_the_filter_logic() {
         assert!(is_filtered_kind(&EventKind::MouseMove { x: 0, y: 0 }));
-        assert!(is_filtered_kind(&EventKind::MouseButtonPress { x: 0, y: 0, button: 1 }));
-        assert!(is_filtered_kind(&EventKind::MouseButtonRelease { x: 0, y: 0, button: 1 }));
+        assert!(is_filtered_kind(&EventKind::MouseButtonPress {
+            x: 0,
+            y: 0,
+            button: 1
+        }));
+        assert!(is_filtered_kind(&EventKind::MouseButtonRelease {
+            x: 0,
+            y: 0,
+            button: 1
+        }));
         assert!(is_filtered_kind(&EventKind::Leave));
         assert!(is_filtered_kind(&EventKind::Enter { x: 0, y: 0 }));
         assert!(!is_filtered_kind(&EventKind::Close));
-        assert!(!is_filtered_kind(&EventKind::Resize { width: 1, height: 1, old_width: 0, old_height: 0 }));
+        assert!(!is_filtered_kind(&EventKind::Resize {
+            width: 1,
+            height: 1,
+            old_width: 0,
+            old_height: 0
+        }));
     }
 
     #[test]
@@ -3036,7 +3131,10 @@ mod sidebar_geometry_tests {
         assert!(tree_contains(&root, id(&root)));
         assert!(tree_contains(&root, id(&child)));
         assert!(tree_contains(&root, id(&grandchild)));
-        assert!(!tree_contains(&root, id(&stranger)), "another window's widget");
+        assert!(
+            !tree_contains(&root, id(&stranger)),
+            "another window's widget"
+        );
         // the widget that is being notified is mutably borrowed and cannot be read: it is found
         let child_id = id(&child);
         let held = child.borrow_mut();

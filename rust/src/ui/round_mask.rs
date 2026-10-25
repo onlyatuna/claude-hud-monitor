@@ -115,9 +115,11 @@ mod tests {
     #[test]
     fn area_matches_a_rounded_rectangle() {
         let (w, h, r) = (450, 350, 12);
-        let area: i32 = rounded_rects(w, h, r).iter().map(|&(_, _, rw, rh)| rw * rh).sum();
-        let expected =
-            f64::from(w * h) - (4.0 - std::f64::consts::PI) * f64::from(r * r);
+        let area: i32 = rounded_rects(w, h, r)
+            .iter()
+            .map(|&(_, _, rw, rh)| rw * rh)
+            .sum();
+        let expected = f64::from(w * h) - (4.0 - std::f64::consts::PI) * f64::from(r * r);
         assert!((f64::from(area) / expected - 1.0).abs() < 0.002);
     }
 

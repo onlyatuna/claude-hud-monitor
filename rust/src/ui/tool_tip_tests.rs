@@ -236,7 +236,8 @@ fn card_and_header_ghost_tool_tips_follow_python() {
     let h = hud("sidebar");
     assert_eq!(tip(&h.ghost_label), "滑鼠穿透中 (Alt+Shift+C 解除)");
     let card = &h.sidebar_cards["claude"];
-    card.borrow_mut().update_metrics(&offline("claude", "card-boom"));
+    card.borrow_mut()
+        .update_metrics(&offline("claude", "card-boom"));
     assert_eq!(tip(&card.borrow().widget()), "card-boom");
     card.borrow_mut().update_metrics(&healthy("claude"));
     assert_eq!(

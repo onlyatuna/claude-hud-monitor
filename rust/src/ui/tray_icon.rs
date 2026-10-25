@@ -219,9 +219,17 @@ pub fn build_hud_menu(
     ferrokit_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
 
     if tray {
-        add_item(&mut menu, ACTION_TOGGLE_VISIBILITY, "顯示 / 隱藏 HUD (Alt+C)");
+        add_item(
+            &mut menu,
+            ACTION_TOGGLE_VISIBILITY,
+            "顯示 / 隱藏 HUD (Alt+C)",
+        );
     }
-    add_item(&mut menu, ACTION_REFRESH_ALL, "立即重新整理所有 AI (Refresh All)");
+    add_item(
+        &mut menu,
+        ACTION_REFRESH_ALL,
+        "立即重新整理所有 AI (Refresh All)",
+    );
     menu.add_separator();
     build_interface(&mut menu, cfg);
     build_appearance(&mut menu, cfg);
@@ -290,7 +298,12 @@ fn build_interface(menu: &mut Menu, cfg: &Config) {
             add_submenu(sub, "大小 (Ctrl＋滾輪)", cfg, |size| {
                 let current = (cfg.sidebar_scale_setting() * 100.0).round() as u32;
                 for pct in SIDEBAR_SCALES {
-                    add_check(size, ACTION_SIDEBAR_SCALE_BASE + pct, &format!("{pct}%"), pct == current);
+                    add_check(
+                        size,
+                        ACTION_SIDEBAR_SCALE_BASE + pct,
+                        &format!("{pct}%"),
+                        pct == current,
+                    );
                 }
             });
         }
@@ -314,7 +327,12 @@ fn build_agy_rows(menu: &mut Menu, cfg: &Config) {
         {
             let mut r = reset.borrow_mut();
             r.set_data(Variant::uint(ACTION_AGY_ORDER_RESET as u64));
-            r.set_enabled(order.iter().map(String::as_str).ne(crate::agy_rows::DEFAULT_ORDER));
+            r.set_enabled(
+                order
+                    .iter()
+                    .map(String::as_str)
+                    .ne(crate::agy_rows::DEFAULT_ORDER),
+            );
         }
         sub.add_action(reset);
     });
@@ -364,7 +382,12 @@ fn build_idle_fade(menu: &mut Menu, cfg: &Config) {
             }
             levels.sort_unstable_by(|a, b| b.cmp(a));
             for pct in levels {
-                add_check(dim, ACTION_IDLE_LEVEL_BASE + pct, &format!("{pct}%"), pct == level);
+                add_check(
+                    dim,
+                    ACTION_IDLE_LEVEL_BASE + pct,
+                    &format!("{pct}%"),
+                    pct == level,
+                );
             }
         });
         add_submenu(sub, "多久後淡化 (Delay)", cfg, |delays| {
@@ -389,11 +412,31 @@ fn build_idle_fade(menu: &mut Menu, cfg: &Config) {
 /// Python `hud_menu._build_behaviour`.
 fn build_behaviour(menu: &mut Menu, cfg: &Config) {
     add_submenu(menu, "行為 (Behaviour)", cfg, |sub| {
-        add_check(sub, ACTION_CLICK_THROUGH, "滑鼠點擊穿透 (Alt+Shift+C)", cfg.click_through);
-        add_check(sub, ACTION_ALWAYS_ON_TOP, "視窗永遠置頂 (Always on Top)", cfg.always_on_top);
-        add_check(sub, ACTION_LOCK_DRAG, "鎖定視窗位置 (Lock Drag)", cfg.locked);
+        add_check(
+            sub,
+            ACTION_CLICK_THROUGH,
+            "滑鼠點擊穿透 (Alt+Shift+C)",
+            cfg.click_through,
+        );
+        add_check(
+            sub,
+            ACTION_ALWAYS_ON_TOP,
+            "視窗永遠置頂 (Always on Top)",
+            cfg.always_on_top,
+        );
+        add_check(
+            sub,
+            ACTION_LOCK_DRAG,
+            "鎖定視窗位置 (Lock Drag)",
+            cfg.locked,
+        );
         build_idle_fade(sub, cfg);
-        add_check(sub, ACTION_AUTOSTART, "開機自動啟動 (Start on Boot)", is_autostart_enabled());
+        add_check(
+            sub,
+            ACTION_AUTOSTART,
+            "開機自動啟動 (Start on Boot)",
+            is_autostart_enabled(),
+        );
         sub.add_separator();
         add_submenu(sub, "⏱️ 更新頻率 (Interval)", cfg, |interval| {
             for (id, sec) in [
@@ -402,7 +445,12 @@ fn build_behaviour(menu: &mut Menu, cfg: &Config) {
                 (ACTION_INTERVAL_120, 120),
                 (ACTION_INTERVAL_300, 300),
             ] {
-                add_check(interval, id, &format!("{sec} 秒"), cfg.refresh_interval_sec == sec);
+                add_check(
+                    interval,
+                    id,
+                    &format!("{sec} 秒"),
+                    cfg.refresh_interval_sec == sec,
+                );
             }
         });
     });
@@ -421,11 +469,20 @@ fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
         };
         add_check(sub, ACTION_CLAUDE_PROFILE_AUTO, &title, is_auto);
         sub.add_separator();
-        for (i, prof) in crate::providers::claude::discover_profiles().iter().take(40).enumerate() {
+        for (i, prof) in crate::providers::claude::discover_profiles()
+            .iter()
+            .take(40)
+            .enumerate()
+        {
             let selected = !is_auto
                 && (current.eq_ignore_ascii_case(&prof.id)
                     || (current == ".claude" && prof.id == "default"));
-            add_check(sub, ACTION_CLAUDE_PROFILE_BASE + i as u32, &prof.display_name, selected);
+            add_check(
+                sub,
+                ACTION_CLAUDE_PROFILE_BASE + i as u32,
+                &prof.display_name,
+                selected,
+            );
         }
     });
 }
@@ -565,7 +622,9 @@ impl HUDTrayIcon {
                 hud.set_idle_fade_level((id - ACTION_IDLE_LEVEL_BASE) as i32);
                 self.update_menu_state();
             }
-            id if (ACTION_IDLE_DELAY_BASE + 200..=ACTION_IDLE_DELAY_BASE + 30_000).contains(&id) => {
+            id if (ACTION_IDLE_DELAY_BASE + 200..=ACTION_IDLE_DELAY_BASE + 30_000)
+                .contains(&id) =>
+            {
                 hud.set_idle_fade_delay((id - ACTION_IDLE_DELAY_BASE) as i64);
                 self.update_menu_state();
             }
@@ -1022,8 +1081,14 @@ mod menu_parity_tests {
                 "AGY 項目順序 (Row order)",
             ])
         );
-        assert!(item(&table, &["介面 (Interface)"], "儀表表格 (Modern Table)").borrow().is_checked());
-        assert!(!item(&table, &["介面 (Interface)"], "側邊欄 (Sidebar)").borrow().is_checked());
+        assert!(
+            item(&table, &["介面 (Interface)"], "儀表表格 (Modern Table)")
+                .borrow()
+                .is_checked()
+        );
+        assert!(!item(&table, &["介面 (Interface)"], "側邊欄 (Sidebar)")
+            .borrow()
+            .is_checked());
 
         let sidebar = body(&config("sidebar"));
         assert_eq!(
@@ -1040,7 +1105,9 @@ mod menu_parity_tests {
                 "AGY 項目順序 (Row order)",
             ])
         );
-        assert!(item(&sidebar, &["介面 (Interface)"], "側邊欄 (Sidebar)").borrow().is_checked());
+        assert!(item(&sidebar, &["介面 (Interface)"], "側邊欄 (Sidebar)")
+            .borrow()
+            .is_checked());
     }
 
     /// The colour scheme and the blur switch are table-only; the opacity is always there.
@@ -1141,13 +1208,27 @@ mod menu_parity_tests {
         };
         let menu = tray(&cfg);
         let behaviour = ["行為 (Behaviour)"];
-        assert!(item(&menu, &behaviour, "滑鼠點擊穿透 (Alt+Shift+C)").borrow().is_checked());
-        assert!(!item(&menu, &behaviour, "視窗永遠置頂 (Always on Top)").borrow().is_checked());
-        assert!(item(&menu, &behaviour, "鎖定視窗位置 (Lock Drag)").borrow().is_checked());
-        assert!(item(&menu, &["外觀 (Appearance)"], "深色 (Dark)").borrow().is_checked());
-        assert!(!item(&menu, &["外觀 (Appearance)"], "淺色 (Light)").borrow().is_checked());
-        assert!(item(&menu, &["介面 (Interface)"], "細條 (Strip)").borrow().is_checked());
-        assert!(!item(&menu, &["介面 (Interface)"], "固定窄欄 (Panel)").borrow().is_checked());
+        assert!(item(&menu, &behaviour, "滑鼠點擊穿透 (Alt+Shift+C)")
+            .borrow()
+            .is_checked());
+        assert!(!item(&menu, &behaviour, "視窗永遠置頂 (Always on Top)")
+            .borrow()
+            .is_checked());
+        assert!(item(&menu, &behaviour, "鎖定視窗位置 (Lock Drag)")
+            .borrow()
+            .is_checked());
+        assert!(item(&menu, &["外觀 (Appearance)"], "深色 (Dark)")
+            .borrow()
+            .is_checked());
+        assert!(!item(&menu, &["外觀 (Appearance)"], "淺色 (Light)")
+            .borrow()
+            .is_checked());
+        assert!(item(&menu, &["介面 (Interface)"], "細條 (Strip)")
+            .borrow()
+            .is_checked());
+        assert!(!item(&menu, &["介面 (Interface)"], "固定窄欄 (Panel)")
+            .borrow()
+            .is_checked());
     }
 
     /// Each item dispatches the id `handle_action` routes on.
@@ -1163,18 +1244,62 @@ mod menu_parity_tests {
         );
         let menu = body(&config("table"));
         for (path, text, expected) in [
-            (vec![], "立即重新整理所有 AI (Refresh All)", ACTION_REFRESH_ALL),
+            (
+                vec![],
+                "立即重新整理所有 AI (Refresh All)",
+                ACTION_REFRESH_ALL,
+            ),
             (vec![], "結束程式 (Exit)", ACTION_EXIT),
-            (vec!["介面 (Interface)"], "儀表表格 (Modern Table)", ACTION_MODE_TABLE),
-            (vec!["介面 (Interface)"], "側邊欄 (Sidebar)", ACTION_MODE_SIDEBAR),
-            (vec!["外觀 (Appearance)"], "毛玻璃模糊 (Blur)", ACTION_TABLE_BLUR),
-            (vec!["行為 (Behaviour)"], "滑鼠點擊穿透 (Alt+Shift+C)", ACTION_CLICK_THROUGH),
-            (vec!["行為 (Behaviour)"], "視窗永遠置頂 (Always on Top)", ACTION_ALWAYS_ON_TOP),
-            (vec!["行為 (Behaviour)"], "鎖定視窗位置 (Lock Drag)", ACTION_LOCK_DRAG),
-            (vec!["行為 (Behaviour)"], "開機自動啟動 (Start on Boot)", ACTION_AUTOSTART),
-            (vec!["更多 (More)"], "開啟記錄檔目錄 (Open Logs)", ACTION_OPEN_LOGS),
-            (vec!["更多 (More)"], "重設預設尺寸與位置", ACTION_RESET_GEOMETRY),
-            (vec!["更多 (More)"], "隱藏 HUD (Alt+C 重新喚出)", ACTION_HIDE_HUD),
+            (
+                vec!["介面 (Interface)"],
+                "儀表表格 (Modern Table)",
+                ACTION_MODE_TABLE,
+            ),
+            (
+                vec!["介面 (Interface)"],
+                "側邊欄 (Sidebar)",
+                ACTION_MODE_SIDEBAR,
+            ),
+            (
+                vec!["外觀 (Appearance)"],
+                "毛玻璃模糊 (Blur)",
+                ACTION_TABLE_BLUR,
+            ),
+            (
+                vec!["行為 (Behaviour)"],
+                "滑鼠點擊穿透 (Alt+Shift+C)",
+                ACTION_CLICK_THROUGH,
+            ),
+            (
+                vec!["行為 (Behaviour)"],
+                "視窗永遠置頂 (Always on Top)",
+                ACTION_ALWAYS_ON_TOP,
+            ),
+            (
+                vec!["行為 (Behaviour)"],
+                "鎖定視窗位置 (Lock Drag)",
+                ACTION_LOCK_DRAG,
+            ),
+            (
+                vec!["行為 (Behaviour)"],
+                "開機自動啟動 (Start on Boot)",
+                ACTION_AUTOSTART,
+            ),
+            (
+                vec!["更多 (More)"],
+                "開啟記錄檔目錄 (Open Logs)",
+                ACTION_OPEN_LOGS,
+            ),
+            (
+                vec!["更多 (More)"],
+                "重設預設尺寸與位置",
+                ACTION_RESET_GEOMETRY,
+            ),
+            (
+                vec!["更多 (More)"],
+                "隱藏 HUD (Alt+C 重新喚出)",
+                ACTION_HIDE_HUD,
+            ),
         ] {
             assert_eq!(id(&menu, &path, text), Some(expected as u64), "{text}");
         }
@@ -1200,7 +1325,10 @@ mod menu_parity_tests {
                 .map(|a| a.borrow().text().to_string())
                 .collect()
         };
-        assert_eq!(checked(&["介面 (Interface)", "大小 (Ctrl＋滾輪)"]), strings(&["125%"]));
+        assert_eq!(
+            checked(&["介面 (Interface)", "大小 (Ctrl＋滾輪)"]),
+            strings(&["125%"])
+        );
         // a value that is not one of the presets is added to its list (Python `set(IDLE_LEVELS) | {level}`)
         let fade = ["行為 (Behaviour)", "閒置時淡化 (Idle fade)"];
         assert_eq!(

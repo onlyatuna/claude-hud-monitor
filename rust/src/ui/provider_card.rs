@@ -818,8 +818,11 @@ impl ProviderCardWidget {
     pub fn set_appearance(&mut self, dark: bool) {
         self.dark = dark;
         let hex = brand_hex(&self.provider_id, dark).to_string();
-        self.styles
-            .apply(&self.title, title_qss(&hex), Some(brand_color(&self.provider_id, dark)));
+        self.styles.apply(
+            &self.title,
+            title_qss(&hex),
+            Some(brand_color(&self.provider_id, dark)),
+        );
         *self.core.theme_hex.borrow_mut() = hex;
         let metrics = self.current_metrics.clone();
         self.update_metrics(&metrics);
@@ -963,13 +966,25 @@ impl ProviderCardWidget {
         }
         set_label_text(
             &self.m1_sub,
-            reset_text(data.metric1_reset, &data.metric1_title, &data.metric1_subtext),
+            reset_text(
+                data.metric1_reset,
+                &data.metric1_title,
+                &data.metric1_subtext,
+            ),
         );
         set_label_text(
             &self.m2_sub,
-            reset_text(data.metric2_reset, &data.metric2_title, &data.metric2_subtext),
+            reset_text(
+                data.metric2_reset,
+                &data.metric2_title,
+                &data.metric2_subtext,
+            ),
         );
-        for (metric, row) in data.extra_metrics.iter().zip(self.core.extra_rows.borrow().iter()) {
+        for (metric, row) in data
+            .extra_metrics
+            .iter()
+            .zip(self.core.extra_rows.borrow().iter())
+        {
             set_label_text(
                 &row.sub,
                 reset_text(metric.reset, &metric.title, &metric.subtext),
@@ -1191,9 +1206,15 @@ mod card_logic_tests {
     fn reset_text_has_a_stamp_only_for_long_windows() {
         let reset = Some(Utc::now() + Duration::hours(3));
         let short = reset_text(reset, "SESSION 5H", "");
-        assert!(short.starts_with("重設於: ") && !short.contains('·'), "{short}");
+        assert!(
+            short.starts_with("重設於: ") && !short.contains('·'),
+            "{short}"
+        );
         let weekly = reset_text(reset, "WEEKLY 7D", "");
-        assert!(weekly.starts_with("重設於: 週") && weekly.contains(" · "), "{weekly}");
+        assert!(
+            weekly.starts_with("重設於: 週") && weekly.contains(" · "),
+            "{weekly}"
+        );
     }
 
     #[test]
@@ -1282,7 +1303,10 @@ mod card_logic_tests {
     #[test]
     fn rows_are_not_reorderable_while_offline() {
         let mut card = ProviderCardWidget::new("claude");
-        assert_eq!(card.row_titles(), ["SESSION 5H", "WEEKLY 7D"].map(String::from));
+        assert_eq!(
+            card.row_titles(),
+            ["SESSION 5H", "WEEKLY 7D"].map(String::from)
+        );
         card.update_metrics(&UsageMetrics {
             provider_id: "claude".to_string(),
             error: Some("timeout".to_string()),
