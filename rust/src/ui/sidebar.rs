@@ -17,7 +17,7 @@ use ferrokit_gui::tiny_skia::Color;
 
 use crate::pace::{reset_stamp, scale_level, short_window};
 use crate::providers::base::{format_countdown, UsageMetrics};
-use crate::ui::dock_geometry::{py_round, Rect};
+use crate::ui::dock_geometry::{py_round, Rect as GeoRect};
 use crate::ui::gauge;
 use crate::ui::styles::get_theme;
 
@@ -410,7 +410,7 @@ pub fn panel_preferred_size(
 
 /// Python `_flyout_position`: where the flyout opens beside a tile (`tile` in global coordinates,
 /// the flyout `size`, the screen `area`), kept inside the area.
-pub fn flyout_position(tile: Rect, size: (i32, i32), area: Rect, dock_edge: Option<&str>) -> (i32, i32) {
+pub fn flyout_position(tile: GeoRect, size: (i32, i32), area: GeoRect, dock_edge: Option<&str>) -> (i32, i32) {
     let (tx, ty, tw, th) = tile;
     let (w, h) = size;
     let (ax, ay, aw, ah) = area;
@@ -469,6 +469,1838 @@ pub fn wheel_steps(remainder: i32, delta: i32) -> (Vec<i32>, i32) {
     }
     (steps, remainder)
 }
+
+
+// ---- widgets ---------------------------------------------------------------------------------
+//
+// `_Indicators`, `_Button`, `_Flyout` and `SidebarWidget` of `sidebar.py`. Python's `owner` back
+// references are `Weak<SidebarInner>`; its signals are `Notifier`s. Every call from a button or
+// filter into the sidebar that touches layouts or other widgets is queued (`defer`): Python runs
+// those synchronously, but here the widget that is being notified is mutably borrowed while its
+// handler runs and a layout pass would borrow it again.
+
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+use std::time::Instant;
+
+use ferrokit_core::animation::{EasingCurve, EasingType, PropertyAnimation};
+use ferrokit_core::event::{Event, EventKind};
+use ferrokit_core::object::{
+    register_owned_qobject, ObjectData, ObjectDataMut, ObjectId, OwnedObject, QObject,
+};
+use ferrokit_core::timer::Timer;
+use ferrokit_gui::geometry::primitives::{Margins, Point, PointF, Rect, RectF, Size};
+use ferrokit_gui::paint::brush::Brush;
+use ferrokit_gui::paint::painter::{Painter, RenderHint};
+use ferrokit_gui::text::font::{Font, FontWeight};
+use ferrokit_gui::text::font_metrics::FontMetrics;
+use ferrokit_gui::tiny_skia::PathBuilder;
+use ferrokit_platform::cursor::CursorShape;
+use ferrokit_widgets::cursor::Cursor;
+use ferrokit_widgets::frame::Frame;
+use ferrokit_widgets::layout::Direction;
+use ferrokit_widgets::{
+    Alignment, BoxLayout, EmptyWidget, Layout, Policy, QSizePolicy, Widget, WidgetBase, WidgetRef,
+    WidgetWeak, Window,
+};
+
+use crate::providers::base::UsageMetrics as Metrics;
+use crate::ui::provider_card::ProviderCardWidget;
+use crate::ui::styles::get_cards_stylesheet;
+use crate::ui::{round_pen, Notifier, UiThread};
+
+/// Python `QWIDGETSIZE_MAX`.
+const QWIDGETSIZE_MAX: i32 = 16_777_215;
+/// Python `_Flyout.RADIUS`.
+const FLYOUT_RADIUS: f32 = 10.0;
+/// Python `Qt.Key_Escape`, `Key_Return`, `Key_Enter`, `Key_Space`.
+const KEY_ESCAPE: u32 = 0x0100_0000;
+const KEY_RETURN: u32 = 0x0100_0004;
+const KEY_ENTER: u32 = 0x0100_0005;
+const KEY_SPACE: u32 = 0x20;
+/// `Qt::ControlModifier` in `EventKind::Wheel::modifiers`.
+const CONTROL_MODIFIER: u32 = 0x0400_0000;
+
+/// Runs `f` once the event that is being dispatched is done and no widget is borrowed.
+fn defer(f: impl FnOnce() + 'static) {
+    ferrokit_widgets::WidgetCommandQueue::post_task(f);
+}
+
+/// Python `SidebarWidget._animations_enabled` (the system's reduced-motion preference).
+pub fn animations_enabled() -> bool {
+    ferrokit_gui::application::GuiApplication::animation_duration_factor() != 0.0
+}
+
+fn rgba(color: ferrokit_gui::tiny_skia::Color, alpha: f32) -> ferrokit_gui::tiny_skia::Color {
+    let mut c = color;
+    c.set_alpha(alpha);
+    c
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Align {
+    Left,
+    Right,
+    Center,
+}
+
+/// `QPainter.drawText(rect, align | Qt.AlignVCenter, text)`.
+fn draw_text_in(
+    painter: &mut Painter,
+    rect: RectF,
+    align: Align,
+    text: &str,
+    font: &Font,
+    color: ferrokit_gui::tiny_skia::Color,
+) {
+    let metrics = FontMetrics::from_font(font);
+    let width = metrics.horizontal_advance_exact(text, font);
+    let x = match align {
+        Align::Left => rect.x,
+        Align::Right => rect.x + rect.width - width,
+        Align::Center => rect.x + (rect.width - width) / 2.0,
+    };
+    let line = metrics.ascent + metrics.descent;
+    let baseline = rect.y + (rect.height - line) / 2.0 + metrics.ascent;
+    painter.draw_text_colored(PointF::new(x, baseline), text, font, color);
+}
+
+fn font_px(family: &str, px: f32, bold: bool) -> Font {
+    let font = Font::new(family, px);
+    if bold {
+        font.with_weight(FontWeight::Bold)
+    } else {
+        font
+    }
+}
+
+/// Python `round(x)` of a pixel size, at least `minimum`.
+fn px(value: f64, minimum: i32) -> f32 {
+    minimum.max(py_round(value)) as f32
+}
+
+// ---- _Button -----------------------------------------------------------------------------------
+
+/// What `_Button` keeps in attributes, shared with its `_Indicators` child and with the owner.
+pub struct ButtonData {
+    pub kind: String,
+    pub tile: RefCell<TileState>,
+    pub flash: Cell<f64>,
+    pub show_labels: Cell<bool>,
+    down: Cell<bool>,
+    press_pos: Cell<Option<Point>>,
+    dragged: Cell<bool>,
+    reordering: Cell<bool>,
+    hold: Timer,
+    owner: Weak<SidebarInner>,
+    /// The button's own handle, for what `_begin_reorder` does to the widget.
+    me: RefCell<Option<WidgetWeak>>,
+}
+
+impl ButtonData {
+    fn is_provider(&self) -> bool {
+        name_of(&self.kind).is_some()
+    }
+
+    fn widget(&self) -> Option<WidgetRef> {
+        self.me.borrow().as_ref().and_then(|w| w.upgrade())
+    }
+
+    fn update(&self) {
+        if let Some(w) = self.widget() {
+            if let Ok(w) = w.try_borrow() {
+                w.update();
+            }
+        }
+    }
+
+    /// Python `_begin_reorder` (the hold timer fired).
+    fn begin_reorder(&self) {
+        let Some(owner) = self.owner.upgrade() else { return };
+        if self.press_pos.get().is_none()
+            || self.dragged.get()
+            || !self.is_provider()
+            || owner.state.get() != State::Strip
+        {
+            return;
+        }
+        self.reordering.set(true);
+        self.down.set(false);
+        if let Some(w) = self.widget() {
+            if let Ok(w) = w.try_borrow() {
+                w.set_cursor(CursorShape::ClosedHand);
+            }
+        }
+        self.update();
+        owner.start_reorder(&self.kind);
+    }
+}
+
+/// Python `_Indicators`: status painted above the tile without intercepting its input.
+pub struct Indicators {
+    base: WidgetBase,
+    data: Rc<ButtonData>,
+    owner: Weak<SidebarInner>,
+}
+
+impl Indicators {
+    fn new(data: Rc<ButtonData>, owner: Weak<SidebarInner>) -> Self {
+        let base = WidgetBase::new();
+        // `WA_TransparentForMouseEvents`
+        base.set_transparent_for_mouse_events(true);
+        Self { base, data, owner }
+    }
+}
+
+impl QObject for Indicators {
+    fn object_data(&self) -> &ObjectData {
+        &self.base.object_data
+    }
+    fn object_data_mut(&mut self) -> ObjectDataMut<'_> {
+        ObjectDataMut::new(&mut self.base.object_data)
+    }
+}
+
+impl Widget for Indicators {
+    fn widget_base(&self) -> &WidgetBase {
+        &self.base
+    }
+    fn id(&self) -> ObjectId {
+        self.base.id()
+    }
+    fn geometry(&self) -> Rect {
+        self.base.geometry()
+    }
+    fn set_geometry(&self, rect: Rect) {
+        self.base.set_geometry(rect);
+    }
+    fn is_visible(&self) -> bool {
+        self.base.is_visible()
+    }
+    fn set_visible(&self, visible: bool) {
+        self.base.set_visible(visible);
+    }
+    fn is_enabled(&self) -> bool {
+        self.base.is_enabled()
+    }
+    fn update(&self) {
+        self.base.update();
+    }
+    fn dirty_rect(&self) -> Option<Rect> {
+        self.base.dirty_rect()
+    }
+    fn clear_dirty(&self) {
+        self.base.clear_dirty();
+    }
+    fn parent_widget(&self) -> Option<WidgetWeak> {
+        self.base.parent_widget()
+    }
+    fn set_parent_widget(&self, parent: Option<WidgetWeak>) {
+        self.base.set_parent_widget(parent);
+    }
+    fn window_id(&self) -> Option<ObjectId> {
+        self.base.window_id()
+    }
+    fn set_window_id(&self, window_id: Option<ObjectId>) {
+        self.base.set_window_id(window_id);
+    }
+    fn children(&self) -> Vec<WidgetRef> {
+        self.base.children()
+    }
+    fn add_child(&mut self, child: WidgetRef) {
+        self.base.add_child(child);
+    }
+    fn remove_child(&mut self, child_id: ObjectId) {
+        self.base.remove_child(child_id);
+    }
+
+    /// Python `_Indicators.paintEvent`.
+    fn paint_event(&mut self, p: &mut Painter) {
+        let Some(owner) = self.owner.upgrade() else { return };
+        let t = owner.tokens();
+        let scale = owner.scale.get() as f32;
+        p.set_render_hint(RenderHint::Antialiasing, true);
+        let mut right = self.base.geometry().width as f32;
+        let tile = self.data.tile.borrow();
+        if tile.alert {
+            // warning triangle with "!" -- readable without relying on colour
+            let size = 11.0 * scale;
+            let (x, y) = (right - size - 2.0 * scale, 1.5 * scale);
+            let mut path = PathBuilder::new();
+            path.move_to(x + size / 2.0, y);
+            path.line_to(x + size, y + size * 0.92);
+            path.line_to(x, y + size * 0.92);
+            path.close();
+            p.set_pen(None);
+            p.set_brush(Brush::Color(t.alert));
+            if let Some(path) = path.finish() {
+                p.fill_path(&path);
+            }
+            let font = font_px(t.font, (6.0f32).max((8.0 * scale).round()), true);
+            draw_text_in(
+                p,
+                RectF::new(x, y + size * 0.28, size, size * 0.64),
+                Align::Center,
+                "!",
+                &font,
+                ferrokit_gui::tiny_skia::Color::WHITE,
+            );
+            right -= size + 4.0 * scale;
+        }
+        if tile.stale {
+            p.set_pen(None);
+            p.set_brush(Brush::Color(t.stale));
+            p.draw_ellipse(RectF::new(right - 10.0 * scale, 0.0, 6.0 * scale, 6.0 * scale));
+        }
+        if self.data.kind == "agy" {
+            let count = tile.dot_colors.len() as f32;
+            for (i, color) in tile.dot_colors.iter().enumerate() {
+                p.set_pen(Some(round_pen(t.background, scale)));
+                let fill = if tile.offline { t.muted } else { *color };
+                p.set_brush(Brush::Color(fill));
+                p.draw_ellipse(RectF::new(
+                    (60.0 - 8.0 * count + 8.0 * i as f32) * scale,
+                    10.0 * scale,
+                    6.0 * scale,
+                    6.0 * scale,
+                ));
+            }
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+/// Python `_Button(QPushButton)`.
+pub struct SidebarButton {
+    base: WidgetBase,
+    data: Rc<ButtonData>,
+    owner: Weak<SidebarInner>,
+    /// QAbstractButton's `clicked`.
+    pub clicked: Rc<Notifier<()>>,
+    last_move_accepted: bool,
+}
+
+impl SidebarButton {
+    /// Builds the button and its indicators child; returns the widget and the shared data.
+    pub fn create(kind: &str, owner: &Rc<SidebarInner>) -> (WidgetRef, Rc<ButtonData>, Rc<Notifier<()>>) {
+        let hold = Timer::new();
+        hold.set_single_shot(true);
+        let data = Rc::new(ButtonData {
+            kind: kind.to_owned(),
+            tile: RefCell::new(initial_tile()),
+            flash: Cell::new(0.0),
+            show_labels: Cell::new(owner.scale.get() >= 0.8),
+            down: Cell::new(false),
+            press_pos: Cell::new(None),
+            dragged: Cell::new(false),
+            reordering: Cell::new(false),
+            hold,
+            owner: Rc::downgrade(owner),
+            me: RefCell::new(None),
+        });
+        let weak = UiThread::new(Rc::downgrade(&data));
+        data.hold.timeout.connect(move |()| {
+            if let Some(data) = weak.get().and_then(|w| w.upgrade()) {
+                data.begin_reorder();
+            }
+        });
+        let base = WidgetBase::new();
+        base.set_focus_policy(ferrokit_widgets::FocusPolicy::StrongFocus);
+        base.set_mouse_tracking(true);
+        let clicked = Rc::new(Notifier::new());
+        let mut button = SidebarButton {
+            base,
+            data: Rc::clone(&data),
+            owner: Rc::downgrade(owner),
+            clicked: Rc::clone(&clicked),
+            last_move_accepted: false,
+        };
+        let indicators: WidgetRef = Rc::new(RefCell::new(Box::new(Indicators::new(
+            Rc::clone(&data),
+            Rc::downgrade(owner),
+        ))));
+        button.base.add_child(indicators);
+        let widget: WidgetRef = Rc::new(RefCell::new(Box::new(button)));
+        *data.me.borrow_mut() = Some(Rc::downgrade(&widget));
+        {
+            let w = widget.borrow();
+            w.set_cursor(CursorShape::PointingHand);
+            // Python `setAccessibleName(_NAMES.get(kind, 'Toggle sidebar'))`, `setToolTip(name)`
+            let name = name_of(kind).unwrap_or("Toggle sidebar");
+            w.set_accessible_name(name);
+        }
+        widget.borrow_mut().set_tool_tip(name_of(kind).unwrap_or("Toggle sidebar"));
+        (widget, data, clicked)
+    }
+
+    fn indicators(&self) -> Option<WidgetRef> {
+        self.base.children().into_iter().next()
+    }
+
+    /// `QAbstractButton::click`: queued, because the owner's slot opens a flyout beside this
+    /// (borrowed) widget.
+    fn click(&self) {
+        let clicked = Rc::clone(&self.clicked);
+        defer(move || clicked.emit(&()));
+    }
+
+    fn set_down(&mut self, down: bool) {
+        if self.data.down.get() != down {
+            self.data.down.set(down);
+            self.update();
+        }
+    }
+
+    fn escape(&self) {
+        if let Some(owner) = self.owner.upgrade() {
+            defer(move || owner.close_flyout());
+        }
+    }
+}
+
+fn initial_tile() -> TileState {
+    let neutral = get_theme(true).neutral;
+    TileState {
+        rows: vec![
+            TileRow { label: "5H".into(), value: None, color: neutral },
+            TileRow { label: "7D".into(), value: None, color: neutral },
+        ],
+        display: ["--".to_owned(), "--".to_owned()],
+        dot_colors: vec![neutral; 3],
+        alert: false,
+        offline: false,
+        stale: false,
+    }
+}
+
+impl QObject for SidebarButton {
+    fn object_data(&self) -> &ObjectData {
+        &self.base.object_data
+    }
+    fn object_data_mut(&mut self) -> ObjectDataMut<'_> {
+        ObjectDataMut::new(&mut self.base.object_data)
+    }
+
+    /// Python `_Button.event` plus the `QPushButton` mouse handling.
+    fn event(&mut self, event: &mut Event) -> bool {
+        match &event.kind {
+            EventKind::ToolTip { .. } => {
+                // The flyout already shows the details; a native tooltip on top of it only flickers.
+                self.owner.upgrade().is_some_and(|o| o.active.borrow().is_some())
+            }
+            EventKind::Enter { .. } => {
+                self.enter_event(Point::new(0, 0));
+                true
+            }
+            EventKind::Leave => {
+                self.leave_event();
+                true
+            }
+            EventKind::MouseButtonPress { x, y, button } => {
+                self.mouse_press_event(Point::new(*x, *y), *button, 0);
+                if *button != 1 {
+                    event.ignore();
+                }
+                true
+            }
+            EventKind::MouseMove { x, y } => {
+                self.last_move_accepted = false;
+                self.mouse_move_event(Point::new(*x, *y));
+                self.last_move_accepted
+            }
+            EventKind::MouseButtonRelease { x, y, button } => {
+                self.mouse_release_event(Point::new(*x, *y), *button, 0);
+                if *button != 1 {
+                    event.ignore();
+                }
+                true
+            }
+            EventKind::FocusIn { .. } | EventKind::FocusOut { .. } => {
+                self.update();
+                true
+            }
+            EventKind::KeyPress { key, modifiers, is_repeat } => {
+                self.key_press_event(*key, *modifiers, *is_repeat);
+                true
+            }
+            EventKind::KeyRelease { key, modifiers } => {
+                self.key_release_event(*key, *modifiers);
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Widget for SidebarButton {
+    fn widget_base(&self) -> &WidgetBase {
+        &self.base
+    }
+    fn id(&self) -> ObjectId {
+        self.base.id()
+    }
+    fn geometry(&self) -> Rect {
+        self.base.geometry()
+    }
+    fn set_geometry(&self, rect: Rect) {
+        self.base.set_geometry(rect);
+    }
+    fn is_visible(&self) -> bool {
+        self.base.is_visible()
+    }
+    fn set_visible(&self, visible: bool) {
+        self.base.set_visible(visible);
+    }
+    fn is_enabled(&self) -> bool {
+        self.base.is_enabled()
+    }
+    fn update(&self) {
+        self.base.update();
+    }
+    fn dirty_rect(&self) -> Option<Rect> {
+        self.base.dirty_rect()
+    }
+    fn clear_dirty(&self) {
+        self.base.clear_dirty();
+    }
+    fn parent_widget(&self) -> Option<WidgetWeak> {
+        self.base.parent_widget()
+    }
+    fn set_parent_widget(&self, parent: Option<WidgetWeak>) {
+        self.base.set_parent_widget(parent);
+    }
+    fn window_id(&self) -> Option<ObjectId> {
+        self.base.window_id()
+    }
+    fn set_window_id(&self, window_id: Option<ObjectId>) {
+        self.base.set_window_id(window_id);
+        for child in self.base.children() {
+            child.borrow().set_window_id(window_id);
+        }
+    }
+    fn children(&self) -> Vec<WidgetRef> {
+        self.base.children()
+    }
+    fn add_child(&mut self, child: WidgetRef) {
+        self.base.add_child(child);
+    }
+    fn remove_child(&mut self, child_id: ObjectId) {
+        self.base.remove_child(child_id);
+    }
+    fn focus_policy(&self) -> ferrokit_widgets::FocusPolicy {
+        self.base.focus_policy()
+    }
+    fn set_focus_policy(&self, policy: ferrokit_widgets::FocusPolicy) {
+        self.base.set_focus_policy(policy);
+    }
+    fn has_focus(&self) -> bool {
+        self.base.has_focus()
+    }
+    fn set_has_focus(&self, focus: bool) {
+        self.base.set_has_focus(focus);
+    }
+
+    fn enter_event(&mut self, _pos: Point) {
+        self.update();
+        if self.data.is_provider() {
+            if let Some(owner) = self.owner.upgrade() {
+                let kind = self.data.kind.clone();
+                defer(move || owner.hover(&kind));
+            }
+        }
+    }
+
+    fn leave_event(&mut self) {
+        self.update();
+        if let Some(owner) = self.owner.upgrade() {
+            owner.hover_timer.stop();
+            owner.schedule_close();
+        }
+    }
+
+    /// Python `mousePressEvent`.
+    fn mouse_press_event(&mut self, pos: Point, button: u32, _modifiers: u32) {
+        if button == 1 {
+            self.data.press_pos.set(Some(pos));
+            self.data.dragged.set(false);
+            if self.data.is_provider() {
+                self.data.hold.start_with_interval(HOLD_MS);
+            }
+            // QAbstractButton::mousePressEvent
+            self.set_down(true);
+        }
+    }
+
+    /// Python `mouseMoveEvent`.
+    fn mouse_move_event(&mut self, pos: Point) {
+        if self.data.reordering.get() {
+            let global = Cursor::pos();
+            if let Some(owner) = self.owner.upgrade() {
+                let kind = self.data.kind.clone();
+                defer(move || owner.move_reorder(&kind, global));
+            }
+            self.last_move_accepted = true;
+            return;
+        }
+        if let (Some(press), false) = (self.data.press_pos.get(), self.data.dragged.get()) {
+            let (dx, dy) = ((pos.x - press.x) as f64, (pos.y - press.y) as f64);
+            if dx.hypot(dy) > 6.0 {
+                self.data.hold.stop();
+                self.data.dragged.set(true);
+                self.set_down(false);
+                if let Some(owner) = self.owner.upgrade() {
+                    owner.hover_timer.stop();
+                    defer(move || owner.drag_requested.emit(&()));
+                }
+            }
+        }
+    }
+
+    /// Python `mouseReleaseEvent`.
+    fn mouse_release_event(&mut self, pos: Point, button: u32, _modifiers: u32) {
+        self.data.hold.stop();
+        if self.data.reordering.get() {
+            self.data.reordering.set(false);
+            self.data.press_pos.set(None);
+            self.set_down(false);
+            self.set_cursor(CursorShape::PointingHand);
+            if let Some(owner) = self.owner.upgrade() {
+                defer(move || owner.finish_reorder());
+            }
+            return;
+        }
+        let dragged = self.data.dragged.get();
+        self.data.press_pos.set(None);
+        if dragged && button == 1 {
+            self.set_down(false);
+            return;
+        }
+        // QAbstractButton::mouseReleaseEvent: `clicked` when it ended inside
+        if button == 1 && self.data.down.get() {
+            self.set_down(false);
+            let g = self.base.geometry();
+            if Rect::new(0, 0, g.width, g.height).contains(pos) {
+                self.click();
+            }
+        }
+    }
+
+    /// Python `keyPressEvent`.
+    fn key_press_event(&mut self, key: u32, _modifiers: u32, _is_repeat: bool) {
+        match key {
+            KEY_RETURN | KEY_ENTER => self.click(),
+            KEY_ESCAPE => self.escape(),
+            KEY_SPACE => self.set_down(true),
+            _ => {}
+        }
+    }
+
+    fn key_release_event(&mut self, key: u32, _modifiers: u32) {
+        if key == KEY_SPACE && self.data.down.get() {
+            self.set_down(false);
+            self.click();
+        }
+    }
+
+    /// Python `_Button.paintEvent`.
+    fn paint_event(&mut self, p: &mut Painter) {
+        let Some(owner) = self.owner.upgrade() else { return };
+        let t = owner.tokens();
+        let dark = owner.dark.get();
+        let scale = owner.scale.get();
+        let s = scale as f32;
+        let geo = self.base.geometry();
+        let (w, h) = (geo.width as f32, geo.height as f32);
+        let tile = self.data.tile.borrow();
+        let radius = t.radius as f32 * s;
+        let inner = RectF::new(s, s, w - 2.0 * s, h - 2.0 * s);
+        p.set_render_hint(RenderHint::Antialiasing, true);
+        p.set_pen(None);
+        let fill = if self.data.down.get() {
+            t.pressed
+        } else if self.under_mouse() {
+            t.hover
+        } else {
+            t.background
+        };
+        p.set_brush(Brush::Color(fill));
+        p.draw_rounded_rect(inner, radius, radius);
+        let provider = self.data.is_provider();
+        let flash = self.data.flash.get();
+        if flash > 0.0 && provider {
+            let glow = rgba(t.provider(&self.data.kind, dark), (0.45 * flash).min(0.45) as f32);
+            p.set_pen(None);
+            p.set_brush(Brush::Color(glow));
+            p.draw_rounded_rect(inner, radius, radius);
+        }
+        if provider {
+            // identity stripe: the service colour, never a usage colour
+            p.set_pen(None);
+            let stripe = if tile.offline { t.muted } else { t.provider(&self.data.kind, dark) };
+            p.set_brush(Brush::Color(stripe));
+            p.draw_rounded_rect(
+                RectF::new(1.5 * s, 7.0 * s, 2.5 * s, h - 14.0 * s),
+                1.2 * s,
+                1.2 * s,
+            );
+        }
+        if self.has_focus() {
+            p.set_brush(Brush::NoBrush);
+            let color = if provider { t.provider(&self.data.kind, dark) } else { t.focus };
+            p.set_pen(Some(round_pen(color, t.focus_width as f32 * s)));
+            p.draw_rounded_rect(
+                RectF::new(2.0 * s, 2.0 * s, w - 4.0 * s, h - 4.0 * s),
+                radius,
+                radius,
+            );
+        }
+        let family = t.font;
+        if self.data.kind == "toggle" {
+            let font = font_px(family, (8.0f32).max((t.font_size as f32 * s).round()), false);
+            let glyph = if owner.state.get() == State::Strip { "\u{2261}" } else { "\u{25a5}" };
+            draw_text_in(p, RectF::new(0.0, 0.0, w, h), Align::Center, glyph, &font, t.text);
+            return;
+        }
+        let name_color = if tile.offline { t.muted } else { t.provider(&self.data.kind, dark) };
+        let title_width = if self.data.kind == "agy" { 30.0 } else { 52.0 };
+        let font = font_px(family, (8.0f32).max((t.font_size as f32 * s).round()), true);
+        draw_text_in(
+            p,
+            RectF::new(6.0 * s, 2.0 * s, title_width * s, 16.0 * s),
+            Align::Left,
+            name_of(&self.data.kind).unwrap_or(""),
+            &font,
+            name_color,
+        );
+        let scheme = owner.scheme.get();
+        let theme = get_theme(dark);
+        for (index, row) in tile.rows.iter().enumerate() {
+            let y = (19 + index as i32 * 21) as f32 * s;
+            if self.data.show_labels.get() {
+                let label_font = font_px(family, (8.0f32).max((10.0 * s).round()), false);
+                draw_text_in(p, RectF::new(6.0 * s, y, 30.0 * s, 15.0 * s), Align::Left, &row.label, &label_font, t.muted);
+            }
+            let shown = row_color(row, dark, scheme);
+            let value_font = font_px(family, (8.0f32).max((12.0 * s).round()), true);
+            draw_text_in(
+                p,
+                RectF::new(6.0 * s, y, 52.0 * s, 15.0 * s),
+                Align::Right,
+                &tile.display[index],
+                &value_font,
+                if tile.offline { t.muted } else { shown },
+            );
+            let track = RectF::new(6.0 * s, y + 15.0 * s, 52.0 * s, 4.0 * s);
+            let fraction = match row.value {
+                Some(value) if !tile.offline => value.clamp(0.0, 100.0) / 100.0,
+                _ => 0.0,
+            };
+            let stops: Vec<(u32, ferrokit_gui::tiny_skia::Color)> = if scheme == Scheme::Duo {
+                vec![(0, shown), (100, shown)]
+            } else {
+                // a fixed green -> amber -> red gauge revealed up to the value: the leading edge
+                // always carries the same colour as the number
+                ramp_stops(dark)
+            };
+            gauge::draw_gauge_bar(p, track, fraction, theme.track, &stops, false, false);
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+}
+
+// ---- SidebarWidget -----------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Strip,
+    Panel,
+}
+
+impl State {
+    pub fn parse(name: &str) -> Option<State> {
+        match name {
+            "strip" => Some(State::Strip),
+            "panel" => Some(State::Panel),
+            _ => None,
+        }
+    }
+}
+
+/// Everything `SidebarWidget` keeps; reached from timers, filters and buttons through `Weak`.
+pub struct SidebarInner {
+    container: WidgetRef,
+    strip: WidgetRef,
+    panel: WidgetRef,
+    toggle: std::cell::OnceCell<WidgetRef>,
+    buttons: std::cell::OnceCell<Vec<(String, WidgetRef, Rc<ButtonData>)>>,
+    cards: Vec<(String, Rc<RefCell<ProviderCardWidget>>)>,
+    dividers: RefCell<Vec<WidgetRef>>,
+    flyout: Rc<RefCell<Window>>,
+    flyout_root: WidgetRef,
+    state: Cell<State>,
+    orientation: Cell<Orientation>,
+    scale: Cell<f64>,
+    dock_edge: RefCell<Option<String>>,
+    dark: Cell<bool>,
+    scheme: Cell<Scheme>,
+    metrics: RefCell<std::collections::HashMap<String, Metrics>>,
+    active: RefCell<Option<String>>,
+    pinned: Cell<bool>,
+    pinned_key: RefCell<Option<String>>,
+    hover_id: RefCell<Option<String>>,
+    row_state: RefCell<std::collections::HashMap<String, RowState>>,
+    wheel_remainder: Cell<i32>,
+    order: RefCell<Vec<String>>,
+    hover_timer: Timer,
+    leave_timer: Timer,
+    animation: RefCell<PropertyAnimation>,
+    animation_timer: Timer,
+    animation_clock: Cell<Option<Instant>>,
+    filters: RefCell<Vec<OwnedObject<SidebarFilter>>>,
+    // Python signals
+    pub state_change_requested: Notifier<String>,
+    pub context_menu_requested: Notifier<Point>,
+    pub scale_step_requested: Notifier<i32>,
+    pub drag_requested: Notifier<()>,
+    /// provider ids in their new order (press-hold a tile, then drag)
+    pub order_changed: Notifier<Vec<String>>,
+}
+
+/// Python `SidebarWidget`: a handle to the shared state.
+#[derive(Clone)]
+pub struct SidebarWidget {
+    inner: Rc<SidebarInner>,
+}
+
+/// Looks the widget of `kind` up in an `(id, widget, data)` list.
+fn find_button<'a>(
+    buttons: &'a [(String, WidgetRef, Rc<ButtonData>)],
+    key: &str,
+) -> Option<&'a (String, WidgetRef, Rc<ButtonData>)> {
+    buttons.iter().find(|(k, _, _)| k == key)
+}
+
+fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
+    Rc::new(RefCell::new(Box::new(w)))
+}
+
+fn box_layout_widget(direction: Direction) -> WidgetRef {
+    let widget = make_widget(EmptyWidget::new());
+    let mut layout = BoxLayout::new(direction);
+    layout.set_margins(Margins::new(0, 0, 0, 0));
+    layout.set_spacing(0);
+    widget.borrow_mut().set_layout(Box::new(layout));
+    widget
+}
+
+fn box_index_of(layout: &BoxLayout, widget: &WidgetRef) -> Option<usize> {
+    (0..layout.count()).find(|&i| Layout::item_at(layout, i).is_some_and(|w| Rc::ptr_eq(&w, widget)))
+}
+
+fn layout_remove(owner: &WidgetRef, widget: &WidgetRef) {
+    owner.borrow().with_box_layout(|l| {
+        if let Some(index) = box_index_of(l, widget) {
+            l.remove_widget(index);
+        }
+    });
+}
+
+fn layout_add(owner: &WidgetRef, widget: &WidgetRef) {
+    owner.borrow().with_box_layout(|l| Layout::add_widget(l, Rc::clone(widget)));
+}
+
+/// Python `re.sub(r'([\d.]+)px', lambda m: f'{float(m[1])*s:g}px', sheet)`.
+pub fn scale_px_in_qss(sheet: &str, scale: f64) -> String {
+    let bytes = sheet.as_bytes();
+    let mut out = String::with_capacity(sheet.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() || bytes[i] == b'.' {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            if sheet[i..].starts_with("px") {
+                if let Ok(value) = sheet[start..i].parse::<f64>() {
+                    out.push_str(&format_g(value * scale));
+                    continue;
+                }
+            }
+            out.push_str(&sheet[start..i]);
+        } else {
+            let ch = sheet[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+/// Python's `f'{x:g}'`: six significant digits, no trailing zeros.
+pub fn format_g(value: f64) -> String {
+    if value == 0.0 {
+        return "0".to_owned();
+    }
+    let magnitude = value.abs().log10().floor() as i32;
+    let decimals = (5 - magnitude).clamp(0, 15) as usize;
+    let text = format!("{value:.decimals$}");
+    if text.contains('.') {
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    } else {
+        text
+    }
+}
+
+impl SidebarWidget {
+    /// Python `SidebarWidget.__init__(cards)`; `flyout` is the tool window `_Flyout` that is
+    /// parented to the HUD window.
+    pub fn new(cards: Vec<(String, Rc<RefCell<ProviderCardWidget>>)>, flyout: Window) -> Self {
+        let container = make_widget(EmptyWidget::new());
+        container.borrow_mut().set_object_name("Sidebar");
+        let mut layout = BoxLayout::new(Direction::TopToBottom);
+        layout.set_spacing(0);
+        container.borrow_mut().set_layout(Box::new(layout));
+        let strip = box_layout_widget(Direction::TopToBottom);
+        let panel = box_layout_widget(Direction::TopToBottom);
+        let flyout_root = flyout.root_widget();
+        {
+            let mut vbox = BoxLayout::new(Direction::TopToBottom);
+            vbox.set_margins(Margins::new(8, 8, 8, 8));
+            flyout_root.borrow_mut().set_layout(Box::new(vbox));
+        }
+
+        let inner = Rc::new({
+            SidebarInner {
+                container: Rc::clone(&container),
+                strip: Rc::clone(&strip),
+                panel: Rc::clone(&panel),
+                toggle: std::cell::OnceCell::new(),
+                buttons: std::cell::OnceCell::new(),
+                cards: cards.clone(),
+                dividers: RefCell::new(Vec::new()),
+                flyout: Rc::new(RefCell::new(flyout)),
+                flyout_root: Rc::clone(&flyout_root),
+                state: Cell::new(State::Strip),
+                orientation: Cell::new(Orientation::Vertical),
+                scale: Cell::new(1.0),
+                dock_edge: RefCell::new(None),
+                dark: Cell::new(true),
+                scheme: Cell::new(Scheme::Scale),
+                metrics: RefCell::new(Default::default()),
+                active: RefCell::new(None),
+                pinned: Cell::new(false),
+                pinned_key: RefCell::new(None),
+                hover_id: RefCell::new(None),
+                row_state: RefCell::new(Default::default()),
+                wheel_remainder: Cell::new(0),
+                order: RefCell::new(DEFAULT_ORDER.iter().map(|s| s.to_string()).collect()),
+                hover_timer: Timer::new(),
+                leave_timer: Timer::new(),
+                animation: RefCell::new(PropertyAnimation::new("windowOpacity")),
+                animation_timer: Timer::new(),
+                animation_clock: Cell::new(None),
+                filters: RefCell::new(Vec::new()),
+                state_change_requested: Notifier::new(),
+                context_menu_requested: Notifier::new(),
+                scale_step_requested: Notifier::new(),
+                drag_requested: Notifier::new(),
+                order_changed: Notifier::new(),
+            }
+        });
+        // The buttons need `owner`, so they are made once the Rc exists (interior mutability for
+        // the two fields that hold them).
+        let mut built: Vec<(String, WidgetRef, Rc<ButtonData>)> = Vec::new();
+        let (toggle_widget, toggle_data, toggle_clicked) = SidebarButton::create("toggle", &inner);
+        built.push(("toggle".to_owned(), Rc::clone(&toggle_widget), toggle_data));
+        let mut provider_clicks: Vec<(String, Rc<Notifier<()>>)> = Vec::new();
+        for key in DEFAULT_ORDER {
+            let (widget, data, clicked) = SidebarButton::create(key, &inner);
+            built.push((key.to_owned(), widget, data));
+            provider_clicks.push((key.to_owned(), clicked));
+        }
+        let _ = inner.toggle.set(toggle_widget);
+        let _ = inner.buttons.set(built.into_iter().filter(|(k, _, _)| k != "toggle").collect());
+        let this = SidebarWidget { inner };
+        this.wire(toggle_clicked, provider_clicks);
+        this
+    }
+
+    fn wire(&self, toggle_clicked: Rc<Notifier<()>>, provider_clicks: Vec<(String, Rc<Notifier<()>>)>) {
+        let inner = &self.inner;
+        // toggle: stateChangeRequested.emit('panel' if strip else 'strip')
+        {
+            let weak = Rc::downgrade(inner);
+            toggle_clicked.connect(move |()| {
+                if let Some(inner) = weak.upgrade() {
+                    let next = if inner.state.get() == State::Strip { "panel" } else { "strip" };
+                    inner.state_change_requested.emit(&next.to_owned());
+                }
+            });
+        }
+        for (key, clicked) in provider_clicks {
+            let weak = Rc::downgrade(inner);
+            clicked.connect(move |()| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.click_provider(&key);
+                }
+            });
+        }
+        // layout: toggle, strip, panel; the provider tiles in the strip
+        let container = Rc::clone(&inner.container);
+        layout_add(&container, &inner.toggle());
+        layout_add(&container, &inner.strip);
+        layout_add(&container, &inner.panel);
+        for (_, widget, _) in inner.buttons() {
+            layout_add(&inner.strip, widget);
+        }
+        ferrokit_widgets::widget::set_widget_visible(&inner.panel, false);
+        // cards: hidden until the panel or the flyout shows them
+        for (_, card) in &inner.cards {
+            let widget = card.borrow().widget();
+            widget.borrow().set_visible(false);
+            widget.borrow().set_minimum_size(Size::new(0, 0));
+            widget
+                .borrow()
+                .set_size_policy(QSizePolicy::new(Policy::Ignored, Policy::Preferred));
+        }
+        // timers
+        let weak = UiThread::new(Rc::downgrade(inner));
+        inner.hover_timer.set_single_shot(true);
+        inner.hover_timer.timeout.connect({
+            let weak = UiThread::new(Rc::downgrade(inner));
+            move |()| {
+                if let Some(inner) = weak.get().and_then(|w| w.upgrade()) {
+                    let key = inner.hover_id.borrow().clone();
+                    if let Some(key) = key {
+                        inner.open_flyout(&key);
+                    }
+                }
+            }
+        });
+        inner.leave_timer.set_single_shot(true);
+        inner.leave_timer.timeout.connect({
+            let weak = UiThread::new(Rc::downgrade(inner));
+            move |()| {
+                if let Some(inner) = weak.get().and_then(|w| w.upgrade()) {
+                    inner.maybe_close();
+                }
+            }
+        });
+        inner.animation_timer.set_interval(16);
+        inner.animation_timer.timeout.connect(move |()| {
+            if let Some(inner) = weak.get().and_then(|w| w.upgrade()) {
+                inner.animation_tick();
+            }
+        });
+        // `self._animation.setEasingCurve(QEasingCurve.OutCubic)`
+        inner
+            .animation
+            .borrow_mut()
+            .animation_mut()
+            .set_easing_curve(EasingCurve::new(EasingType::OutCubic));
+        // `self._flyout.installEventFilter(self)`, `self.installEventFilter(self)` and the children
+        inner.install_filters();
+        {
+            // `ContextMenu` on the flyout window (not on a tile): the HUD shows its menu
+            let weak = Rc::downgrade(inner);
+            inner.flyout.borrow_mut().set_context_menu_handler(move |pos| {
+                if let Some(inner) = weak.upgrade() {
+                    inner.context_menu_requested.emit(&pos);
+                }
+            });
+        }
+        {
+            // Python `_Flyout.paintEvent`: the rounded surface painted by the flyout itself
+            let weak = Rc::downgrade(inner);
+            if let Some(root) = inner
+                .flyout_root
+                .borrow_mut()
+                .as_any_mut()
+                .downcast_mut::<EmptyWidget>()
+            {
+                root.set_paint_handler(move |p| {
+                    let Some(inner) = weak.upgrade() else { return };
+                    let t = inner.tokens();
+                    let g = p.device();
+                    let (w, h) = (g.width(), g.height());
+                    p.set_render_hint(RenderHint::Antialiasing, true);
+                    p.set_brush(Brush::Color(t.background));
+                    p.set_pen(Some(round_pen(t.separator, 1.0)));
+                    p.draw_rounded_rect(
+                        RectF::new(0.5, 0.5, w - 1.0, h - 1.0),
+                        FLYOUT_RADIUS,
+                        FLYOUT_RADIUS,
+                    );
+                });
+            }
+        }
+        self.set_appearance(true, Scheme::Scale);
+    }
+
+    /// The `QWidget` to put into the HUD's layout.
+    pub fn widget(&self) -> WidgetRef {
+        Rc::clone(&self.inner.container)
+    }
+
+    pub fn inner(&self) -> &Rc<SidebarInner> {
+        &self.inner
+    }
+
+    pub fn state(&self) -> State {
+        self.inner.state.get()
+    }
+
+    pub fn orientation(&self) -> Orientation {
+        self.inner.orientation.get()
+    }
+
+    pub fn scale(&self) -> f64 {
+        self.inner.scale.get()
+    }
+
+    pub fn order(&self) -> Vec<String> {
+        self.inner.order.borrow().clone()
+    }
+
+    /// Python `_active`: the provider whose flyout is open.
+    pub fn active(&self) -> Option<String> {
+        self.inner.active.borrow().clone()
+    }
+
+    pub fn state_change_requested(&self) -> &Notifier<String> {
+        &self.inner.state_change_requested
+    }
+    pub fn context_menu_requested(&self) -> &Notifier<Point> {
+        &self.inner.context_menu_requested
+    }
+    pub fn scale_step_requested(&self) -> &Notifier<i32> {
+        &self.inner.scale_step_requested
+    }
+    pub fn drag_requested(&self) -> &Notifier<()> {
+        &self.inner.drag_requested
+    }
+    pub fn order_changed(&self) -> &Notifier<Vec<String>> {
+        &self.inner.order_changed
+    }
+
+    pub fn set_state(&self, state: State) {
+        self.inner.set_state(state);
+    }
+
+    /// Python `set_order`: `None` when `order` is not a permutation of the providers (Python raises).
+    pub fn set_order(&self, order: &[String]) -> Option<()> {
+        let order = valid_order(order)?;
+        if order == *self.inner.order.borrow() {
+            return Some(());
+        }
+        *self.inner.order.borrow_mut() = order;
+        self.inner.apply_order();
+        Some(())
+    }
+
+    pub fn set_orientation(&self, orientation: Orientation) {
+        if orientation == self.inner.orientation.get() {
+            return;
+        }
+        self.inner.close_flyout();
+        self.inner.orientation.set(orientation);
+        self.inner.relayout();
+    }
+
+    /// Python `set_dock_edge(edge)`: the edge the bar is docked to (`None` = floating).
+    pub fn set_dock_edge(&self, edge: Option<&str>) {
+        if edge.map(str::to_owned) == *self.inner.dock_edge.borrow() {
+            return;
+        }
+        *self.inner.dock_edge.borrow_mut() = edge.map(str::to_owned);
+        let active = self.inner.active.borrow().clone();
+        if let Some(key) = active {
+            self.inner.animation_timer.stop();
+            self.inner.animation.borrow_mut().animation_mut().stop();
+            self.inner.place_flyout(&key);
+        }
+    }
+
+    /// Python `set_scale`; a non-finite scale is refused (Python raises).
+    pub fn set_scale(&self, scale: f64) -> Option<()> {
+        let scale = clamp_scale(scale)?;
+        if scale == self.inner.scale.get() {
+            return Some(());
+        }
+        self.inner.scale.set(scale);
+        self.inner.relayout();
+        self.update_countdown();
+        Some(())
+    }
+
+    /// Python `set_appearance(dark, scheme)`.
+    pub fn set_appearance(&self, dark: bool, scheme: Scheme) {
+        self.inner.set_appearance(dark, scheme);
+    }
+
+    pub fn update_metrics(&self, data: &Metrics) {
+        self.inner.update_metrics(data);
+    }
+
+    pub fn update_countdown(&self) {
+        let keys: Vec<String> = self.inner.metrics.borrow().keys().cloned().collect();
+        for key in keys {
+            self.inner.refresh_tooltip(&key);
+        }
+    }
+
+    /// Python `preferred_size`.
+    pub fn preferred_size(&self) -> (i32, i32) {
+        self.inner.preferred_size()
+    }
+
+    pub fn close_flyout(&self) {
+        self.inner.close_flyout();
+    }
+
+    /// Python `_flyout_position` for the HUD's tests and docking.
+    pub fn tokens(&self) -> Tokens {
+        self.inner.tokens()
+    }
+}
+
+impl SidebarInner {
+    fn tokens(&self) -> Tokens {
+        tokens(self.dark.get())
+    }
+
+    fn buttons(&self) -> &[(String, WidgetRef, Rc<ButtonData>)] {
+        self.buttons.get().map_or(&[], |b| b.as_slice())
+    }
+
+    fn toggle(&self) -> &WidgetRef {
+        self.toggle.get().expect("toggle is set in SidebarWidget::new")
+    }
+
+    fn button(&self, key: &str) -> Option<&(String, WidgetRef, Rc<ButtonData>)> {
+        find_button(self.buttons(), key)
+    }
+
+    fn card(&self, key: &str) -> Option<&Rc<RefCell<ProviderCardWidget>>> {
+        self.cards.iter().find(|(k, _)| k == key).map(|(_, c)| c)
+    }
+
+    fn card_widget(&self, key: &str) -> Option<WidgetRef> {
+        self.card(key).map(|c| c.borrow().widget())
+    }
+
+    /// The filters of Python's `eventFilter`: the sidebar and the flyout.
+    fn install_filters(self: &Rc<Self>) {
+        let mut owners = self.filters.borrow_mut();
+        for target in [&self.container, &self.flyout_root] {
+            let filter = SidebarFilter {
+                data: ObjectData::with_auto_id(),
+                inner: UiThread::new(Rc::downgrade(self)),
+                flyout_root: self.flyout_root.borrow().id(),
+            };
+            // SAFETY: the owner is kept in `self.filters` on the UI thread and never reads the
+            // object; its callbacks run only from event dispatch.
+            let owner = unsafe { register_owned_qobject(filter) };
+            target
+                .borrow_mut()
+                .object_data_mut()
+                .install_event_filter(OwnedObject::object_id(&owner));
+            owners.push(owner);
+        }
+    }
+
+    fn set_state(self: &Rc<Self>, state: State) {
+        if state == self.state.get() {
+            return;
+        }
+        self.set_state_forced(state);
+    }
+
+    /// Python `set_state` after its early return.
+    fn set_state_forced(self: &Rc<Self>, state: State) {
+        self.close_flyout();
+        self.state.set(state);
+        ferrokit_widgets::widget::set_widget_visible(&self.strip, state == State::Strip);
+        ferrokit_widgets::widget::set_widget_visible(&self.panel, state == State::Panel);
+        if state == State::Panel {
+            let order = self.order.borrow().clone();
+            let cards: Vec<&Rc<RefCell<ProviderCardWidget>>> = order
+                .iter()
+                .filter_map(|k| self.cards.iter().find(|(c, _)| c == k).map(|(_, c)| c))
+                .collect();
+            for (index, card) in cards.into_iter().enumerate() {
+                if index > 0 {
+                    let mut divider = Frame::new();
+                    divider.set_object_name("SidebarDivider");
+                    let line = make_widget(divider);
+                    self.dividers.borrow_mut().push(Rc::clone(&line));
+                    layout_add(&self.panel, &line);
+                }
+                let widget = card.borrow().widget();
+                layout_add(&self.panel, &widget);
+                ferrokit_widgets::widget::set_widget_visible(&widget, true);
+            }
+        } else {
+            // take every widget out of the panel: the cards go back to storage, the dividers go
+            loop {
+                let taken = self.panel.borrow().with_box_layout(|l| {
+                    if l.count() == 0 {
+                        None
+                    } else {
+                        Layout::take_at(l, 0)
+                    }
+                });
+                let Some(Some(widget)) = taken else { break };
+                if self.cards.iter().any(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget)) {
+                    // `_restore_card_style`
+                    if let Some((_, card)) =
+                        self.cards.iter().find(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget))
+                    {
+                        card.borrow_mut().set_font_scale(1.0);
+                    }
+                    ferrokit_widgets::widget::set_widget_visible(&widget, false);
+                }
+            }
+            self.dividers.borrow_mut().clear();
+        }
+        self.relayout();
+    }
+
+    fn apply_order(self: &Rc<Self>) {
+        let order = self.order.borrow().clone();
+        for (_, widget, _) in self.buttons() {
+            layout_remove(&self.strip, widget);
+        }
+        for key in &order {
+            if let Some((_, widget, _)) = self.button(key) {
+                layout_add(&self.strip, widget);
+            }
+        }
+        self.strip.borrow().with_box_layout(|l| l.update_layout());
+        if self.state.get() == State::Panel {
+            self.set_state_forced(State::Strip);
+            self.set_state_forced(State::Panel);
+        }
+    }
+
+    /// Python `_start_reorder`.
+    fn start_reorder(self: &Rc<Self>, _key: &str) {
+        let inner = Rc::clone(self);
+        defer(move || {
+            inner.close_flyout();
+            inner.hover_timer.stop();
+        });
+    }
+
+    /// Python `_move_reorder(key, global_pos)`.
+    fn move_reorder(self: &Rc<Self>, key: &str, global: Point) {
+        let pos = self.strip.borrow().map_from_global(global);
+        let vertical = self.orientation.get() == Orientation::Vertical;
+        let coordinate = if vertical { pos.y } else { pos.x };
+        let order = self.order.borrow().clone();
+        let mut centers = std::collections::HashMap::new();
+        for (k, widget, _) in self.buttons() {
+            if let Ok(w) = widget.try_borrow() {
+                let g = w.geometry();
+                centers.insert(
+                    k.clone(),
+                    if vertical { g.y + g.height / 2 } else { g.x + g.width / 2 },
+                );
+            }
+        }
+        let new_order = reorder(&order, key, coordinate, &centers);
+        if new_order != order {
+            *self.order.borrow_mut() = new_order.clone();
+            for (_, widget, _) in self.buttons() {
+                layout_remove(&self.strip, widget);
+            }
+            for k in &new_order {
+                if let Some((_, widget, _)) = self.button(k) {
+                    layout_add(&self.strip, widget);
+                }
+            }
+            self.strip.borrow().with_box_layout(|l| l.update_layout());
+        }
+    }
+
+    /// Python `_finish_reorder`.
+    fn finish_reorder(self: &Rc<Self>) {
+        let order = self.order.borrow().clone();
+        self.order_changed.emit(&order);
+    }
+
+    /// Python `_relayout`.
+    fn relayout(self: &Rc<Self>) {
+        let s = self.scale.get();
+        let vertical = self.orientation.get() == Orientation::Vertical;
+        let direction = if vertical { Direction::TopToBottom } else { Direction::LeftToRight };
+        let t = self.tokens();
+        let padding = py_round(t.spacing as f64 * s);
+        self.container.borrow().with_box_layout(|l| {
+            l.set_direction(direction);
+            l.set_margins(Margins::new(padding, padding, padding, padding));
+            l.set_spacing(0);
+        });
+        self.strip.borrow().with_box_layout(|l| l.set_direction(direction));
+        self.panel.borrow().with_box_layout(|l| {
+            l.set_direction(direction);
+            l.set_spacing(py_round(4.0 * s));
+        });
+        let handle = scaled(22, s);
+        layout_remove(&self.container, self.toggle());
+        {
+            let toggle = self.toggle().borrow();
+            if vertical {
+                self.container.borrow().with_box_layout(|l| l.insert_widget(0, Rc::clone(self.toggle()), 0));
+                toggle.set_minimum_size(Size::new(0, 0));
+                toggle.set_maximum_size(Size::new(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
+                toggle.set_fixed_size(Size::new(scaled(BASE_BUTTON_W, s), handle));
+            } else {
+                self.container.borrow().with_box_layout(|l| Layout::add_widget(l, Rc::clone(self.toggle())));
+                toggle.set_minimum_size(Size::new(handle, handle));
+                toggle.set_maximum_size(Size::new(handle, QWIDGETSIZE_MAX));
+                toggle.set_size_policy(QSizePolicy::new(Policy::Fixed, Policy::Expanding));
+            }
+        }
+        for (_, widget, data) in self.buttons() {
+            let w = widget.borrow();
+            let (bw, bh) = (scaled(BASE_BUTTON_W, s), scaled(BASE_BUTTON_H, s));
+            w.set_fixed_size(Size::new(bw, bh));
+            data.show_labels.set(s >= 0.8);
+            if let Some(indicators) = w.children().into_iter().next() {
+                indicators.borrow().set_geometry(Rect::new(0, 0, bw, bh));
+                indicators.borrow().raise();
+                indicators.borrow().update();
+            }
+            w.update();
+        }
+        let panel_sheet = get_cards_stylesheet(self.dark.get());
+        self.panel.borrow().set_style_sheet(&scale_px_in_qss(panel_sheet, s));
+        let panel_vertical_width = scaled(BASE_PANEL_W, s) - 2 * padding;
+        for (_, card) in &self.cards {
+            let widget = card.borrow().widget();
+            if self.state.get() == State::Panel {
+                // side by side, cards keep their natural height instead of stretching to the tallest one
+                self.panel.borrow().with_box_layout(|l| {
+                    l.set_alignment(&widget, if vertical { Alignment::NONE } else { Alignment::TOP });
+                });
+                card.borrow_mut().set_font_scale(s);
+                let width = if vertical { panel_vertical_width } else { scaled(BASE_PANEL_W, s) };
+                let w = widget.borrow();
+                w.set_minimum_size(Size::new(width, 0));
+                w.set_maximum_size(Size::new(width, QWIDGETSIZE_MAX));
+                w.ensure_polished();
+                w.update_layout();
+            } else {
+                let w = widget.borrow();
+                w.set_minimum_size(Size::new(0, 0));
+                w.set_maximum_size(Size::new(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
+            }
+        }
+        for line in self.dividers.borrow().iter() {
+            let w = line.borrow();
+            w.set_minimum_size(Size::new(0, 0));
+            w.set_maximum_size(Size::new(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
+            let thickness = 1.max(py_round(s));
+            if vertical {
+                w.set_minimum_size(Size::new(0, thickness));
+                w.set_maximum_size(Size::new(QWIDGETSIZE_MAX, thickness));
+            } else {
+                w.set_minimum_size(Size::new(thickness, 0));
+                w.set_maximum_size(Size::new(thickness, QWIDGETSIZE_MAX));
+            }
+        }
+        self.toggle().borrow().update();
+        for layout_owner in [&self.strip, &self.panel, &self.container] {
+            layout_owner.borrow().with_box_layout(|l| l.update_layout());
+        }
+        self.container.borrow().update_geometry();
+        self.container.borrow().update();
+    }
+
+    /// Python `set_appearance`.
+    fn set_appearance(self: &Rc<Self>, dark: bool, scheme: Scheme) {
+        self.dark.set(dark);
+        self.scheme.set(scheme);
+        let t = self.tokens();
+        let cards_sheet = get_cards_stylesheet(dark);
+        self.container.borrow().set_style_sheet(&format!(
+            "{cards_sheet}QWidget#Sidebar {{background:{};border-radius:{}px;}} QFrame#SidebarDivider {{background:{};border:none;}}",
+            gauge::to_hex(t.background),
+            format_g(t.radius as f64 * self.scale.get()),
+            gauge::to_hex(t.separator),
+        ));
+        self.flyout
+            .borrow_mut()
+            .set_style_sheet(&format!("{cards_sheet}QWidget {{background-color: transparent;}}"));
+        self.relayout();
+        let keys: Vec<String> = self.metrics.borrow().keys().cloned().collect();
+        for key in &keys {
+            self.refresh_tile(key);
+        }
+        for key in &keys {
+            self.refresh_tooltip(key);
+        }
+    }
+
+    /// Python `update_metrics`.
+    fn update_metrics(self: &Rc<Self>, data: &Metrics) {
+        let Some((_, _, button)) = self.button(&data.provider_id) else { return };
+        let previous = self
+            .row_state
+            .borrow()
+            .get(&data.provider_id)
+            .cloned()
+            .unwrap_or_default();
+        self.metrics.borrow_mut().insert(data.provider_id.clone(), data.clone());
+        let current = row_state(data);
+        let offline = is_offline(data);
+        if !offline && window_reset(&previous, &current) {
+            self.flash(button);
+        }
+        self.row_state.borrow_mut().insert(data.provider_id.clone(), current);
+        self.refresh_tile(&data.provider_id);
+        self.refresh_tooltip(&data.provider_id);
+        if self.state.get() == State::Panel {
+            self.relayout();
+        }
+    }
+
+    /// Python `_refresh_tile`.
+    fn refresh_tile(&self, key: &str) {
+        let (Some((_, widget, data)), Some(metrics)) = (self.button(key), self.metrics.borrow().get(key).cloned())
+        else {
+            return;
+        };
+        *data.tile.borrow_mut() = refresh_tile(key, &metrics, self.dark.get(), self.scheme.get());
+        if let Ok(w) = widget.try_borrow() {
+            if let Some(indicators) = w.children().into_iter().next() {
+                indicators.borrow().update();
+            }
+            w.update();
+        }
+    }
+
+    /// Python `_refresh_tooltip`.
+    fn refresh_tooltip(&self, key: &str) {
+        let (Some((_, widget, data)), Some(metrics)) = (self.button(key), self.metrics.borrow().get(key).cloned())
+        else {
+            return;
+        };
+        let alert = data.tile.borrow().alert;
+        let text = tooltip_text(key, &metrics, alert);
+        if let Ok(mut w) = widget.try_borrow_mut() {
+            w.set_tool_tip(&text);
+            w.set_accessible_description(&text);
+        }
+    }
+
+    /// Python `_flash`.
+    fn flash(&self, button: &Rc<ButtonData>) {
+        button.flash.set(1.0);
+        let steps = ((FLASH_MS / FLASH_STEP_MS).max(1)) as f64;
+        let weak = Rc::downgrade(button);
+        let handle = Arc::new(UiThread::new(weak));
+        if !animations_enabled() {
+            let handle = Arc::clone(&handle);
+            Timer::single_shot(FLASH_MS, move || {
+                if let Some(button) = handle.get().and_then(|w| w.upgrade()) {
+                    button.flash.set(0.0);
+                    button.update();
+                }
+            });
+            button.update();
+            return;
+        }
+        fn tick(handle: Arc<UiThread<Weak<ButtonData>>>, steps: f64) {
+            let Some(button) = handle.get().and_then(|w| w.upgrade()) else { return };
+            button.flash.set((button.flash.get() - 1.0 / steps).max(0.0));
+            button.update();
+            if button.flash.get() > 0.0 {
+                Timer::single_shot(FLASH_STEP_MS, move || tick(handle, steps));
+            }
+        }
+        button.update();
+        Timer::single_shot(FLASH_STEP_MS, move || tick(handle, steps));
+    }
+
+    /// Python `preferred_size`.
+    fn preferred_size(&self) -> (i32, i32) {
+        let s = self.scale.get();
+        let orientation = self.orientation.get();
+        let spacing = self.tokens().spacing;
+        if self.state.get() == State::Strip {
+            return strip_preferred_size(s, orientation, spacing, 3);
+        }
+        let height = self
+            .panel
+            .borrow()
+            .with_box_layout(|l| {
+                l.update_layout();
+                l.size_hint().height
+            })
+            .unwrap_or(0);
+        panel_preferred_size(s, orientation, spacing, self.cards.len() as i32, height)
+    }
+
+    /// Python `_hover`.
+    fn hover(self: &Rc<Self>, key: &str) {
+        self.leave_timer.stop();
+        if self.state.get() != State::Strip {
+            return;
+        }
+        let active = self.active.borrow().clone();
+        if let Some(active) = active {
+            if key != active {
+                self.hover_timer.stop();
+                self.open_flyout(key);
+            }
+            return;
+        }
+        *self.hover_id.borrow_mut() = Some(key.to_owned());
+        self.hover_timer.start_with_interval(self.tokens().hover_ms);
+    }
+
+    /// Python `_click_provider`.
+    fn click_provider(self: &Rc<Self>, key: &str) {
+        if self.pinned.get() && self.pinned_key.borrow().as_deref() == Some(key) {
+            self.close_flyout();
+            return;
+        }
+        self.open_flyout(key);
+        self.pinned.set(true);
+        *self.pinned_key.borrow_mut() = Some(key.to_owned());
+    }
+
+    /// The work area of the screen the button is on.
+    fn screen_area(&self, tile: Rect) -> Rect {
+        let screens = crate::ui::placement::Screens::current();
+        screens
+            .window_screen(tile)
+            .or(screens.primary)
+            .unwrap_or(Rect::new(0, 0, 1920, 1040))
+    }
+
+    /// The button's rectangle in global coordinates (`QRect(origin, button.size())`).
+    fn button_rect(&self, key: &str) -> Option<Rect> {
+        let (_, widget, _) = self.button(key)?;
+        let w = widget.try_borrow().ok()?;
+        let origin = w.map_to_global(Point::new(0, 0));
+        let g = w.geometry();
+        Some(Rect::new(origin.x, origin.y, g.width, g.height))
+    }
+
+    /// Python `_flyout_position` for the open flyout: moves it beside its tile.
+    fn place_flyout(&self, key: &str) {
+        let Some(tile) = self.button_rect(key) else { return };
+        let area = self.screen_area(tile);
+        let g = self.flyout.borrow().geometry();
+        let edge = self.dock_edge.borrow().clone();
+        let (x, y) = flyout_position(
+            (tile.x, tile.y, tile.width, tile.height),
+            (g.width, g.height),
+            (area.x, area.y, area.width, area.height),
+            edge.as_deref(),
+        );
+        self.flyout.borrow_mut().set_geometry(Rect::new(x, y, g.width, g.height));
+    }
+
+    /// Python `_open_flyout`.
+    fn open_flyout(self: &Rc<Self>, key: &str) {
+        if self.state.get() != State::Strip || self.card(key).is_none() {
+            return;
+        }
+        if self.active.borrow().as_deref() == Some(key) {
+            self.leave_timer.stop();
+            return;
+        }
+        let (pinned, pinned_key) = (self.pinned.get(), self.pinned_key.borrow().clone());
+        self.close_flyout();
+        self.pinned.set(pinned);
+        *self.pinned_key.borrow_mut() = pinned_key;
+        *self.active.borrow_mut() = Some(key.to_owned());
+        let (Some(card), Some(tile)) = (self.card(key).cloned(), self.button_rect(key)) else { return };
+        card.borrow_mut().set_font_scale(1.0); // `_restore_card_style`
+        let widget = card.borrow().widget();
+        {
+            let w = widget.borrow();
+            w.set_minimum_size(Size::new(0, 0));
+            w.set_maximum_size(Size::new(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX));
+        }
+        layout_add(&self.flyout_root, &widget);
+        widget.borrow().set_window_id(Some(self.flyout.borrow().id()));
+        ferrokit_widgets::widget::set_widget_visible(&widget, true);
+        let area = self.screen_area(tile);
+        let hint = self
+            .flyout_root
+            .borrow()
+            .with_box_layout(|l| {
+                l.update_layout();
+                l.size_hint().height
+            })
+            .unwrap_or(0);
+        let size = (FLYOUT_WIDTH.min(area.width), hint.min(area.height));
+        {
+            let mut flyout = self.flyout.borrow_mut();
+            flyout.set_fixed_size(size.0, size.1);
+        }
+        let edge = self.dock_edge.borrow().clone();
+        let (x, y) = flyout_position(
+            (tile.x, tile.y, tile.width, tile.height),
+            size,
+            (area.x, area.y, area.width, area.height),
+            edge.as_deref(),
+        );
+        {
+            let mut flyout = self.flyout.borrow_mut();
+            flyout.set_geometry(Rect::new(x, y, size.0, size.1));
+            if animations_enabled() {
+                flyout.set_opacity(0.0);
+            } else {
+                flyout.set_opacity(1.0);
+            }
+            flyout.show();
+        }
+        if animations_enabled() {
+            // Opacity keeps the window inside the screen throughout the animation.
+            let mut animation = self.animation.borrow_mut();
+            let inner = animation.animation_mut();
+            inner.set_duration(self.tokens().animation_ms);
+            inner.set_start_value(0.0f64);
+            inner.set_end_value(1.0f64);
+            inner.start();
+            drop(animation);
+            self.animation_clock.set(Some(Instant::now()));
+            self.animation_timer.start();
+        }
+    }
+
+    /// One tick of the `QPropertyAnimation` on the flyout's `windowOpacity`.
+    fn animation_tick(&self) {
+        let now = Instant::now();
+        let delta = self
+            .animation_clock
+            .replace(Some(now))
+            .map_or(16, |last| now.duration_since(last).as_millis() as u64);
+        let Ok(mut flyout) = self.flyout.try_borrow_mut() else { return };
+        let running = self.animation.borrow_mut().step_target(delta.max(1), &mut *flyout);
+        if !running {
+            self.animation_timer.stop();
+        }
+    }
+
+    /// Python `close_flyout`.
+    fn close_flyout(self: &Rc<Self>) {
+        self.hover_timer.stop();
+        self.leave_timer.stop();
+        self.animation_timer.stop();
+        self.animation.borrow_mut().animation_mut().stop();
+        let active = self.active.borrow_mut().take();
+        if let Some(key) = active {
+            if let Some(widget) = self.card_widget(&key) {
+                layout_remove(&self.flyout_root, &widget);
+                ferrokit_widgets::widget::set_widget_visible(&widget, false);
+            }
+        }
+        if let Ok(mut flyout) = self.flyout.try_borrow_mut() {
+            flyout.hide();
+        }
+        self.pinned.set(false);
+        *self.pinned_key.borrow_mut() = None;
+    }
+
+    /// Python `_schedule_close`.
+    fn schedule_close(&self) {
+        if !self.pinned.get() {
+            self.leave_timer.start_with_interval(self.tokens().leave_ms);
+        }
+    }
+
+    /// Python `_maybe_close`.
+    fn maybe_close(self: &Rc<Self>) {
+        let active = self.active.borrow().clone();
+        if self.pinned.get() {
+            return;
+        }
+        let Some(key) = active else { return };
+        let pos = Cursor::pos();
+        if let Some(tile) = self.button_rect(&key) {
+            if tile.contains(pos) {
+                return;
+            }
+        }
+        if self.flyout.borrow().geometry().contains(pos) {
+            return;
+        }
+        self.close_flyout();
+    }
+}
+
+/// Python `SidebarWidget.eventFilter` / `keyPressEvent` for the sidebar and its flyout.
+struct SidebarFilter {
+    data: ObjectData,
+    inner: UiThread<Weak<SidebarInner>>,
+    flyout_root: ObjectId,
+}
+
+impl QObject for SidebarFilter {
+    fn object_data(&self) -> &ObjectData {
+        &self.data
+    }
+    fn object_data_mut(&mut self) -> ObjectDataMut<'_> {
+        ObjectDataMut::new(&mut self.data)
+    }
+
+    fn event_filter(&mut self, watched: ObjectId, event: &mut Event) -> bool {
+        let Some(inner) = self.inner.get().and_then(|w| w.upgrade()) else {
+            return false;
+        };
+        match &event.kind {
+            EventKind::Wheel { angle_delta_y, modifiers, .. } if modifiers & CONTROL_MODIFIER != 0 => {
+                let (steps, remainder) = wheel_steps(inner.wheel_remainder.get(), *angle_delta_y);
+                inner.wheel_remainder.set(remainder);
+                if !steps.is_empty() {
+                    let inner = Rc::clone(&inner);
+                    defer(move || {
+                        for step in steps {
+                            inner.scale_step_requested.emit(&step);
+                        }
+                    });
+                }
+                event.accept();
+                true
+            }
+            EventKind::Enter { .. } if watched == self.flyout_root => {
+                inner.leave_timer.stop();
+                false
+            }
+            EventKind::Leave if watched == self.flyout_root => {
+                inner.schedule_close();
+                false
+            }
+            EventKind::KeyPress { key, .. } if *key == KEY_ESCAPE => {
+                let inner = Rc::clone(&inner);
+                defer(move || inner.close_flyout());
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
