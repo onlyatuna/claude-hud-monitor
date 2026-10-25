@@ -240,35 +240,22 @@ fn main() -> std::process::ExitCode {
             .expect("failed to save table png");
         info!("Saved table mode snapshot: {}", table_path.display());
 
-        // 2. Cards mode horizontal snapshot
-        hud.apply_cards_layout_mode("horizontal");
+        // 2. Sidebar panel snapshot
+        hud.apply_ui_mode("sidebar");
         hud.update_clock();
         let _ = ferrokit_core::application::CoreApplication::process_events(false);
-        let cards_h_path = out_dir.join("hud_cards_horizontal.png");
+        let sidebar_path = out_dir.join("hud_sidebar_panel.png");
         hud.window
-            .save_png(&cards_h_path)
-            .expect("failed to save cards h png");
-        info!(
-            "Saved cards horizontal snapshot: {}",
-            cards_h_path.display()
-        );
-
-        // 3. Cards mode vertical snapshot
-        hud.apply_cards_layout_mode("vertical");
-        hud.update_clock();
-        let _ = ferrokit_core::application::CoreApplication::process_events(false);
-        let cards_v_path = out_dir.join("hud_cards_vertical.png");
-        hud.window
-            .save_png(&cards_v_path)
-            .expect("failed to save cards v png");
-        info!("Saved cards vertical snapshot: {}", cards_v_path.display());
-        // 4. Context Menu snapshot
+            .save_png(&sidebar_path)
+            .expect("failed to save sidebar png");
+        info!("Saved sidebar snapshot: {}", sidebar_path.display());
+        // 3. Context Menu snapshot
         use ferrokit_gui::paint::{Painter, Pixmap};
         use ferrokit_gui::tiny_skia::Color;
         use ferrokit_widgets::Widget;
         let cfg = config.lock();
         let mut context_menu =
-            ui::tray_icon::build_hud_context_menu(&cfg, &hud.window.root_widget());
+            ui::tray_icon::build_hud_menu(&cfg, &hud.window.root_widget(), false);
         context_menu.set_visible(true);
         let menu_size = context_menu.size_hint();
         context_menu.set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
@@ -395,38 +382,11 @@ fn main() -> std::process::ExitCode {
             }
         });
 
-    // Connect title bar layout toggle button ("⇄")
-    if let Some(btn) = hud
-        .borrow()
-        .layout_toggle_btn
-        .borrow_mut()
-        .as_any_mut()
-        .downcast_mut::<ferrokit_widgets::button::Button>()
-    {
-        btn.clicked.connect(move |()| {
-            ferrokit_widgets::command::WidgetCommandQueue::post_task(move || {
-                MAIN_HUD.with(|h_cell| {
-                    if let Some(hud) = h_cell.borrow().as_ref() {
-                        hud.borrow_mut().toggle_cards_layout();
-                    }
-                });
-                MAIN_TRAY.with(|t_cell| {
-                    if let Some(tray) = t_cell.borrow().as_ref() {
-                        tray.borrow_mut().update_menu_state();
-                    }
-                });
-            });
-        });
-    }
-
     // Helper to pop up the modern, styled HUD context menu (used by both HUD body and system tray)
     fn show_hud_popup_menu(
         global_pos: Point,
         config: &Arc<Mutex<Config>>,
-        build_menu: fn(
-            &Config,
-            &ferrokit_widgets::widget::WidgetRef,
-        ) -> ferrokit_widgets::menu::Menu,
+        tray: bool,
     ) {
         let cfg = config.lock().clone();
         let Some(root) = MAIN_HUD.with(|h_cell| {
@@ -437,7 +397,9 @@ fn main() -> std::process::ExitCode {
         }) else {
             return;
         };
-        let menu = std::rc::Rc::new(std::cell::RefCell::new(build_menu(&cfg, &root)));
+        let menu = std::rc::Rc::new(std::cell::RefCell::new(
+            ui::tray_icon::build_hud_menu(&cfg, &root, tray),
+        ));
         if let Some(action) = ferrokit_widgets::menu::Menu::exec_popup(&menu, global_pos) {
             if let Some(id) = action.borrow().data().to_u64() {
                 let action_id = id as u32;
@@ -470,7 +432,7 @@ fn main() -> std::process::ExitCode {
             let global_pos = *pos;
             let cfg_clone = Arc::clone(&config_clone);
             Timer::single_shot(0, move || {
-                show_hud_popup_menu(global_pos, &cfg_clone, ui::tray_icon::build_hud_tray_menu);
+                show_hud_popup_menu(global_pos, &cfg_clone, true);
             });
         });
 
@@ -502,11 +464,7 @@ fn main() -> std::process::ExitCode {
         .set_context_menu_handler(move |global_pos| {
             let cfg_clone = Arc::clone(&config_clone2);
             Timer::single_shot(0, move || {
-                show_hud_popup_menu(
-                    global_pos,
-                    &cfg_clone,
-                    ui::tray_icon::build_hud_context_menu,
-                );
+                show_hud_popup_menu(global_pos, &cfg_clone, false);
             });
         });
     // Python `self.sidebar.contextMenuRequested.connect(self._show_sidebar_menu)`: a right click on
@@ -518,11 +476,7 @@ fn main() -> std::process::ExitCode {
         .connect(move |global_pos: &Point| {
             let (global_pos, cfg_clone) = (*global_pos, Arc::clone(&config_clone3));
             Timer::single_shot(0, move || {
-                show_hud_popup_menu(
-                    global_pos,
-                    &cfg_clone,
-                    ui::tray_icon::build_hud_context_menu,
-                );
+                show_hud_popup_menu(global_pos, &cfg_clone, false);
             });
         });
 

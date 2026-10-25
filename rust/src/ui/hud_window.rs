@@ -22,7 +22,7 @@ use ferrokit_platform::cursor::CursorShape;
 use ferrokit_platform::WindowFlags;
 use ferrokit_widgets::cursor::Cursor;
 use ferrokit_widgets::{
-    BoxLayout, Button, EmptyWidget, Label, Layout, StackedWidget, Widget, WidgetRef, Window,
+    BoxLayout, EmptyWidget, Label, Layout, StackedWidget, Widget, WidgetRef, Window,
 };
 use parking_lot::Mutex;
 
@@ -40,10 +40,8 @@ use super::table_layout::{
 use super::round_mask::rounded_rects;
 use super::usage_table::{TableViews, UsageTable, PROVIDER_ORDER};
 use crate::config::{
-    Config, ConfigManager, ResizeDebouncer, DEFAULT_HORIZONTAL_HEIGHT, DEFAULT_HORIZONTAL_WIDTH,
-    DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH, DEFAULT_VERTICAL_HEIGHT, DEFAULT_VERTICAL_WIDTH,
-    MIN_HORIZONTAL_HEIGHT, MIN_HORIZONTAL_WIDTH, MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH,
-    MIN_VERTICAL_HEIGHT, MIN_VERTICAL_WIDTH,
+    Config, ConfigManager, ResizeDebouncer, DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH,
+    MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH,
 };
 use crate::providers::base::UsageMetrics;
 use crate::providers::Provider;
@@ -91,22 +89,11 @@ fn apply_table_size(cfg: &mut Config, width: i32, height: i32) {
     }
 }
 
-/// Python `_persist_geometry`'s size part: the active mode's width and height, never below the
-/// mode's minimum.
+/// Python `_persist_geometry`'s size part: only the table's size is saved here; the sidebar is placed
+/// by `_finish_sidebar_move`.
 fn apply_size(cfg: &mut Config, width: i32, height: i32) {
-    if cfg.ui_mode == "sidebar" {
-        // Python `_persist_geometry`: the sidebar is placed by `_finish_sidebar_move`, not saved here
-        return;
-    }
-    let (w, h) = (width as u32, height as u32);
     if cfg.ui_mode == "table" {
         apply_table_size(cfg, width, height);
-    } else if cfg.layout_mode == "horizontal" {
-        cfg.horizontal_width = w.max(MIN_HORIZONTAL_WIDTH);
-        cfg.horizontal_height = h.max(MIN_HORIZONTAL_HEIGHT);
-    } else {
-        cfg.vertical_width = w.max(MIN_VERTICAL_WIDTH);
-        cfg.vertical_height = h.max(MIN_VERTICAL_HEIGHT);
     }
 }
 
@@ -130,7 +117,8 @@ impl TableChrome {
             let cfg = self.config.lock();
             (cfg.ui_mode == "table", cfg.click_through)
         };
-        let show = !(in_table && self.views.is_compact());
+        // Outside the table the header widgets sit unparented; showing them would pop up stray windows.
+        let show = in_table && !self.views.is_compact();
         for w in &self.header {
             w.borrow().set_visible(show);
         }
@@ -173,12 +161,6 @@ impl TableChrome {
         if now != was {
             self.set_compact(now);
         }
-    }
-
-    /// Leaving the table style: the full margins and the header again.
-    fn leave_table(&self) {
-        self.set_margins(false);
-        self.sync_header();
     }
 
     fn relayout(&self) {
@@ -452,12 +434,9 @@ pub struct HUDWindow {
     pub status_dot: WidgetRef,
     pub title_label: WidgetRef,
     pub ghost_label: WidgetRef,
-    pub layout_toggle_btn: WidgetRef,
     pub time_label: WidgetRef,
 
     pub stack: WidgetRef,
-    pub cards_container: WidgetRef,
-    pub cards: HashMap<String, ProviderCardWidget>,
     pub table: UsageTable,
     pub debouncer: Arc<ResizeDebouncer>,
     /// Wall-clock time of the previous clock tick (Python `_last_countdown_ts`); `None` before the first.
@@ -542,24 +521,10 @@ impl HUDWindow {
             let (w, h, min_w, min_h) = if cfg.ui_mode == "sidebar" {
                 // docked by `dock_sidebar` right after construction; Python sets no minimum
                 (72, 222, 0, 0)
-            } else if cfg.ui_mode == "table" {
+            } else {
                 let (w, h) = saved_table_size(&cfg, cfg.table_compact);
                 let (min_w, min_h) = table_min_size();
                 (w, h, min_w, min_h)
-            } else if cfg.layout_mode == "horizontal" {
-                (
-                    cfg.horizontal_width.max(MIN_HORIZONTAL_WIDTH) as i32,
-                    cfg.horizontal_height.max(MIN_HORIZONTAL_HEIGHT) as i32,
-                    MIN_HORIZONTAL_WIDTH as i32,
-                    MIN_HORIZONTAL_HEIGHT as i32,
-                )
-            } else {
-                (
-                    cfg.vertical_width.max(MIN_VERTICAL_WIDTH) as i32,
-                    cfg.vertical_height.max(MIN_VERTICAL_HEIGHT) as i32,
-                    MIN_VERTICAL_WIDTH as i32,
-                    MIN_VERTICAL_HEIGHT as i32,
-                )
             };
             // `_restore_or_default_position`: the saved position if it shows enough of some
             // screen, otherwise the default spot on the primary screen.
@@ -627,11 +592,7 @@ impl HUDWindow {
         let status_dot = make_widget(Label::new("●"));
         set_status_dot_color(&status_dot, status_dot_color(false, false));
 
-        let mut title = Label::new(if ui_mode == "table" {
-            "AI AGENT HUD (TABLE)"
-        } else {
-            "AI AGENT HUD (3-IN-1)"
-        });
+        let mut title = Label::new("AI AGENT HUD (TABLE)");
         title.set_object_name("HeaderTitle");
         let title_label = make_widget(title);
 
@@ -640,14 +601,6 @@ impl HUDWindow {
             .borrow_mut()
             .set_tool_tip("滑鼠穿透中 (Alt+Shift+C 解除)");
         ghost_label.borrow_mut().set_visible(ct);
-
-        let mut btn = Button::new("⇄");
-        btn.set_object_name("LayoutToggleBtn");
-        let layout_toggle_btn = make_widget(btn);
-        layout_toggle_btn
-            .borrow_mut()
-            .set_tool_tip("切換 橫向並排 / 直式堆疊 佈局");
-        layout_toggle_btn.borrow().set_visible(ui_mode != "table");
 
         let mut time_lbl = Label::new("--:--:--");
         time_lbl.set_object_name("HeaderStatus");
@@ -658,22 +611,10 @@ impl HUDWindow {
             status_dot: status_dot.clone(),
             title_label: title_label.clone(),
             ghost_label: ghost_label.clone(),
-            layout_toggle_btn: layout_toggle_btn.clone(),
             time_label: time_label.clone(),
         };
 
-        // Page 0: Cards mode
-        // Python sets no size policy and no stretch on the cards container (`hud_window.py:141-145`).
-        let cards_container = make_widget(EmptyWidget::new());
-        let mut cards = HashMap::new();
-        cards.insert("claude".to_string(), ProviderCardWidget::new("claude"));
-        cards.insert("agy".to_string(), ProviderCardWidget::new("agy"));
-        cards.insert("codex".to_string(), ProviderCardWidget::new("codex"));
-
-        let card_layout_mode = { config.lock().layout_mode.clone() };
-        Self::apply_cards_layout_inner(&cards_container, &cards, &card_layout_mode);
-
-        // Page 1: Table mode
+        // Page 0: Table mode
         let scheme = { config.lock().color_scheme.clone() };
         let table = UsageTable::with_order(theme.clone(), &scheme, &config.lock().provider_order_setting());
 
@@ -682,10 +623,9 @@ impl HUDWindow {
         stack
             .borrow_mut()
             .set_size_policy(Self::stack_policy(ui_mode == "table"));
-        StackedWidget::add_widget(&stack, cards_container.clone());
         StackedWidget::add_widget(&stack, table.widget());
 
-        // Page 2: the sidebar (Python `self.sidebar`, built hidden in `__init__`), its cards and the
+        // Page 1: the sidebar (Python `self.sidebar`, built hidden in `__init__`), its cards and the
         // tool window of its flyout (`_Flyout(owner)`, a child top-level of the HUD window).
         let sidebar_cards: Vec<(String, Rc<RefCell<ProviderCardWidget>>)> = DEFAULT_ORDER
             .iter()
@@ -704,9 +644,8 @@ impl HUDWindow {
         let sidebar = SidebarWidget::new(sidebar_cards.clone(), flyout);
         StackedWidget::add_widget(&stack, sidebar.widget());
         let active_index = match ui_mode.as_str() {
-            "table" => 1,
             "sidebar" => SIDEBAR_PAGE,
-            _ => 0,
+            _ => TABLE_PAGE,
         };
         StackedWidget::set_current_index(&stack, active_index);
 
@@ -931,11 +870,8 @@ impl HUDWindow {
             status_dot,
             title_label,
             ghost_label,
-            layout_toggle_btn,
             time_label,
             stack,
-            cards_container,
-            cards,
             table,
             debouncer: Arc::clone(&debouncer),
             busy: false,
@@ -963,10 +899,9 @@ impl HUDWindow {
         Ok(hud)
     }
 
-    /// Python puts the table or the cards container straight into the root layout, so the layout
-    /// item behaves like that page: the cards container is `Preferred` (extra height goes to the
-    /// header, `hud_window.py:141-145,308`), while the table's grid makes its item expand and take
-    /// all the extra height (measured: 462 px of a 500 px window). The stack stands in for both.
+    /// Python puts the table straight into the root layout, so its item expands and takes all the
+    /// extra height (measured: 462 px of a 500 px window); the sidebar's page is `Preferred`. The
+    /// stack stands in for both.
     fn stack_policy(table: bool) -> ferrokit_widgets::QSizePolicy {
         let p = if table {
             ferrokit_widgets::Policy::Expanding
@@ -974,56 +909,6 @@ impl HUDWindow {
             ferrokit_widgets::Policy::Preferred
         };
         ferrokit_widgets::QSizePolicy::new(p, p)
-    }
-
-    fn apply_cards_layout_inner(
-        container: &WidgetRef,
-        cards: &HashMap<String, ProviderCardWidget>,
-        layout_mode: &str,
-    ) {
-        let is_horizontal = layout_mode == "horizontal";
-        let mut layout = if is_horizontal {
-            // `body_layout.setSpacing(8)` (`hud_window.py:337`); nested body, margin 0.
-            let mut body = BoxLayout::horizontal();
-            body.set_margins(Margins::new(0, 0, 0, 0));
-            body.set_spacing(8);
-            body
-        } else {
-            // `cards_layout` margin 0, spacing 6 (`hud_window.py:169-170`).
-            let mut column = BoxLayout::vertical();
-            column.set_margins(Margins::new(0, 0, 0, 0));
-            column.set_spacing(6);
-            column
-        };
-
-        // Card order of the Python HUD (`provider_ids` in `_apply_cards_layout`); the table
-        // mode has its own order (`usage_table::PROVIDER_ORDER`).
-        const CARDS_ORDER: [&str; 3] = ["claude", "agy", "codex"];
-        for (idx, pid) in CARDS_ORDER.iter().enumerate() {
-            if let Some(card) = cards.get(*pid) {
-                if idx > 0 {
-                    if is_horizontal {
-                        let mut div = ferrokit_widgets::frame::Frame::new();
-                        div.set_object_name("Divider");
-                        div.set_frame_shape(ferrokit_widgets::frame::FrameShape::VLine);
-                        layout.add_widget(make_widget(div));
-                    } else {
-                        let mut h_div = ferrokit_widgets::frame::Frame::new();
-                        h_div.set_object_name("HorizontalDivider");
-                        h_div.set_frame_shape(ferrokit_widgets::frame::FrameShape::HLine);
-                        layout.add_widget(make_widget(h_div));
-                    }
-                }
-                // `body_layout.addWidget(card, 1)` in the horizontal body only; the vertical column
-                // adds the cards without a stretch (`hud_window.py:336-363`).
-                if is_horizontal {
-                    layout.add_widget_with_stretch(card.widget(), 1);
-                } else {
-                    layout.add_widget(card.widget());
-                }
-            }
-        }
-        container.borrow_mut().set_layout(Box::new(layout));
     }
 
     pub fn show(&mut self) {
@@ -1185,32 +1070,18 @@ impl HUDWindow {
     }
 
     pub fn apply_ui_mode(&mut self, mode: &str) {
-        let (old_mode, old_layout) = {
-            let cfg = self.config.lock();
-            (cfg.ui_mode.clone(), cfg.layout_mode.clone())
-        };
+        // Python `_apply_ui_mode`: a style that is not offered falls back to the sidebar.
+        let mode = if crate::config::UI_MODES.contains(&mode) { mode } else { "sidebar" };
+        let old_mode = self.config.lock().ui_mode.clone();
         let geom = self.window.geometry();
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
-            if old_mode != "sidebar" {
+            if old_mode == "table" {
                 cfg.window_x = Some(geom.x);
                 cfg.window_y = Some(geom.y);
-                if old_mode == "table" {
-                    apply_table_size(cfg, geom.width, geom.height);
-                } else if old_layout == "horizontal" {
-                    cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
-                    cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
-                } else {
-                    cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
-                    cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
-                }
+                apply_table_size(cfg, geom.width, geom.height);
             }
             cfg.ui_mode = mode.to_string();
         });
-
-        if mode == "cards" {
-            let card_layout_mode = { self.config.lock().layout_mode.clone() };
-            Self::apply_cards_layout_inner(&self.cards_container, &self.cards, &card_layout_mode);
-        }
 
         self.apply_ui_mode_internal(mode);
     }
@@ -1229,6 +1100,8 @@ impl HUDWindow {
             self.refresh_backdrop(mode);
             self.window.set_minimum_size(0, 0);
             self.apply_sidebar_mode();
+            // Python `_sync_header`: the header widgets stay hidden outside the table style.
+            self.chrome.sync_header();
             self.republish_all();
             self.apply_opacity();
             return;
@@ -1241,45 +1114,17 @@ impl HUDWindow {
             self.window
                 .set_maximum_size(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
         }
-        let (w, h) = if mode == "table" {
-            StackedWidget::set_current_index(&self.stack, 1);
-            self.stack
-                .borrow_mut()
-                .set_size_policy(Self::stack_policy(true));
-            set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
-            self.layout_toggle_btn.borrow().set_visible(false);
-            // Python `_rebuild_table`: the collapsed or the full table, as last left.
-            let (min_w, min_h) = table_min_size();
-            self.window.set_minimum_size(min_w, min_h);
-            let compact = self.config.lock().table_compact;
-            self.chrome.set_compact(compact);
-            let size = saved_table_size(&self.config.lock(), compact);
-            size
-        } else {
-            StackedWidget::set_current_index(&self.stack, 0);
-            self.stack
-                .borrow_mut()
-                .set_size_policy(Self::stack_policy(false));
-            set_label_text(&self.title_label, "AI AGENT HUD (3-IN-1)");
-            self.layout_toggle_btn.borrow().set_visible(true);
-            self.chrome.leave_table();
-            let cfg = self.config.lock();
-            if cfg.layout_mode == "horizontal" {
-                self.window
-                    .set_minimum_size(MIN_HORIZONTAL_WIDTH as i32, MIN_HORIZONTAL_HEIGHT as i32);
-                (
-                    cfg.horizontal_width.max(MIN_HORIZONTAL_WIDTH) as i32,
-                    cfg.horizontal_height.max(MIN_HORIZONTAL_HEIGHT) as i32,
-                )
-            } else {
-                self.window
-                    .set_minimum_size(MIN_VERTICAL_WIDTH as i32, MIN_VERTICAL_HEIGHT as i32);
-                (
-                    cfg.vertical_width.max(MIN_VERTICAL_WIDTH) as i32,
-                    cfg.vertical_height.max(MIN_VERTICAL_HEIGHT) as i32,
-                )
-            }
-        };
+        StackedWidget::set_current_index(&self.stack, TABLE_PAGE);
+        self.stack
+            .borrow_mut()
+            .set_size_policy(Self::stack_policy(true));
+        set_label_text(&self.title_label, "AI AGENT HUD (TABLE)");
+        // Python `_rebuild_table`: the collapsed or the full table, as last left.
+        let (min_w, min_h) = table_min_size();
+        self.window.set_minimum_size(min_w, min_h);
+        let compact = self.config.lock().table_compact;
+        self.chrome.set_compact(compact);
+        let (w, h) = saved_table_size(&self.config.lock(), compact);
         self.refresh_backdrop(mode);
 
         // `_ensure_within_screen(w, h)` runs after the resize, so the screen is picked from the
@@ -1294,51 +1139,9 @@ impl HUDWindow {
             screens.primary,
         );
         self.window.set_geometry(Rect::new(nx, ny, w, h));
-        self.cards_container.borrow().update_layout();
         self.chrome.relayout();
         self.republish_all();
         self.apply_opacity();
-    }
-
-    pub fn apply_cards_layout_mode(&mut self, mode: &str) {
-        let (old_mode, old_layout) = {
-            let cfg = self.config.lock();
-            (cfg.ui_mode.clone(), cfg.layout_mode.clone())
-        };
-        let geom = self.window.geometry();
-        crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
-            if old_mode != "sidebar" {
-                cfg.window_x = Some(geom.x);
-                cfg.window_y = Some(geom.y);
-                if old_mode == "table" {
-                    apply_table_size(cfg, geom.width, geom.height);
-                } else if old_layout == "horizontal" {
-                    cfg.horizontal_width = (geom.width as u32).max(MIN_HORIZONTAL_WIDTH);
-                    cfg.horizontal_height = (geom.height as u32).max(MIN_HORIZONTAL_HEIGHT);
-                } else {
-                    cfg.vertical_width = (geom.width as u32).max(MIN_VERTICAL_WIDTH);
-                    cfg.vertical_height = (geom.height as u32).max(MIN_VERTICAL_HEIGHT);
-                }
-            }
-            cfg.layout_mode = mode.to_string();
-            cfg.ui_mode = "cards".to_string();
-        });
-        Self::apply_cards_layout_inner(&self.cards_container, &self.cards, mode);
-        self.apply_ui_mode_internal("cards");
-    }
-
-    #[allow(dead_code)]
-    pub fn toggle_cards_layout(&mut self) {
-        let new_mode = {
-            let cfg = self.config.lock();
-            if cfg.layout_mode == "horizontal" {
-                "vertical".to_string()
-            } else {
-                "horizontal".to_string()
-            }
-        };
-
-        self.apply_cards_layout_mode(&new_mode);
     }
 
     pub fn set_theme(&mut self, dark: bool) {
@@ -1350,9 +1153,6 @@ impl HUDWindow {
         self.window.set_style_sheet(sheet);
         ferrokit_widgets::application::Application::set_style_sheet(sheet);
 
-        for card in self.cards.values_mut() {
-            card.set_appearance(dark);
-        }
         if ui_mode == "sidebar" {
             // Python `_apply_theme`: status colours only; the duo scheme is for the table
             self.sidebar.set_appearance(dark, Scheme::Scale);
@@ -1397,9 +1197,6 @@ impl HUDWindow {
 
     /// Python `_publish`.
     fn publish(&mut self, data: &UsageMetrics) {
-        if let Some(card) = self.cards.get_mut(&data.provider_id) {
-            card.update_metrics(data);
-        }
         if let Some(card) = self.sidebar_cards.get(&data.provider_id) {
             card.borrow_mut().update_metrics(data);
         }
@@ -1413,7 +1210,6 @@ impl HUDWindow {
             Local::now().format("%H:%M:%S").to_string(),
         );
         self.refresh_status_dot();
-        self.cards_container.borrow().update_layout();
     }
 
     /// Python `_republish_all`.
@@ -1503,16 +1299,13 @@ impl HUDWindow {
 
     fn refresh_status_dot(&self) {
         let any_error = self
-            .cards
+            .sidebar_cards
             .values()
-            .any(|card| card.current_metrics.error.is_some());
+            .any(|card| card.borrow().current_metrics.error.is_some());
         set_status_dot_color(&self.status_dot, status_dot_color(self.busy, any_error));
     }
 
     pub fn update_clock(&mut self) {
-        for card in self.cards.values_mut() {
-            card.update_countdown();
-        }
         for card in self.sidebar_cards.values() {
             card.borrow_mut().update_countdown();
         }
@@ -1615,22 +1408,7 @@ impl HUDWindow {
             self.chrome.set_compact(false);
             self.chrome.relayout();
         }
-        let (w, h) = {
-            let cfg = self.config.lock();
-            if cfg.ui_mode == "table" {
-                (DEFAULT_TABLE_WIDTH as i32, DEFAULT_TABLE_HEIGHT as i32)
-            } else if cfg.layout_mode == "horizontal" {
-                (
-                    DEFAULT_HORIZONTAL_WIDTH as i32,
-                    DEFAULT_HORIZONTAL_HEIGHT as i32,
-                )
-            } else {
-                (
-                    DEFAULT_VERTICAL_WIDTH as i32,
-                    DEFAULT_VERTICAL_HEIGHT as i32,
-                )
-            }
-        };
+        let (w, h) = (DEFAULT_TABLE_WIDTH as i32, DEFAULT_TABLE_HEIGHT as i32);
 
         // `_reset_geometry` moves to the spot near the top right of the primary screen's work area
         // without clamping it.
@@ -1649,8 +1427,9 @@ pub const SIDEBAR_SNAP_PX: i32 = 24;
 pub const RESIZE_GRIP_PX: i32 = 7;
 /// Python `QWIDGETSIZE_MAX`.
 const QWIDGETSIZE_MAX: i32 = 16_777_215;
-/// The stack page of the sidebar (cards = 0, table = 1).
-const SIDEBAR_PAGE: usize = 2;
+/// The stack pages (table = 0, sidebar = 1).
+const TABLE_PAGE: usize = 0;
+const SIDEBAR_PAGE: usize = 1;
 /// Python `QTimer.start(1500)` in `_apply_sidebar_mode`: fully visible for a moment after the mode
 /// is chosen.
 const SIDEBAR_FADE_GRACE_MS: u64 = 1500;
@@ -2258,13 +2037,13 @@ impl HUDWindow {
         for raw in &raws {
             table.update_metrics(&self.arranged(raw));
         }
-        StackedWidget::remove_widget(&self.stack, 1);
-        StackedWidget::insert_widget(&self.stack, 1, table.widget());
+        StackedWidget::remove_widget(&self.stack, TABLE_PAGE);
+        StackedWidget::insert_widget(&self.stack, TABLE_PAGE, table.widget());
         self.table = table;
         if in_table {
             self.apply_ui_mode_internal("table");
         } else {
-            let page = if self.sidebar_layout { SIDEBAR_PAGE } else { 0 };
+            let page = if self.sidebar_layout { SIDEBAR_PAGE } else { TABLE_PAGE };
             StackedWidget::set_current_index(&self.stack, page);
         }
     }
@@ -2380,7 +2159,6 @@ impl HUDWindow {
         header_layout.add_widget(header.status_dot.clone());
         header_layout.add_widget(header.title_label.clone());
         header_layout.add_widget(header.ghost_label.clone());
-        header_layout.add_widget(header.layout_toggle_btn.clone());
         header_layout.add_stretch(1);
         header_layout.add_widget(header.time_label.clone());
         root_layout.add_layout(Box::new(header_layout), 0);
@@ -2398,7 +2176,6 @@ impl HUDWindow {
             status_dot: self.status_dot.clone(),
             title_label: self.title_label.clone(),
             ghost_label: self.ghost_label.clone(),
-            layout_toggle_btn: self.layout_toggle_btn.clone(),
             time_label: self.time_label.clone(),
         };
         let layout = Self::build_root_layout(sidebar, &header, &self.stack);
@@ -2406,13 +2183,11 @@ impl HUDWindow {
     }
 }
 
-/// The widgets of the header bar (Python `status_dot`, `title_label`, `ghost_label`,
-/// `layout_toggle_btn`, `time_label`).
+/// The widgets of the header bar (Python `status_dot`, `title_label`, `ghost_label`, `time_label`).
 struct HeaderWidgets {
     status_dot: WidgetRef,
     title_label: WidgetRef,
     ghost_label: WidgetRef,
-    layout_toggle_btn: WidgetRef,
     time_label: WidgetRef,
 }
 
@@ -2511,180 +2286,6 @@ mod tests {
     use super::*;
     use crate::refresh_controller::RefreshController;
 
-    /// G12.8.f / RC-23. PySide6 oracle (`hud_window.py:31-35`, run with a fresh config at DPR 1.25,
-    /// `size()` / `minimumSize()` after `show()`): horizontal 690x145, minimum 540x125; vertical
-    /// 280x410, minimum 250x320. The minimum is the explicit `setMinimumSize` and wins over the
-    /// layout's own minimum (151 / 395), so the window may be smaller than its content needs.
-    #[cfg(windows)]
-    #[test]
-    fn test_window_default_and_minimum_sizes_match_pyside6() {
-        let _setup = crate::ui::test_support::CardsOracleSetup::new();
-        for (mode, size, min) in [
-            ("horizontal", (690, 145), (540, 125)),
-            ("vertical", (280, 410), (250, 320)),
-        ] {
-            let mut cfg = Config::default();
-            cfg.ui_mode = "cards".into();
-            cfg.layout_mode = mode.into();
-            cfg.window_x = Some(0);
-            cfg.window_y = Some(0);
-            let cfg = Arc::new(Mutex::new(cfg));
-            let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-            let mut hud =
-                HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers())
-                    .unwrap();
-            let g = hud.window.geometry();
-            assert_eq!((g.width, g.height), size, "{mode} default size (PySide6)");
-            assert_eq!(
-                hud.window.minimum_size(),
-                min,
-                "{mode} initial minimum size on construction (G12.8.q)"
-            );
-            // RC-161: The minimum size is now applied immediately on construction (G12.8.q).
-            hud.apply_cards_layout_mode(mode);
-            assert_eq!(hud.window.minimum_size(), min, "{mode} minimum (PySide6)");
-            let g = hud.window.geometry();
-            assert_eq!(
-                (g.width, g.height),
-                size,
-                "{mode} size after the mode is applied"
-            );
-        }
-    }
-
-    /// Since the provider card became 117 high (RowCell blocks, `provider_card.py`) every cards-mode
-    /// oracle below uses a window 24 px (3 cards x 8) taller than the PySide6 measurement it comes
-    /// from, so the header still gets the same extra height; the card sizes are the new measured ones.
-    /// RC-24 guard. The HUD keeps the table page in its `StackedWidget` while the cards page is
-    /// shown, and `QStackedLayout::sizeHint`/`minimumSize` cover every page, so the stack's hint
-    /// now includes the table. PySide6 (no stack, `py_geom.py vertical`, `VH=410`, DPR 1.25) at the
-    /// default 280x410: header [12, 8, 256, 33], cards at y 47/169/291, each 256x109.
-    #[cfg(windows)]
-    #[test]
-    fn test_default_vertical_window_layout_matches_pyside6_with_the_table_page_in_the_stack() {
-        let _setup = crate::ui::test_support::CardsOracleSetup::new();
-        let mut cfg = Config::default();
-        cfg.ui_mode = "cards".into();
-        cfg.layout_mode = "vertical".into();
-        cfg.appearance = "dark".into();
-        cfg.window_x = Some(0);
-        cfg.window_y = Some(0);
-        cfg.vertical_height = crate::config::DEFAULT_VERTICAL_HEIGHT + 24;
-        let cfg = Arc::new(Mutex::new(cfg));
-        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let hud =
-            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
-        hud.window.root_widget().borrow().update_layout();
-        let header = hud.window.root_widget().borrow().children()[0]
-            .borrow()
-            .geometry();
-        assert_eq!(
-            (header.x, header.y, header.width, header.height),
-            (12, 8, 256, 33),
-            "header (PySide6 [12, 8, 256, 33])"
-        );
-        let cards: Vec<(i32, i32, i32, i32)> = ["claude", "agy", "codex"]
-            .iter()
-            .map(|id| {
-                let g = hud.cards[*id].container.borrow().geometry();
-                (g.x, g.y, g.width, g.height)
-            })
-            .collect();
-        // Card geometry is relative to the cards container, so compare sizes and the 130 px pitch.
-        assert!(
-            cards.iter().all(|c| c.3 == 117 && c.2 == 256),
-            "cards {cards:?} (PySide6 256x117)"
-        );
-        assert_eq!(
-            (cards[1].1 - cards[0].1, cards[2].1 - cards[1].1),
-            (130, 130)
-        );
-    }
-
-    /// G12.8.b. PySide6 (`py_horizontal.json`, DPR 1.25): in a 666 px wide body the three cards are
-    /// 211, 210 and 211 px wide, because the body `QHBoxLayout` has spacing 8 (`hud_window.py:337`).
-    #[cfg(windows)]
-    #[test]
-    fn test_horizontal_cards_body_matches_pyside6_widths() {
-        let _setup = crate::ui::test_support::CardsOracleSetup::new();
-        let cards: HashMap<String, ProviderCardWidget> = ["claude", "agy", "codex"]
-            .iter()
-            .map(|id| (id.to_string(), ProviderCardWidget::new(id)))
-            .collect();
-        let container = make_widget(ferrokit_widgets::EmptyWidget::new());
-        HUDWindow::apply_cards_layout_inner(&container, &cards, "horizontal");
-        container
-            .borrow_mut()
-            .set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
-                12, 32, 666, 103,
-            ));
-        container.borrow().update_layout();
-
-        let widths: Vec<i32> = ["claude", "agy", "codex"]
-            .iter()
-            .map(|id| cards[*id].widget().borrow().geometry().width)
-            .collect();
-        assert_eq!(widths, [211, 210, 211]);
-    }
-
-    /// RC-16, G12.8.c. PySide6 (`py_vertical.json`, DPR 1.25, 280x463): the card column keeps each
-    /// card at its size hint (109) and the extra height goes to the header row, which becomes 86
-    /// high with the title label filling it, because the header is a plain layout and the card
-    /// container has no stretch and no `Expanding` policy.
-    #[cfg(windows)]
-    #[test]
-    fn test_vertical_extra_height_goes_to_header_like_pyside6() {
-        let _setup = crate::ui::test_support::CardsOracleSetup::new();
-        let mut cfg = Config::default();
-        cfg.ui_mode = "cards".into();
-        cfg.layout_mode = "vertical".into();
-        cfg.appearance = "dark".into();
-        cfg.window_x = Some(0);
-        cfg.window_y = Some(0);
-        cfg.vertical_width = 280;
-        cfg.vertical_height = 463 + 24;
-        let cfg = Arc::new(Mutex::new(cfg));
-        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let hud =
-            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
-        hud.window.root_widget().borrow().update_layout();
-
-        let root = hud.window.root_widget();
-        let header = root.borrow().children()[0].clone();
-        assert_eq!(
-            header.borrow().geometry().height,
-            86,
-            "header row height (PySide6: 86)"
-        );
-        assert_eq!(
-            hud.title_label.borrow().geometry().height,
-            86,
-            "title label height (PySide6: 86)"
-        );
-        // RC-19 / G12.8.g: `max-height: 18px` is the content box, so the button is 22 high (PySide6:
-        // `layout_toggle_btn` [175, 40, 28, 22] in the window, i.e. y 32 inside the header at y 8).
-        let toggle = hud.layout_toggle_btn.borrow().geometry();
-        assert_eq!(
-            (toggle.y, toggle.width, toggle.height),
-            (32, 28, 22),
-            "layout toggle button (PySide6: y 32, 28x22)"
-        );
-        let heights: Vec<i32> = ["claude", "agy", "codex"]
-            .iter()
-            .map(|id| hud.cards[*id].widget().borrow().geometry().height)
-            .collect();
-        assert_eq!(heights, [117, 117, 117], "card heights (PySide6: 117 each)");
-        let ys: Vec<i32> = ["claude", "agy", "codex"]
-            .iter()
-            .map(|id| hud.cards[*id].widget().borrow().geometry().y)
-            .collect();
-        assert_eq!(
-            ys,
-            [0, 130, 260],
-            "card y inside the container (PySide6: 100/222/344 in the window)"
-        );
-    }
-
     /// RC-16 side check. PySide6 (DPR 1.25, table mode 400x500): the title label stays 14 high and
     /// the table takes all the extra height (462), although the table's own policy is Preferred.
     #[cfg(windows)]
@@ -2714,144 +2315,6 @@ mod tests {
             462,
             "table height (PySide6: 462)"
         );
-    }
-
-    /// RC-16: the stack policy follows the page, so switching cards -> table -> cards keeps both
-    /// PySide6 geometries (table takes the height; the vertical header takes it in cards mode).
-    #[cfg(windows)]
-    #[test]
-    fn test_ui_mode_switch_keeps_pyside6_extra_height_owner() {
-        let _setup = crate::ui::test_support::CardsOracleSetup::new();
-        let mut cfg = Config::default();
-        cfg.ui_mode = "cards".into();
-        cfg.layout_mode = "vertical".into();
-        cfg.appearance = "dark".into();
-        cfg.window_x = Some(0);
-        cfg.window_y = Some(0);
-        cfg.vertical_width = 280;
-        cfg.vertical_height = 463 + 24;
-        cfg.table_width = 400;
-        cfg.table_height = 500;
-        let cfg = Arc::new(Mutex::new(cfg));
-        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let mut hud =
-            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
-
-        hud.apply_ui_mode("table");
-        hud.window.root_widget().borrow().update_layout();
-        assert_eq!(
-            hud.title_label.borrow().geometry().height,
-            14,
-            "table mode title height (PySide6: 14)"
-        );
-        assert_eq!(
-            hud.stack.borrow().geometry().height,
-            462,
-            "table mode table height (PySide6: 462)"
-        );
-        hud.apply_ui_mode("cards");
-        hud.window.root_widget().borrow().update_layout();
-        assert_eq!(
-            hud.title_label.borrow().geometry().height,
-            86,
-            "cards mode title height (PySide6: 86)"
-        );
-        assert_eq!(
-            hud.stack.borrow().geometry().height,
-            377,
-            "cards mode stack height"
-        );
-        assert!(
-            hud.layout_toggle_btn.borrow().is_visible(),
-            "toggle button visible in cards mode"
-        );
-        assert_eq!(
-            hud.title_label
-                .borrow()
-                .as_any()
-                .downcast_ref::<Label>()
-                .unwrap()
-                .text(),
-            "AI AGENT HUD (3-IN-1)"
-        );
-    }
-
-    /// G12.5.r / DV-04: Test full roundtrip switching `cards -> table -> cards`
-    /// asserts visibility, geometry preservation, toggle button, and title state without degradation.
-    #[cfg(windows)]
-    #[test]
-    fn test_cards_table_cards_roundtrip_preserves_state() {
-        let _setup = crate::ui::test_support::CardsOracleSetup::new();
-        let mut cfg = Config::default();
-        cfg.ui_mode = "cards".into();
-        cfg.layout_mode = "vertical".into();
-        cfg.appearance = "dark".into();
-        cfg.window_x = Some(0);
-        cfg.window_y = Some(0);
-        cfg.vertical_width = 280;
-        cfg.vertical_height = 463 + 24;
-        cfg.table_width = 400;
-        cfg.table_height = 500;
-        let cfg = Arc::new(Mutex::new(cfg));
-        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
-        let mut hud =
-            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
-
-        // 1. Initial cards mode
-        hud.window.root_widget().borrow().update_layout();
-        let init_cards_geom = hud.cards_container.borrow().geometry();
-        let init_toggle_visible = hud.layout_toggle_btn.borrow().is_visible();
-        assert!(init_toggle_visible);
-        assert_eq!(
-            hud.title_label
-                .borrow()
-                .as_any()
-                .downcast_ref::<Label>()
-                .unwrap()
-                .text(),
-            "AI AGENT HUD (3-IN-1)"
-        );
-
-        // 2. Switch to table mode
-        hud.apply_ui_mode("table");
-        hud.window.root_widget().borrow().update_layout();
-        assert!(
-            !hud.layout_toggle_btn.borrow().is_visible(),
-            "toggle button hidden in table mode"
-        );
-        assert_eq!(
-            hud.title_label
-                .borrow()
-                .as_any()
-                .downcast_ref::<Label>()
-                .unwrap()
-                .text(),
-            "AI AGENT HUD (TABLE)"
-        );
-        assert_eq!(hud.stack.borrow().geometry().height, 462);
-
-        // 3. Switch back to cards mode
-        hud.apply_ui_mode("cards");
-        hud.window.root_widget().borrow().update_layout();
-        let final_cards_geom = hud.cards_container.borrow().geometry();
-        assert!(
-            hud.layout_toggle_btn.borrow().is_visible(),
-            "toggle button restored visible in cards mode"
-        );
-        assert_eq!(
-            hud.title_label
-                .borrow()
-                .as_any()
-                .downcast_ref::<Label>()
-                .unwrap()
-                .text(),
-            "AI AGENT HUD (3-IN-1)"
-        );
-        assert_eq!(
-            final_cards_geom, init_cards_geom,
-            "cards container geometry preserved across roundtrip"
-        );
-        assert_eq!(hud.stack.borrow().geometry().height, 377);
     }
 
     /// TI-01: a window built with injected providers fetches from exactly those providers — one
@@ -3243,7 +2706,7 @@ mod tests {
             attributes: &[],
         };
         let mut colours = Vec::new();
-        for mode in ["table", "cards", "table"] {
+        for mode in ["table", "sidebar", "table"] {
             hud.apply_ui_mode(mode);
             let expected = QStyleSheetStyle::parse(style_sheet_for(mode, hud.is_dark))
                 .resolve(&ctx)
@@ -3311,13 +2774,13 @@ mod tests {
         assert_eq!(panel_alpha(&hud), alpha(hud.theme.panel_bg));
     }
 
-    /// An idle countdown pass in cards mode marks nothing for repaint: the countdowns are
+    /// An idle countdown pass in sidebar mode marks nothing for repaint: the countdowns are
     /// day-granular so no text changes, and the hidden table page's dials are not visible, so
     /// their `update()` is ignored as in Qt (`QWidgetPrivate::update`, qwidget.cpp:11367-11368).
     #[test]
-    fn idle_countdown_pass_in_cards_mode_marks_nothing_for_repaint() {
+    fn idle_countdown_pass_in_sidebar_mode_marks_nothing_for_repaint() {
         let (mut hud, _fetched) = hud_with_stubs();
-        assert_eq!(hud.config.lock().ui_mode, "cards");
+        assert_eq!(hud.config.lock().ui_mode, "sidebar");
         let reset = chrono::Utc::now() + chrono::Duration::days(3) + chrono::Duration::hours(2);
         for id in crate::providers::PROVIDER_IDS {
             hud.on_data_fetched(&UsageMetrics {

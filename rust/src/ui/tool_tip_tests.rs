@@ -25,12 +25,9 @@ const WEEK_NOTE: &str = "照目前速度，重設前不會用完";
 fn hud(ui_mode: &str) -> HUDWindow {
     let mut cfg = Config::default();
     cfg.ui_mode = ui_mode.into();
-    cfg.layout_mode = "vertical".into();
     cfg.appearance = "dark".into();
     cfg.window_x = Some(0);
     cfg.window_y = Some(0);
-    cfg.vertical_width = 280;
-    cfg.vertical_height = 463;
     cfg.table_width = 400;
     cfg.table_height = 500;
     let cfg = Arc::new(Mutex::new(cfg));
@@ -235,21 +232,15 @@ fn a_recovered_column_loses_its_error_tool_tips() {
 }
 
 #[test]
-fn card_and_header_button_tool_tips_follow_python() {
-    let mut h = hud("cards");
+fn card_and_header_ghost_tool_tips_follow_python() {
+    let h = hud("sidebar");
     assert_eq!(tip(&h.ghost_label), "滑鼠穿透中 (Alt+Shift+C 解除)");
-    assert_eq!(tip(&h.layout_toggle_btn), "切換 橫向並排 / 直式堆疊 佈局");
-    h.cards
-        .get_mut("claude")
-        .unwrap()
-        .update_metrics(&offline("claude", "card-boom"));
-    assert_eq!(tip(&h.cards["claude"].widget()), "card-boom");
-    h.cards
-        .get_mut("claude")
-        .unwrap()
-        .update_metrics(&healthy("claude"));
+    let card = &h.sidebar_cards["claude"];
+    card.borrow_mut().update_metrics(&offline("claude", "card-boom"));
+    assert_eq!(tip(&card.borrow().widget()), "card-boom");
+    card.borrow_mut().update_metrics(&healthy("claude"));
     assert_eq!(
-        tip(&h.cards["claude"].widget()),
+        tip(&card.borrow().widget()),
         "",
         "`setToolTip(data.error or \"\")` clears it"
     );
@@ -299,32 +290,12 @@ fn a_child_without_a_tip_falls_back_to_its_parents() {
         tip_after_hover(&mut el, &h, &h.table.columns["claude"].name).as_deref(),
         Some("boom")
     );
-
-    let mut h = hud("cards");
-    h.cards
-        .get_mut("claude")
-        .unwrap()
-        .update_metrics(&offline("claude", "card-boom"));
-    let card = &h.cards["claude"];
-    // The Python card is one widget with the tip; its title and value labels have none.
-    assert_eq!(
-        tip_after_hover(&mut el, &h, &card.title).as_deref(),
-        Some("card-boom")
-    );
-    assert_eq!(
-        tip_after_hover(&mut el, &h, &card.m1_val).as_deref(),
-        Some("card-boom")
-    );
 }
 
 #[test]
-fn header_button_and_ghost_tool_tips_show_on_hover() {
+fn header_ghost_tool_tip_shows_on_hover() {
     let mut el = EventLoop::new();
-    let mut h = hud("cards");
-    assert_eq!(
-        tip_after_hover(&mut el, &h, &h.layout_toggle_btn).as_deref(),
-        Some("切換 橫向並排 / 直式堆疊 佈局")
-    );
+    let mut h = hud("table");
     h.set_click_through(true);
     h.window.root_widget().borrow().update_layout();
     assert_eq!(

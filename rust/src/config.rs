@@ -33,16 +33,6 @@ pub struct Config {
     pub color_scheme: String,
     #[serde(default = "default_appearance", deserialize_with = "lenient_appearance")]
     pub appearance: String,
-    #[serde(default = "default_layout_mode", deserialize_with = "lenient_layout_mode")]
-    pub layout_mode: String,
-    #[serde(default = "default_vertical_width", deserialize_with = "lenient_vertical_width")]
-    pub vertical_width: u32,
-    #[serde(default = "default_vertical_height", deserialize_with = "lenient_vertical_height")]
-    pub vertical_height: u32,
-    #[serde(default = "default_horizontal_width", deserialize_with = "lenient_horizontal_width")]
-    pub horizontal_width: u32,
-    #[serde(default = "default_horizontal_height", deserialize_with = "lenient_horizontal_height")]
-    pub horizontal_height: u32,
     #[serde(default = "default_true", deserialize_with = "lenient_bool_true")]
     pub always_on_top: bool,
     #[serde(default = "default_opacity", deserialize_with = "lenient_opacity")]
@@ -117,19 +107,13 @@ pub struct Config {
         deserialize_with = "lenient_compact_height"
     )]
     pub table_compact_height: u32,
+    /// Keys this build does not know, kept so the file round-trips: the retired Classic Cards keys
+    /// (`layout_mode`, `vertical_*`, `horizontal_*`) stay for downgrades, as in Python, whose config
+    /// is a plain dict.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
-// Window size constants, `hud_window.py:31-35`. The minimum is the explicit `setMinimumSize`; it wins
-// over the layout's own minimum, so it is not derived from the content (G12.8.f / RC-23).
-pub const MIN_HORIZONTAL_WIDTH: u32 = 540;
-pub const MIN_HORIZONTAL_HEIGHT: u32 = 125;
-pub const MIN_VERTICAL_WIDTH: u32 = 250;
-pub const MIN_VERTICAL_HEIGHT: u32 = 320;
-
-pub const DEFAULT_HORIZONTAL_WIDTH: u32 = 690;
-pub const DEFAULT_HORIZONTAL_HEIGHT: u32 = 145;
-pub const DEFAULT_VERTICAL_WIDTH: u32 = 280;
-pub const DEFAULT_VERTICAL_HEIGHT: u32 = 410;
 pub const MIN_TABLE_WIDTH: u32 = 380;
 pub const MIN_TABLE_HEIGHT: u32 = 280;
 pub const DEFAULT_TABLE_WIDTH: u32 = 450;
@@ -138,7 +122,7 @@ pub const DEFAULT_TABLE_COMPACT_WIDTH: u32 = crate::ui::table_layout::DEF_COMPAC
 pub const DEFAULT_TABLE_COMPACT_HEIGHT: u32 = crate::ui::table_layout::DEF_COMPACT_H as u32;
 
 fn default_ui_mode() -> String {
-    "cards".to_owned()
+    "sidebar".to_owned()
 }
 fn default_table_width() -> u32 {
     DEFAULT_TABLE_WIDTH
@@ -187,21 +171,6 @@ fn default_appearance() -> String {
     "auto".to_owned()
 }
 
-fn default_layout_mode() -> String {
-    "vertical".to_owned()
-}
-fn default_vertical_width() -> u32 {
-    DEFAULT_VERTICAL_WIDTH
-}
-fn default_vertical_height() -> u32 {
-    DEFAULT_VERTICAL_HEIGHT
-}
-fn default_horizontal_width() -> u32 {
-    DEFAULT_HORIZONTAL_WIDTH
-}
-fn default_horizontal_height() -> u32 {
-    DEFAULT_HORIZONTAL_HEIGHT
-}
 fn default_true() -> bool {
     true
 }
@@ -256,11 +225,6 @@ impl Default for Config {
             table_height: default_table_height(),
             color_scheme: default_color_scheme(),
             appearance: default_appearance(),
-            layout_mode: default_layout_mode(),
-            vertical_width: default_vertical_width(),
-            vertical_height: default_vertical_height(),
-            horizontal_width: default_horizontal_width(),
-            horizontal_height: default_horizontal_height(),
             always_on_top: true,
             opacity: default_opacity(),
             click_through: false,
@@ -287,6 +251,7 @@ impl Default for Config {
             table_compact: false,
             table_compact_width: default_table_compact_width(),
             table_compact_height: default_table_compact_height(),
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -347,11 +312,6 @@ lenient_field!(lenient_table_width, u32, default_table_width());
 lenient_field!(lenient_table_height, u32, default_table_height());
 lenient_field!(lenient_color_scheme, String, default_color_scheme());
 lenient_field!(lenient_appearance, String, default_appearance());
-lenient_field!(lenient_layout_mode, String, default_layout_mode());
-lenient_field!(lenient_vertical_width, u32, default_vertical_width());
-lenient_field!(lenient_vertical_height, u32, default_vertical_height());
-lenient_field!(lenient_horizontal_width, u32, default_horizontal_width());
-lenient_field!(lenient_horizontal_height, u32, default_horizontal_height());
 lenient_field!(lenient_opacity, f32, default_opacity());
 lenient_field!(lenient_refresh_interval, u64, default_refresh_interval());
 lenient_field!(lenient_hotkey, String, default_hotkey());
@@ -464,21 +424,6 @@ impl ConfigManager {
 
     /// Sanitize and clamp configuration parameters to valid ranges.
     pub fn sanitize(cfg: &mut Config) {
-        if cfg.horizontal_height < MIN_HORIZONTAL_HEIGHT || cfg.horizontal_height > 300 {
-            cfg.horizontal_height = DEFAULT_HORIZONTAL_HEIGHT;
-            if cfg.horizontal_width < 600 {
-                cfg.horizontal_width = DEFAULT_HORIZONTAL_WIDTH;
-            }
-        }
-        if cfg.horizontal_width < MIN_HORIZONTAL_WIDTH {
-            cfg.horizontal_width = DEFAULT_HORIZONTAL_WIDTH;
-        }
-        if cfg.vertical_height < MIN_VERTICAL_HEIGHT {
-            cfg.vertical_height = DEFAULT_VERTICAL_HEIGHT;
-        }
-        if cfg.vertical_width < MIN_VERTICAL_WIDTH {
-            cfg.vertical_width = DEFAULT_VERTICAL_WIDTH;
-        }
         if !cfg.opacity.is_finite() || cfg.opacity <= 0.0 {
             cfg.opacity = default_opacity();
         } else {
@@ -486,9 +431,6 @@ impl ConfigManager {
         }
         if cfg.refresh_interval_sec < 20 {
             cfg.refresh_interval_sec = default_refresh_interval();
-        }
-        if cfg.layout_mode != "horizontal" && cfg.layout_mode != "vertical" {
-            cfg.layout_mode = default_layout_mode();
         }
         // Python parity (config_manager.py:DEFAULT_CONFIG, hud_window.py:313, 403-424; G11.4.f):
         // coordinate values are preserved as-is. Visibility validation and primary-screen
@@ -499,15 +441,24 @@ impl ConfigManager {
         }
     }
 
-    /// Load config from disk, falling back to defaults on any error.
+    /// Load config from disk, falling back to defaults on any error. A file written for the retired
+    /// Classic Cards style is migrated to the sidebar panel and saved (Python `ConfigManager.load`).
     pub fn load() -> Config {
-        let path = Self::config_path();
+        Self::load_from(&Self::config_path())
+    }
+
+    fn load_from(path: &std::path::Path) -> Config {
         if path.exists() {
-            match fs::read_to_string(&path) {
-                Ok(text) => match serde_json::from_str::<Config>(&text) {
-                    Ok(mut cfg) => {
+            match fs::read_to_string(path) {
+                Ok(text) => match serde_json::from_str::<serde_json::Value>(&text)
+                    .and_then(|saved| serde_json::from_value::<Config>(saved.clone()).map(|c| (saved, c)))
+                {
+                    Ok((saved, mut cfg)) => {
                         info!("[Config] Loaded from {:?}", path);
                         Self::sanitize(&mut cfg);
+                        if migrate_style(&mut cfg, &saved) {
+                            Self::save_to(path, &cfg);
+                        }
                         return cfg;
                     }
                     Err(e) => error!("[Config] Parse error: {e}"),
@@ -516,6 +467,11 @@ impl ConfigManager {
             }
         }
         Config::default()
+    }
+
+    fn save_to(path: &std::path::Path, cfg: &Config) {
+        let _save = SAVE_LOCK.lock();
+        Self::save_internal(path, cfg);
     }
 
     /// Save a Config value atomically. Acquires SAVE_LOCK itself, so it MUST NOT be called
@@ -580,6 +536,45 @@ impl ConfigManager {
             Err(e) => error!("[Config] Serialize error: {e}"),
         }
     }
+}
+
+/// Styles this build offers (Python `UI_MODES`).
+pub const UI_MODES: [&str; 2] = ["table", "sidebar"];
+
+/// Python `migrate_style`: a saved style that is not offered any more becomes the sidebar panel. The
+/// retired Classic Cards style (`ui_mode = "cards"`, or a file from before the sidebar existed that has
+/// no `ui_mode` but a `layout_mode` or a window position) keeps its horizontal/vertical orientation
+/// and its free window position (`sidebar_edge = "none"`, `sidebar_x/y`). Unknown styles fall back to the
+/// new default. The legacy keys stay in `cfg.extra`. Returns whether anything was changed.
+pub fn migrate_style(cfg: &mut Config, saved: &serde_json::Value) -> bool {
+    use serde_json::Value;
+    let mut mode = saved.get("ui_mode").filter(|v| !v.is_null()).cloned();
+    let has_x = saved.get("window_x").is_some_and(|v| !v.is_null());
+    if mode.is_none() && (saved.get("layout_mode").is_some() || has_x) {
+        mode = Some(Value::String("cards".to_owned()));
+    }
+    if let Some(Value::String(m)) = &mode {
+        if UI_MODES.contains(&m.as_str()) {
+            return false;
+        }
+    }
+    cfg.ui_mode = "sidebar".to_owned();
+    cfg.sidebar_state = "panel".to_owned();
+    if mode.as_ref().and_then(Value::as_str) == Some("cards") {
+        let layout = saved.get("layout_mode").and_then(Value::as_str);
+        cfg.sidebar_orientation = match layout {
+            Some("horizontal") => "horizontal",
+            _ => "vertical",
+        }
+        .to_owned();
+        let int = |key: &str| saved.get(key).and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok());
+        if let (Some(x), Some(y)) = (int("window_x"), int("window_y")) {
+            cfg.sidebar_edge = "none".to_owned();
+            cfg.sidebar_x = Some(x);
+            cfg.sidebar_y = Some(y);
+        }
+    }
+    true
 }
 
 /// Config path forced by an isolated `--smoke-test` run; `None` means normal resolution.
@@ -1025,7 +1020,7 @@ mod sidebar_config_tests {
     fn a_wrong_typed_older_key_keeps_its_default_and_nothing_else() {
         let cfg = parse(
             r#"{"ui_mode": 5, "opacity": "high", "locked": "yes", "always_on_top": 1,
-                "window_x": "left", "table_width": -3, "layout_mode": [], "hotkey": 7,
+                "window_x": "left", "table_width": -3, "hotkey": 7,
                 "refresh_interval_sec": "fast", "claude_profile": null,
                 "appearance": "dark", "sidebar_edge": "top"}"#,
         );
@@ -1036,7 +1031,6 @@ mod sidebar_config_tests {
         assert!(cfg.always_on_top);
         assert_eq!(cfg.window_x, None);
         assert_eq!(cfg.table_width, defaults.table_width);
-        assert_eq!(cfg.layout_mode, defaults.layout_mode);
         assert_eq!(cfg.hotkey, defaults.hotkey);
         assert_eq!(cfg.refresh_interval_sec, defaults.refresh_interval_sec);
         assert_eq!(cfg.claude_profile, defaults.claude_profile);
@@ -1095,60 +1089,18 @@ mod tests {
     #[test]
     fn test_config_defaults() {
         let cfg = Config::default();
-        assert_eq!(cfg.layout_mode, "vertical");
-        // PySide6 `DEFAULT_CONFIG` (`config_manager.py:15-17`).
-        assert_eq!(cfg.vertical_width, 280);
-        assert_eq!(cfg.vertical_height, 410);
-        assert_eq!(cfg.horizontal_width, 690);
-        assert_eq!(cfg.horizontal_height, 145);
+        // PySide6 `DEFAULT_CONFIG`: the sidebar panel is the default style.
+        assert_eq!(cfg.ui_mode, "sidebar");
+        assert_eq!(cfg.sidebar_state, "panel");
         assert!(cfg.always_on_top);
         assert!(!cfg.click_through);
         assert_eq!(cfg.refresh_interval_sec, 60);
         assert_eq!(cfg.hotkey, "Alt+C");
     }
 
-    /// G12.8.f / RC-23. Python (`hud_window.py:31-35`, `config_manager.py:15-17`) keeps any stored
-    /// size at or above its minimum (125 high horizontal, 320 high vertical) and only below that
-    /// falls back to the default (145 / 410). Rust's higher minimums used to reset stored sizes
-    /// Python keeps.
-    #[test]
-    fn test_sanitize_keeps_stored_sizes_pyside6_keeps() {
-        let mut cfg = Config {
-            horizontal_height: 125,
-            vertical_height: 320,
-            ..Default::default()
-        };
-        ConfigManager::sanitize(&mut cfg);
-        assert_eq!((cfg.horizontal_height, cfg.vertical_height), (125, 320));
-
-        let mut cfg = Config {
-            horizontal_height: 124,
-            vertical_height: 319,
-            ..Default::default()
-        };
-        ConfigManager::sanitize(&mut cfg);
-        assert_eq!((cfg.horizontal_height, cfg.vertical_height), (145, 410));
-
-        // Stored by an earlier Rust build (its old defaults / minimum): still valid in Python.
-        let mut cfg = Config {
-            horizontal_height: 152,
-            vertical_height: 490,
-            ..Default::default()
-        };
-        ConfigManager::sanitize(&mut cfg);
-        assert_eq!((cfg.horizontal_height, cfg.vertical_height), (152, 490));
-        let mut cfg = Config {
-            vertical_height: 463,
-            ..Default::default()
-        };
-        ConfigManager::sanitize(&mut cfg);
-        assert_eq!(cfg.vertical_height, 463);
-    }
-
     #[test]
     fn test_config_serde_roundtrip() {
         let cfg = Config {
-            layout_mode: "horizontal".to_string(),
             opacity: 0.75,
             click_through: true,
             refresh_interval_sec: 120,
@@ -1158,7 +1110,6 @@ mod tests {
         let json = serde_json::to_string(&cfg).expect("serialization failed");
         let restored: Config = serde_json::from_str(&json).expect("deserialization failed");
 
-        assert_eq!(restored.layout_mode, "horizontal");
         assert_eq!(restored.opacity, 0.75);
         assert!(restored.click_through);
         assert_eq!(restored.refresh_interval_sec, 120);
@@ -1208,29 +1159,11 @@ mod tests {
         let mut cfg = Config {
             opacity: f32::NAN,
             refresh_interval_sec: 5,
-            horizontal_height: 50,
-            horizontal_width: 100,
-            vertical_height: 50,
-            vertical_width: 100,
             ..Default::default()
         };
         ConfigManager::sanitize(&mut cfg);
         assert_eq!(cfg.opacity, 0.88);
         assert_eq!(cfg.refresh_interval_sec, 60);
-        assert_eq!(cfg.horizontal_height, DEFAULT_HORIZONTAL_HEIGHT);
-        assert_eq!(cfg.horizontal_width, DEFAULT_HORIZONTAL_WIDTH);
-        assert_eq!(cfg.vertical_height, DEFAULT_VERTICAL_HEIGHT);
-        assert_eq!(cfg.vertical_width, DEFAULT_VERTICAL_WIDTH);
-
-        // Test corrupted horizontal dimensions (e.g. from vertical leak)
-        let mut cfg_corrupt = Config {
-            horizontal_height: 463,
-            horizontal_width: 540,
-            ..Default::default()
-        };
-        ConfigManager::sanitize(&mut cfg_corrupt);
-        assert_eq!(cfg_corrupt.horizontal_height, DEFAULT_HORIZONTAL_HEIGHT);
-        assert_eq!(cfg_corrupt.horizontal_width, DEFAULT_HORIZONTAL_WIDTH);
         // Test non-finite and negative opacity
         let mut cfg_neg = Config {
             opacity: -0.5,
@@ -1278,13 +1211,11 @@ mod tests {
         let mut cfg_valid_coords = Config {
             window_x: Some(-1920),
             window_y: Some(100),
-            layout_mode: "invalid_mode_string".to_string(),
             ..Default::default()
         };
         ConfigManager::sanitize(&mut cfg_valid_coords);
         assert_eq!(cfg_valid_coords.window_x, Some(-1920));
         assert_eq!(cfg_valid_coords.window_y, Some(100));
-        assert_eq!(cfg_valid_coords.layout_mode, "vertical");
 
         // Test claude_profile default and sanitization
         let mut cfg_profile = Config {
@@ -1968,6 +1899,105 @@ mod tests {
         assert!(
             err.contains("Settings did not survive reload"),
             "unexpected error: {err}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod style_migration_tests {
+    //! Ports of `python/tests/test_config.py::StyleMigrationTests`.
+    use super::*;
+    use serde_json::{json, Value};
+
+    /// Write `saved` (if any) to a fresh config file and load it, as `ConfigManager.load` does.
+    fn load(saved: Option<Value>) -> (PathBuf, Config) {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ClaudeHUDMonitor-migrate-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        if let Some(saved) = saved {
+            fs::write(&path, saved.to_string()).unwrap();
+        }
+        let cfg = ConfigManager::load_from(&path);
+        (path, cfg)
+    }
+
+    #[test]
+    fn fresh_install_defaults_to_sidebar_panel() {
+        let (_, cfg) = load(None);
+        assert_eq!((cfg.ui_mode.as_str(), cfg.sidebar_state.as_str()), ("sidebar", "panel"));
+    }
+
+    #[test]
+    fn cards_become_sidebar_panel_keeping_position_and_orientation() {
+        let (_, cfg) = load(Some(json!({"ui_mode": "cards", "layout_mode": "horizontal",
+            "window_x": 120, "window_y": 80, "opacity": 0.7})));
+        assert_eq!(cfg.ui_mode, "sidebar");
+        assert_eq!(cfg.sidebar_state, "panel");
+        assert_eq!(cfg.sidebar_orientation, "horizontal");
+        assert_eq!(cfg.sidebar_edge, "none");
+        assert_eq!((cfg.sidebar_x, cfg.sidebar_y), (Some(120), Some(80)));
+        assert_eq!(cfg.opacity, 0.7);
+    }
+
+    #[test]
+    fn vertical_cards_become_vertical_panel() {
+        let (_, cfg) = load(Some(json!({"ui_mode": "cards", "layout_mode": "vertical",
+            "window_x": 5, "window_y": 6})));
+        assert_eq!(cfg.sidebar_orientation, "vertical");
+    }
+
+    #[test]
+    fn cards_without_saved_position_keep_default_edge() {
+        let (_, cfg) = load(Some(json!({"ui_mode": "cards", "layout_mode": "vertical"})));
+        assert_eq!(cfg.sidebar_edge, "right");
+        assert_eq!(cfg.sidebar_x, None);
+    }
+
+    #[test]
+    fn legacy_file_without_ui_mode_counts_as_cards() {
+        let (_, cfg) = load(Some(json!({"layout_mode": "horizontal", "window_x": 10, "window_y": 20})));
+        assert_eq!(cfg.ui_mode, "sidebar");
+        assert_eq!(cfg.sidebar_orientation, "horizontal");
+        assert_eq!((cfg.sidebar_x, cfg.sidebar_y), (Some(10), Some(20)));
+    }
+
+    #[test]
+    fn table_and_sidebar_settings_are_untouched() {
+        let (_, table) = load(Some(json!({"ui_mode": "table", "window_x": 1, "window_y": 2,
+            "layout_mode": "horizontal"})));
+        assert_eq!(table.ui_mode, "table");
+        assert_eq!(table.sidebar_edge, "right");
+        let (_, strip) = load(Some(json!({"ui_mode": "sidebar", "sidebar_state": "strip",
+            "sidebar_edge": "left"})));
+        assert_eq!((strip.sidebar_state.as_str(), strip.sidebar_edge.as_str()), ("strip", "left"));
+    }
+
+    #[test]
+    fn unknown_mode_falls_back_to_default_style() {
+        for bad in [json!("grid"), json!(""), Value::Null, json!(3)] {
+            let (_, cfg) = load(Some(json!({"ui_mode": bad})));
+            assert_eq!((cfg.ui_mode.as_str(), cfg.sidebar_state.as_str()), ("sidebar", "panel"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn migration_is_saved_idempotent_and_keeps_the_legacy_keys() {
+        let (path, cfg) = load(Some(json!({"ui_mode": "cards", "layout_mode": "vertical",
+            "window_x": 7, "window_y": 9, "vertical_height": 410})));
+        let on_disk: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk["ui_mode"], "sidebar");
+        // legacy keys stay for downgrades
+        assert_eq!(on_disk["layout_mode"], "vertical");
+        assert_eq!(on_disk["vertical_height"], 410);
+        let again = ConfigManager::load_from(&path);
+        assert_eq!(
+            serde_json::to_value(&again).unwrap(),
+            serde_json::to_value(&cfg).unwrap()
         );
     }
 }

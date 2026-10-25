@@ -19,12 +19,8 @@ use crate::config::Config;
 pub const ACTION_TOGGLE_VISIBILITY: u32 = 1;
 pub const ACTION_REFRESH_ALL: u32 = 2;
 
-pub const ACTION_MODE_CARDS: u32 = 10;
 pub const ACTION_MODE_TABLE: u32 = 11;
 pub const ACTION_MODE_SIDEBAR: u32 = 12;
-
-pub const ACTION_LAYOUT_HORIZONTAL: u32 = 20;
-pub const ACTION_LAYOUT_VERTICAL: u32 = 21;
 
 pub const ACTION_APPEARANCE_AUTO: u32 = 30;
 pub const ACTION_APPEARANCE_LIGHT: u32 = 31;
@@ -32,7 +28,7 @@ pub const ACTION_APPEARANCE_DARK: u32 = 32;
 
 pub const ACTION_SCHEME_SCALE: u32 = 40;
 pub const ACTION_SCHEME_DUO: u32 = 41;
-/// The `table_blur` switch (Python `toggle_table_blur`), in the Colors submenu: both are table-only.
+/// The `table_blur` switch (Python `toggle_table_blur`), in the Appearance submenu of the table style.
 pub const ACTION_TABLE_BLUR: u32 = 42;
 
 pub const ACTION_CLICK_THROUGH: u32 = 50;
@@ -196,186 +192,45 @@ fn test_hud_root() -> ferrokit_widgets::widget::WidgetRef {
     )))
 }
 
-pub fn build_hud_context_menu(cfg: &Config, root: &ferrokit_widgets::widget::WidgetRef) -> Menu {
+/// The `UI_MODES` choices of Python `hud_menu` (the retired Classic Cards style is gone).
+const UI_MODE_CHOICES: [(&str, u32, &str); 2] = [
+    ("table", ACTION_MODE_TABLE, "儀表表格 (Modern Table)"),
+    ("sidebar", ACTION_MODE_SIDEBAR, "側邊欄 (Sidebar)"),
+];
+
+/// Python `SIDEBAR_FORMS`.
+const SIDEBAR_FORM_CHOICES: [(&str, u32, &str); 2] = [
+    ("strip", ACTION_SIDEBAR_STRIP, "細條 (Strip)"),
+    ("panel", ACTION_SIDEBAR_PANEL, "固定窄欄 (Panel)"),
+];
+
+/// Python `hud_menu.build_hud_menu`: the one menu structure shared by the HUD right-click menu and
+/// the tray icon. The top level stays short and everything else lives in four groups (Interface /
+/// Appearance / Behaviour / More); a setting appears exactly once. `tray` adds show/hide on top and
+/// drops the More group. The menu is built each time it is shown, so the checks are always current.
+pub fn build_hud_menu(
+    cfg: &Config,
+    root: &ferrokit_widgets::widget::WidgetRef,
+    tray: bool,
+) -> Menu {
     let mut menu = Menu::new("");
     menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
     menu.set_style(hud_menu_style(cfg));
     ferrokit_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
 
-    // Refresh
-    add_item(
-        &mut menu,
-        ACTION_REFRESH_ALL,
-        "🔄 立即重新整理所有 AI (Refresh All)",
-    );
-    menu.add_separator();
-
-    // Claude Account Submenu (PR 13)
-    let claude_sub = Menu::new_ref("✳️ Claude 帳號 (Claude Account)");
-    {
-        let mut cs = claude_sub.borrow_mut();
-        cs.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
-
-        let cur_profile = cfg.claude_profile.as_str();
-        let is_auto = cur_profile.is_empty() || cur_profile.eq_ignore_ascii_case("auto");
-        let (active_prof, _) = crate::providers::claude::resolve_active_profile(cur_profile);
-
-        let auto_title = if is_auto && active_prof.id != "default" {
-            format!("🎯 智慧自動追蹤 (目前: {})", active_prof.short_name)
-        } else {
-            "🎯 智慧自動追蹤 (最近活躍)".to_string()
-        };
-        add_check(&mut cs, ACTION_CLAUDE_PROFILE_AUTO, &auto_title, is_auto);
-
-        cs.add_separator();
-
-        let profiles = crate::providers::claude::discover_profiles();
-        for (i, prof) in profiles.iter().take(40).enumerate() {
-            let is_selected = !is_auto
-                && (cur_profile.eq_ignore_ascii_case(&prof.id)
-                    || (cur_profile == ".claude" && prof.id == "default"));
-            add_check(
-                &mut cs,
-                ACTION_CLAUDE_PROFILE_BASE + i as u32,
-                &prof.display_name,
-                is_selected,
-            );
-        }
+    if tray {
+        add_item(&mut menu, ACTION_TOGGLE_VISIBILITY, "顯示 / 隱藏 HUD (Alt+C)");
     }
-    menu.add_menu_ref(&claude_sub);
+    add_item(&mut menu, ACTION_REFRESH_ALL, "立即重新整理所有 AI (Refresh All)");
     menu.add_separator();
-
-    // UI Style, Layout, Colors/Appearance (shared with the tray menu)
-    add_ui_style_menu(&mut menu, cfg);
-    add_layout_menu(&mut menu, cfg);
-    add_sidebar_menu(&mut menu, cfg);
-    add_theme_menus(&mut menu, cfg);
-
-    // Ghost Mode
-    add_check(
-        &mut menu,
-        ACTION_CLICK_THROUGH,
-        "👻 滑鼠點擊穿透 (Alt+Shift+C)",
-        cfg.click_through,
-    );
-
-    // Always on top
-    add_check(
-        &mut menu,
-        ACTION_ALWAYS_ON_TOP,
-        "📌 視窗永遠置頂 (Always on Top)",
-        cfg.always_on_top,
-    );
-
-    // Lock Drag
-    add_check(
-        &mut menu,
-        ACTION_LOCK_DRAG,
-        "🔒 鎖定視窗位置 (Lock Drag)",
-        cfg.locked,
-    );
-
-    // Opacity Submenu
-    let opacity_sub = Menu::new_ref("🌗 視窗透明度 (Opacity)");
-    {
-        let mut op = opacity_sub.borrow_mut();
-        op.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
-        let current_op = cfg.opacity;
-        for (id, pct, val) in [
-            (ACTION_OPACITY_100, 100, 1.00),
-            (ACTION_OPACITY_90, 90, 0.90),
-            (ACTION_OPACITY_80, 80, 0.80),
-            (ACTION_OPACITY_70, 70, 0.70),
-            (ACTION_OPACITY_50, 50, 0.50),
-            (ACTION_OPACITY_30, 30, 0.30),
-        ] {
-            let is_checked = (current_op - val as f32).abs() < 0.05;
-            add_check(&mut op, id, &format!("{}%", pct), is_checked);
-        }
+    build_interface(&mut menu, cfg);
+    build_appearance(&mut menu, cfg);
+    build_behaviour(&mut menu, cfg);
+    if !tray {
+        build_more(&mut menu, cfg);
     }
-    menu.add_menu_ref(&opacity_sub);
-
-    // Interval Submenu
-    let interval_sub = Menu::new_ref("⏱️ 更新頻率 (Interval)");
-    {
-        let mut intv = interval_sub.borrow_mut();
-        intv.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
-        let cur_int = cfg.refresh_interval_sec;
-        for (id, sec) in [
-            (ACTION_INTERVAL_30, 30),
-            (ACTION_INTERVAL_60, 60),
-            (ACTION_INTERVAL_120, 120),
-            (ACTION_INTERVAL_300, 300),
-        ] {
-            add_check(&mut intv, id, &format!("{} 秒", sec), cur_int == sec);
-        }
-    }
-    menu.add_menu_ref(&interval_sub);
-
-    // Autostart
-    add_check(
-        &mut menu,
-        ACTION_AUTOSTART,
-        "🚀 開機自動啟動 (Start on Boot)",
-        is_autostart_enabled(),
-    );
-
     menu.add_separator();
-
-    // Logs, Reset Geometry, Hide HUD, Exit
-    add_item(&mut menu, ACTION_OPEN_LOGS, "📂 開啟記錄檔目錄 (Open Logs)");
-    add_item(&mut menu, ACTION_RESET_GEOMETRY, "📐 重設預設尺寸與位置");
-    add_item(&mut menu, ACTION_HIDE_HUD, "👁️ 隱藏 HUD (Alt+C 重新喚出)");
-    add_item(&mut menu, ACTION_EXIT, "❌ 結束程式 (Exit)");
-
-    menu
-}
-
-/// Python `HUDTrayIcon` right-click menu (`tray_icon.py:43-122`). The tray and the HUD body
-/// are different menus: this one never contains the body-only account, lock, opacity,
-/// interval, reset or hide items.
-pub fn build_hud_tray_menu(cfg: &Config, root: &ferrokit_widgets::widget::WidgetRef) -> Menu {
-    let mut menu = Menu::new("");
-    menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
-    menu.set_style(hud_menu_style(cfg));
-    ferrokit_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
-
-    add_item(
-        &mut menu,
-        ACTION_TOGGLE_VISIBILITY,
-        "👁️ 顯示 / 隱藏 HUD (Alt+C)",
-    );
-    add_item(
-        &mut menu,
-        ACTION_REFRESH_ALL,
-        "🔄 立即重新整理所有 AI (Refresh All)",
-    );
-    menu.add_separator();
-    add_ui_style_menu(&mut menu, cfg);
-    add_layout_menu(&mut menu, cfg);
-    add_sidebar_menu(&mut menu, cfg);
-    add_theme_menus(&mut menu, cfg);
-    add_check(
-        &mut menu,
-        ACTION_CLICK_THROUGH,
-        "👻 滑鼠點擊穿透 (Alt+Shift+C)",
-        cfg.click_through,
-    );
-    add_check(
-        &mut menu,
-        ACTION_ALWAYS_ON_TOP,
-        "📌 視窗永遠置頂",
-        cfg.always_on_top,
-    );
-    add_check(
-        &mut menu,
-        ACTION_AUTOSTART,
-        "🚀 開機自動啟動",
-        is_autostart_enabled(),
-    );
-    add_item(&mut menu, ACTION_OPEN_LOGS, "📂 開啟記錄檔目錄 (Open Logs)");
-    menu.add_separator();
-    add_item(&mut menu, ACTION_EXIT, "❌ 結束程式 (Exit)");
+    add_item(&mut menu, ACTION_EXIT, "結束程式 (Exit)");
     menu
 }
 
@@ -385,6 +240,13 @@ fn new_submenu(title: &str, cfg: &Config) -> MenuRef {
     sub.borrow_mut()
         .set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
     sub
+}
+
+/// Adds the submenu `title` to `menu`, filled by `fill`.
+fn add_submenu(menu: &mut Menu, title: &str, cfg: &Config, fill: impl FnOnce(&mut Menu)) {
+    let sub = new_submenu(title, cfg);
+    fill(&mut sub.borrow_mut());
+    menu.add_menu_ref(&sub);
 }
 
 /// Plain action whose data is `id`, the key `handle_action` dispatches on.
@@ -406,33 +268,6 @@ fn add_check(menu: &mut Menu, id: u32, text: &str, checked: bool) {
     menu.add_action(act);
 }
 
-/// Python `ui_style_menu` (`tray_icon.py:66-77`, `hud_window.py:710-721`).
-fn add_ui_style_menu(menu: &mut Menu, cfg: &Config) {
-    let sub = new_submenu("🎭 介面風格 (UI Style)", cfg);
-    {
-        let mut s = sub.borrow_mut();
-        add_check(
-            &mut s,
-            ACTION_MODE_CARDS,
-            "🗂️ 傳統卡片 (Classic Cards)",
-            cfg.ui_mode == "cards",
-        );
-        add_check(
-            &mut s,
-            ACTION_MODE_TABLE,
-            "📊 儀表表格 (Modern Table)",
-            cfg.ui_mode == "table",
-        );
-        add_check(
-            &mut s,
-            ACTION_MODE_SIDEBAR,
-            "📍 側邊欄 (Sidebar)",
-            cfg.ui_mode == "sidebar",
-        );
-    }
-    menu.add_menu_ref(&sub);
-}
-
 /// A disabled plain-text row (Python `QAction.setEnabled(False)`).
 fn add_disabled(menu: &mut Menu, text: &str) {
     let act = Action::new_ref(text);
@@ -440,143 +275,170 @@ fn add_disabled(menu: &mut Menu, text: &str) {
     menu.add_action(act);
 }
 
-/// Python `hud_menu._build_interface` (the sidebar entries), `_build_agy_rows` and
-/// `_build_idle_fade`: visible only in the sidebar style.
-fn add_sidebar_menu(menu: &mut Menu, cfg: &Config) {
-    let sub = new_submenu("📍 側邊欄 (Sidebar)", cfg);
-    {
-        let mut s = sub.borrow_mut();
-        for (value, id, label) in [
-            ("strip", ACTION_SIDEBAR_STRIP, "細條 (Strip)"),
-            ("panel", ACTION_SIDEBAR_PANEL, "固定窄欄 (Panel)"),
-        ] {
-            add_check(&mut s, id, label, cfg.sidebar_state == value);
+/// Python `hud_menu._build_interface`: the style, and in the sidebar style its form and size.
+fn build_interface(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "介面 (Interface)", cfg, |sub| {
+        for (value, id, label) in UI_MODE_CHOICES {
+            add_check(sub, id, label, cfg.ui_mode == value);
         }
-        s.add_separator();
-        let size_menu = new_submenu("大小 (Ctrl＋滾輪)", cfg);
-        {
-            let mut sz = size_menu.borrow_mut();
-            let current = (cfg.sidebar_scale_setting() * 100.0).round() as u32;
-            for pct in SIDEBAR_SCALES {
-                add_check(&mut sz, ACTION_SIDEBAR_SCALE_BASE + pct, &format!("{pct}%"), pct == current);
+        if cfg.ui_mode == "sidebar" {
+            sub.add_separator();
+            for (value, id, label) in SIDEBAR_FORM_CHOICES {
+                add_check(sub, id, label, cfg.sidebar_state == value);
             }
+            sub.add_separator();
+            add_submenu(sub, "大小 (Ctrl＋滾輪)", cfg, |size| {
+                let current = (cfg.sidebar_scale_setting() * 100.0).round() as u32;
+                for pct in SIDEBAR_SCALES {
+                    add_check(size, ACTION_SIDEBAR_SCALE_BASE + pct, &format!("{pct}%"), pct == current);
+                }
+            });
         }
-        s.add_menu_ref(&size_menu);
-        s.add_separator();
-        // AGY row order: shown here, changed by dragging rows in the detail page
-        let order = crate::agy_rows::normalize_order(&cfg.agy_order);
-        let agy = new_submenu("AGY 項目順序 (Row order)", cfg);
-        {
-            let mut a = agy.borrow_mut();
-            add_disabled(&mut a, "在詳細頁面拖拉標題可調整，前兩條為主要顯示");
-            a.add_separator();
-            for (index, title) in order.iter().enumerate() {
-                add_disabled(&mut a, &format!("{}. {title}", index + 1));
-            }
-            a.add_separator();
-            let reset = Action::new_ref("還原預設順序");
-            {
-                let mut r = reset.borrow_mut();
-                r.set_data(Variant::uint(ACTION_AGY_ORDER_RESET as u64));
-                r.set_enabled(order.iter().map(String::as_str).ne(crate::agy_rows::DEFAULT_ORDER));
-            }
-            a.add_action(reset);
-        }
-        s.add_menu_ref(&agy);
-        s.add_separator();
-        // idle fade
-        let fade = new_submenu("閒置時淡化 (Idle fade)", cfg);
-        {
-            let mut f = fade.borrow_mut();
-            add_check(&mut f, ACTION_IDLE_FADE_TOGGLE, "啟用", cfg.sidebar_idle_fade);
-            f.add_separator();
-            let level_menu = new_submenu("淡化到 (Dim to)", cfg);
-            {
-                let mut l = level_menu.borrow_mut();
-                let level = (cfg.idle_fade_level_setting() * 100.0).round() as u32;
-                let mut levels: Vec<u32> = IDLE_LEVELS.to_vec();
-                if !levels.contains(&level) {
-                    levels.push(level);
-                }
-                levels.sort_unstable_by(|a, b| b.cmp(a));
-                for pct in levels {
-                    add_check(&mut l, ACTION_IDLE_LEVEL_BASE + pct, &format!("{pct}%"), pct == level);
-                }
-            }
-            f.add_menu_ref(&level_menu);
-            let delay_menu = new_submenu("多久後淡化 (Delay)", cfg);
-            {
-                let mut d = delay_menu.borrow_mut();
-                let delay = cfg.idle_fade_delay_setting() as u32;
-                let mut delays: Vec<u32> = IDLE_DELAYS_MS.to_vec();
-                if !delays.contains(&delay) {
-                    delays.push(delay);
-                }
-                delays.sort_unstable();
-                for ms in delays {
-                    add_check(
-                        &mut d,
-                        ACTION_IDLE_DELAY_BASE + ms,
-                        &format!("{} 秒", crate::ui::sidebar::format_g(ms as f64 / 1000.0)),
-                        ms == delay,
-                    );
-                }
-            }
-            f.add_menu_ref(&delay_menu);
-        }
-        s.add_menu_ref(&fade);
-    }
-    let action = menu.add_menu_ref(&sub);
-    action.borrow_mut().set_visible(cfg.ui_mode == "sidebar");
+        sub.add_separator();
+        build_agy_rows(sub, cfg);
+    });
 }
 
-/// Python `layout_menu` (`tray_icon.py:79-90`). Visible only in cards mode, as
-/// `update_menu_state` sets it (`tray_icon.py:134`).
-fn add_layout_menu(menu: &mut Menu, cfg: &Config) {
-    let sub = new_submenu("📐 顯示佈局 (Layout)", cfg);
-    {
-        let mut l = sub.borrow_mut();
-        add_check(
-            &mut l,
-            ACTION_LAYOUT_HORIZONTAL,
-            "💻 橫向三欄並排 (Horizontal Triple)",
-            cfg.layout_mode == "horizontal",
-        );
-        add_check(
-            &mut l,
-            ACTION_LAYOUT_VERTICAL,
-            "📱 直立三層堆疊 (Vertical Stack)",
-            cfg.layout_mode == "vertical",
-        );
-    }
-    let action = menu.add_menu_ref(&sub);
-    action.borrow_mut().set_visible(cfg.ui_mode == "cards");
+/// Python `hud_menu._build_agy_rows`: shows the current agy row order; the order itself is changed by
+/// dragging rows in the detail page.
+fn build_agy_rows(menu: &mut Menu, cfg: &Config) {
+    let order = crate::agy_rows::normalize_order(&cfg.agy_order);
+    add_submenu(menu, "AGY 項目順序 (Row order)", cfg, |sub| {
+        add_disabled(sub, "在詳細頁面拖拉標題可調整，前兩條為主要顯示");
+        sub.add_separator();
+        for (index, title) in order.iter().enumerate() {
+            add_disabled(sub, &format!("{}. {title}", index + 1));
+        }
+        sub.add_separator();
+        let reset = Action::new_ref("還原預設順序");
+        {
+            let mut r = reset.borrow_mut();
+            r.set_data(Variant::uint(ACTION_AGY_ORDER_RESET as u64));
+            r.set_enabled(order.iter().map(String::as_str).ne(crate::agy_rows::DEFAULT_ORDER));
+        }
+        sub.add_action(reset);
+    });
 }
 
-/// Python `add_theme_menus` (`hud_window.py:652-675`): Colors, visible only in table mode,
-/// then Appearance. The tray uses the same pair.
-fn add_theme_menus(menu: &mut Menu, cfg: &Config) {
-    let scheme_sub = new_submenu("🎨 配色 (Colors)", cfg);
-    {
-        let mut sc = scheme_sub.borrow_mut();
-        for (value, id, label) in SCHEME_CHOICES {
-            add_check(&mut sc, id, label, cfg.color_scheme == value);
-        }
-        add_check(&mut sc, ACTION_TABLE_BLUR, TABLE_BLUR_LABEL, cfg.table_blur);
-    }
-    let scheme_action = menu.add_menu_ref(&scheme_sub);
-    scheme_action
-        .borrow_mut()
-        .set_visible(cfg.ui_mode == "table");
-
-    let appearance_sub = new_submenu("🌓 外觀 (Appearance)", cfg);
-    {
-        let mut a = appearance_sub.borrow_mut();
+/// Python `hud_menu._build_appearance`: light / dark, in the table style its colour scheme and the
+/// blur switch, then the window opacity.
+fn build_appearance(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "外觀 (Appearance)", cfg, |sub| {
         for (value, id, label) in APPEARANCE_CHOICES {
-            add_check(&mut a, id, label, cfg.appearance == value);
+            add_check(sub, id, label, cfg.appearance == value);
         }
-    }
-    menu.add_menu_ref(&appearance_sub);
+        if cfg.ui_mode == "table" {
+            sub.add_separator();
+            for (value, id, label) in SCHEME_CHOICES {
+                add_check(sub, id, label, cfg.color_scheme == value);
+            }
+            add_check(sub, ACTION_TABLE_BLUR, TABLE_BLUR_LABEL, cfg.table_blur);
+        }
+        sub.add_separator();
+        add_submenu(sub, "視窗透明度 (Opacity)", cfg, |opacity| {
+            for (id, pct, val) in [
+                (ACTION_OPACITY_100, 100, 1.00),
+                (ACTION_OPACITY_90, 90, 0.90),
+                (ACTION_OPACITY_80, 80, 0.80),
+                (ACTION_OPACITY_70, 70, 0.70),
+                (ACTION_OPACITY_50, 50, 0.50),
+                (ACTION_OPACITY_30, 30, 0.30),
+            ] {
+                let checked = (cfg.opacity - val as f32).abs() < 0.05;
+                add_check(opacity, id, &format!("{pct}%"), checked);
+            }
+        });
+    });
+}
+
+/// Python `hud_menu._build_idle_fade`.
+fn build_idle_fade(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "閒置時淡化 (Idle fade)", cfg, |sub| {
+        add_check(sub, ACTION_IDLE_FADE_TOGGLE, "啟用", cfg.sidebar_idle_fade);
+        sub.add_separator();
+        add_submenu(sub, "淡化到 (Dim to)", cfg, |dim| {
+            let level = (cfg.idle_fade_level_setting() * 100.0).round() as u32;
+            let mut levels: Vec<u32> = IDLE_LEVELS.to_vec();
+            if !levels.contains(&level) {
+                levels.push(level);
+            }
+            levels.sort_unstable_by(|a, b| b.cmp(a));
+            for pct in levels {
+                add_check(dim, ACTION_IDLE_LEVEL_BASE + pct, &format!("{pct}%"), pct == level);
+            }
+        });
+        add_submenu(sub, "多久後淡化 (Delay)", cfg, |delays| {
+            let delay = cfg.idle_fade_delay_setting() as u32;
+            let mut all: Vec<u32> = IDLE_DELAYS_MS.to_vec();
+            if !all.contains(&delay) {
+                all.push(delay);
+            }
+            all.sort_unstable();
+            for ms in all {
+                add_check(
+                    delays,
+                    ACTION_IDLE_DELAY_BASE + ms,
+                    &format!("{} 秒", crate::ui::sidebar::format_g(ms as f64 / 1000.0)),
+                    ms == delay,
+                );
+            }
+        });
+    });
+}
+
+/// Python `hud_menu._build_behaviour`.
+fn build_behaviour(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "行為 (Behaviour)", cfg, |sub| {
+        add_check(sub, ACTION_CLICK_THROUGH, "滑鼠點擊穿透 (Alt+Shift+C)", cfg.click_through);
+        add_check(sub, ACTION_ALWAYS_ON_TOP, "視窗永遠置頂 (Always on Top)", cfg.always_on_top);
+        add_check(sub, ACTION_LOCK_DRAG, "鎖定視窗位置 (Lock Drag)", cfg.locked);
+        build_idle_fade(sub, cfg);
+        add_check(sub, ACTION_AUTOSTART, "開機自動啟動 (Start on Boot)", is_autostart_enabled());
+        sub.add_separator();
+        add_submenu(sub, "⏱️ 更新頻率 (Interval)", cfg, |interval| {
+            for (id, sec) in [
+                (ACTION_INTERVAL_30, 30),
+                (ACTION_INTERVAL_60, 60),
+                (ACTION_INTERVAL_120, 120),
+                (ACTION_INTERVAL_300, 300),
+            ] {
+                add_check(interval, id, &format!("{sec} 秒"), cfg.refresh_interval_sec == sec);
+            }
+        });
+    });
+}
+
+/// Python `hud_menu._build_claude_accounts`.
+fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "Claude 帳號 (Claude Account)", cfg, |sub| {
+        let current = cfg.claude_profile.as_str();
+        let is_auto = current.is_empty() || current.eq_ignore_ascii_case("auto");
+        let (active, _) = crate::providers::claude::resolve_active_profile(current);
+        let title = if is_auto && active.id != "default" {
+            format!("智慧自動追蹤 (目前: {})", active.short_name)
+        } else {
+            "智慧自動追蹤 (最近活躍)".to_string()
+        };
+        add_check(sub, ACTION_CLAUDE_PROFILE_AUTO, &title, is_auto);
+        sub.add_separator();
+        for (i, prof) in crate::providers::claude::discover_profiles().iter().take(40).enumerate() {
+            let selected = !is_auto
+                && (current.eq_ignore_ascii_case(&prof.id)
+                    || (current == ".claude" && prof.id == "default"));
+            add_check(sub, ACTION_CLAUDE_PROFILE_BASE + i as u32, &prof.display_name, selected);
+        }
+    });
+}
+
+/// Python `hud_menu._build_more`.
+fn build_more(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "更多 (More)", cfg, |sub| {
+        build_claude_accounts(sub, cfg);
+        sub.add_separator();
+        add_item(sub, ACTION_OPEN_LOGS, "開啟記錄檔目錄 (Open Logs)");
+        add_item(sub, ACTION_RESET_GEOMETRY, "重設預設尺寸與位置");
+        add_item(sub, ACTION_HIDE_HUD, "隱藏 HUD (Alt+C 重新喚出)");
+    });
 }
 
 /// Balloon sink: Python `tray_icon.showMessage(title, text, icon, msecs)`. The shell sink is
@@ -637,8 +499,8 @@ impl HUDTrayIcon {
     }
 
     pub fn update_menu_state(&mut self) {
-        // Dynamic on-demand menu: build_hud_context_menu(&cfg) is built whenever
-        // requested, ensuring perfect parity with the HUD right-click menu without Win32 GDI caching.
+        // Dynamic on-demand menu: `build_hud_menu` builds it whenever it is requested, ensuring
+        // perfect parity between the HUD right-click menu and the tray without Win32 GDI caching.
     }
 
     /// The one place a click-through toggle happens: the tray action and the global hotkey both
@@ -671,10 +533,6 @@ impl HUDTrayIcon {
             }
             ACTION_REFRESH_ALL => {
                 hud.trigger_refresh();
-            }
-            ACTION_MODE_CARDS => {
-                hud.apply_ui_mode("cards");
-                self.update_menu_state();
             }
             ACTION_MODE_TABLE => {
                 hud.apply_ui_mode("table");
@@ -713,14 +571,6 @@ impl HUDTrayIcon {
             }
             ACTION_AGY_ORDER_RESET => {
                 hud.reset_agy_order();
-                self.update_menu_state();
-            }
-            ACTION_LAYOUT_HORIZONTAL => {
-                hud.apply_cards_layout_mode("horizontal");
-                self.update_menu_state();
-            }
-            ACTION_LAYOUT_VERTICAL => {
-                hud.apply_cards_layout_mode("vertical");
                 self.update_menu_state();
             }
             ACTION_APPEARANCE_AUTO => {
@@ -854,84 +704,6 @@ mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
 
-    #[test]
-    fn test_context_menu_parity_cards_and_table_modes() {
-        // 1. Cards mode configuration
-        let cfg_cards = Config {
-            ui_mode: "cards".to_string(),
-            layout_mode: "horizontal".to_string(),
-            opacity: 0.90,
-            refresh_interval_sec: 60,
-            claude_profile: "auto".to_string(),
-            ..Config::default()
-        };
-
-        let menu_cards = build_hud_context_menu(&cfg_cards, &test_hud_root());
-        let actions = menu_cards.actions();
-        assert!(!actions.is_empty(), "Context menu must have actions");
-        assert_eq!(
-            actions[0].borrow().text(),
-            "🔄 立即重新整理所有 AI (Refresh All)"
-        );
-
-        // 2. Table mode configuration
-        let cfg_table = Config {
-            ui_mode: "table".to_string(),
-            color_scheme: "scale".to_string(),
-            ..Config::default()
-        };
-
-        let menu_table = build_hud_context_menu(&cfg_table, &test_hud_root());
-        let actions_table = menu_table.actions();
-        assert!(!actions_table.is_empty());
-
-        let has_refresh = actions_table
-            .iter()
-            .any(|a| a.borrow().data().to_u64() == Some(ACTION_REFRESH_ALL as u64));
-        assert!(has_refresh);
-
-        let has_lock = actions_table
-            .iter()
-            .any(|a| a.borrow().data().to_u64() == Some(ACTION_LOCK_DRAG as u64));
-        assert!(has_lock);
-
-        let has_reset = actions_table
-            .iter()
-            .any(|a| a.borrow().data().to_u64() == Some(ACTION_RESET_GEOMETRY as u64));
-        assert!(has_reset);
-
-        let has_hide = actions_table
-            .iter()
-            .any(|a| a.borrow().data().to_u64() == Some(ACTION_HIDE_HUD as u64));
-        assert!(has_hide);
-
-        let has_exit = actions_table
-            .iter()
-            .any(|a| a.borrow().data().to_u64() == Some(ACTION_EXIT as u64));
-        assert!(has_exit);
-    }
-
-    #[test]
-    fn tray_and_hud_menus_share_dark_mode() {
-        // `auto` follows the operating system, so the test fixes the appearance.
-        for (appearance, dark) in [("dark", true), ("light", false)] {
-            let config = Config {
-                appearance: appearance.to_string(),
-                ..Config::default()
-            };
-            assert_eq!(
-                build_hud_tray_menu(&config, &test_hud_root()).is_dark_mode(),
-                dark,
-                "tray {appearance}"
-            );
-            assert_eq!(
-                build_hud_context_menu(&config, &test_hud_root()).is_dark_mode(),
-                dark,
-                "body {appearance}"
-            );
-        }
-    }
-
     /// Restores the application device pixel ratio the other tests run under.
     struct DevicePixelRatioGuard;
 
@@ -951,7 +723,7 @@ mod tests {
         use ferrokit_widgets::Widget;
         let _guard = DevicePixelRatioGuard;
         ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.25);
-        let mut menu = build_hud_context_menu(&Config::default(), &test_hud_root());
+        let mut menu = build_hud_menu(&Config::default(), &test_hud_root(), false);
         menu.set_visible(true);
         let size = menu.size_hint();
         menu.set_geometry(ferrokit_gui::geometry::primitives::Rect::new(
@@ -1127,80 +899,25 @@ mod menu_parity_tests {
     use ferrokit_widgets::action::ActionRef;
     use ferrokit_widgets::menu::Menu;
 
-    /// Visible labels of the submenu whose parent text contains `title_part`
-    /// (Qt skips hidden actions in the popup, `qmenu.cpp:374, 397`).
-    fn submenu_visible_labels(menu: &Menu, title_part: &str) -> Vec<String> {
-        let sub = menu
-            .actions()
-            .iter()
-            .find(|a| a.borrow().text().contains(title_part))
-            .and_then(|a| a.borrow().menu())
-            .expect("submenu must exist");
-        let labels: Vec<String> = sub
-            .borrow()
-            .actions()
-            .iter()
-            .filter(|a| a.borrow().is_visible())
-            .map(|a| a.borrow().text().to_string())
-            .collect();
-        labels
+    fn body(cfg: &Config) -> Menu {
+        build_hud_menu(cfg, &test_hud_root(), false)
     }
 
-    /// Python `SCHEME_LABELS` (`hud_window.py:25`) in the Colors submenu.
-    #[test]
-    fn body_scheme_labels_match_python_scheme_labels() {
-        let cfg = Config {
-            ui_mode: "table".to_string(),
-            color_scheme: "scale".to_string(),
+    fn tray(cfg: &Config) -> Menu {
+        build_hud_menu(cfg, &test_hud_root(), true)
+    }
+
+    fn config(ui_mode: &str) -> Config {
+        Config {
+            ui_mode: ui_mode.to_string(),
             ..Config::default()
-        };
-        let menu = build_hud_context_menu(&cfg, &test_hud_root());
-        assert_eq!(
-            submenu_visible_labels(&menu, "(Colors)"),
-            vec![
-                "色階 (Scale)".to_string(),
-                "雙色 (Duo)".to_string(),
-                "毛玻璃模糊 (Blur)".to_string()
-            ]
-        );
+        }
     }
 
-    /// Python `APPEARANCE_LABELS` (`hud_window.py:26`) in the Appearance submenu.
-    #[test]
-    fn body_appearance_labels_match_python_appearance_labels() {
-        let cfg = Config {
-            ui_mode: "table".to_string(),
-            ..Config::default()
-        };
-        let menu = build_hud_context_menu(&cfg, &test_hud_root());
-        assert_eq!(
-            submenu_visible_labels(&menu, "(Appearance)"),
-            vec![
-                "跟隨系統 (Auto)".to_string(),
-                "淺色 (Light)".to_string(),
-                "深色 (Dark)".to_string(),
-            ]
-        );
-    }
-
-    /// Python's cards sheet has no `QMenu::item:disabled` rule, so Qt keeps the normal item colour
-    /// on disabled rows (`qstylesheetstyle.cpp` configurePalette writes every group).
-    #[test]
-    fn cards_disabled_menu_rows_keep_the_normal_text_colour() {
-        let cfg = Config {
-            ui_mode: "cards".to_string(),
-            appearance: "dark".to_string(),
-            ..Config::default()
-        };
-        let style = hud_menu_style(&cfg);
-        assert_eq!(style.disabled_text, style.text);
-    }
-
-    /// Visible top-level items in popup order; `---` marks a separator.
-    fn visible_top_level(menu: &Menu) -> Vec<String> {
+    /// Items of a menu in popup order; `---` marks a separator.
+    fn labels(menu: &Menu) -> Vec<String> {
         menu.actions()
             .iter()
-            .filter(|a| a.borrow().is_visible())
             .map(|a| {
                 if a.borrow().is_separator() {
                     "---".to_string()
@@ -1211,166 +928,260 @@ mod menu_parity_tests {
             .collect()
     }
 
-    fn action_with_text(menu: &Menu, text: &str) -> ActionRef {
-        menu.actions()
+    /// The submenu reached by following the titles in `path` from `menu`.
+    fn submenu(menu: &Menu, path: &[&str]) -> MenuRef {
+        let mut current: Option<MenuRef> = None;
+        for title in path {
+            let actions = match &current {
+                Some(m) => m.borrow().actions(),
+                None => menu.actions(),
+            };
+            let next = actions
+                .iter()
+                .find(|a| a.borrow().text() == *title)
+                .and_then(|a| a.borrow().menu())
+                .unwrap_or_else(|| panic!("submenu {title} must exist"));
+            current = Some(next);
+        }
+        current.expect("a path")
+    }
+
+    fn sub_labels(menu: &Menu, path: &[&str]) -> Vec<String> {
+        labels(&submenu(menu, path).borrow())
+    }
+
+    /// The action `item` inside the submenu at `path` (the top level when `path` is empty).
+    fn item(menu: &Menu, path: &[&str], text: &str) -> ActionRef {
+        let actions = if path.is_empty() {
+            menu.actions()
+        } else {
+            submenu(menu, path).borrow().actions()
+        };
+        actions
             .iter()
             .find(|a| a.borrow().text() == text)
             .cloned()
-            .expect("top-level action must exist")
+            .unwrap_or_else(|| panic!("{text} must exist"))
     }
 
-    fn submenu_action(menu: &Menu, title_part: &str, text: &str) -> ActionRef {
-        let actions = menu.actions();
-        let sub = actions
-            .iter()
-            .find(|a| a.borrow().text().contains(title_part))
-            .and_then(|a| a.borrow().menu())
-            .expect("submenu must exist");
-        let children = sub.borrow().actions();
-        children
-            .iter()
-            .find(|a| a.borrow().text() == text)
-            .cloned()
-            .expect("submenu item must exist")
+    fn strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
     }
 
-    /// Python `tray_icon.py:43-122` item order in cards mode: Layout is shown, Colors is hidden.
+    /// Python `hud_menu.build_hud_menu` for the HUD body: refresh, the four groups, exit.
     #[test]
-    fn tray_menu_cards_mode_matches_python_tray_items() {
-        let cfg = Config {
-            ui_mode: "cards".to_string(),
-            ..Config::default()
-        };
-        let menu = build_hud_tray_menu(&cfg, &test_hud_root());
-        let expected: Vec<String> = [
-            "👁️ 顯示 / 隱藏 HUD (Alt+C)",
-            "🔄 立即重新整理所有 AI (Refresh All)",
-            "---",
-            "🎭 介面風格 (UI Style)",
-            "📐 顯示佈局 (Layout)",
-            "🌓 外觀 (Appearance)",
-            "👻 滑鼠點擊穿透 (Alt+Shift+C)",
-            "📌 視窗永遠置頂",
-            "🚀 開機自動啟動",
-            "📂 開啟記錄檔目錄 (Open Logs)",
-            "---",
-            "❌ 結束程式 (Exit)",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        assert_eq!(visible_top_level(&menu), expected);
-    }
-
-    /// Python `tray_icon.py` table mode: Colors is shown between UI Style and Appearance; Layout
-    /// is hidden, and the Colors children are the Python `SCHEME_LABELS`.
-    #[test]
-    fn tray_menu_table_mode_shows_colors_hides_layout() {
-        let cfg = Config {
-            ui_mode: "table".to_string(),
-            ..Config::default()
-        };
-        let menu = build_hud_tray_menu(&cfg, &test_hud_root());
-        let expected: Vec<String> = [
-            "👁️ 顯示 / 隱藏 HUD (Alt+C)",
-            "🔄 立即重新整理所有 AI (Refresh All)",
-            "---",
-            "🎭 介面風格 (UI Style)",
-            "🎨 配色 (Colors)",
-            "🌓 外觀 (Appearance)",
-            "👻 滑鼠點擊穿透 (Alt+Shift+C)",
-            "📌 視窗永遠置頂",
-            "🚀 開機自動啟動",
-            "📂 開啟記錄檔目錄 (Open Logs)",
-            "---",
-            "❌ 結束程式 (Exit)",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        assert_eq!(visible_top_level(&menu), expected);
-        assert_eq!(
-            submenu_visible_labels(&menu, "(Colors)"),
-            vec![
-                "色階 (Scale)".to_string(),
-                "雙色 (Duo)".to_string(),
-                "毛玻璃模糊 (Blur)".to_string()
-            ]
-        );
-    }
-
-    /// Checked state follows the config for the tray items (Python `update_menu_state`).
-    #[test]
-    fn tray_menu_checked_state_follows_config() {
-        let cfg = Config {
-            ui_mode: "cards".to_string(),
-            layout_mode: "vertical".to_string(),
-            appearance: "dark".to_string(),
-            click_through: true,
-            always_on_top: false,
-            ..Config::default()
-        };
-        let menu = build_hud_tray_menu(&cfg, &test_hud_root());
-        assert!(action_with_text(&menu, "👻 滑鼠點擊穿透 (Alt+Shift+C)")
-            .borrow()
-            .is_checked());
-        assert!(!action_with_text(&menu, "📌 視窗永遠置頂")
-            .borrow()
-            .is_checked());
-        assert!(
-            submenu_action(&menu, "(Layout)", "📱 直立三層堆疊 (Vertical Stack)")
-                .borrow()
-                .is_checked()
-        );
-        assert!(submenu_action(&menu, "(Appearance)", "深色 (Dark)")
-            .borrow()
-            .is_checked());
-        assert!(!submenu_action(&menu, "(Appearance)", "淺色 (Light)")
-            .borrow()
-            .is_checked());
-    }
-
-    /// Each tray item dispatches the id `handle_action` routes on.
-    #[test]
-    fn tray_menu_items_dispatch_their_handler_ids() {
-        let menu = build_hud_tray_menu(&Config::default(), &test_hud_root());
-        for (text, id) in [
-            ("👁️ 顯示 / 隱藏 HUD (Alt+C)", ACTION_TOGGLE_VISIBILITY),
-            ("🔄 立即重新整理所有 AI (Refresh All)", ACTION_REFRESH_ALL),
-            ("📂 開啟記錄檔目錄 (Open Logs)", ACTION_OPEN_LOGS),
-            ("❌ 結束程式 (Exit)", ACTION_EXIT),
-        ] {
+    fn body_menu_has_the_python_top_level() {
+        for mode in ["table", "sidebar"] {
             assert_eq!(
-                action_with_text(&menu, text).borrow().data().to_u64(),
-                Some(id as u64),
-                "{text}"
+                labels(&body(&config(mode))),
+                strings(&[
+                    "立即重新整理所有 AI (Refresh All)",
+                    "---",
+                    "介面 (Interface)",
+                    "外觀 (Appearance)",
+                    "行為 (Behaviour)",
+                    "更多 (More)",
+                    "---",
+                    "結束程式 (Exit)",
+                ]),
+                "{mode}"
             );
         }
     }
 
-    /// The sidebar entries exist only in the sidebar style (Python `hud_menu._build_interface`).
+    /// `tray=True` adds show/hide on top and drops the More group.
     #[test]
-    fn sidebar_submenu_is_visible_only_in_the_sidebar_style() {
-        let sidebar = Config {
-            ui_mode: "sidebar".to_string(),
-            ..Config::default()
-        };
-        let menu = build_hud_context_menu(&sidebar, &test_hud_root());
-        assert!(visible_top_level(&menu).contains(&"📍 側邊欄 (Sidebar)".to_string()));
-        let tray = build_hud_tray_menu(&sidebar, &test_hud_root());
-        assert!(visible_top_level(&tray).contains(&"📍 側邊欄 (Sidebar)".to_string()));
-        for mode in ["cards", "table"] {
-            let cfg = Config {
-                ui_mode: mode.to_string(),
-                ..Config::default()
-            };
-            let menu = build_hud_context_menu(&cfg, &test_hud_root());
-            assert!(!visible_top_level(&menu).contains(&"📍 側邊欄 (Sidebar)".to_string()), "{mode}");
+    fn tray_menu_adds_show_hide_and_drops_more() {
+        for mode in ["table", "sidebar"] {
+            assert_eq!(
+                labels(&tray(&config(mode))),
+                strings(&[
+                    "顯示 / 隱藏 HUD (Alt+C)",
+                    "立即重新整理所有 AI (Refresh All)",
+                    "---",
+                    "介面 (Interface)",
+                    "外觀 (Appearance)",
+                    "行為 (Behaviour)",
+                    "---",
+                    "結束程式 (Exit)",
+                ]),
+                "{mode}"
+            );
         }
     }
 
     #[test]
-    fn sidebar_submenu_lists_forms_sizes_row_order_and_idle_fade() {
+    fn interface_group_offers_two_styles_and_the_sidebar_entries_only_in_the_sidebar_style() {
+        let table = body(&config("table"));
+        assert_eq!(
+            sub_labels(&table, &["介面 (Interface)"]),
+            strings(&[
+                "儀表表格 (Modern Table)",
+                "側邊欄 (Sidebar)",
+                "---",
+                "AGY 項目順序 (Row order)",
+            ])
+        );
+        assert!(item(&table, &["介面 (Interface)"], "儀表表格 (Modern Table)").borrow().is_checked());
+        assert!(!item(&table, &["介面 (Interface)"], "側邊欄 (Sidebar)").borrow().is_checked());
+
+        let sidebar = body(&config("sidebar"));
+        assert_eq!(
+            sub_labels(&sidebar, &["介面 (Interface)"]),
+            strings(&[
+                "儀表表格 (Modern Table)",
+                "側邊欄 (Sidebar)",
+                "---",
+                "細條 (Strip)",
+                "固定窄欄 (Panel)",
+                "---",
+                "大小 (Ctrl＋滾輪)",
+                "---",
+                "AGY 項目順序 (Row order)",
+            ])
+        );
+        assert!(item(&sidebar, &["介面 (Interface)"], "側邊欄 (Sidebar)").borrow().is_checked());
+    }
+
+    /// The colour scheme and the blur switch are table-only; the opacity is always there.
+    #[test]
+    fn appearance_group_shows_schemes_and_blur_only_in_the_table_style() {
+        let table = body(&config("table"));
+        assert_eq!(
+            sub_labels(&table, &["外觀 (Appearance)"]),
+            strings(&[
+                "跟隨系統 (Auto)",
+                "淺色 (Light)",
+                "深色 (Dark)",
+                "---",
+                "色階 (Scale)",
+                "雙色 (Duo)",
+                "毛玻璃模糊 (Blur)",
+                "---",
+                "視窗透明度 (Opacity)",
+            ])
+        );
+        let sidebar = body(&config("sidebar"));
+        assert_eq!(
+            sub_labels(&sidebar, &["外觀 (Appearance)"]),
+            strings(&[
+                "跟隨系統 (Auto)",
+                "淺色 (Light)",
+                "深色 (Dark)",
+                "---",
+                "視窗透明度 (Opacity)",
+            ])
+        );
+    }
+
+    #[test]
+    fn behaviour_and_more_groups_list_the_python_items() {
+        let menu = body(&config("sidebar"));
+        assert_eq!(
+            sub_labels(&menu, &["行為 (Behaviour)"]),
+            strings(&[
+                "滑鼠點擊穿透 (Alt+Shift+C)",
+                "視窗永遠置頂 (Always on Top)",
+                "鎖定視窗位置 (Lock Drag)",
+                "閒置時淡化 (Idle fade)",
+                "開機自動啟動 (Start on Boot)",
+                "---",
+                "⏱️ 更新頻率 (Interval)",
+            ])
+        );
+        assert_eq!(
+            sub_labels(&menu, &["更多 (More)"]),
+            strings(&[
+                "Claude 帳號 (Claude Account)",
+                "---",
+                "開啟記錄檔目錄 (Open Logs)",
+                "重設預設尺寸與位置",
+                "隱藏 HUD (Alt+C 重新喚出)",
+            ])
+        );
+    }
+
+    /// Python's cards sheet (the sidebar's) has no `QMenu::item:disabled` rule, so Qt keeps the normal
+    /// item colour on disabled rows (`qstylesheetstyle.cpp` configurePalette writes every group).
+    #[test]
+    fn sidebar_disabled_menu_rows_keep_the_normal_text_colour() {
+        let cfg = Config {
+            ui_mode: "sidebar".to_string(),
+            appearance: "dark".to_string(),
+            ..Config::default()
+        };
+        let style = hud_menu_style(&cfg);
+        assert_eq!(style.disabled_text, style.text);
+    }
+
+    #[test]
+    fn tray_and_body_menus_share_dark_mode() {
+        // `auto` follows the operating system, so the test fixes the appearance.
+        for (appearance, dark) in [("dark", true), ("light", false)] {
+            let cfg = Config {
+                appearance: appearance.to_string(),
+                ..Config::default()
+            };
+            assert_eq!(tray(&cfg).is_dark_mode(), dark, "tray {appearance}");
+            assert_eq!(body(&cfg).is_dark_mode(), dark, "body {appearance}");
+        }
+    }
+
+    /// Checked state follows the config (Python builds the menu again each time it is shown).
+    #[test]
+    fn checked_state_follows_config() {
+        let cfg = Config {
+            ui_mode: "sidebar".to_string(),
+            sidebar_state: "strip".to_string(),
+            appearance: "dark".to_string(),
+            click_through: true,
+            always_on_top: false,
+            locked: true,
+            ..Config::default()
+        };
+        let menu = tray(&cfg);
+        let behaviour = ["行為 (Behaviour)"];
+        assert!(item(&menu, &behaviour, "滑鼠點擊穿透 (Alt+Shift+C)").borrow().is_checked());
+        assert!(!item(&menu, &behaviour, "視窗永遠置頂 (Always on Top)").borrow().is_checked());
+        assert!(item(&menu, &behaviour, "鎖定視窗位置 (Lock Drag)").borrow().is_checked());
+        assert!(item(&menu, &["外觀 (Appearance)"], "深色 (Dark)").borrow().is_checked());
+        assert!(!item(&menu, &["外觀 (Appearance)"], "淺色 (Light)").borrow().is_checked());
+        assert!(item(&menu, &["介面 (Interface)"], "細條 (Strip)").borrow().is_checked());
+        assert!(!item(&menu, &["介面 (Interface)"], "固定窄欄 (Panel)").borrow().is_checked());
+    }
+
+    /// Each item dispatches the id `handle_action` routes on.
+    #[test]
+    fn items_dispatch_their_handler_ids() {
+        let id = |menu: &Menu, path: &[&str], text: &str| {
+            item(menu, path, text).borrow().data().to_u64()
+        };
+        let tray_menu = tray(&config("table"));
+        assert_eq!(
+            id(&tray_menu, &[], "顯示 / 隱藏 HUD (Alt+C)"),
+            Some(ACTION_TOGGLE_VISIBILITY as u64)
+        );
+        let menu = body(&config("table"));
+        for (path, text, expected) in [
+            (vec![], "立即重新整理所有 AI (Refresh All)", ACTION_REFRESH_ALL),
+            (vec![], "結束程式 (Exit)", ACTION_EXIT),
+            (vec!["介面 (Interface)"], "儀表表格 (Modern Table)", ACTION_MODE_TABLE),
+            (vec!["介面 (Interface)"], "側邊欄 (Sidebar)", ACTION_MODE_SIDEBAR),
+            (vec!["外觀 (Appearance)"], "毛玻璃模糊 (Blur)", ACTION_TABLE_BLUR),
+            (vec!["行為 (Behaviour)"], "滑鼠點擊穿透 (Alt+Shift+C)", ACTION_CLICK_THROUGH),
+            (vec!["行為 (Behaviour)"], "視窗永遠置頂 (Always on Top)", ACTION_ALWAYS_ON_TOP),
+            (vec!["行為 (Behaviour)"], "鎖定視窗位置 (Lock Drag)", ACTION_LOCK_DRAG),
+            (vec!["行為 (Behaviour)"], "開機自動啟動 (Start on Boot)", ACTION_AUTOSTART),
+            (vec!["更多 (More)"], "開啟記錄檔目錄 (Open Logs)", ACTION_OPEN_LOGS),
+            (vec!["更多 (More)"], "重設預設尺寸與位置", ACTION_RESET_GEOMETRY),
+            (vec!["更多 (More)"], "隱藏 HUD (Alt+C 重新喚出)", ACTION_HIDE_HUD),
+        ] {
+            assert_eq!(id(&menu, &path, text), Some(expected as u64), "{text}");
+        }
+    }
+
+    #[test]
+    fn sidebar_entries_list_the_size_the_row_order_and_the_idle_fade() {
         let cfg = Config {
             ui_mode: "sidebar".to_string(),
             sidebar_state: "strip".to_string(),
@@ -1379,53 +1190,30 @@ mod menu_parity_tests {
             sidebar_idle_delay_ms: 1200,
             ..Config::default()
         };
-        let menu = build_hud_context_menu(&cfg, &test_hud_root());
-        let labels = submenu_visible_labels(&menu, "(Sidebar)");
-        assert_eq!(labels[0], "細條 (Strip)");
-        assert_eq!(labels[1], "固定窄欄 (Panel)");
-        assert!(labels.iter().any(|l| l.contains("大小")));
-        assert!(labels.iter().any(|l| l.contains("AGY 項目順序")));
-        assert!(labels.iter().any(|l| l.contains("閒置時淡化")));
-        // the chosen form and size are the checked ones
-        assert!(submenu_action(&menu, "(Sidebar)", "細條 (Strip)").borrow().is_checked());
-        assert!(!submenu_action(&menu, "(Sidebar)", "固定窄欄 (Panel)").borrow().is_checked());
-        let sidebar_menu = menu
-            .actions()
-            .iter()
-            .find(|a| a.borrow().text().contains("(Sidebar)"))
-            .and_then(|a| a.borrow().menu())
-            .expect("sidebar submenu");
-        let size = sidebar_menu
-            .borrow()
-            .actions()
-            .iter()
-            .find(|a| a.borrow().text().contains("大小"))
-            .and_then(|a| a.borrow().menu())
-            .expect("size submenu");
-        let checked: Vec<String> = size
-            .borrow()
-            .actions()
-            .iter()
-            .filter(|a| a.borrow().is_checked())
-            .map(|a| a.borrow().text().to_string())
-            .collect();
-        assert_eq!(checked, vec!["125%".to_string()]);
+        let menu = body(&cfg);
+        let checked = |path: &[&str]| -> Vec<String> {
+            submenu(&menu, path)
+                .borrow()
+                .actions()
+                .iter()
+                .filter(|a| a.borrow().is_checked())
+                .map(|a| a.borrow().text().to_string())
+                .collect()
+        };
+        assert_eq!(checked(&["介面 (Interface)", "大小 (Ctrl＋滾輪)"]), strings(&["125%"]));
         // a value that is not one of the presets is added to its list (Python `set(IDLE_LEVELS) | {level}`)
-        let fade = sidebar_menu
-            .borrow()
-            .actions()
-            .iter()
-            .find(|a| a.borrow().text().contains("閒置時淡化"))
-            .and_then(|a| a.borrow().menu())
-            .expect("idle fade submenu");
-        let delay = fade
-            .borrow()
-            .actions()
-            .iter()
-            .find(|a| a.borrow().text().contains("多久後淡化"))
-            .and_then(|a| a.borrow().menu())
-            .expect("delay submenu");
-        let delays: Vec<String> = delay.borrow().actions().iter().map(|a| a.borrow().text().to_string()).collect();
-        assert_eq!(delays, ["0.5 秒", "0.9 秒", "1.2 秒", "2 秒", "5 秒"]);
+        let fade = ["行為 (Behaviour)", "閒置時淡化 (Idle fade)"];
+        assert_eq!(
+            sub_labels(&menu, &[fade[0], fade[1], "多久後淡化 (Delay)"]),
+            ["0.5 秒", "0.9 秒", "1.2 秒", "2 秒", "5 秒"]
+        );
+        assert_eq!(
+            checked(&[fade[0], fade[1], "淡化到 (Dim to)"]),
+            strings(&["50%"])
+        );
+        // the AGY row order is listed, and only the reset entry can be chosen
+        let rows = sub_labels(&menu, &["介面 (Interface)", "AGY 項目順序 (Row order)"]);
+        assert!(rows.iter().any(|l| l.starts_with("1. ")));
+        assert!(rows.contains(&"還原預設順序".to_string()));
     }
 }
