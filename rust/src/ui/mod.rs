@@ -158,8 +158,10 @@ pub(crate) fn resolve_is_dark(appearance: &str) -> bool {
 /// UI thread. `ferrokit_core::signal::Signal::connect` needs `Send + Sync` slots, which the HUD's
 /// `Rc`-held widgets can never be, so signals between HUD classes are callbacks like these.
 pub struct Notifier<T> {
-    slots: std::cell::RefCell<Vec<std::rc::Rc<dyn Fn(&T)>>>,
+    slots: std::cell::RefCell<Vec<Slot<T>>>,
 }
+
+type Slot<T> = std::rc::Rc<dyn Fn(&T)>;
 
 impl<T> Default for Notifier<T> {
     fn default() -> Self {

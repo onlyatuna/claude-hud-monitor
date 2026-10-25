@@ -722,6 +722,7 @@ impl ProviderCardWidget {
     }
 
     /// Python `_drag_rows` titles: `[m1, m2, extras...]`, empty when there is nothing to reorder.
+    #[cfg(test)]
     pub fn row_titles(&self) -> Vec<String> {
         self.core.row_titles()
     }

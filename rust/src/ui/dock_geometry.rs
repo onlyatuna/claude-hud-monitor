@@ -69,7 +69,7 @@ pub fn pick_work_area(point: (i32, i32), work_areas: &[Rect]) -> Option<Rect> {
     let mut best: Option<Rect> = None;
     for wa in work_areas {
         // strict `<` keeps the first minimum, like python's min()
-        if best.map_or(true, |b| dist(wa) < dist(&b)) {
+        if best.is_none_or(|b| dist(wa) < dist(&b)) {
             best = Some(*wa);
         }
     }

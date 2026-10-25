@@ -1480,7 +1480,7 @@ impl SidebarWidget {
         }
         // layout: toggle, strip, panel; the provider tiles in the strip
         let container = Rc::clone(&inner.container);
-        layout_add(&container, &inner.toggle());
+        layout_add(&container, inner.toggle());
         layout_add(&container, &inner.strip);
         layout_add(&container, &inner.panel);
         for (_, widget, _) in inner.buttons() {

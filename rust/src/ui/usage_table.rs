@@ -1321,11 +1321,13 @@ impl TableViews {
     }
 
     /// Python `full_view`.
+    #[cfg(test)]
     pub fn full(&self) -> WidgetRef {
         self.pages.borrow().0.clone()
     }
 
     /// Python `compact_view`.
+    #[cfg(test)]
     pub fn compact_view(&self) -> WidgetRef {
         self.pages.borrow().1.clone()
     }
@@ -1352,6 +1354,7 @@ impl TableViews {
 pub struct UsageTable {
     pub container: WidgetRef,
     /// Python `provider_ids`: the column order.
+    #[cfg(test)]
     pub order: Vec<String>,
     pub columns: HashMap<String, ProviderColumn>,
     pub theme: Theme,
@@ -1364,6 +1367,7 @@ pub struct UsageTable {
 
 impl UsageTable {
     /// Python `UsageTable(theme, scheme)`: `provider_ids` defaults to `PROVIDER_ORDER`.
+    #[cfg(test)]
     pub fn new(theme: Theme, scheme: &str) -> Self {
         let order: Vec<String> = PROVIDER_ORDER.iter().map(|p| p.to_string()).collect();
         Self::with_order(theme, scheme, &order)
@@ -1504,6 +1508,7 @@ impl UsageTable {
 
         Self {
             container,
+            #[cfg(test)]
             order: order.to_vec(),
             columns,
             theme,
