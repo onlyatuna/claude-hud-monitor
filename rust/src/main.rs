@@ -119,7 +119,7 @@ fn run_smoke_test(isolation: &config::SmokeIsolation) -> std::process::ExitCode 
         ..Default::default()
     });
     hud.apply_ui_mode("table");
-    hud.apply_ui_mode("cards");
+    hud.apply_ui_mode("sidebar");
     hud.set_theme(true);
     hud.update_clock();
     let _ = ferrokit_core::application::CoreApplication::process_events(false);

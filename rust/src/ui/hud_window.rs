@@ -2317,6 +2317,30 @@ mod tests {
         );
     }
 
+    /// The table's dials meet their minimum size and share one height (the check the old cards-mode
+    /// proportions test made at its end; this behaviour is the table's own).
+    #[test]
+    fn table_dials_meet_their_minimum_size_and_share_one_height() {
+        let mut cfg = Config::default();
+        cfg.ui_mode = "table".into();
+        cfg.window_x = Some(0);
+        cfg.window_y = Some(0);
+        cfg.table_width = 450;
+        cfg.table_height = 350;
+        let cfg = Arc::new(Mutex::new(cfg));
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        hud.window.root_widget().borrow().update_layout();
+        let claude = hud.table.columns["claude"].dial.borrow().geometry();
+        let codex = hud.table.columns["codex"].dial.borrow().geometry();
+        assert!(
+            claude.width >= 80 && claude.height >= 80,
+            "dial must meet its minimum size, got {claude:?}"
+        );
+        assert_eq!(claude.height, codex.height, "dials must have a uniform height");
+    }
+
     /// TI-01: a window built with injected providers fetches from exactly those providers — one
     /// background fetch each — so tests never reach the live endpoints.
     #[test]
