@@ -12,7 +12,7 @@ Reference: python/ at 8e2f5fc. Static code reading only: nothing here was run on
 | widgets | 215 | 18 | 11 | 3 | 23 |
 | **all** | **435** | **45** | **45** | **8** | **35** |
 
-No P0. P1: usage table agy badge text; smoke test is not offline and checks less than Python's.
+No P0. The three P1s of the first audit (agy badge text in the usage table, smoke test not offline, smoke test without recovery asserts) are fixed; their rows below keep the original finding and are marked FIXED.
 
 ---
 
@@ -26,8 +26,8 @@ Rust: config.rs, refresh_controller.rs, pace.rs, autostart.rs, logger.rs, main.r
 
 | Sev | Item | Fix hint |
 |---|---|---|
-| P1 | `--smoke-test` is not offline: `run_smoke_test` calls `HUDWindow::new` -> `default_providers` (hud_window.rs:495-514) which builds Claude/Agy/Codex providers and `with_providers` launches a live fetch for each (hud_window.rs:879-883). Python passes `providers={}` (smoke_check.py:30) and the docstring promises it never loads credentials. | Use `HUDWindow::with_providers(cfg, ctrl, HashMap::new())` in `run_smoke_test`. |
-| P1 | Smoke does not assert error-recovery: Python checks the agy card sub-text and table badge are cleared after the recovery fetch (smoke_check.py:33-36) and raises. Rust calls `on_data_fetched` twice and asserts nothing (main.rs:111-121). `set_color_scheme('duo')` is also never exercised (main.rs:122-125 has no equivalent). | Read card/badge state back after the second `on_data_fetched`, return `ExitCode::FAILURE` on mismatch; call the colour-scheme setter. |
+| P1 FIXED | `--smoke-test` was not offline: `run_smoke_test` went through `HUDWindow::new` -> `default_providers`, which built live providers and fetched. Python passes `providers={}` (smoke_check.py:30). | Fixed: `run_smoke_test` uses `HUDWindow::with_providers(cfg, ctrl, HashMap::new())` (main.rs:138-144). |
+| P1 FIXED | Smoke did not assert error recovery (smoke_check.py:33-36). | Fixed: `smoke_recovery_check` (main.rs:105-121) reads the agy card sub-text and table badge back after the recovery fetch and returns `ExitCode::FAILURE` on mismatch. The colour scheme is set to `duo` through the config before `set_theme`. |
 | P2 | `pace::window_seconds` parses loosely: collects every digit/`.` and the last alphabetic char anywhere in the string (pace.rs:100-127). Python needs `^…(\d+(?:\.\d+)?)\s*([DHM])$` at the end of the string, case-sensitive (pace.py:76-78). So Rust accepts `H5`, `5h`, `5H ` and Python returns the default. Today's titles (`SESSION 5H`, `WEEKLY 7D`, `C/G 7D`, `WINDOW 30D`) agree. | Port the regex (or an end-anchored manual parse): number, optional spaces, one uppercase D/H/M, end of string. |
 | P2 | `ConfigManager::sanitize` has no Python counterpart in the manager: opacity <=0/NaN -> 0.88, else clamp 0.1..1.0 (config.rs:477-483); `refresh_interval_sec < 20` -> **60** (config.rs:485-487); blank `claude_profile` -> `auto`. Python keeps the stored values and `RefreshController` clamps `max(20, interval)`, so 5 becomes **20** (refresh_controller.py:30; hud_window.py:104-105). | Change the Rust fallback to `.max(20)` (clamp, not reset to 60) or document the intentional reset. |
 | P2 | Config save has no fsync and uses a fixed temp name `config.tmp` (config.rs:570-590). Python writes a unique `.config-*.tmp`, `flush()` + `os.fsync()`, `os.replace` (config_manager.py:129-135). The file header comment (config.rs:8) claims fsync. | Use `File::create` + `write_all` + `sync_all` before rename. |
@@ -136,8 +136,8 @@ Rust: config.rs, refresh_controller.rs, pace.rs, autostart.rs, logger.rs, main.r
 | Isolated APPDATA temp dir; restored afterwards (smoke_check.py:15-19,45-49) | config.rs:645-682 `SmokeIsolation` | same | config.rs::tests::test_smoke_writes_only_into_isolated_directory / none | Rust also overrides the config path and deletes the dir on drop. |
 | Frozen path selection asserted to use the user-data dir (20-23) | config.rs:684-688 | same | config.rs::tests::test_smoke_writes_only_into_isolated_directory / none | Rust asserts path under the isolation root. |
 | Config round trip: set opacity 0.55, reload must match (26-29) | config.rs:689-701, 670 `SMOKE_OPACITY` | same | config.rs::tests::test_smoke_round_trip_detects_persistence_failure / none | |
-| HUD built with `providers={}` (offline, no credentials) (30) | main.rs:110 -> hud_window.rs:495-514,879-883 | diff | none / none | P1: live providers created and fetched. |
-| Error then recovery on agy; asserts card sub-text and table badge cleared (31-36) | main.rs:111-121 | diff | none / none | P1: no assertions. |
+|HUD built with `providers={}` (offline, no credentials) (30) | main.rs:138-144 | same | none / none | Was P1; fixed: empty provider map. |
+|Error then recovery on agy; asserts card sub-text and table badge cleared (31-36) | main.rs:105-121, 145-159 | same | none / none | Was P1; fixed: `smoke_recovery_check` asserts, run exits FAILURE on mismatch. Not exercised by a unit test (needs a window). |
 | `toggle_ui_mode`, `set_color_scheme('duo')`, `set_appearance('dark')`, `processEvents` (37-40) | main.rs:122-126 | diff | none / none | Rust does `apply_ui_mode` table+sidebar, `set_theme(true)`, `update_clock`; no colour-scheme call. |
 | Stop controller/timers, close window (41-44) | main.rs:128 (return, Drop) | intentional-diff | none / none | Cleanup via destructors. |
 | `QT_QPA_PLATFORM=offscreen` (9) | none | intentional-diff | none / none | Not applicable to ferrokit; whether the Rust smoke needs a desktop is `unverified` at runtime. |
@@ -557,7 +557,7 @@ Read-only analysis; nothing built or run. Sections below are the detailed matric
 
 | Sev | Area | Item | Fix hint |
 |---|---|---|---|
-| P1 | usage_table | agy column badge: Python `_badge_text` joins both badges `"{b1} · {b2}"` (`剩餘:`->`:`); Rust (usage_table.rs:1197-1208) shows only badge1 else badge2. Rust agy provider fills both | port `_badge_text` (copy provider_card.rs:924 replace logic) |
+| P1 FIXED | usage_table | agy column badge: Python `_badge_text` joins both badges `"{b1} · {b2}"` (`剩餘:`->`:`). | Fixed: `badge_text` in usage_table.rs:51-60 joins both for agy; unit test asserts `Pro:3 · Flash:5` and the non-agy fallbacks (usage_table.rs:1662-1668). |
 | P2 | styles | Light cards QSS `QLabel#Badge` border is `rgba(15,23,42,0.08)` (styles.rs:310); Python maps 0.08->0.10 (styles.py:187 map) | change to 0.10 |
 | P2 | dock_geometry | `clamp_scale` rounds `(x*10).round()/10` (dock_geometry.rs:255) vs Python `round(x,1)`; differs at exact .x5 ties; also non-number inputs | decimal-style round; unreachable via 0.1 UI steps |
 | P2 | usage_table | legend ring / tick / caption halo pens use round cap/join (usage_table.rs:792-805,455); Python default square cap/bevel; tick dash not scaled by width 1.4 | use default-cap pens, scale dash |
@@ -736,7 +736,7 @@ Rust file = `rust/src/ui/usage_table.rs` (abbrev RS). Python file = `python/ui/u
 
 | # | Sev | Item | Fix hint |
 |---|-----|------|----------|
-| 1 | P1 | **missing**: agy badge combining. PY `_badge_text` (PY:343-348) for `agy` with both badge1+badge2 shows `"{b1} · {b2}"` with ` 剩餘:`/`剩餘:` -> `:`. RS (1197-1208) picks badge1 else badge2 only. Rust agy provider does fill both (providers/agy.rs:334 `Argon 剩餘: x`, :247 `Gemini Models`), so Rust agy column shows only "C/G 剩餘: 84%", Python shows "C/G: 84% · Argon: 79%". Relayout oracle only uses agy with badge1 -> not covered. | Port `_badge_text` (provider_card.rs:924 already has the same replace logic to copy). |
+| 1 | P1 FIXED | agy badge combining. PY `_badge_text` for `agy` with both badge1+badge2 shows `"{b1} · {b2}"` with ` 剩餘:`/`剩餘:` -> `:`. | Fixed: `badge_text` (usage_table.rs:51-60) joins both for agy; unit test asserts `Pro:3 · Flash:5`. |
 | 2 | P2 | Legend `ring` glyph arc pen: PY `QPen(color,2.2)` = Qt default square cap/bevel join (PY:97-99); RS uses `round_pen` (round cap/join) (RS:792-794). | Use `Pen::new(..)` default cap, not round_pen. |
 | 3 | P2 | Legend `tick` glyph: PY `QPen(text,1.4,CustomDashLine)` + `setDashPattern([1.5,1.3])` (Qt dash unit = pen width => 2.1/1.82 px) with square cap (PY:101-104). RS (RS:798-805) round cap and un-scaled dash `[1.5,1.3]` px. The dial pace tick (RS:196-201) DOES scale by width (1.6*1.6) -> inconsistent. | Scale dashes by 1.4 and use square cap. |
 | 4 | P2 | Dial caption halo pen: PY `QPen(halo,2.5)` default square cap/bevel join (PY:245); RS `round_pen(halo,2.5)` (RS:455). Also the track ring pen default cap irrelevant (full ellipse). | Use non-round pen for caption halo. |
@@ -810,7 +810,7 @@ Rust file = `rust/src/ui/usage_table.rs` (abbrev RS). Python file = `python/ui/u
 | Muted state -> `muted` on value cells + name else "" (PY:357-359) | RS:1146-1160 | unverified | none | see `_set_state` row |
 | `icon.setEnabled(not muted)` (PY:360) | RS:1155-1161 recolour `text3` offline, brand online | unverified | none | #9 |
 | Offline branch: badge "OFFLINE"; dials `(None,)*3,"ERR",(None,)*3,muted=True`; full dial tip = error; compact tip "name\nerror"; m2_val "--" and style cleared; value texts reset; return (PY:362-374) | RS:1162-1190 | same | RS: `test_error_recovery_clears_offline_state`, `offline_collapsed_dial_is_muted_with_the_error_in_its_tooltip`; PY: `test_error_recovery_clears_offline_state`, `test_offline_and_stale_states_reach_the_compact_dials` | full dial tip equals `error or ""`; Rust passes `error_tip` |
-| Online badge: `⏱ STALE` if stale else `_badge_text` (PY:376) | RS:1197-1209 | diff | RS: `test_stale_data_...` (contains STALE), relayout "stale"; PY: `test_stale_data_remains_visible_and_labelled` | agy compact badge missing, #1 (P1) |
+| Online badge: `⏱ STALE` if stale else `_badge_text` (PY:376) | RS:1235-1240 | same | RS: `badge_text` unit test (agy joined, non-agy fallbacks), `test_stale_data_...`; PY: `test_stale_data_remains_visible_and_labelled` | Was diff (P1 agy compact badge); fixed. |
 | `_badge_text` non-agy: `badge1 or badge2 or " "` (PY:344-348) | RS:1198-1208 | same | relayout tests (badge1 only) | |
 | Stale header tooltip `舊資料 {stamp}\nerror` (PY:377-379) | RS:1211-1223 | same | PY: `test_stale_data_remains_visible_and_labelled` (assertIn timeout); RS: none for tooltip | |
 | `update_countdown`: skipped when offline; texts `format_reset_time(m1,with_day=False)`, `format_countdown_hm`, `format_reset_time(m2,True)`, `format_countdown_dhm` (PY:351-361) | RS:1226-1240 | same | RS/PY: `test_absent_timestamp_clears_previous_countdown` | pace.rs functions are other files' parity |
