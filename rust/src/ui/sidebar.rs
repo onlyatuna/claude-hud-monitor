@@ -521,7 +521,7 @@ pub fn wheel_steps(remainder: i32, delta: i32) -> (Vec<i32>, i32) {
 // ---- widgets ---------------------------------------------------------------------------------
 //
 // `_Indicators`, `_Button`, `_Flyout` and `SidebarWidget` of `sidebar.py`. Python's `owner` back
-// references are `Weak<SidebarInner>`; its signals are `Notifier`s. Every call from a button or
+// references are `Weak<SidebarInner>`; its signals are `Signal`s. Every call from a button or
 // filter into the sidebar that touches layouts or other widgets is queued (`defer`): Python runs
 // those synchronously, but here the widget that is being notified is mutably borrowed while its
 // handler runs and a layout pass would borrow it again.
@@ -554,7 +554,8 @@ use ferrokit_widgets::{
 use crate::providers::base::UsageMetrics as Metrics;
 use crate::ui::provider_card::ProviderCardWidget;
 use crate::ui::styles::get_cards_stylesheet;
-use crate::ui::{round_pen, Notifier, UiThread};
+use crate::ui::{round_pen, UiThread};
+use ferrokit_core::signal::Signal;
 
 /// Python `QWIDGETSIZE_MAX`.
 const QWIDGETSIZE_MAX: i32 = 16_777_215;
@@ -857,16 +858,13 @@ pub struct SidebarButton {
     data: Rc<ButtonData>,
     owner: Weak<SidebarInner>,
     /// QAbstractButton's `clicked`.
-    pub clicked: Rc<Notifier<()>>,
+    pub clicked: Signal<()>,
     last_move_accepted: bool,
 }
 
 impl SidebarButton {
     /// Builds the button and its indicators child; returns the widget and the shared data.
-    pub fn create(
-        kind: &str,
-        owner: &Rc<SidebarInner>,
-    ) -> (WidgetRef, Rc<ButtonData>, Rc<Notifier<()>>) {
+    pub fn create(kind: &str, owner: &Rc<SidebarInner>) -> (WidgetRef, Rc<ButtonData>, Signal<()>) {
         let hold = Timer::new();
         hold.set_single_shot(true);
         let data = Rc::new(ButtonData {
@@ -891,12 +889,12 @@ impl SidebarButton {
         let base = WidgetBase::new();
         base.set_focus_policy(ferrokit_widgets::FocusPolicy::StrongFocus);
         base.set_mouse_tracking(true);
-        let clicked = Rc::new(Notifier::new());
+        let clicked = Signal::new();
         let mut button = SidebarButton {
             base,
             data: Rc::clone(&data),
             owner: Rc::downgrade(owner),
-            clicked: Rc::clone(&clicked),
+            clicked: clicked.clone(),
             last_move_accepted: false,
         };
         let indicators: WidgetRef = Rc::new(RefCell::new(Box::new(Indicators::new(
@@ -926,7 +924,7 @@ impl SidebarButton {
     /// `QAbstractButton::click`: queued, because the owner's slot opens a flyout beside this
     /// (borrowed) widget.
     fn click(&self) {
-        let clicked = Rc::clone(&self.clicked);
+        let clicked = self.clicked.clone();
         defer(move || clicked.emit(&()));
     }
 
@@ -1417,12 +1415,12 @@ pub struct SidebarInner {
     animation_clock: Cell<Option<Instant>>,
     filters: RefCell<Vec<OwnedObject<SidebarFilter>>>,
     // Python signals
-    pub state_change_requested: Notifier<String>,
-    pub context_menu_requested: Notifier<Point>,
-    pub scale_step_requested: Notifier<i32>,
-    pub drag_requested: Notifier<()>,
+    pub state_change_requested: Signal<String>,
+    pub context_menu_requested: Signal<Point>,
+    pub scale_step_requested: Signal<i32>,
+    pub drag_requested: Signal<()>,
     /// provider ids in their new order (press-hold a tile, then drag)
-    pub order_changed: Notifier<Vec<String>>,
+    pub order_changed: Signal<Vec<String>>,
 }
 
 /// Python `SidebarWidget`: a handle to the shared state.
@@ -1563,11 +1561,11 @@ impl SidebarWidget {
                 animation_timer: Timer::new(),
                 animation_clock: Cell::new(None),
                 filters: RefCell::new(Vec::new()),
-                state_change_requested: Notifier::new(),
-                context_menu_requested: Notifier::new(),
-                scale_step_requested: Notifier::new(),
-                drag_requested: Notifier::new(),
-                order_changed: Notifier::new(),
+                state_change_requested: Signal::new(),
+                context_menu_requested: Signal::new(),
+                scale_step_requested: Signal::new(),
+                drag_requested: Signal::new(),
+                order_changed: Signal::new(),
             }
         });
         // The buttons need `owner`, so they are made once the Rc exists (interior mutability for
@@ -1575,7 +1573,7 @@ impl SidebarWidget {
         let mut built: Vec<(String, WidgetRef, Rc<ButtonData>)> = Vec::new();
         let (toggle_widget, toggle_data, toggle_clicked) = SidebarButton::create("toggle", &inner);
         built.push(("toggle".to_owned(), Rc::clone(&toggle_widget), toggle_data));
-        let mut provider_clicks: Vec<(String, Rc<Notifier<()>>)> = Vec::new();
+        let mut provider_clicks: Vec<(String, Signal<()>)> = Vec::new();
         for key in DEFAULT_ORDER {
             let (widget, data, clicked) = SidebarButton::create(key, &inner);
             built.push((key.to_owned(), widget, data));
@@ -1593,16 +1591,12 @@ impl SidebarWidget {
         this
     }
 
-    fn wire(
-        &self,
-        toggle_clicked: Rc<Notifier<()>>,
-        provider_clicks: Vec<(String, Rc<Notifier<()>>)>,
-    ) {
+    fn wire(&self, toggle_clicked: Signal<()>, provider_clicks: Vec<(String, Signal<()>)>) {
         let inner = &self.inner;
         // toggle: stateChangeRequested.emit('panel' if strip else 'strip')
         {
             let weak = Rc::downgrade(inner);
-            toggle_clicked.connect(move |()| {
+            toggle_clicked.connect_local(move |()| {
                 if let Some(inner) = weak.upgrade() {
                     let next = if inner.state.get() == State::Strip {
                         "panel"
@@ -1615,7 +1609,7 @@ impl SidebarWidget {
         }
         for (key, clicked) in provider_clicks {
             let weak = Rc::downgrade(inner);
-            clicked.connect(move |()| {
+            clicked.connect_local(move |()| {
                 if let Some(inner) = weak.upgrade() {
                     inner.click_provider(&key);
                 }
@@ -1746,7 +1740,7 @@ impl SidebarWidget {
         self.inner.active.borrow().clone()
     }
 
-    pub fn state_change_requested(&self) -> &Notifier<String> {
+    pub fn state_change_requested(&self) -> &Signal<String> {
         &self.inner.state_change_requested
     }
 
@@ -1754,16 +1748,16 @@ impl SidebarWidget {
     pub fn host_screen(&self) -> Arc<parking_lot::Mutex<Option<String>>> {
         Arc::clone(&self.inner.host_screen)
     }
-    pub fn context_menu_requested(&self) -> &Notifier<Point> {
+    pub fn context_menu_requested(&self) -> &Signal<Point> {
         &self.inner.context_menu_requested
     }
-    pub fn scale_step_requested(&self) -> &Notifier<i32> {
+    pub fn scale_step_requested(&self) -> &Signal<i32> {
         &self.inner.scale_step_requested
     }
-    pub fn drag_requested(&self) -> &Notifier<()> {
+    pub fn drag_requested(&self) -> &Signal<()> {
         &self.inner.drag_requested
     }
-    pub fn order_changed(&self) -> &Notifier<Vec<String>> {
+    pub fn order_changed(&self) -> &Signal<Vec<String>> {
         &self.inner.order_changed
     }
 

@@ -546,7 +546,7 @@ fn main() -> std::process::ExitCode {
     hud.borrow()
         .sidebar
         .context_menu_requested()
-        .connect(move |global_pos: &Point| {
+        .connect_local(move |global_pos: &Point| {
             let (global_pos, cfg_clone) = (*global_pos, Arc::clone(&config_clone3));
             Timer::single_shot(0, move || {
                 show_hud_popup_menu(global_pos, &cfg_clone, false);

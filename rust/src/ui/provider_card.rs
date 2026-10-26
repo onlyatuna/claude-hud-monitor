@@ -18,7 +18,7 @@ use crate::pace::reset_stamp;
 use crate::providers::base::{format_countdown, MetricRow, UsageMetrics};
 use crate::ui::brand::{brand_color, brand_hex};
 use crate::ui::gauge::{ramp_color, skia, GaugeBar};
-use crate::ui::Notifier;
+use ferrokit_core::signal::Signal;
 
 /// `QColor(hex)` as the painter's colour (labels take the colour of the QSS `color:` hex).
 fn parse_hex(hex: &str) -> Color {
@@ -395,7 +395,7 @@ struct CardCore {
     /// `self.theme['color']`.
     theme_hex: RefCell<String>,
     drag: RefCell<Option<RowDrag>>,
-    row_order_changed: Notifier<Vec<String>>,
+    row_order_changed: Signal<Vec<String>>,
 }
 
 impl CardCore {
@@ -675,7 +675,7 @@ impl ProviderCardWidget {
             drop_line,
             theme_hex: RefCell::new(theme_hex),
             drag: RefCell::new(None),
-            row_order_changed: Notifier::new(),
+            row_order_changed: Signal::new(),
         });
         // SAFETY: the owner lives in the card, on the UI thread; nothing else touches the filter
         // object while one of its callbacks runs.
@@ -721,7 +721,7 @@ impl ProviderCardWidget {
     }
 
     /// Python `rowOrderChanged`: the new order of all row titles after a drag.
-    pub fn row_order_changed(&self) -> &Notifier<Vec<String>> {
+    pub fn row_order_changed(&self) -> &Signal<Vec<String>> {
         &self.core.row_order_changed
     }
 

@@ -744,7 +744,7 @@ impl HUDWindow {
         blur_resume_timer.set_interval(BLUR_RESUME_MS);
         blur_resume_timer
             .timeout
-            .connect(move |()| resume_blur_or_retry());
+            .connect_local(move |()| resume_blur_or_retry());
 
         let cfg_press = Arc::clone(&config);
         window.set_mouse_press_handler(move |pos, button| {
@@ -2182,26 +2182,30 @@ impl HUDWindow {
     /// that raised it is done.
     fn connect_sidebar_signals(&mut self) {
         let sidebar = self.sidebar.clone();
-        sidebar.state_change_requested().connect(|state: &String| {
-            let state = state.clone();
-            with_hud_later(move |hud| hud.set_sidebar_state(&state));
-        });
-        sidebar.scale_step_requested().connect(|steps: &i32| {
+        sidebar
+            .state_change_requested()
+            .connect_local(|state: &String| {
+                let state = state.clone();
+                with_hud_later(move |hud| hud.set_sidebar_state(&state));
+            });
+        sidebar.scale_step_requested().connect_local(|steps: &i32| {
             let steps = *steps;
             with_hud_later(move |hud| hud.on_sidebar_scale_step(steps));
         });
-        sidebar.drag_requested().connect(|()| {
+        sidebar.drag_requested().connect_local(|()| {
             with_hud_later(|hud| hud.start_sidebar_drag());
         });
-        sidebar.order_changed().connect(|order: &Vec<String>| {
-            let order = order.clone();
-            with_hud_later(move |hud| hud.set_provider_order(&order));
-        });
+        sidebar
+            .order_changed()
+            .connect_local(|order: &Vec<String>| {
+                let order = order.clone();
+                with_hud_later(move |hud| hud.set_provider_order(&order));
+            });
         for (pid, card) in &self.sidebar_cards {
             let pid = pid.clone();
             card.borrow()
                 .row_order_changed()
-                .connect(move |titles: &Vec<String>| {
+                .connect_local(move |titles: &Vec<String>| {
                     let (pid, titles) = (pid.clone(), titles.clone());
                     with_hud_later(move |hud| hud.set_row_order(&pid, &titles));
                 });
