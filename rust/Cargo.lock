@@ -173,7 +173,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-core"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=37deed88ed4b2dcddacfe27357d08b50fbefd382#37deed88ed4b2dcddacfe27357d08b50fbefd382"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=a9323f6b5aa2f81fb47fd81d19607814b10ae14d#a9323f6b5aa2f81fb47fd81d19607814b10ae14d"
 dependencies = [
  "ferrokit-derive",
  "libc",
@@ -184,7 +184,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-derive"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=37deed88ed4b2dcddacfe27357d08b50fbefd382#37deed88ed4b2dcddacfe27357d08b50fbefd382"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=a9323f6b5aa2f81fb47fd81d19607814b10ae14d#a9323f6b5aa2f81fb47fd81d19607814b10ae14d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -194,7 +194,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-gui"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=37deed88ed4b2dcddacfe27357d08b50fbefd382#37deed88ed4b2dcddacfe27357d08b50fbefd382"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=a9323f6b5aa2f81fb47fd81d19607814b10ae14d#a9323f6b5aa2f81fb47fd81d19607814b10ae14d"
 dependencies = [
  "ab_glyph_rasterizer",
  "ferrokit-core",
@@ -210,7 +210,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-platform"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=37deed88ed4b2dcddacfe27357d08b50fbefd382#37deed88ed4b2dcddacfe27357d08b50fbefd382"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=a9323f6b5aa2f81fb47fd81d19607814b10ae14d#a9323f6b5aa2f81fb47fd81d19607814b10ae14d"
 dependencies = [
  "bitflags 2.13.2",
  "ferrokit-core",
@@ -222,7 +222,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-widgets"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=37deed88ed4b2dcddacfe27357d08b50fbefd382#37deed88ed4b2dcddacfe27357d08b50fbefd382"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=a9323f6b5aa2f81fb47fd81d19607814b10ae14d#a9323f6b5aa2f81fb47fd81d19607814b10ae14d"
 dependencies = [
  "ferrokit-core",
  "ferrokit-gui",

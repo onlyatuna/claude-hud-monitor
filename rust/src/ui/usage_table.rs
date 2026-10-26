@@ -17,7 +17,7 @@ use ferrokit_gui::geometry::primitives::{Margins, PointF, Rect, RectF};
 use ferrokit_gui::paint::brush::Brush;
 use ferrokit_gui::paint::painter::{create_donut_arc_path, create_pie_path, Painter, RenderHint};
 use ferrokit_gui::paint::pixmap::Pixmap;
-use ferrokit_gui::text::font::{Font, FontWeight};
+use ferrokit_gui::text::font::{Font, FontTag, FontWeight};
 use ferrokit_gui::text::font_metrics::FontMetrics;
 use ferrokit_gui::tiny_skia::{Color, LineCap, PathBuilder};
 use ferrokit_widgets::{
@@ -1070,7 +1070,7 @@ impl ProviderColumn {
             let cell = make_cell_label(txt, obj);
             if let Some(l) = cell.borrow_mut().as_any_mut().downcast_mut::<Label>() {
                 // Countdowns must not shift horizontally as digits change.
-                l.set_font(l.font().clone().with_tabular_numbers(true));
+                l.set_font(l.font().clone().with_feature(FontTag::TNUM, 1));
             }
             cell
         };
