@@ -148,8 +148,8 @@ pub(crate) fn resolve_is_dark(appearance: &str) -> bool {
         "light" => false,
         "dark" => true,
         _ => !matches!(
-            ferrokit_platform::platform().theme().color_scheme(),
-            ferrokit_platform::ColorScheme::Light
+            ferrokit_gui::application::GuiApplication::style_hints().color_scheme(),
+            ferrokit_gui::application::ColorScheme::Light
         ),
     }
 }

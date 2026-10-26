@@ -614,15 +614,17 @@ fn main() -> std::process::ExitCode {
         );
     }
 
-    // Follow the operating system's light/dark setting while `appearance` is "auto".
-    // `WM_SETTINGCHANGE` refreshes the platform theme inside the window procedure, so the
-    // change is queued to the UI event loop instead of re-entering the HUD from there.
-    ferrokit_platform::platform()
-        .theme()
-        .theme_changed()
+    // Follow the operating system's light/dark setting while `appearance` is "auto"
+    // (`QStyleHints::colorSchemeChanged`, emitted on the main thread).
+    ferrokit_gui::application::GuiApplication::style_hints()
+        .color_scheme_changed()
         .connect(move |_| {
-            run_on_main_thread(main_thread_id, |hud| {
-                hud.borrow_mut().follow_system_theme();
+            MAIN_HUD.with(|cell| {
+                if let Some(hud) = cell.borrow().as_ref() {
+                    if let Ok(mut hud) = hud.try_borrow_mut() {
+                        hud.follow_system_theme();
+                    }
+                }
             });
         });
 
