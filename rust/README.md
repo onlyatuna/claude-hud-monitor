@@ -119,7 +119,7 @@ Default values match the Python original exactly.
 
 ## Known Limitations
 
-- **Supported platform: Windows x64 only.** macOS and Linux builds are experimental: they compile and run the CI tests, but the HUD has never been run on them, and on macOS real mouse and keyboard input does not reach the window yet (Contract G11.13.r)
+- **Supported platform: Windows x64 only.** macOS and Linux builds are experimental: they compile and run the CI tests, but the HUD has never been run on them, and the macOS native input, hotkey, clipboard and dialog code has only been type-checked and mock-tested, never run on a Mac
 - Click-through ghost mode is fully supported on Windows (`WS_EX_TRANSPARENT` + layered hit-test passthrough with ghost indicator); macOS/Linux click-through passthrough is currently layout/docking based
-- macOS hotkeys not yet implemented (use tray menu as fallback)
+- macOS hotkeys are implemented (Carbon `RegisterEventHotKey`) but untested on a real Mac; the tray menu is the fallback
 - Linux tray icon requires libappindicator
