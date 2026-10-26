@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use ferrokit_gui::tiny_skia::Color;
+use ferrokit_gui::color::Color;
 
 use crate::pace::{reset_stamp, scale_level, short_window};
 use crate::providers::base::{format_countdown, UsageMetrics};
@@ -51,7 +51,7 @@ impl Tokens {
 }
 
 pub fn tokens(dark: bool) -> Tokens {
-    let hex = gauge::parse_hex;
+    let hex = Color::from;
     if dark {
         Tokens {
             background: hex("#1e1e24"),
@@ -167,16 +167,16 @@ pub fn status_color(
     let theme = get_theme(dark);
     if scheme == Scheme::Duo && !force_scale {
         return match which {
-            Which::Inner => theme.duo_inner,
-            Which::Outer => theme.duo_outer,
+            Which::Inner => Color::from(theme.duo_inner),
+            Which::Outer => Color::from(theme.duo_outer),
         };
     }
     match scale_level(value) {
-        Some("green") => theme.scale_green,
-        Some("yellow") => theme.scale_yellow,
-        Some("orange") => theme.scale_orange,
-        Some("red") => theme.scale_red,
-        _ => theme.neutral,
+        Some("green") => Color::from(theme.scale_green),
+        Some("yellow") => Color::from(theme.scale_yellow),
+        Some("orange") => Color::from(theme.scale_orange),
+        Some("red") => Color::from(theme.scale_red),
+        _ => Color::from(theme.neutral),
     }
 }
 
@@ -345,17 +345,22 @@ pub fn tile_surfaces(dark: bool) -> [Color; 3] {
 }
 
 pub fn text_color(color: Color, dark: bool) -> Color {
-    gauge::readable(color, dark, Some(&tile_surfaces(dark)), gauge::MIN_CONTRAST)
+    gauge::readable(
+        color,
+        dark,
+        Some(&tile_surfaces(dark)[..]),
+        gauge::MIN_CONTRAST,
+    )
 }
 
 /// Python `_Button.ramp_stops`: status colours at their band starts, each readable on the tile.
 pub fn ramp_stops(dark: bool) -> Vec<(u32, Color)> {
-    gauge::ramp_stops(dark, Some(&tile_surfaces(dark)))
+    gauge::ramp_stops(dark, Some(&tile_surfaces(dark)[..]))
 }
 
 /// Python `_Button.ramp(value)`.
 pub fn ramp(value: f64, dark: bool) -> Color {
-    gauge::ramp_color(value, dark, Some(&tile_surfaces(dark)))
+    gauge::ramp_color(value, dark, Some(&tile_surfaces(dark)[..]))
 }
 
 /// Python `_Button.row_color(index)`: one colour per row, shared by the bar's leading edge and the
@@ -574,9 +579,10 @@ pub fn animations_enabled() -> bool {
     ferrokit_gui::application::GuiApplication::animation_duration_factor() != 0.0
 }
 
-fn rgba(color: ferrokit_gui::tiny_skia::Color, alpha: f32) -> ferrokit_gui::tiny_skia::Color {
+/// `QColor.setAlphaF(alpha)` on a copy.
+fn rgba(color: Color, alpha: f32) -> Color {
     let mut c = color;
-    c.set_alpha(alpha);
+    c.set_alpha_f(alpha);
     c
 }
 
@@ -594,7 +600,7 @@ fn draw_text_in(
     align: Align,
     text: &str,
     font: &Font,
-    color: ferrokit_gui::tiny_skia::Color,
+    color: Color,
 ) {
     let metrics = FontMetrics::from_font(font);
     let width = metrics.horizontal_advance_exact(text, font);
@@ -605,7 +611,7 @@ fn draw_text_in(
     };
     let line = metrics.ascent + metrics.descent;
     let baseline = rect.y + (rect.height - line) / 2.0 + metrics.ascent;
-    painter.draw_text_colored(PointF::new(x, baseline), text, font, color);
+    painter.draw_text_colored(PointF::new(x, baseline), text, font, gauge::skia(color));
 }
 
 fn font_px(family: &str, px: f32, bold: bool) -> Font {
@@ -799,7 +805,7 @@ impl Widget for Indicators {
             path.line_to(x, y + size * 0.92);
             path.close();
             p.set_pen(None);
-            p.set_brush(Brush::Color(t.alert));
+            p.set_brush(Brush::Color(gauge::skia(t.alert)));
             if let Some(path) = path.finish() {
                 p.fill_path(&path);
             }
@@ -810,13 +816,13 @@ impl Widget for Indicators {
                 Align::Center,
                 "!",
                 &font,
-                ferrokit_gui::tiny_skia::Color::WHITE,
+                Color::from(ferrokit_gui::GlobalColor::White),
             );
             right -= size + 4.0 * scale;
         }
         if tile.stale {
             p.set_pen(None);
-            p.set_brush(Brush::Color(t.stale));
+            p.set_brush(Brush::Color(gauge::skia(t.stale)));
             p.draw_ellipse(RectF::new(
                 right - 10.0 * scale,
                 0.0,
@@ -827,9 +833,9 @@ impl Widget for Indicators {
         if self.data.kind == "agy" {
             let count = tile.dot_colors.len() as f32;
             for (i, color) in tile.dot_colors.iter().enumerate() {
-                p.set_pen(Some(round_pen(t.background, scale)));
+                p.set_pen(Some(round_pen(gauge::skia(t.background), scale)));
                 let fill = if tile.offline { t.muted } else { *color };
-                p.set_brush(Brush::Color(fill));
+                p.set_brush(Brush::Color(gauge::skia(fill)));
                 p.draw_ellipse(RectF::new(
                     (60.0 - 8.0 * count + 8.0 * i as f32) * scale,
                     10.0 * scale,
@@ -942,7 +948,7 @@ impl SidebarButton {
 }
 
 fn initial_tile() -> TileState {
-    let neutral = get_theme(true).neutral;
+    let neutral = Color::from(get_theme(true).neutral);
     TileState {
         rows: vec![
             TileRow {
@@ -1222,7 +1228,7 @@ impl Widget for SidebarButton {
         } else {
             t.background
         };
-        p.set_brush(Brush::Color(fill));
+        p.set_brush(Brush::Color(gauge::skia(fill)));
         p.draw_rounded_rect(inner, radius, radius);
         let provider = self.data.is_provider();
         let flash = self.data.flash.get();
@@ -1232,7 +1238,7 @@ impl Widget for SidebarButton {
                 (0.45 * flash).min(0.45) as f32,
             );
             p.set_pen(None);
-            p.set_brush(Brush::Color(glow));
+            p.set_brush(Brush::Color(gauge::skia(glow)));
             p.draw_rounded_rect(inner, radius, radius);
         }
         if provider {
@@ -1243,7 +1249,7 @@ impl Widget for SidebarButton {
             } else {
                 t.provider(&self.data.kind, dark)
             };
-            p.set_brush(Brush::Color(stripe));
+            p.set_brush(Brush::Color(gauge::skia(stripe)));
             p.draw_rounded_rect(
                 RectF::new(1.5 * s, 7.0 * s, 2.5 * s, h - 14.0 * s),
                 1.2 * s,
@@ -1257,7 +1263,10 @@ impl Widget for SidebarButton {
             } else {
                 t.focus
             };
-            p.set_pen(Some(round_pen(color, t.focus_width as f32 * s)));
+            p.set_pen(Some(round_pen(
+                gauge::skia(color),
+                t.focus_width as f32 * s,
+            )));
             p.draw_rounded_rect(
                 RectF::new(2.0 * s, 2.0 * s, w - 4.0 * s, h - 4.0 * s),
                 radius,
@@ -1331,14 +1340,22 @@ impl Widget for SidebarButton {
                 Some(value) if !tile.offline => value.clamp(0.0, 100.0) / 100.0,
                 _ => 0.0,
             };
-            let stops: Vec<(u32, ferrokit_gui::tiny_skia::Color)> = if scheme == Scheme::Duo {
+            let stops: Vec<(u32, Color)> = if scheme == Scheme::Duo {
                 vec![(0, shown), (100, shown)]
             } else {
                 // a fixed green -> amber -> red gauge revealed up to the value: the leading edge
                 // always carries the same colour as the number
                 ramp_stops(dark)
             };
-            gauge::draw_gauge_bar(p, track, fraction, theme.track, &stops, false, false);
+            gauge::draw_gauge_bar(
+                p,
+                track,
+                fraction,
+                Color::from(theme.track),
+                &stops,
+                false,
+                false,
+            );
         }
     }
 
@@ -1689,8 +1706,8 @@ impl SidebarWidget {
                     let g = p.device();
                     let (w, h) = (g.width(), g.height());
                     p.set_render_hint(RenderHint::Antialiasing, true);
-                    p.set_brush(Brush::Color(t.background));
-                    p.set_pen(Some(round_pen(t.separator, 1.0)));
+                    p.set_brush(Brush::Color(gauge::skia(t.background)));
+                    p.set_pen(Some(round_pen(gauge::skia(t.separator), 1.0)));
                     p.draw_rounded_rect(
                         RectF::new(0.5, 0.5, w - 1.0, h - 1.0),
                         FLYOUT_RADIUS,
@@ -2145,9 +2162,9 @@ impl SidebarInner {
         let cards_sheet = get_cards_stylesheet(dark);
         self.container.borrow().set_style_sheet(&format!(
             "{cards_sheet}QWidget#Sidebar {{background:{};border-radius:{}px;}} QFrame#SidebarDivider {{background:{};border:none;}}",
-            gauge::to_hex(t.background),
+            t.background.name(),
             format_g(t.radius as f64 * self.scale.get()),
-            gauge::to_hex(t.separator),
+            t.separator.name(),
         ));
         self.flyout.borrow_mut().set_style_sheet(&format!(
             "{cards_sheet}QWidget {{background-color: transparent;}}"
@@ -2560,9 +2577,9 @@ mod tests {
 
     #[test]
     fn tokens_are_complete_for_both_themes_and_match_python() {
-        assert_eq!(tokens(true).stale, gauge::parse_hex("#f59e0b"));
-        assert_eq!(tokens(false).stale, gauge::parse_hex("#92400e"));
-        assert_eq!(tokens(true).background, gauge::parse_hex("#1e1e24"));
+        assert_eq!(tokens(true).stale, Color::from("#f59e0b"));
+        assert_eq!(tokens(false).stale, Color::from("#92400e"));
+        assert_eq!(tokens(true).background, Color::from("#1e1e24"));
         assert_eq!(
             (
                 tokens(true).hover_ms,
@@ -2656,12 +2673,15 @@ mod tests {
             ..Default::default()
         };
         let tile = refresh_tile("agy", &data, true, Scheme::Scale);
-        let green = get_theme(true).scale_green;
+        let green = Color::from(get_theme(true).scale_green);
         assert_eq!(tile.dot_colors, vec![green, green]);
         assert!(tooltip_text("agy", &data, false).contains("C/G 7D 已用 15%"));
         // the duo scheme never changes the dots
         let light = refresh_tile("agy", &data, false, Scheme::Duo);
-        assert_eq!(light.dot_colors, vec![get_theme(false).scale_green; 2]);
+        assert_eq!(
+            light.dot_colors,
+            vec![Color::from(get_theme(false).scale_green); 2]
+        );
         let none = refresh_tile(
             "agy",
             &UsageMetrics {
@@ -2681,7 +2701,10 @@ mod tests {
             false,
             Scheme::Duo,
         );
-        assert_eq!(unknown.dot_colors, vec![get_theme(false).neutral]);
+        assert_eq!(
+            unknown.dot_colors,
+            vec![Color::from(get_theme(false).neutral)]
+        );
         let three = refresh_tile(
             "agy",
             &UsageMetrics {
@@ -2812,10 +2835,10 @@ mod tests {
         );
         assert_eq!(ramp(0.0, true), stops[0].1);
         assert_eq!(ramp(100.0, true), stops[3].1);
-        let mid = gauge::to_hex(ramp(25.0, true));
-        assert_ne!(mid, gauge::to_hex(stops[0].1));
-        assert_ne!(mid, gauge::to_hex(stops[1].1));
-        let channel = |v: f64, c: fn(&ferrokit_gui::tiny_skia::Color) -> f32| c(&ramp(v, true));
+        let mid = ramp(25.0, true).name();
+        assert_ne!(mid, stops[0].1.name());
+        assert_ne!(mid, stops[1].1.name());
+        let channel = |v: f64, c: fn(&Color) -> i32| c(&ramp(v, true));
         assert!(channel(95.0, |c| c.red()) > channel(0.0, |c| c.red()));
         assert!(channel(95.0, |c| c.green()) < channel(0.0, |c| c.green()));
     }

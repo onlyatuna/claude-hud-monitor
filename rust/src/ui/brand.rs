@@ -4,7 +4,7 @@
 //! green / amber / red scale so a brand colour is never mistaken for "how full is it".
 //! Light variants are darkened until the name reads at >= 4.5:1 on the light panel backgrounds.
 
-use ferrokit_gui::tiny_skia::Color;
+use ferrokit_gui::color::Color;
 
 /// `(provider id, dark colour, light colour)`.
 pub const BRAND: [(&str, &str, &str); 3] = [
@@ -27,9 +27,7 @@ pub fn brand_hex(provider_id: &str, dark: bool) -> &'static str {
 }
 
 pub fn brand_color(provider_id: &str, dark: bool) -> Color {
-    let hex = brand_hex(provider_id, dark);
-    let channel = |i: usize| u8::from_str_radix(&hex[1 + 2 * i..3 + 2 * i], 16).unwrap_or(0);
-    Color::from_rgba8(channel(0), channel(1), channel(2), 255)
+    Color::from(brand_hex(provider_id, dark))
 }
 
 #[cfg(test)]
@@ -47,7 +45,7 @@ mod tests {
 
     #[test]
     fn hex_is_parsed_into_a_colour() {
-        let c = brand_color("codex", true).to_color_u8();
+        let c = brand_color("codex", true);
         assert_eq!(
             (c.red(), c.green(), c.blue(), c.alpha()),
             (0x10, 0xA3, 0x7F, 255)

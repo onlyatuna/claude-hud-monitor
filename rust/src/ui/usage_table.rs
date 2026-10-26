@@ -796,9 +796,8 @@ impl Widget for GlyphWidget {
             "pie" => {
                 painter.set_pen(None);
                 // `QColor(*theme["disc"]).darker(110)`, usage_table.py:88
-                painter.set_brush(Brush::Color(ferrokit_gui::color::darker(
-                    self.theme.disc,
-                    110,
+                painter.set_brush(Brush::Color(crate::ui::gauge::skia(
+                    ferrokit_gui::color::Color::from(self.theme.disc).darker(110),
                 )));
                 painter.draw_ellipse(r);
                 painter.set_brush(Brush::Color(self.color));
@@ -1049,7 +1048,7 @@ impl ProviderColumn {
         top.set_spacing(5);
         top.add_stretch(1);
 
-        let brand = brand_color(provider_id, theme.is_dark);
+        let brand = crate::ui::gauge::skia(brand_color(provider_id, theme.is_dark));
         let icon = make_widget(ProviderIconWidget::new(provider_id, brand, 18.0));
         top.add_widget(icon.clone());
 
@@ -1112,7 +1111,7 @@ impl ProviderColumn {
         self.theme = theme.clone();
         self.scheme = scheme.to_string();
         // Python rebuilds the table on a theme change, which recomputes the brand colour.
-        self.brand = brand_color(&self.provider_id, theme.is_dark);
+        self.brand = crate::ui::gauge::skia(brand_color(&self.provider_id, theme.is_dark));
         set_label_color(&self.name, self.brand);
         if let Some(ic) = self
             .icon
@@ -2260,15 +2259,24 @@ mod tests {
     fn names_and_icons_use_the_brand_colour_and_follow_the_theme() {
         let mut table = UsageTable::new(Theme::dark(), "scale");
         for pid in PROVIDER_ORDER {
-            assert_eq!(table.columns[pid].brand, brand_color(pid, true));
+            assert_eq!(
+                table.columns[pid].brand,
+                crate::ui::gauge::skia(brand_color(pid, true))
+            );
         }
         table.set_theme(Theme::light(), "scale");
         for pid in PROVIDER_ORDER {
-            assert_eq!(table.columns[pid].brand, brand_color(pid, false));
+            assert_eq!(
+                table.columns[pid].brand,
+                crate::ui::gauge::skia(brand_color(pid, false))
+            );
         }
         let col = &table.columns["claude"];
         let icon = col.icon.borrow();
         let icon = icon.as_any().downcast_ref::<ProviderIconWidget>().unwrap();
-        assert_eq!(icon.color, brand_color("claude", false));
+        assert_eq!(
+            icon.color,
+            crate::ui::gauge::skia(brand_color("claude", false))
+        );
     }
 }

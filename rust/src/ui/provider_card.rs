@@ -17,8 +17,13 @@ use ferrokit_widgets::{BoxLayout, EmptyWidget, Label, Layout, Widget, WidgetRef}
 use crate::pace::reset_stamp;
 use crate::providers::base::{format_countdown, MetricRow, UsageMetrics};
 use crate::ui::brand::{brand_color, brand_hex};
-use crate::ui::gauge::{parse_hex, ramp_color, to_hex, GaugeBar};
+use crate::ui::gauge::{ramp_color, skia, GaugeBar};
 use crate::ui::Notifier;
+
+/// `QColor(hex)` as the painter's colour (labels take the colour of the QSS `color:` hex).
+fn parse_hex(hex: &str) -> Color {
+    skia(ferrokit_gui::color::Color::from(hex))
+}
 
 pub fn get_progress_color(percent: f64, dark: bool) -> Color {
     if percent >= 90.0 {
@@ -48,7 +53,7 @@ pub fn get_progress_color(percent: f64, dark: bool) -> Color {
 
 #[allow(dead_code)]
 pub fn provider_accent_color(provider_id: &str, dark: bool) -> Color {
-    brand_color(provider_id, dark)
+    skia(brand_color(provider_id, dark))
 }
 
 pub fn default_provider_name(provider_id: &str) -> &'static str {
@@ -266,7 +271,7 @@ fn bar_value(val: Option<f64>) -> i32 {
 /// Python `ramp_color(val, dark) if val is not None else "#64748b"`.
 fn value_hex(val: Option<f64>, dark: bool) -> String {
     match val {
-        Some(v) => to_hex(ramp_color(v, dark, None)),
+        Some(v) => ramp_color(v, dark, None).name(),
         None => NEUTRAL_HEX.to_string(),
     }
 }
@@ -599,7 +604,7 @@ impl ProviderCardWidget {
         styles.apply(
             &dot,
             format!("color: {theme_hex}; font-size: 10px;"),
-            Some(theme_color),
+            Some(skia(theme_color)),
         );
         header_layout.add_widget(dot.clone());
 
@@ -613,7 +618,7 @@ impl ProviderCardWidget {
                 ferrokit_widgets::Policy::Minimum,
                 ferrokit_widgets::Policy::Preferred,
             ));
-        styles.apply(&title, title_qss(&theme_hex), Some(theme_color));
+        styles.apply(&title, title_qss(&theme_hex), Some(skia(theme_color)));
         header_layout.add_widget(title.clone());
 
         header_layout.add_stretch(1);
@@ -820,7 +825,7 @@ impl ProviderCardWidget {
         self.styles.apply(
             &self.title,
             title_qss(&hex),
-            Some(brand_color(&self.provider_id, dark)),
+            Some(skia(brand_color(&self.provider_id, dark))),
         );
         *self.core.theme_hex.borrow_mut() = hex;
         let metrics = self.current_metrics.clone();
@@ -1281,21 +1286,21 @@ mod card_logic_tests {
                 .map(|b| (b.value(), b.dark()))
         };
         assert_eq!(value(&card.m1_bar), Some((82, true)));
-        assert!(local_qss(&card, &card.m1_val).contains(&to_hex(ramp_color(82.0, true, None))));
-        assert!(local_qss(&card, &card.m2_val).contains(&to_hex(ramp_color(12.0, true, None))));
+        assert!(local_qss(&card, &card.m1_val).contains(&ramp_color(82.0, true, None).name()));
+        assert!(local_qss(&card, &card.m2_val).contains(&ramp_color(12.0, true, None).name()));
         let (extra_value, extra_bar) = {
             let rows = card.core.extra_rows.borrow();
             (rows[0].value.clone(), rows[0].bar.clone())
         };
         assert_eq!(value(&extra_bar), Some((55, true)));
-        assert!(local_qss(&card, &extra_value).contains(&to_hex(ramp_color(55.0, true, None))));
+        assert!(local_qss(&card, &extra_value).contains(&ramp_color(55.0, true, None).name()));
         assert_eq!(
             card.row_titles(),
             ["C/G 5H", "ARGON 7D", "GEMINI 5H"].map(String::from)
         );
 
         card.set_appearance(false);
-        assert!(local_qss(&card, &card.m1_val).contains(&to_hex(ramp_color(82.0, false, None))));
+        assert!(local_qss(&card, &card.m1_val).contains(&ramp_color(82.0, false, None).name()));
         assert_eq!(value(&card.m1_bar), Some((82, false)));
     }
 
