@@ -10,7 +10,7 @@ Parity status document: [`docs/qt_parity/PYTHON_QT_SEMANTIC_CONTRACT.md`](docs/q
 main.rs                  — entry point, window / tray / hotkey wiring
 config.rs                — ConfigManager (JSON, atomic save, platform paths)
 refresh_controller.rs    — per-provider scheduling, backoff, stale data
-hotkey.rs                — Win32 RegisterHotKey (Alt+C / Alt+Shift+C)
+hotkey.rs                — global hotkeys via ferrokit GlobalHotkeyManager (Alt+C / Alt+Shift+C)
 autostart.rs             — Windows registry / macOS LaunchAgent
 logger.rs                — logging setup, open log directory
 memory.rs                — process working-set trimming

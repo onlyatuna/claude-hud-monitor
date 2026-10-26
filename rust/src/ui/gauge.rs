@@ -466,6 +466,14 @@ mod tests {
     }
 
     #[test]
+    fn an_invalid_colour_paints_black() {
+        assert_eq!(
+            skia(Color::default()),
+            ferrokit_gui::tiny_skia::Color::BLACK
+        );
+    }
+
+    #[test]
     fn hex_roundtrip() {
         for s in ["#000000", "#ffffff", "#8cc79c", "#e07b7b", "#0e1117"] {
             assert_eq!(Color::from(s).name(), s);

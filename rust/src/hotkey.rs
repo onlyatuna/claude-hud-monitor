@@ -28,10 +28,8 @@ pub enum HotkeyStatus {
     Registered,
     /// The system refused the registration (`HotkeyError::Os { code }`: `GetLastError()` taken
     /// right after `RegisterHotKey`, 1409 = `ERROR_HOTKEY_ALREADY_REGISTERED`).
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     Failed(u32),
     /// This platform has no global-hotkey backend.
-    #[cfg_attr(target_os = "windows", allow(dead_code))]
     Unsupported,
 }
 
@@ -45,7 +43,7 @@ pub struct HotkeyRegistration {
 }
 
 impl HotkeyRegistration {
-    /// No registration confirmed and none failed: no backend, or the worker did not report in time.
+    /// No registration confirmed and none failed: this platform has no global-hotkey backend.
     pub fn unconfirmed() -> Self {
         Self {
             toggle: HotkeyStatus::Unsupported,
@@ -105,13 +103,28 @@ pub struct HotkeyManager {
     _manager: Option<GlobalHotkeyManager>,
 }
 
+/// Old config spellings (`Win`, `Windows`, `Super`, `Control`) as Qt's portable names.
+fn qt_spelling(text: &str) -> String {
+    text.split('+')
+        .map(|token| match token.trim().to_lowercase().as_str() {
+            "win" | "windows" | "super" => "Meta".to_owned(),
+            "control" => "Ctrl".to_owned(),
+            _ => token.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 /// The modifier set and virtual key of a portable hotkey string like "Alt+C" or "Ctrl+Shift+H"
-/// (`QKeySequence::fromString`). Anything that is not a single registrable chord falls back to
-/// Alt+C.
+/// (`QKeySequence::fromString`, after `qt_spelling`). Anything that is not a single registrable
+/// chord falls back to Alt+C.
 fn resolve_hotkey(text: &str) -> (HotkeyModifiers, u32) {
     let parse = |s: &str| KeySequence::from_portable_string(s).to_hotkey();
-    parse(text)
-        .or_else(|| parse("Alt+C"))
+    parse(&qt_spelling(text))
+        .or_else(|| {
+            warn!("[Hotkey] {text:?} is not a registrable hotkey, using Alt+C");
+            parse("Alt+C")
+        })
         .expect("Alt+C is a registrable hotkey")
 }
 
@@ -238,6 +251,19 @@ mod tests {
         // Not a registrable chord: falls back to Alt+C
         assert_eq!(resolve_hotkey("InvalidKeyString"), (ALT, b'C' as u32));
         assert_eq!(resolve_hotkey("Alt+C, Alt+D"), (ALT, b'C' as u32));
+    }
+
+    #[test]
+    fn old_config_spellings_keep_working() {
+        let c = b'C' as u32;
+        assert_eq!(resolve_hotkey("Win+C"), (HotkeyModifiers::WIN, c));
+        assert_eq!(resolve_hotkey("Super+C"), (HotkeyModifiers::WIN, c));
+        assert_eq!(
+            resolve_hotkey("windows+shift+c"),
+            (HotkeyModifiers::WIN | SHIFT, c)
+        );
+        assert_eq!(resolve_hotkey("Control+C"), (CONTROL, c));
+        assert_eq!(resolve_hotkey("Control+Alt+C"), (CONTROL | ALT, c));
     }
 
     #[test]
