@@ -25,7 +25,7 @@ use ferrokit_gui::geometry::primitives::Point;
 use ferrokit_platform::platform_tray::TrayMessageIcon;
 use ferrokit_platform::tray_icon::TrayActivation;
 use ferrokit_widgets::application::Application;
-use hotkey::{click_through_startup_allowed, HotkeyManager};
+use hotkey::{click_through_startup_allowed, HotkeyAction, HotkeyManager};
 use log::info;
 use parking_lot::Mutex;
 use refresh_controller::RefreshController;
@@ -557,29 +557,20 @@ fn main() -> std::process::ExitCode {
     let hotkey_enabled = { config.lock().hotkey_enabled };
     let hotkey_str = { config.lock().hotkey.clone() };
     let hotkey = if hotkey_enabled {
-        match HotkeyManager::start(&hotkey_str) {
+        let on_press = move |action: HotkeyAction| {
+            run_on_main_thread(main_thread_id, move |hud| match action {
+                HotkeyAction::Toggle => hud.borrow_mut().toggle_visibility(),
+                HotkeyAction::ClickThrough => MAIN_TRAY.with(|t_cell| {
+                    if let Some(tray) = t_cell.borrow().as_ref() {
+                        tray.borrow_mut()
+                            .toggle_click_through(&mut hud.borrow_mut());
+                    }
+                }),
+            });
+        };
+        match HotkeyManager::start(&hotkey_str, on_press) {
             Ok(hk) => {
                 info!("Global hotkey manager registered: {}", hotkey_str);
-                let hk = Arc::new(hk);
-                let hk_weak = Arc::downgrade(&hk);
-                hk.set_notify_callback(move || {
-                    let hk_weak = hk_weak.clone();
-                    run_on_main_thread(main_thread_id, move |hud| {
-                        if let Some(hk) = hk_weak.upgrade() {
-                            if hk.poll_toggle() {
-                                hud.borrow_mut().toggle_visibility();
-                            }
-                            if hk.poll_clickthrough() {
-                                MAIN_TRAY.with(|t_cell| {
-                                    if let Some(tray) = t_cell.borrow().as_ref() {
-                                        tray.borrow_mut()
-                                            .toggle_click_through(&mut hud.borrow_mut());
-                                    }
-                                });
-                            }
-                        }
-                    });
-                });
                 Some(hk)
             }
             Err(e) => {
