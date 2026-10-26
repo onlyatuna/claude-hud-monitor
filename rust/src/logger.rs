@@ -144,9 +144,23 @@ pub fn format_unhandled(
 /// Logs an unhandled panic and returns, so the process keeps running (Python `sys.excepthook`
 /// / `threading.excepthook` behaviour). Must not panic itself: a panic here would abort.
 fn panic_hook(info: &std::panic::PanicHookInfo<'_>) {
-    if PANIC_LOG_SUPPRESSED.with(|flag| flag.get()) {
-        return;
+    // Contained panics count too: a recurring one is what the restart policy is for.
+    let restart = crate::panic_guard::note_panic();
+    if !PANIC_LOG_SUPPRESSED.with(|flag| flag.get()) {
+        log_panic(info);
     }
+    if restart {
+        log::error!(
+            "[PanicGuard] {} panics within {} min; restarting the process",
+            crate::panic_guard::PANIC_LIMIT,
+            crate::panic_guard::PANIC_WINDOW.as_secs() / 60
+        );
+        log::logger().flush();
+        crate::panic_guard::restart_process();
+    }
+}
+
+fn log_panic(info: &std::panic::PanicHookInfo<'_>) {
     let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
         s.to_string()
     } else if let Some(s) = info.payload().downcast_ref::<String>() {

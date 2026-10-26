@@ -9,6 +9,7 @@ mod hotkey;
 mod logger;
 pub mod memory;
 pub mod pace;
+mod panic_guard;
 mod providers;
 mod refresh_controller;
 mod ui;
@@ -346,10 +347,23 @@ fn main() -> std::process::ExitCode {
     // Single instance protection and IPC wake-up broadcast across all platforms
     use ferrokit_platform::{SingleInstance, SingleInstanceCommand, SingleInstanceResult};
 
-    let single_instance = SingleInstance::acquire(
-        "ClaudeHUDMonitorSingleInstance",
-        SingleInstanceCommand::WakeUp,
-    );
+    let acquire = || {
+        SingleInstance::acquire(
+            "ClaudeHUDMonitorSingleInstance",
+            SingleInstanceCommand::WakeUp,
+        )
+    };
+    let mut single_instance = acquire();
+    // A copy started by the panic guard races the old process, which is still releasing the lock.
+    if std::env::args().any(|a| a == panic_guard::RESTART_FLAG) {
+        for _ in 0..50 {
+            if matches!(single_instance, SingleInstanceResult::Primary(_)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            single_instance = acquire();
+        }
+    }
     let _instance_guard = match single_instance {
         SingleInstanceResult::Primary(guard) => {
             #[cfg(target_os = "windows")]
