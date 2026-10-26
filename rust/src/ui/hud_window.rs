@@ -2523,8 +2523,11 @@ mod tests {
 
     impl TrimLog {
         fn install(hud: &HUDWindow) -> Self {
+            Self::install_at(hud, std::time::Instant::now())
+        }
+
+        fn install_at(hud: &HUDWindow, start: std::time::Instant) -> Self {
             let calls = Arc::new(Mutex::new(Vec::new()));
-            let start = std::time::Instant::now();
             let sink = Arc::clone(&calls);
             hud.set_trim(Arc::new(move || sink.lock().push(start.elapsed())));
             TrimLog(calls, start)
@@ -2652,12 +2655,14 @@ mod tests {
     /// Python `HUDWindow.__init__` -> `QTimer.singleShot(2500, trim_memory)` (`hud_window.py:114`).
     #[test]
     fn construction_schedules_initial_trim_at_2500ms() {
+        // The timer starts inside the constructor, so the clock must start before it.
+        let start = std::time::Instant::now();
         let mut el = ferrokit_core::event_loop::EventLoop::new();
         let cfg = Arc::new(Mutex::new(Config::default()));
         let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
         let (providers, _fetched) = crate::providers::stub::stub_providers_with_receiver();
         let hud = HUDWindow::with_providers(cfg, ctrl, providers).expect("with_providers");
-        let log = TrimLog::install(&hud);
+        let log = TrimLog::install_at(&hud, start);
 
         // Within 1000ms, initial 2500ms trim should not have fired yet
         log.pump_until(&mut el, 1000);
