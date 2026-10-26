@@ -29,7 +29,7 @@ use hotkey::{click_through_startup_allowed, HotkeyAction, HotkeyManager};
 use log::info;
 use parking_lot::Mutex;
 use refresh_controller::RefreshController;
-use ui::hud_window::HUDWindow;
+use ui::hud_window::{with_hud_later, with_hud_retry, HUDWindow};
 use ui::tray_icon::HUDTrayIcon;
 
 pub static WAKE_MSG: AtomicU32 = AtomicU32::new(0);
@@ -40,11 +40,23 @@ thread_local! {
     static MAIN_TRAY: RefCell<Option<Rc<RefCell<HUDTrayIcon>>>> = const { RefCell::new(None) };
 }
 
-/// Runs `f` on the main window, when it exists (UI thread only).
-fn with_main_hud(f: impl FnOnce(&Rc<RefCell<HUDWindow>>)) {
-    MAIN_HUD.with(|cell| {
-        if let Some(hud) = cell.borrow().as_ref() {
-            f(hud);
+/// The click-through hotkey: `HUDTrayIcon::toggle_click_through` on the HUD. A nested event loop
+/// (menu, drag) can have the HUD or the tray borrowed, and the toggle is the way out of
+/// click-through, so a busy one is retried (as the colour-scheme slot does) instead of lost.
+fn toggle_click_through_when_free() {
+    with_hud_retry(|hud| {
+        let toggled = MAIN_TRAY.with(|t_cell| match t_cell.borrow().as_ref() {
+            Some(tray) => match tray.try_borrow_mut() {
+                Ok(mut tray) => {
+                    tray.toggle_click_through(hud);
+                    true
+                }
+                Err(_) => false,
+            },
+            None => true,
+        });
+        if !toggled {
+            with_hud_later(|_| toggle_click_through_when_free());
         }
     });
 }
@@ -582,16 +594,9 @@ fn main() -> std::process::ExitCode {
     let hotkey = if hotkey_enabled {
         // The hotkey worker thread emits; the press is handled on the UI thread.
         let pressed = ferrokit_core::signal::Signal::<HotkeyAction>::new();
-        connect_on_ui_thread(&ui_context, &pressed, |action| {
-            with_main_hud(|hud| match action {
-                HotkeyAction::Toggle => hud.borrow_mut().toggle_visibility(),
-                HotkeyAction::ClickThrough => MAIN_TRAY.with(|t_cell| {
-                    if let Some(tray) = t_cell.borrow().as_ref() {
-                        tray.borrow_mut()
-                            .toggle_click_through(&mut hud.borrow_mut());
-                    }
-                }),
-            });
+        connect_on_ui_thread(&ui_context, &pressed, |action| match action {
+            HotkeyAction::Toggle => with_hud_retry(|hud| hud.toggle_visibility()),
+            HotkeyAction::ClickThrough => toggle_click_through_when_free(),
         });
         let on_press = move |action: HotkeyAction| pressed.emit(&action);
         match HotkeyManager::start(&hotkey_str, on_press) {
@@ -653,7 +658,7 @@ fn main() -> std::process::ExitCode {
     // Connect worker thread results callback
     let refresh_done = ferrokit_core::signal::Signal::<()>::new();
     connect_on_ui_thread(&ui_context, &refresh_done, |()| {
-        with_main_hud(|hud| hud.borrow_mut().drain_refresh_results());
+        with_hud_retry(|hud| hud.drain_refresh_results());
     });
     refresh_ctrl
         .lock()

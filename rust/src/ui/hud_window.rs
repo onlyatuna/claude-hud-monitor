@@ -1617,7 +1617,7 @@ fn should_retry(ran: bool, tries_left: u32) -> bool {
 
 /// Runs `f` on the HUD, trying again every `HUD_RETRY_MS` while it is borrowed. State the HUD
 /// must leave (a resize grab, the sidebar's mode) is never skipped silently.
-fn with_hud_retry(f: impl FnOnce(&mut HUDWindow) + 'static) {
+pub(crate) fn with_hud_retry(f: impl FnOnce(&mut HUDWindow) + 'static) {
     run_on_hud(Rc::new(RefCell::new(Some(f))), HUD_RETRIES);
 }
 
