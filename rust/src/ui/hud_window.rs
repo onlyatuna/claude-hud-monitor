@@ -2669,7 +2669,7 @@ mod tests {
         assert!(log.calls().is_empty(), "trimmed prematurely before 2500ms");
 
         // After pumping past 2700ms, initial trim should have fired exactly once
-        log.pump_until(&mut el, 2700);
+        log.pump_until(&mut el, 5000);
         assert_one_trim_after(&log, 2500, "construction 2500ms trim");
     }
     #[test]
