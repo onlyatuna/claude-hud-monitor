@@ -15,8 +15,9 @@ use std::rc::Rc;
 use ferrokit_core::object::{ObjectData, ObjectDataMut, ObjectId, QObject};
 use ferrokit_gui::geometry::primitives::{Margins, PointF, Rect, RectF};
 use ferrokit_gui::paint::brush::Brush;
-use ferrokit_gui::paint::painter::{create_donut_arc_path, create_pie_path, Painter, RenderHint};
+use ferrokit_gui::paint::painter::{Painter, RenderHint};
 use ferrokit_gui::paint::pixmap::Pixmap;
+use ferrokit_gui::paint::{PainterPath, PainterPathStroker, PenCapStyle};
 use ferrokit_gui::text::font::{Font, FontTag, FontWeight};
 use ferrokit_gui::text::font_metrics::FontMetrics;
 use ferrokit_gui::tiny_skia::{Color, LineCap, PathBuilder};
@@ -336,16 +337,17 @@ impl Widget for UsageDial {
                 if let Some(mark) = o_mark {
                     if pct > mark {
                         let mark_deg = Self::deg(mark);
-                        let span = Self::deg(pct) - mark_deg;
-                        if let Some(arc_path) =
-                            create_donut_arc_path(ring_rect, ring_width, 90.0 + mark_deg, span)
-                        {
-                            painter.set_pen(None);
-                            painter.set_brush(Brush::Hatched {
-                                color: self.theme.hatch,
-                            });
-                            painter.fill_path(&arc_path);
-                        }
+                        let mut arc = PainterPath::new();
+                        arc.arc_move_to(ring_rect, 90.0 + mark_deg);
+                        arc.arc_to(ring_rect, 90.0 + mark_deg, Self::deg(pct) - mark_deg);
+                        let mut stroker = PainterPathStroker::new();
+                        stroker.set_width(f64::from(ring_width));
+                        stroker.set_cap_style(PenCapStyle::Flat);
+                        painter.set_pen(None);
+                        painter.set_brush(Brush::Hatched {
+                            color: self.theme.hatch,
+                        });
+                        painter.fill_painter_path(&stroker.create_stroke(&arc));
                     }
                 }
             }
@@ -388,14 +390,14 @@ impl Widget for UsageDial {
                 if let Some(mark) = i_mark {
                     if pct > mark {
                         let mark_deg = Self::deg(mark);
-                        let span = Self::deg(pct) - mark_deg;
-                        if let Some(pie_path) = create_pie_path(inner_rect, 90.0 + mark_deg, span) {
-                            painter.set_pen(None);
-                            painter.set_brush(Brush::Hatched {
-                                color: self.theme.hatch,
-                            });
-                            painter.fill_path(&pie_path);
-                        }
+                        let mut wedge = PainterPath::with_start_point(center);
+                        wedge.arc_to(inner_rect, 90.0 + mark_deg, Self::deg(pct) - mark_deg);
+                        wedge.close_subpath();
+                        painter.set_pen(None);
+                        painter.set_brush(Brush::Hatched {
+                            color: self.theme.hatch,
+                        });
+                        painter.fill_painter_path(&wedge);
                     }
                 }
             }

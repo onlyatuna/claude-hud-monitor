@@ -542,7 +542,6 @@ use ferrokit_gui::paint::brush::Brush;
 use ferrokit_gui::paint::painter::{Painter, RenderHint};
 use ferrokit_gui::text::font::{Font, FontWeight};
 use ferrokit_gui::text::font_metrics::FontMetrics;
-use ferrokit_gui::tiny_skia::PathBuilder;
 use ferrokit_platform::cursor::CursorShape;
 use ferrokit_widgets::cursor::Cursor;
 use ferrokit_widgets::frame::Frame;
@@ -799,16 +798,14 @@ impl Widget for Indicators {
             // warning triangle with "!" -- readable without relying on colour
             let size = 11.0 * scale;
             let (x, y) = (right - size - 2.0 * scale, 1.5 * scale);
-            let mut path = PathBuilder::new();
-            path.move_to(x + size / 2.0, y);
-            path.line_to(x + size, y + size * 0.92);
-            path.line_to(x, y + size * 0.92);
-            path.close();
+            let triangle = ferrokit_gui::geometry::QPolygonF::from_points(vec![
+                PointF::new(x + size / 2.0, y),
+                PointF::new(x + size, y + size * 0.92),
+                PointF::new(x, y + size * 0.92),
+            ]);
             p.set_pen(None);
             p.set_brush(Brush::Color(gauge::skia(t.alert)));
-            if let Some(path) = path.finish() {
-                p.fill_path(&path);
-            }
+            p.draw_polygon(&triangle, ferrokit_gui::paint::FillRule::OddEven);
             let font = font_px(t.font, (6.0f32).max((8.0 * scale).round()), true);
             draw_text_in(
                 p,
