@@ -882,9 +882,9 @@ impl SidebarButton {
             owner: Rc::downgrade(owner),
             me: RefCell::new(None),
         });
-        let weak = UiThread::new(Rc::downgrade(&data));
-        data.hold.timeout.connect(move |()| {
-            if let Some(data) = weak.get().and_then(|w| w.upgrade()) {
+        let weak = Rc::downgrade(&data);
+        data.hold.timeout.connect_local(move |()| {
+            if let Some(data) = weak.upgrade() {
                 data.begin_reorder();
             }
         });
@@ -1640,12 +1640,12 @@ impl SidebarWidget {
                 .set_size_policy(QSizePolicy::new(Policy::Ignored, Policy::Preferred));
         }
         // timers
-        let weak = UiThread::new(Rc::downgrade(inner));
+        let weak = Rc::downgrade(inner);
         inner.hover_timer.set_single_shot(true);
-        inner.hover_timer.timeout.connect({
-            let weak = UiThread::new(Rc::downgrade(inner));
+        inner.hover_timer.timeout.connect_local({
+            let weak = Rc::downgrade(inner);
             move |()| {
-                if let Some(inner) = weak.get().and_then(|w| w.upgrade()) {
+                if let Some(inner) = weak.upgrade() {
                     let key = inner.hover_id.borrow().clone();
                     if let Some(key) = key {
                         inner.open_flyout(&key);
@@ -1654,17 +1654,17 @@ impl SidebarWidget {
             }
         });
         inner.leave_timer.set_single_shot(true);
-        inner.leave_timer.timeout.connect({
-            let weak = UiThread::new(Rc::downgrade(inner));
+        inner.leave_timer.timeout.connect_local({
+            let weak = Rc::downgrade(inner);
             move |()| {
-                if let Some(inner) = weak.get().and_then(|w| w.upgrade()) {
+                if let Some(inner) = weak.upgrade() {
                     inner.maybe_close();
                 }
             }
         });
         inner.animation_timer.set_interval(16);
-        inner.animation_timer.timeout.connect(move |()| {
-            if let Some(inner) = weak.get().and_then(|w| w.upgrade()) {
+        inner.animation_timer.timeout.connect_local(move |()| {
+            if let Some(inner) = weak.upgrade() {
                 inner.animation_tick();
             }
         });
@@ -1886,7 +1886,7 @@ impl SidebarInner {
         for target in [&self.container, &self.flyout_root] {
             let filter = SidebarFilter {
                 data: ObjectData::with_auto_id(),
-                inner: UiThread::new(Rc::downgrade(self)),
+                inner: Rc::downgrade(self),
                 flyout_root: self.flyout_root.borrow().id(),
             };
             // SAFETY: the owner is kept in `self.filters` on the UI thread and never reads the
@@ -2499,7 +2499,7 @@ impl SidebarInner {
 /// Python `SidebarWidget.eventFilter` / `keyPressEvent` for the sidebar and its flyout.
 struct SidebarFilter {
     data: ObjectData,
-    inner: UiThread<Weak<SidebarInner>>,
+    inner: Weak<SidebarInner>,
     flyout_root: ObjectId,
 }
 
@@ -2512,7 +2512,7 @@ impl QObject for SidebarFilter {
     }
 
     fn event_filter(&mut self, watched: ObjectId, event: &mut Event) -> bool {
-        let Some(inner) = self.inner.get().and_then(|w| w.upgrade()) else {
+        let Some(inner) = self.inner.upgrade() else {
             return false;
         };
         match &event.kind {

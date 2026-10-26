@@ -786,12 +786,12 @@ impl HUDWindow {
         let snap_timer = Timer::new();
         snap_timer.set_single_shot(true);
         snap_timer.set_interval(SIDEBAR_SNAP_DELAY_MS);
-        snap_timer.timeout.connect(|()| {
+        snap_timer.timeout.connect_local(|()| {
             with_hud_retry(|hud| hud.finish_sidebar_move());
         });
         let fade_timer = Timer::new();
         fade_timer.set_single_shot(true);
-        fade_timer.timeout.connect(|()| {
+        fade_timer.timeout.connect_local(|()| {
             with_hud_retry(|hud| hud.apply_opacity());
         });
         let sidebar_hud = Rc::new(SidebarHud {
@@ -1702,7 +1702,7 @@ impl SidebarHud {
 /// Python `HUDWindow.eventFilter` (installed application-wide) and `enterEvent` / `leaveEvent`.
 struct HudFilter {
     data: ObjectData,
-    state: UiThread<Weak<SidebarHud>>,
+    state: Weak<SidebarHud>,
     config: Arc<Mutex<Config>>,
 }
 
@@ -1718,7 +1718,7 @@ impl QObject for HudFilter {
         if !is_filtered_kind(&event.kind) {
             return false;
         }
-        let Some(hud) = self.state.get().and_then(|w| w.upgrade()) else {
+        let Some(hud) = self.state.upgrade() else {
             return false;
         };
         // `try_lock`: the config guard may be held by the code that dispatched this event
@@ -2211,7 +2211,7 @@ impl HUDWindow {
         // QApplication.instance().installEventFilter(self)
         let filter = HudFilter {
             data: ObjectData::with_auto_id(),
-            state: UiThread::new(Rc::downgrade(&self.sidebar_hud)),
+            state: Rc::downgrade(&self.sidebar_hud),
             config: Arc::clone(&self.config),
         };
         // SAFETY: the owner stays in `self.hud_filter` on the UI thread and never reads the

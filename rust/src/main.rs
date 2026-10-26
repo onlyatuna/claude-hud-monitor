@@ -634,7 +634,7 @@ fn main() -> std::process::ExitCode {
     // Timers matching Qt C++ QTimer architecture
     let clock_timer = Timer::new();
     clock_timer.set_interval(1000);
-    clock_timer.timeout.connect(move |()| {
+    clock_timer.timeout.connect_local(move |()| {
         MAIN_HUD.with(|cell| {
             if let Some(hud) = cell.borrow().as_ref() {
                 // A nested event loop (menu, drag) can fire this while the HUD is borrowed: skip the tick.
@@ -652,7 +652,7 @@ fn main() -> std::process::ExitCode {
 
     let poll_timer = Timer::new();
     poll_timer.set_interval(100);
-    poll_timer.timeout.connect(move |()| {
+    poll_timer.timeout.connect_local(move |()| {
         MAIN_HUD.with(|cell| {
             if let Some(hud) = cell.borrow().as_ref() {
                 if let Ok(mut hud) = hud.try_borrow_mut() {
