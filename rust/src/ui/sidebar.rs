@@ -553,8 +553,8 @@ use ferrokit_widgets::{
 
 use crate::providers::base::UsageMetrics as Metrics;
 use crate::ui::provider_card::ProviderCardWidget;
+use crate::ui::round_pen;
 use crate::ui::styles::get_cards_stylesheet;
-use crate::ui::{round_pen, UiThread};
 use ferrokit_core::signal::Signal;
 
 /// Python `QWIDGETSIZE_MAX`.
@@ -2235,11 +2235,9 @@ impl SidebarInner {
         button.flash.set(1.0);
         let steps = ((FLASH_MS / FLASH_STEP_MS).max(1)) as f64;
         let weak = Rc::downgrade(button);
-        let handle = Arc::new(UiThread::new(weak));
         if !animations_enabled() {
-            let handle = Arc::clone(&handle);
-            Timer::single_shot(FLASH_MS, move || {
-                if let Some(button) = handle.get().and_then(|w| w.upgrade()) {
+            Timer::single_shot_local(FLASH_MS, move || {
+                if let Some(button) = weak.upgrade() {
                     button.flash.set(0.0);
                     button.update();
                 }
@@ -2247,8 +2245,8 @@ impl SidebarInner {
             button.update();
             return;
         }
-        fn tick(handle: Arc<UiThread<Weak<ButtonData>>>, steps: f64) {
-            let Some(button) = handle.get().and_then(|w| w.upgrade()) else {
+        fn tick(weak: Weak<ButtonData>, steps: f64) {
+            let Some(button) = weak.upgrade() else {
                 return;
             };
             button
@@ -2256,11 +2254,11 @@ impl SidebarInner {
                 .set((button.flash.get() - 1.0 / steps).max(0.0));
             button.update();
             if button.flash.get() > 0.0 {
-                Timer::single_shot(FLASH_STEP_MS, move || tick(handle, steps));
+                Timer::single_shot_local(FLASH_STEP_MS, move || tick(weak, steps));
             }
         }
         button.update();
-        Timer::single_shot(FLASH_STEP_MS, move || tick(handle, steps));
+        Timer::single_shot_local(FLASH_STEP_MS, move || tick(weak, steps));
     }
 
     /// Python `preferred_size`.

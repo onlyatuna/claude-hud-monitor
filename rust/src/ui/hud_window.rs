@@ -40,7 +40,6 @@ use super::table_layout::{
     compact_min_size, table_state, COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W,
 };
 use super::usage_table::{TableViews, UsageTable, PROVIDER_ORDER};
-use super::UiThread;
 use crate::config::{
     Config, ConfigManager, ResizeDebouncer, DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH,
     MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH,
@@ -1619,22 +1618,18 @@ fn should_retry(ran: bool, tries_left: u32) -> bool {
 /// Runs `f` on the HUD, trying again every `HUD_RETRY_MS` while it is borrowed. State the HUD
 /// must leave (a resize grab, the sidebar's mode) is never skipped silently.
 fn with_hud_retry(f: impl FnOnce(&mut HUDWindow) + 'static) {
-    run_on_hud(Arc::new(UiThread::new(RefCell::new(Some(f)))), HUD_RETRIES);
+    run_on_hud(Rc::new(RefCell::new(Some(f))), HUD_RETRIES);
 }
 
-fn run_on_hud<F: FnOnce(&mut HUDWindow) + 'static>(
-    slot: Arc<UiThread<RefCell<Option<F>>>>,
-    tries_left: u32,
-) {
-    let Some(cell) = slot.get() else { return };
+fn run_on_hud<F: FnOnce(&mut HUDWindow) + 'static>(slot: Rc<RefCell<Option<F>>>, tries_left: u32) {
     let ran = with_hud(|hud| {
-        let task = cell.borrow_mut().take();
+        let task = slot.borrow_mut().take();
         if let Some(task) = task {
             task(hud);
         }
     });
     if should_retry(ran, tries_left) {
-        ferrokit_core::timer::Timer::single_shot(HUD_RETRY_MS, move || {
+        ferrokit_core::timer::Timer::single_shot_local(HUD_RETRY_MS, move || {
             run_on_hud(slot, tries_left - 1)
         });
     }
