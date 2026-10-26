@@ -130,7 +130,6 @@ pub fn reset_position(w: i32, primary: Rect) -> (i32, i32) {
 /// The platform's screens as work areas, for the functions above.
 pub struct Screens {
     pub available: Vec<Rect>,
-    full: Vec<Rect>,
     pub primary: Option<Rect>,
 }
 
@@ -140,24 +139,13 @@ impl Screens {
         let screens = platform.screens();
         Self {
             available: screens.iter().map(|s| s.available_geometry()).collect(),
-            full: screens.iter().map(|s| s.geometry()).collect(),
             primary: Some(platform.primary_screen().available_geometry()),
         }
     }
 
-    /// Stand-in for `QWidget.screen()`: the work area of the screen the window overlaps most.
-    /// Qt asks the platform for the window's monitor (`MonitorFromWindow`); ferrokit has no
-    /// `Window::screen()` yet (Contract G11.4.b), so this approximates it from the geometry.
-    pub fn window_screen(&self, geometry: Rect) -> Option<Rect> {
-        let mut best: Option<(i64, usize)> = None;
-        for (i, &full) in self.full.iter().enumerate() {
-            let (w, h) = intersection_size(full, geometry);
-            let area = w * h;
-            if area > 0 && best.is_none_or(|(a, _)| area > a) {
-                best = Some((area, i));
-            }
-        }
-        best.map(|(_, i)| self.available[i])
+    /// `QWidget.screen().availableGeometry()` of `window`: the screen Qt tracks for it.
+    pub fn of_window(window: &ferrokit_widgets::window::Window) -> Rect {
+        window.screen().available_geometry()
     }
 }
 
@@ -290,20 +278,23 @@ mod tests {
     }
 
     #[test]
-    fn window_screen_is_the_most_overlapped_one_or_none() {
-        let s = Screens {
-            available: vec![Rect::new(0, 0, 1000, 760), Rect::new(1000, 0, 1000, 760)],
-            full: vec![Rect::new(0, 0, 1000, 800), Rect::new(1000, 0, 1000, 800)],
-            primary: Some(Rect::new(0, 0, 1000, 760)),
-        };
+    fn the_window_screen_is_only_used_when_no_work_area_holds_the_centre() {
+        let a = Rect::new(0, 0, 1000, 760);
+        let b = Rect::new(1000, 0, 1000, 760);
+        let (screens, primary) = ([a, b], Some(a));
+        // centre (1899, 149) is inside `b`, and the centre's screen wins over `self.screen()`
+        let g = Rect::new(1700, 0, 400, 300);
         assert_eq!(
-            s.window_screen(Rect::new(900, 0, 400, 300)),
-            Some(s.available[1])
+            ensure_within_screen(g, &screens, Some(a), primary),
+            (1599, 0)
         );
+        // a centre on no screen falls to `self.screen()`, then to the primary screen
+        let off = Rect::new(5000, 0, 400, 300);
         assert_eq!(
-            s.window_screen(Rect::new(700, 0, 400, 300)),
-            Some(s.available[0])
+            ensure_within_screen(off, &screens, Some(b), primary),
+            (1599, 0)
         );
-        assert_eq!(s.window_screen(Rect::new(5000, 0, 400, 300)), None);
+        assert_eq!(ensure_within_screen(off, &screens, None, primary), (599, 0));
+        assert_eq!(ensure_within_screen(off, &screens, None, None), (5000, 0));
     }
 }

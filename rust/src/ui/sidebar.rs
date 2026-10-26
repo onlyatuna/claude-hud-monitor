@@ -1379,6 +1379,9 @@ pub struct SidebarInner {
     dividers: RefCell<Vec<WidgetRef>>,
     flyout: Rc<RefCell<Window>>,
     flyout_root: WidgetRef,
+    /// Name of the screen the HUD window is on (`QWidget.screen()` of a tile); kept current by the
+    /// HUD from `Window::screen_changed`. `None` until the HUD has told the sidebar.
+    host_screen: Arc<parking_lot::Mutex<Option<String>>>,
     state: Cell<State>,
     orientation: Cell<Orientation>,
     scale: Cell<f64>,
@@ -1525,6 +1528,7 @@ impl SidebarWidget {
                 dividers: RefCell::new(Vec::new()),
                 flyout: Rc::new(RefCell::new(flyout)),
                 flyout_root: Rc::clone(&flyout_root),
+                host_screen: Arc::new(parking_lot::Mutex::new(None)),
                 state: Cell::new(State::Strip),
                 orientation: Cell::new(Orientation::Vertical),
                 scale: Cell::new(1.0),
@@ -1730,6 +1734,11 @@ impl SidebarWidget {
 
     pub fn state_change_requested(&self) -> &Notifier<String> {
         &self.inner.state_change_requested
+    }
+
+    /// The cell the HUD keeps with the name of the screen its window is on.
+    pub fn host_screen(&self) -> Arc<parking_lot::Mutex<Option<String>>> {
+        Arc::clone(&self.inner.host_screen)
     }
     pub fn context_menu_requested(&self) -> &Notifier<Point> {
         &self.inner.context_menu_requested
@@ -2294,13 +2303,15 @@ impl SidebarInner {
         *self.pinned_key.borrow_mut() = Some(key.to_owned());
     }
 
-    /// The work area of the screen the button is on.
-    fn screen_area(&self, tile: Rect) -> Rect {
-        let screens = crate::ui::placement::Screens::current();
-        screens
-            .window_screen(tile)
-            .or(screens.primary)
-            .unwrap_or(Rect::new(0, 0, 1920, 1040))
+    /// Python `button.screen().availableGeometry()`: the work area of the screen the window the
+    /// button is in is on. Qt's `QWidget.screen()` always has an answer; if the named screen is
+    /// gone (display change not yet reported) the primary screen stands in.
+    fn screen_area(&self) -> Rect {
+        let platform = ferrokit_platform::platform();
+        let name = self.host_screen.lock().clone();
+        name.and_then(|name| platform.screens().into_iter().find(|s| s.name() == name))
+            .unwrap_or_else(|| platform.primary_screen())
+            .available_geometry()
     }
 
     /// The button's rectangle in global coordinates (`QRect(origin, button.size())`).
@@ -2317,7 +2328,7 @@ impl SidebarInner {
         let Some(tile) = self.button_rect(key) else {
             return;
         };
-        let area = self.screen_area(tile);
+        let area = self.screen_area();
         let g = self.flyout.borrow().geometry();
         let edge = self.dock_edge.borrow().clone();
         let (x, y) = flyout_position(
@@ -2360,7 +2371,7 @@ impl SidebarInner {
             .borrow()
             .set_window_id(Some(self.flyout.borrow().id()));
         ferrokit_widgets::widget::set_widget_visible(&widget, true);
-        let area = self.screen_area(tile);
+        let area = self.screen_area();
         let hint = self
             .flyout_root
             .borrow()
