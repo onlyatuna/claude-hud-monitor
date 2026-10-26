@@ -40,23 +40,40 @@ thread_local! {
     static MAIN_TRAY: RefCell<Option<Rc<RefCell<HUDTrayIcon>>>> = const { RefCell::new(None) };
 }
 
-fn run_on_main_thread<F: FnOnce(&Rc<RefCell<HUDWindow>>) + Send + 'static>(
-    main_thread_id: ferrokit_core::object::ThreadId,
-    f: F,
+/// Runs `f` on the main window, when it exists (UI thread only).
+fn with_main_hud(f: impl FnOnce(&Rc<RefCell<HUDWindow>>)) {
+    MAIN_HUD.with(|cell| {
+        if let Some(hud) = cell.borrow().as_ref() {
+            f(hud);
+        }
+    });
+}
+
+/// The receiver of the signals that worker threads emit (hotkey presses, refresh results): the
+/// context of `Signal::connect_local_to`, which delivers them on the UI thread.
+struct UiContext {
+    data: ferrokit_core::object::ObjectData,
+}
+
+impl ferrokit_core::object::QObject for UiContext {
+    fn object_data(&self) -> &ferrokit_core::object::ObjectData {
+        &self.data
+    }
+    fn object_data_mut(&mut self) -> ferrokit_core::object::ObjectDataMut<'_> {
+        ferrokit_core::object::ObjectDataMut::new(&mut self.data)
+    }
+}
+
+/// Connects `slot` to `signal` so that an emission from any thread runs it on the UI thread.
+fn connect_on_ui_thread<T: Clone + Send + 'static>(
+    context: &ferrokit_core::object::OwnedObject<UiContext>,
+    signal: &ferrokit_core::signal::Signal<T>,
+    slot: impl Fn(&T) + 'static,
 ) {
-    ferrokit_core::event_loop::post_event_to_thread(
-        main_thread_id,
-        ferrokit_core::object::ObjectId(0),
-        ferrokit_core::event::Event::new(ferrokit_core::event::EventKind::MetaCall(Box::new(
-            move |_| {
-                MAIN_HUD.with(|cell| {
-                    if let Some(hud) = cell.borrow().as_ref() {
-                        f(hud);
-                    }
-                });
-            },
-        ))),
-    );
+    context
+        .with(|c| signal.connect_local_to(c, ferrokit_core::signal::ConnectionType::Auto, slot))
+        .and_then(Result::ok)
+        .expect("the UI context is registered on the UI thread");
 }
 
 #[cfg(target_os = "windows")]
@@ -416,7 +433,13 @@ fn main() -> std::process::ExitCode {
     #[cfg(target_os = "windows")]
     ferrokit_core::application::CoreApplication::install_native_event_filter(Box::new(WakeFilter));
 
-    let main_thread_id = ferrokit_core::object::ThreadId::current();
+    // SAFETY: the owner stays in `main` on the UI thread and nothing reads the object; it only
+    // names the thread the worker threads' signals are delivered on.
+    let ui_context = unsafe {
+        ferrokit_core::object::register_owned_qobject(UiContext {
+            data: ferrokit_core::object::ObjectData::with_auto_id(),
+        })
+    };
 
     // Create HUD window
     let hud_res = HUDWindow::new(Arc::clone(&config), Arc::clone(&refresh_ctrl));
@@ -557,8 +580,10 @@ fn main() -> std::process::ExitCode {
     let hotkey_enabled = { config.lock().hotkey_enabled };
     let hotkey_str = { config.lock().hotkey.clone() };
     let hotkey = if hotkey_enabled {
-        let on_press = move |action: HotkeyAction| {
-            run_on_main_thread(main_thread_id, move |hud| match action {
+        // The hotkey worker thread emits; the press is handled on the UI thread.
+        let pressed = ferrokit_core::signal::Signal::<HotkeyAction>::new();
+        connect_on_ui_thread(&ui_context, &pressed, |action| {
+            with_main_hud(|hud| match action {
                 HotkeyAction::Toggle => hud.borrow_mut().toggle_visibility(),
                 HotkeyAction::ClickThrough => MAIN_TRAY.with(|t_cell| {
                     if let Some(tray) = t_cell.borrow().as_ref() {
@@ -567,7 +592,8 @@ fn main() -> std::process::ExitCode {
                     }
                 }),
             });
-        };
+        });
+        let on_press = move |action: HotkeyAction| pressed.emit(&action);
         match HotkeyManager::start(&hotkey_str, on_press) {
             Ok(hk) => {
                 info!("Global hotkey manager registered: {}", hotkey_str);
@@ -625,11 +651,13 @@ fn main() -> std::process::ExitCode {
         });
 
     // Connect worker thread results callback
-    refresh_ctrl.lock().set_notify_callback(move || {
-        run_on_main_thread(main_thread_id, |hud| {
-            hud.borrow_mut().drain_refresh_results()
-        });
+    let refresh_done = ferrokit_core::signal::Signal::<()>::new();
+    connect_on_ui_thread(&ui_context, &refresh_done, |()| {
+        with_main_hud(|hud| hud.borrow_mut().drain_refresh_results());
     });
+    refresh_ctrl
+        .lock()
+        .set_notify_callback(move || refresh_done.emit(&()));
 
     // Timers matching Qt C++ QTimer architecture
     let clock_timer = Timer::new();

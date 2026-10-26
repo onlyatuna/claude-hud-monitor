@@ -5,7 +5,7 @@
 //
 // Registration and the worker thread belong to ferrokit's `GlobalHotkeyManager` (Windows only;
 // elsewhere it reports `Unsupported`). A press runs the handler on that worker thread, which only
-// forwards it to the UI thread (`run_on_main_thread` in main.rs).
+// forwards it to the UI thread (`Signal::connect_local_to` in main.rs).
 
 use ferrokit_platform::{GlobalHotkeyManager, HotkeyError, HotkeyModifiers};
 use ferrokit_widgets::KeySequence;
