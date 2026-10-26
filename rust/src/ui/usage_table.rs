@@ -2258,6 +2258,25 @@ mod tests {
     }
 
     #[test]
+    fn value_cells_use_tabular_figures() {
+        let table = UsageTable::new(Theme::dark(), "scale");
+        for pid in PROVIDER_ORDER {
+            let column = &table.columns[pid];
+            for (name, cell) in [
+                ("m1_reset", &column.m1_reset),
+                ("m1_countdown", &column.m1_countdown),
+                ("m2_val", &column.m2_val),
+                ("m2_reset", &column.m2_reset),
+                ("m2_countdown", &column.m2_countdown),
+            ] {
+                let cell = cell.borrow();
+                let label = cell.as_any().downcast_ref::<Label>().unwrap();
+                assert_eq!(label.font().feature_value(FontTag::TNUM), 1, "{pid} {name}");
+            }
+        }
+    }
+
+    #[test]
     fn names_and_icons_use_the_brand_colour_and_follow_the_theme() {
         let mut table = UsageTable::new(Theme::dark(), "scale");
         for pid in PROVIDER_ORDER {

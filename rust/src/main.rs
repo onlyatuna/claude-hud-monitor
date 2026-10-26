@@ -619,13 +619,9 @@ fn main() -> std::process::ExitCode {
     ferrokit_gui::application::GuiApplication::style_hints()
         .color_scheme_changed()
         .connect(move |_| {
-            MAIN_HUD.with(|cell| {
-                if let Some(hud) = cell.borrow().as_ref() {
-                    if let Ok(mut hud) = hud.try_borrow_mut() {
-                        hud.follow_system_theme();
-                    }
-                }
-            });
+            // Python's `singleShot(0, ...)`: a change that arrives while the HUD is borrowed is
+            // retried, not lost.
+            crate::ui::hud_window::with_hud_later(|hud| hud.follow_system_theme());
         });
 
     // Connect worker thread results callback

@@ -1641,7 +1641,7 @@ fn run_on_hud<F: FnOnce(&mut HUDWindow) + 'static>(
 }
 
 /// `with_hud_retry` once the event that is being dispatched is done.
-fn with_hud_later(f: impl FnOnce(&mut HUDWindow) + 'static) {
+pub(crate) fn with_hud_later(f: impl FnOnce(&mut HUDWindow) + 'static) {
     ferrokit_widgets::WidgetCommandQueue::post_task(move || with_hud_retry(f));
 }
 
