@@ -925,6 +925,12 @@ impl HUDWindow {
             blur_resume_timer,
         };
         hud.connect_sidebar_signals();
+        // Python `button.screen()`: the sidebar asks for the screen its window is on.
+        let host_screen = hud.sidebar.host_screen();
+        *host_screen.lock() = Some(hud.window.screen().name());
+        hud.window.screen_changed().connect(move |screen| {
+            *host_screen.lock() = Some(screen.name());
+        });
         if ui_mode == "sidebar" {
             hud.apply_sidebar_mode();
             hud.window.set_opacity(opacity);
@@ -1175,7 +1181,7 @@ impl HUDWindow {
         let (nx, ny) = super::placement::ensure_within_screen(
             resized,
             &screens.available,
-            screens.window_screen(resized),
+            Some(super::placement::Screens::of_window(&self.window)),
             screens.primary,
         );
         self.window.set_geometry(Rect::new(nx, ny, w, h));
