@@ -5,7 +5,7 @@
 // windows with the real providers drew HTTP 429 from the live endpoint).
 
 use std::collections::HashMap;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 
 use super::base::{Provider, UsageMetrics};

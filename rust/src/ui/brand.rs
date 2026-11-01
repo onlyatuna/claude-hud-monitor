@@ -19,11 +19,7 @@ pub fn brand_hex(provider_id: &str, dark: bool) -> &'static str {
         .iter()
         .find(|(id, _, _)| *id == provider_id)
         .map_or(FALLBACK, |(_, d, l)| (*d, *l));
-    if dark {
-        d
-    } else {
-        l
-    }
+    if dark { d } else { l }
 }
 
 pub fn brand_color(provider_id: &str, dark: bool) -> Color {

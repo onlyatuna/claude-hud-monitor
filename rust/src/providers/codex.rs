@@ -5,8 +5,8 @@
 // Mirrors Python core/providers/codex_provider.py
 
 use super::base::{
-    format_error, now_str, object_field, percent_text, percentage, retry_delay, Provider,
-    UsageMetrics,
+    Provider, UsageMetrics, format_error, now_str, object_field, percent_text, percentage,
+    retry_delay,
 };
 use chrono::{DateTime, TimeZone, Utc};
 use log::error;
@@ -78,16 +78,17 @@ fn parse_timestamp(ts: Option<&Value>) -> Option<DateTime<Utc>> {
 }
 
 fn window_title(window: &Value, fallback: &str) -> String {
-    if let Some(secs) = window.get("limit_window_seconds").and_then(|v| v.as_f64()) {
-        if secs.is_finite() && secs > 0.0 {
-            if secs % 86400.0 == 0.0 {
-                return format!("WINDOW {}D", secs / 86400.0);
-            }
-            if secs % 3600.0 == 0.0 {
-                return format!("WINDOW {}H", secs / 3600.0);
-            }
-            return format!("WINDOW {}M", secs / 60.0);
+    if let Some(secs) = window.get("limit_window_seconds").and_then(|v| v.as_f64())
+        && secs.is_finite()
+        && secs > 0.0
+    {
+        if secs % 86400.0 == 0.0 {
+            return format!("WINDOW {}D", secs / 86400.0);
         }
+        if secs % 3600.0 == 0.0 {
+            return format!("WINDOW {}H", secs / 3600.0);
+        }
+        return format!("WINDOW {}M", secs / 60.0);
     }
     fallback.to_owned()
 }

@@ -6,7 +6,7 @@ fn main() {
     #[cfg(target_os = "windows")]
     unsafe {
         #[link(name = "user32")]
-        extern "system" {
+        unsafe extern "system" {
             fn EnumWindows(
                 lpEnumFunc: unsafe extern "system" fn(isize, isize) -> i32,
                 lParam: isize,
@@ -17,7 +17,7 @@ fn main() {
             fn IsWindowVisible(hWnd: isize) -> i32;
         }
         #[link(name = "kernel32")]
-        extern "system" {
+        unsafe extern "system" {
             fn GetCurrentProcessId() -> u32;
         }
 
@@ -26,13 +26,12 @@ fn main() {
 
         // Find claude-hud-monitor.exe PID by name via toolhelp snapshot
         #[link(name = "kernel32")]
-        extern "system" {
+        unsafe extern "system" {
             fn CreateToolhelp32Snapshot(dwFlags: u32, th32ProcessID: u32) -> isize;
             fn Process32FirstW(hSnapshot: isize, lppe: *mut PROCESSENTRY32W) -> i32;
             fn Process32NextW(hSnapshot: isize, lppe: *mut PROCESSENTRY32W) -> i32;
             fn CloseHandle(hObject: isize) -> i32;
         }
-
         #[repr(C)]
         struct PROCESSENTRY32W {
             dw_size: u32,
@@ -93,15 +92,21 @@ fn main() {
 
         unsafe extern "system" fn enum_cb(hwnd: isize, _: isize) -> i32 {
             let mut pid = 0u32;
-            GetWindowThreadProcessId(hwnd, &mut pid);
+            // SAFETY: valid out pointer.
+            unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
             let pids = TARGET_PIDS.get().unwrap();
             if pids.contains(&pid) {
                 let mut buf = [0u16; 256];
-                let len = GetWindowTextW(hwnd, buf.as_mut_ptr(), 256);
+                // SAFETY: valid hwnd and buffer.
+                let (len, style, exstyle, visible) = unsafe {
+                    (
+                        GetWindowTextW(hwnd, buf.as_mut_ptr(), 256),
+                        GetWindowLongW(hwnd, -16),
+                        GetWindowLongW(hwnd, -20),
+                        IsWindowVisible(hwnd) != 0,
+                    )
+                };
                 let title = String::from_utf16_lossy(&buf[..len as usize]);
-                let style = GetWindowLongW(hwnd, -16); // GWL_STYLE
-                let exstyle = GetWindowLongW(hwnd, -20); // GWL_EXSTYLE
-                let visible = IsWindowVisible(hwnd) != 0;
                 println!(
                     "HWND=0x{:08X}  pid={}  vis={}  style=0x{:08X}  exstyle=0x{:08X}  title='{}'",
                     hwnd as u64, pid, visible, style as u32, exstyle as u32, title

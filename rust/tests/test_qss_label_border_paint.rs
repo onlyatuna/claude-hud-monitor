@@ -15,9 +15,9 @@
 //! of which tiny-skia reproduces. The measured corner maxima are 126 levels (DPR 1.0, an opaque 1px
 //! arc) and 21 levels (DPR 1.25).
 #![cfg(windows)]
+use ferrokit_gui::Pixmap;
 use ferrokit_gui::geometry::primitives::Rect;
 use ferrokit_gui::paint::Painter;
-use ferrokit_gui::Pixmap;
 use ferrokit_widgets::{Label, Widget};
 
 /// The application device pixel ratio is process-global: tests take turns.

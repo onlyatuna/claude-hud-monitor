@@ -6,7 +6,7 @@ use std::rc::Rc;
 use chrono::{DateTime, Local, Utc};
 use ferrokit_core::event::{Event, EventKind};
 use ferrokit_core::object::{
-    register_owned_qobject, ObjectData, ObjectDataMut, ObjectId, OwnedObject, QObject,
+    ObjectData, ObjectDataMut, ObjectId, OwnedObject, QObject, register_owned_qobject,
 };
 use ferrokit_gui::geometry::primitives::{Margins, Point, Rect};
 use ferrokit_gui::text::font::{Font, FontWeight};
@@ -15,9 +15,9 @@ use ferrokit_platform::cursor::CursorShape;
 use ferrokit_widgets::{BoxLayout, EmptyWidget, Label, Layout, Widget, WidgetRef};
 
 use crate::pace::reset_stamp;
-use crate::providers::base::{format_countdown, MetricRow, UsageMetrics};
+use crate::providers::base::{MetricRow, UsageMetrics, format_countdown};
 use crate::ui::brand::{brand_color, brand_hex};
-use crate::ui::gauge::{ramp_color, skia, GaugeBar};
+use crate::ui::gauge::{GaugeBar, ramp_color, skia};
 use ferrokit_core::signal::Signal;
 
 /// `QColor(hex)` as the painter's colour (labels take the colour of the QSS `color:` hex).
@@ -93,19 +93,11 @@ const NEUTRAL_HEX: &str = "#64748b";
 const DRAG_THRESHOLD: i32 = 6;
 
 fn error_hex(dark: bool) -> &'static str {
-    if dark {
-        "#ef4444"
-    } else {
-        "#b91c1c"
-    }
+    if dark { "#ef4444" } else { "#b91c1c" }
 }
 
 fn stale_hex(dark: bool) -> &'static str {
-    if dark {
-        "#f59e0b"
-    } else {
-        "#92400e"
-    }
+    if dark { "#f59e0b" } else { "#92400e" }
 }
 
 /// Python `PROVIDER_THEMES[id]["name"]`, `provider_id.upper()` for an unknown provider.
@@ -179,10 +171,10 @@ impl LocalStyles {
             }
         }
         let mut b = w.borrow_mut();
-        if let Some(c) = color {
-            if let Some(lbl) = b.as_any_mut().downcast_mut::<Label>() {
-                lbl.set_color(c);
-            }
+        if let Some(c) = color
+            && let Some(lbl) = b.as_any_mut().downcast_mut::<Label>()
+        {
+            lbl.set_color(c);
         }
         b.set_style_sheet(&scale_font_sizes(&qss, self.scale.get()));
     }
@@ -1082,14 +1074,15 @@ mod tests {
             metric2_reset: Some(Utc::now() + Duration::days(2)),
             ..Default::default()
         });
-        assert!(card
-            .m2_sub
-            .borrow()
-            .as_any()
-            .downcast_ref::<Label>()
-            .unwrap()
-            .text()
-            .contains("重設於:"));
+        assert!(
+            card.m2_sub
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text()
+                .contains("重設於:")
+        );
 
         card.update_metrics(&UsageMetrics {
             provider_id: "claude".to_string(),

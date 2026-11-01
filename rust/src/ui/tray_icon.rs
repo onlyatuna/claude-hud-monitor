@@ -1093,9 +1093,11 @@ mod menu_parity_tests {
                 .borrow()
                 .is_checked()
         );
-        assert!(!item(&table, &["介面 (Interface)"], "側邊欄 (Sidebar)")
-            .borrow()
-            .is_checked());
+        assert!(
+            !item(&table, &["介面 (Interface)"], "側邊欄 (Sidebar)")
+                .borrow()
+                .is_checked()
+        );
 
         let sidebar = body(&config("sidebar"));
         assert_eq!(
@@ -1112,9 +1114,11 @@ mod menu_parity_tests {
                 "AGY 項目順序 (Row order)",
             ])
         );
-        assert!(item(&sidebar, &["介面 (Interface)"], "側邊欄 (Sidebar)")
-            .borrow()
-            .is_checked());
+        assert!(
+            item(&sidebar, &["介面 (Interface)"], "側邊欄 (Sidebar)")
+                .borrow()
+                .is_checked()
+        );
     }
 
     /// The colour scheme and the blur switch are table-only; the opacity is always there.
@@ -1215,27 +1219,41 @@ mod menu_parity_tests {
         };
         let menu = tray(&cfg);
         let behaviour = ["行為 (Behaviour)"];
-        assert!(item(&menu, &behaviour, "滑鼠點擊穿透 (Alt+Shift+C)")
-            .borrow()
-            .is_checked());
-        assert!(!item(&menu, &behaviour, "視窗永遠置頂 (Always on Top)")
-            .borrow()
-            .is_checked());
-        assert!(item(&menu, &behaviour, "鎖定視窗位置 (Lock Drag)")
-            .borrow()
-            .is_checked());
-        assert!(item(&menu, &["外觀 (Appearance)"], "深色 (Dark)")
-            .borrow()
-            .is_checked());
-        assert!(!item(&menu, &["外觀 (Appearance)"], "淺色 (Light)")
-            .borrow()
-            .is_checked());
-        assert!(item(&menu, &["介面 (Interface)"], "細條 (Strip)")
-            .borrow()
-            .is_checked());
-        assert!(!item(&menu, &["介面 (Interface)"], "固定窄欄 (Panel)")
-            .borrow()
-            .is_checked());
+        assert!(
+            item(&menu, &behaviour, "滑鼠點擊穿透 (Alt+Shift+C)")
+                .borrow()
+                .is_checked()
+        );
+        assert!(
+            !item(&menu, &behaviour, "視窗永遠置頂 (Always on Top)")
+                .borrow()
+                .is_checked()
+        );
+        assert!(
+            item(&menu, &behaviour, "鎖定視窗位置 (Lock Drag)")
+                .borrow()
+                .is_checked()
+        );
+        assert!(
+            item(&menu, &["外觀 (Appearance)"], "深色 (Dark)")
+                .borrow()
+                .is_checked()
+        );
+        assert!(
+            !item(&menu, &["外觀 (Appearance)"], "淺色 (Light)")
+                .borrow()
+                .is_checked()
+        );
+        assert!(
+            item(&menu, &["介面 (Interface)"], "細條 (Strip)")
+                .borrow()
+                .is_checked()
+        );
+        assert!(
+            !item(&menu, &["介面 (Interface)"], "固定窄欄 (Panel)")
+                .borrow()
+                .is_checked()
+        );
     }
 
     /// Each item dispatches the id `handle_action` routes on.

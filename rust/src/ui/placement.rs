@@ -40,11 +40,7 @@ fn qt_contains(r: Rect, (px, py): (i64, i64)) -> bool {
 fn intersection_size(a: Rect, b: Rect) -> (i64, i64) {
     let w = qt_right(a).min(qt_right(b)) - (a.x as i64).max(b.x as i64) + 1;
     let h = qt_bottom(a).min(qt_bottom(b)) - (a.y as i64).max(b.y as i64) + 1;
-    if w <= 0 || h <= 0 {
-        (0, 0)
-    } else {
-        (w, h)
-    }
+    if w <= 0 || h <= 0 { (0, 0) } else { (w, h) }
 }
 
 /// `_restore_or_default_position(x, y, w, h)` (hud_window.py:403-424): the saved position if the

@@ -96,11 +96,7 @@ impl Theme {
 }
 
 pub fn get_theme(dark: bool) -> Theme {
-    if dark {
-        Theme::dark()
-    } else {
-        Theme::light()
-    }
+    if dark { Theme::dark() } else { Theme::light() }
 }
 
 #[allow(dead_code)]
@@ -417,11 +413,7 @@ const LIGHT_SHEET_THEME: SheetTheme = SheetTheme {
 pub fn get_hud_stylesheet(dark: bool) -> &'static str {
     static DARK: LazyLock<String> = LazyLock::new(|| hud_sheet(&DARK_SHEET_THEME));
     static LIGHT: LazyLock<String> = LazyLock::new(|| hud_sheet(&LIGHT_SHEET_THEME));
-    if dark {
-        &DARK
-    } else {
-        &LIGHT
-    }
+    if dark { &DARK } else { &LIGHT }
 }
 
 fn hud_sheet(t: &SheetTheme) -> String {
@@ -480,11 +472,7 @@ fn hud_sheet(t: &SheetTheme) -> String {
 pub fn get_table_stylesheet(dark: bool) -> &'static str {
     static DARK: LazyLock<String> = LazyLock::new(|| table_sheet(&DARK_SHEET_THEME));
     static LIGHT: LazyLock<String> = LazyLock::new(|| table_sheet(&LIGHT_SHEET_THEME));
-    if dark {
-        &DARK
-    } else {
-        &LIGHT
-    }
+    if dark { &DARK } else { &LIGHT }
 }
 
 fn table_sheet(t: &SheetTheme) -> String {

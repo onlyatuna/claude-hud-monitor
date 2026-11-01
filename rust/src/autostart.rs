@@ -40,8 +40,8 @@ pub fn set_autostart(_enable: bool) -> bool {
 // ── Windows ───────────────────────────────────────────────────────────────────
 #[cfg(target_os = "windows")]
 fn windows_is_enabled() -> bool {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let Ok(key) = hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run") else {
         return false;
@@ -51,8 +51,8 @@ fn windows_is_enabled() -> bool {
 
 #[cfg(target_os = "windows")]
 fn windows_set(enable: bool) -> bool {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     match hkcu.open_subkey_with_flags(
         r"Software\Microsoft\Windows\CurrentVersion\Run",

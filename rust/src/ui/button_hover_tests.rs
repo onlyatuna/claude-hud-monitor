@@ -18,9 +18,9 @@
 //! tolerances below.
 use ferrokit_core::event::{Event, EventKind};
 use ferrokit_core::object::qobject::QObject;
+use ferrokit_gui::Pixmap;
 use ferrokit_gui::geometry::primitives::Rect;
 use ferrokit_gui::paint::Painter;
-use ferrokit_gui::Pixmap;
 use ferrokit_widgets::{Button, Widget};
 
 use super::test_support::CardsOracleSetup;

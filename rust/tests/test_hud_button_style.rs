@@ -34,8 +34,8 @@ fn test_button_layout_toggle_btn_size_hint_matches_qt() {
 fn test_button_hover_style_paints_stylesheet_hover_bg() {
     use ferrokit_core::event::{Event, EventKind};
     use ferrokit_core::object::qobject::QObject;
-    use ferrokit_gui::paint::Painter;
     use ferrokit_gui::Pixmap;
+    use ferrokit_gui::paint::Painter;
     use ferrokit_widgets::{Button, Widget};
 
     let qss = r#"

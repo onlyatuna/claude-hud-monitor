@@ -12,8 +12,8 @@ use crate::providers::{Provider, UsageMetrics};
 use chrono::Utc;
 use log::warn;
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -108,10 +108,8 @@ impl RefreshController {
         for id in ids {
             let state = self.states.get(&id).unwrap();
             let should_launch = !state.running && state.due.is_none_or(|due| now >= due);
-            if should_launch {
-                if let Some(provider) = providers.get(&id) {
-                    self.launch(&id, Arc::clone(provider));
-                }
+            if should_launch && let Some(provider) = providers.get(&id) {
+                self.launch(&id, Arc::clone(provider));
             }
         }
         drained

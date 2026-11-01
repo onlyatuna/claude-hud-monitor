@@ -4,7 +4,7 @@
 // Claude/GPT buckets and the per-model Gemini buckets), completed by the quota cache that agy's
 // status line hook writes (`agy_statusline`). There is no CLI fallback.
 
-use super::base::{now_str, percent_text, percentage, MetricRow, Provider, UsageMetrics};
+use super::base::{MetricRow, Provider, UsageMetrics, now_str, percent_text, percentage};
 use crate::agy_statusline::{self, QuotaCache};
 use chrono::{DateTime, Utc};
 use log::{debug, info};
@@ -47,7 +47,7 @@ mod os_cred {
     }
 
     #[link(name = "advapi32")]
-    extern "system" {
+    unsafe extern "system" {
         fn CredReadW(
             target_name: *const u16,
             r#type: u32,
@@ -308,11 +308,11 @@ impl AgyProvider {
             }
         }
 
-        if result.metric1_val.is_none() {
-            if let Some(bucket) = buckets.get("gemini-5h") {
-                result.metric1_val = Some(used(bucket.remaining_fraction));
-                result.metric1_reset = bucket.reset_time;
-            }
+        if result.metric1_val.is_none()
+            && let Some(bucket) = buckets.get("gemini-5h")
+        {
+            result.metric1_val = Some(used(bucket.remaining_fraction));
+            result.metric1_reset = bucket.reset_time;
         }
         let weekly = buckets.get("gemini-weekly");
         result.metric2_val = weekly.map(|b| used(b.remaining_fraction));

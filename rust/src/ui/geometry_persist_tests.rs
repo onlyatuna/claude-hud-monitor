@@ -17,7 +17,7 @@ use crate::refresh_controller::RefreshController;
 type Hwnd = *mut core::ffi::c_void;
 
 #[link(name = "user32")]
-extern "system" {
+unsafe extern "system" {
     fn SetWindowPos(hwnd: Hwnd, after: Hwnd, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
     fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
 }

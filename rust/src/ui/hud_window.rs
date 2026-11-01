@@ -10,18 +10,18 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use chrono::Local;
+use ferrokit_core::QObject;
 use ferrokit_core::event::{Event, EventKind};
 use ferrokit_core::object::{
-    register_owned_qobject, ObjectData, ObjectDataMut, ObjectId, OwnedObject,
+    ObjectData, ObjectDataMut, ObjectId, OwnedObject, register_owned_qobject,
 };
 use ferrokit_core::timer::Timer;
-use ferrokit_core::QObject;
-use ferrokit_gui::geometry::primitives::{Margins, Point, Rect, RectF};
 use ferrokit_gui::geometry::Region;
+use ferrokit_gui::geometry::primitives::{Margins, Point, Rect, RectF};
 use ferrokit_gui::paint::{Brush, RenderHint};
+use ferrokit_platform::WindowFlags;
 use ferrokit_platform::backdrop::BackdropType;
 use ferrokit_platform::cursor::CursorShape;
-use ferrokit_platform::WindowFlags;
 use ferrokit_widgets::cursor::Cursor;
 use ferrokit_widgets::{
     BoxLayout, EmptyWidget, Label, Layout, StackedWidget, Widget, WidgetRef, Window,
@@ -29,23 +29,23 @@ use ferrokit_widgets::{
 use parking_lot::Mutex;
 
 use super::dock_geometry::{
-    dock_to_edge, orientation_for_edge, pick_work_area, snap_rect, snap_rect_corner, step_scale,
-    Offset, Rect as GeoRect, DEFAULT_MARGIN, EDGES,
+    DEFAULT_MARGIN, EDGES, Offset, Rect as GeoRect, dock_to_edge, orientation_for_edge,
+    pick_work_area, snap_rect, snap_rect_corner, step_scale,
 };
 use super::provider_card::ProviderCardWidget;
 use super::round_mask::rounded_rects;
-use super::sidebar::{Orientation, Scheme, SidebarWidget, State, DEFAULT_ORDER};
-use super::styles::{get_theme, Theme};
+use super::sidebar::{DEFAULT_ORDER, Orientation, Scheme, SidebarWidget, State};
+use super::styles::{Theme, get_theme};
 use super::table_layout::{
-    compact_min_size, table_state, COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W,
+    COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W, compact_min_size, table_state,
 };
-use super::usage_table::{TableViews, UsageTable, PROVIDER_ORDER};
+use super::usage_table::{PROVIDER_ORDER, TableViews, UsageTable};
 use crate::config::{
-    Config, ConfigManager, ResizeDebouncer, DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH,
-    MIN_TABLE_HEIGHT, MIN_TABLE_WIDTH,
+    Config, ConfigManager, DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH, MIN_TABLE_HEIGHT,
+    MIN_TABLE_WIDTH, ResizeDebouncer,
 };
-use crate::providers::base::UsageMetrics;
 use crate::providers::Provider;
+use crate::providers::base::UsageMetrics;
 use crate::refresh_controller::RefreshController;
 
 /// The root layout's margins and spacing: `(12, 8, 12, 10)` and 6 for the full table.
@@ -415,14 +415,14 @@ fn with_hud(f: impl FnOnce(&mut HUDWindow)) -> bool {
     let Some(hud) = HUD.with(|h| h.borrow().upgrade()) else {
         return true;
     };
-    let ran = match hud.try_borrow_mut() {
+
+    match hud.try_borrow_mut() {
         Ok(mut hud) => {
             f(&mut hud);
             true
         }
         Err(_) => false,
-    };
-    ran
+    }
 }
 
 /// The resume step of the blur pause: runs `resume_blur`, and while the HUD is busy tries again
@@ -517,7 +517,9 @@ fn default_providers(
 fn default_providers(
     _config: &Arc<Mutex<Config>>,
 ) -> HashMap<String, Arc<dyn Provider + Send + Sync>> {
-    panic!("HUDWindow::new would launch live provider fetches; tests must use HUDWindow::with_providers with providers::stub")
+    panic!(
+        "HUDWindow::new would launch live provider fetches; tests must use HUDWindow::with_providers with providers::stub"
+    )
 }
 
 impl HUDWindow {
@@ -1598,11 +1600,7 @@ pub fn resize_origin(zone: &str, g: Rect, w: i32, h: i32) -> (i32, i32) {
 /// Python `idle_fade_level` / the opacity the window gets: the chosen opacity, dimmed while the
 /// sidebar is idle.
 pub fn faded_opacity(base: f32, level: f64, active: bool) -> f32 {
-    if active {
-        base * level as f32
-    } else {
-        base
-    }
+    if active { base * level as f32 } else { base }
 }
 
 /// How long and how often a task that found the HUD borrowed tries again (Python runs the slot
@@ -1633,7 +1631,10 @@ fn run_on_hud<F: FnOnce(&mut HUDWindow) + 'static>(slot: Rc<RefCell<Option<F>>>,
             run_on_hud(slot, tries_left - 1)
         });
     } else if !ran && tries_left == 0 {
-        log::warn!("[HUD] with_hud_retry exhausted {} retries; HUD remained borrowed", HUD_RETRIES);
+        log::warn!(
+            "[HUD] with_hud_retry exhausted {} retries; HUD remained borrowed",
+            HUD_RETRIES
+        );
     }
 }
 
@@ -2591,7 +2592,7 @@ mod tests {
     #[test]
     fn close_request_trims_150ms_after_the_hide() {
         #[link(name = "user32")]
-        extern "system" {
+        unsafe extern "system" {
             fn SendMessageW(hwnd: *mut core::ffi::c_void, msg: u32, w: usize, l: isize) -> isize;
         }
         const WM_CLOSE: u32 = 0x0010;
@@ -2807,8 +2808,8 @@ mod tests {
     /// mode would keep styling the labels.
     #[test]
     fn test_switching_ui_mode_restyles_labels_from_the_new_sheet() {
-        use ferrokit_widgets::style::stylesheet::{QStyleSheetStyle, WidgetStyleContext};
         use ferrokit_widgets::Label;
+        use ferrokit_widgets::style::stylesheet::{QStyleSheetStyle, WidgetStyleContext};
 
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));

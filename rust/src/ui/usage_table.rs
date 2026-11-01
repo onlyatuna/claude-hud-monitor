@@ -25,10 +25,10 @@ use ferrokit_widgets::{
     Alignment, BoxLayout, EmptyWidget, GridLayout, Label, Layout, Widget, WidgetBase, WidgetRef,
 };
 
-use super::styles::{duo_colors, scale_colors, Theme};
+use super::styles::{Theme, duo_colors, scale_colors};
 use crate::pace::{
-    elapsed_fraction, format_countdown_dhm, format_countdown_hm, format_reset_time, pace_mark,
-    runout_text, window_caption, window_seconds, FIVE_HOURS, ONE_WEEK,
+    FIVE_HOURS, ONE_WEEK, elapsed_fraction, format_countdown_dhm, format_countdown_hm,
+    format_reset_time, pace_mark, runout_text, window_caption, window_seconds,
 };
 use crate::providers::base::UsageMetrics;
 
@@ -328,28 +328,29 @@ impl Widget for UsageDial {
         painter.draw_ellipse(ring_rect);
 
         let (o_pct, o_mark, o_color) = self.outer;
-        if let Some(pct) = o_pct {
-            if !self.muted && pct > 0.0 {
-                painter.set_pen(round_pen(o_color, ring_width).with_cap(LineCap::Butt));
-                painter.draw_arc(ring_rect, 90.0, Self::deg(pct));
+        if let Some(pct) = o_pct
+            && !self.muted
+            && pct > 0.0
+        {
+            painter.set_pen(round_pen(o_color, ring_width).with_cap(LineCap::Butt));
+            painter.draw_arc(ring_rect, 90.0, Self::deg(pct));
 
-                // Hatching when outer pct > mark
-                if let Some(mark) = o_mark {
-                    if pct > mark {
-                        let mark_deg = Self::deg(mark);
-                        let mut arc = PainterPath::new();
-                        arc.arc_move_to(ring_rect, 90.0 + mark_deg);
-                        arc.arc_to(ring_rect, 90.0 + mark_deg, Self::deg(pct) - mark_deg);
-                        let mut stroker = PainterPathStroker::new();
-                        stroker.set_width(f64::from(ring_width));
-                        stroker.set_cap_style(PenCapStyle::Flat);
-                        painter.set_pen(None);
-                        painter.set_brush(Brush::Hatched {
-                            color: self.theme.hatch,
-                        });
-                        painter.fill_painter_path(&stroker.create_stroke(&arc));
-                    }
-                }
+            // Hatching when outer pct > mark
+            if let Some(mark) = o_mark
+                && pct > mark
+            {
+                let mark_deg = Self::deg(mark);
+                let mut arc = PainterPath::new();
+                arc.arc_move_to(ring_rect, 90.0 + mark_deg);
+                arc.arc_to(ring_rect, 90.0 + mark_deg, Self::deg(pct) - mark_deg);
+                let mut stroker = PainterPathStroker::new();
+                stroker.set_width(f64::from(ring_width));
+                stroker.set_cap_style(PenCapStyle::Flat);
+                painter.set_pen(None);
+                painter.set_brush(Brush::Hatched {
+                    color: self.theme.hatch,
+                });
+                painter.fill_painter_path(&stroker.create_stroke(&arc));
             }
         }
         Self::draw_pace_tick(
@@ -377,29 +378,30 @@ impl Widget for UsageDial {
         painter.draw_ellipse(inner_rect);
 
         let (i_pct, i_mark, i_color) = self.inner;
-        if let Some(pct) = i_pct {
-            if !self.muted && pct > 0.0 {
-                painter.set_brush(Brush::Color(i_color));
-                if pct >= 100.0 {
-                    painter.draw_ellipse(inner_rect);
-                } else {
-                    painter.draw_pie(inner_rect, 90.0, Self::deg(pct));
-                }
+        if let Some(pct) = i_pct
+            && !self.muted
+            && pct > 0.0
+        {
+            painter.set_brush(Brush::Color(i_color));
+            if pct >= 100.0 {
+                painter.draw_ellipse(inner_rect);
+            } else {
+                painter.draw_pie(inner_rect, 90.0, Self::deg(pct));
+            }
 
-                // Hatching when inner pct > mark
-                if let Some(mark) = i_mark {
-                    if pct > mark {
-                        let mark_deg = Self::deg(mark);
-                        let mut wedge = PainterPath::with_start_point(center);
-                        wedge.arc_to(inner_rect, 90.0 + mark_deg, Self::deg(pct) - mark_deg);
-                        wedge.close_subpath();
-                        painter.set_pen(None);
-                        painter.set_brush(Brush::Hatched {
-                            color: self.theme.hatch,
-                        });
-                        painter.fill_painter_path(&wedge);
-                    }
-                }
+            // Hatching when inner pct > mark
+            if let Some(mark) = i_mark
+                && pct > mark
+            {
+                let mark_deg = Self::deg(mark);
+                let mut wedge = PainterPath::with_start_point(center);
+                wedge.arc_to(inner_rect, 90.0 + mark_deg, Self::deg(pct) - mark_deg);
+                wedge.close_subpath();
+                painter.set_pen(None);
+                painter.set_brush(Brush::Hatched {
+                    color: self.theme.hatch,
+                });
+                painter.fill_painter_path(&wedge);
             }
         }
         let r_in = inner_side / 2.0;
@@ -448,12 +450,11 @@ impl Widget for UsageDial {
         if let Some(p) = Painter::text_path(PointF::new(x, base_y), num, &num_font) {
             builder.push_path(&p);
         }
-        if has_pct {
-            if let Some(p) =
+        if has_pct
+            && let Some(p) =
                 Painter::text_path(PointF::new(x + num_w + 1.0, base_y), "%", &suf_font)
-            {
-                builder.push_path(&p);
-            }
+        {
+            builder.push_path(&p);
         }
         if let Some(path) = builder.finish() {
             if !self.muted {
@@ -1302,10 +1303,10 @@ impl ProviderColumn {
         if !cap2.is_empty() {
             pct_text = format!("{} · {}", pct_text, cap2);
         }
-        if let (Some(v2), Some(m2)) = (data.metric2_val, mark2) {
-            if v2 - m2 > 0.5 {
-                pct_text = format!("{}  ▲{:.0}", pct_text, v2 - m2);
-            }
+        if let (Some(v2), Some(m2)) = (data.metric2_val, mark2)
+            && v2 - m2 > 0.5
+        {
+            pct_text = format!("{}  ▲{:.0}", pct_text, v2 - m2);
         }
         set_label_text(&self.m2_val, pct_text);
         set_label_color(&self.m2_val, text2);
@@ -1796,14 +1797,15 @@ mod tests {
                 .text(),
             "10 %"
         );
-        assert!(col
-            .badge
-            .borrow()
-            .as_any()
-            .downcast_ref::<Label>()
-            .unwrap()
-            .text()
-            .contains("STALE"));
+        assert!(
+            col.badge
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text()
+                .contains("STALE")
+        );
     }
 
     #[test]
@@ -1817,14 +1819,15 @@ mod tests {
             ..Default::default()
         });
         let col = table.columns.get("codex").unwrap();
-        assert!(col
-            .m2_val
-            .borrow()
-            .as_any()
-            .downcast_ref::<Label>()
-            .unwrap()
-            .text()
-            .contains("▲48"));
+        assert!(
+            col.m2_val
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text()
+                .contains("▲48")
+        );
     }
 
     #[test]
@@ -1841,14 +1844,15 @@ mod tests {
             ..Default::default()
         });
         let col = table.columns.get("codex").unwrap();
-        assert!(col
-            .m2_val
-            .borrow()
-            .as_any()
-            .downcast_ref::<Label>()
-            .unwrap()
-            .text()
-            .contains("30D"));
+        assert!(
+            col.m2_val
+                .borrow()
+                .as_any()
+                .downcast_ref::<Label>()
+                .unwrap()
+                .text()
+                .contains("30D")
+        );
     }
 
     /// The legend's pie swatch paints its disc with `QColor(*theme["disc"]).darker(110)`
@@ -1876,27 +1880,32 @@ mod tests {
     fn test_table_layout_contains_icons_separators_and_glyphs() {
         let table = UsageTable::new(Theme::dark(), "scale");
         assert_eq!(table.columns.len(), 3);
-        assert!(table
-            .sep1
-            .borrow()
-            .as_any()
-            .downcast_ref::<SeparatorWidget>()
-            .is_some());
-        assert!(table
-            .sep2
-            .borrow()
-            .as_any()
-            .downcast_ref::<SeparatorWidget>()
-            .is_some());
+        assert!(
+            table
+                .sep1
+                .borrow()
+                .as_any()
+                .downcast_ref::<SeparatorWidget>()
+                .is_some()
+        );
+        assert!(
+            table
+                .sep2
+                .borrow()
+                .as_any()
+                .downcast_ref::<SeparatorWidget>()
+                .is_some()
+        );
         assert_eq!(table.glyphs.len(), 6); // row 2, leg1, leg2, leg3, leg4, row 7
         for pid in PROVIDER_ORDER {
             let col = table.columns.get(pid).unwrap();
-            assert!(col
-                .icon
-                .borrow()
-                .as_any()
-                .downcast_ref::<ProviderIconWidget>()
-                .is_some());
+            assert!(
+                col.icon
+                    .borrow()
+                    .as_any()
+                    .downcast_ref::<ProviderIconWidget>()
+                    .is_some()
+            );
         }
     }
 

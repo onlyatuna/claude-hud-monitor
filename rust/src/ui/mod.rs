@@ -48,7 +48,7 @@ pub fn enable_win32_dark_mode(hwnd: isize) {
 
     static FNS: LazyLock<DarkModeFns> = LazyLock::new(|| {
         #[link(name = "kernel32")]
-        extern "system" {
+        unsafe extern "system" {
             fn GetModuleHandleA(lpLibFileName: *const u8) -> isize;
             fn LoadLibraryA(lpLibFileName: *const u8) -> isize;
             fn GetProcAddress(hModule: isize, lpProcName: *const u8) -> usize;
@@ -83,7 +83,7 @@ pub fn enable_win32_dark_mode(hwnd: isize) {
     });
 
     #[link(name = "uxtheme")]
-    extern "system" {
+    unsafe extern "system" {
         fn SetWindowTheme(hWnd: isize, pszSubAppName: *const u16, pszSubIdList: *const u16) -> i32;
     }
 

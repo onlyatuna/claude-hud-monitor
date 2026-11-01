@@ -8,7 +8,7 @@
 
 use crate::config::ConfigManager;
 use chrono::{DateTime, Local, Utc};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -477,10 +477,12 @@ mod tests {
             json!({"model": "x", "statusLine": {
                 "type": "command", "command": format!("python {}", hook.display()), "enabled": true}})
         );
-        assert!(!data["statusLine"]["command"]
-            .as_str()
-            .unwrap()
-            .contains('"'));
+        assert!(
+            !data["statusLine"]["command"]
+                .as_str()
+                .unwrap()
+                .contains('"')
+        );
         assert_eq!(fs::read_to_string(&hook).unwrap(), HOOK_SOURCE);
         let backups: Vec<_> = fs::read_dir(dir.path())
             .unwrap()

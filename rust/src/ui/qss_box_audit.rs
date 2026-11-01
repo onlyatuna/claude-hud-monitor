@@ -6,7 +6,7 @@ use ferrokit_widgets::frame::Frame;
 use ferrokit_widgets::progress_bar::ProgressBar;
 use ferrokit_widgets::widget::WidgetRef;
 use ferrokit_widgets::{Button, Label, Widget};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
     std::rc::Rc::new(std::cell::RefCell::new(Box::new(w)))

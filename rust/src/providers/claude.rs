@@ -5,8 +5,8 @@
 // Mirrors Python core/providers/claude_provider.py
 
 use super::base::{
-    format_error, now_str, object_field, percent_text, percentage, retry_delay, Provider,
-    UsageMetrics,
+    Provider, UsageMetrics, format_error, now_str, object_field, percent_text, percentage,
+    retry_delay,
 };
 use crate::config::Config;
 use chrono::{DateTime, Utc};
@@ -290,14 +290,12 @@ fn token_from_keychain() -> Option<String> {
 }
 
 fn get_access_token(credentials_path: &Path) -> Option<String> {
-    if credentials_path.exists() {
-        if let Ok(text) = fs::read_to_string(credentials_path) {
-            if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                if let Some(token) = extract_token(&json) {
-                    return Some(token);
-                }
-            }
-        }
+    if credentials_path.exists()
+        && let Ok(text) = fs::read_to_string(credentials_path)
+        && let Ok(json) = serde_json::from_str::<Value>(&text)
+        && let Some(token) = extract_token(&json)
+    {
+        return Some(token);
     }
 
     #[cfg(target_os = "macos")]

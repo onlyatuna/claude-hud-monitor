@@ -14,8 +14,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use parking_lot::{Condvar, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -574,11 +574,11 @@ impl ConfigManager {
     }
 
     fn save_internal(path: &std::path::Path, cfg: &Config) {
-        if let Some(dir) = path.parent() {
-            if let Err(e) = fs::create_dir_all(dir) {
-                error!("[Config] Cannot create config dir: {e}");
-                return;
-            }
+        if let Some(dir) = path.parent()
+            && let Err(e) = fs::create_dir_all(dir)
+        {
+            error!("[Config] Cannot create config dir: {e}");
+            return;
         }
         // Unique temp name beside the target (Python `.config-*.tmp`), so two writers never share it.
         static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -625,10 +625,10 @@ pub fn migrate_style(cfg: &mut Config, saved: &serde_json::Value) -> bool {
     if mode.is_none() && (saved.get("layout_mode").is_some() || has_x) {
         mode = Some(Value::String("cards".to_owned()));
     }
-    if let Some(Value::String(m)) = &mode {
-        if UI_MODES.contains(&m.as_str()) {
-            return false;
-        }
+    if let Some(Value::String(m)) = &mode
+        && UI_MODES.contains(&m.as_str())
+    {
+        return false;
     }
     cfg.ui_mode = "sidebar".to_owned();
     cfg.sidebar_state = "panel".to_owned();
@@ -675,7 +675,8 @@ pub struct SmokeIsolation {
 impl SmokeIsolation {
     pub fn enter(root: &std::path::Path) -> Self {
         let previous_appdata = std::env::var_os("APPDATA");
-        std::env::set_var("APPDATA", root);
+        // SAFETY: only invoked in single-threaded smoke test entry.
+        unsafe { std::env::set_var("APPDATA", root) };
         let config_file = root.join("ClaudeHUDMonitor").join("config.json");
         let previous_override = CONFIG_PATH_OVERRIDE.lock().replace(config_file);
         Self {
@@ -689,9 +690,12 @@ impl SmokeIsolation {
 impl Drop for SmokeIsolation {
     fn drop(&mut self) {
         *CONFIG_PATH_OVERRIDE.lock() = self.previous_override.take();
-        match &self.previous_appdata {
-            Some(value) => std::env::set_var("APPDATA", value),
-            None => std::env::remove_var("APPDATA"),
+        // SAFETY: restores prior environment captured at isolation entry.
+        unsafe {
+            match &self.previous_appdata {
+                Some(value) => std::env::set_var("APPDATA", value),
+                None => std::env::remove_var("APPDATA"),
+            }
         }
         let _ = fs::remove_dir_all(&self.root);
     }
@@ -1942,9 +1946,12 @@ mod tests {
 
     impl Drop for RestoreAppData {
         fn drop(&mut self) {
-            match &self.0 {
-                Some(value) => std::env::set_var("APPDATA", value),
-                None => std::env::remove_var("APPDATA"),
+            // SAFETY: test tear-down restores prior APPDATA.
+            unsafe {
+                match &self.0 {
+                    Some(value) => std::env::set_var("APPDATA", value),
+                    None => std::env::remove_var("APPDATA"),
+                }
             }
         }
     }
@@ -1957,8 +1964,8 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&decoy).expect("create decoy APPDATA");
         let _restore = RestoreAppData::capture();
-        std::env::set_var("APPDATA", &decoy);
-
+        // SAFETY: test-only decoy APPDATA redirection.
+        unsafe { std::env::set_var("APPDATA", &decoy) };
         let expected = root.join("ClaudeHUDMonitor").join("config.json");
         {
             let isolation = SmokeIsolation::enter(&root);
@@ -2020,7 +2027,7 @@ mod tests {
 mod style_migration_tests {
     //! Ports of `python/tests/test_config.py::StyleMigrationTests`.
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     /// Write `saved` (if any) to a fresh config file and load it, as `ConfigManager.load` does.
     fn load(saved: Option<Value>) -> (PathBuf, Config) {

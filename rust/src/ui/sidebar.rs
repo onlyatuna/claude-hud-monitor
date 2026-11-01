@@ -16,8 +16,8 @@ use chrono::{DateTime, Utc};
 use ferrokit_gui::color::Color;
 
 use crate::pace::{reset_stamp, scale_level, short_window};
-use crate::providers::base::{format_countdown, UsageMetrics};
-use crate::ui::dock_geometry::{py_round, Rect as GeoRect};
+use crate::providers::base::{UsageMetrics, format_countdown};
+use crate::ui::dock_geometry::{Rect as GeoRect, py_round};
 use crate::ui::gauge;
 use crate::ui::styles::get_theme;
 
@@ -534,7 +534,7 @@ use std::time::Instant;
 use ferrokit_core::animation::{EasingCurve, EasingType, PropertyAnimation};
 use ferrokit_core::event::{Event, EventKind};
 use ferrokit_core::object::{
-    register_owned_qobject, ObjectData, ObjectDataMut, ObjectId, OwnedObject, QObject,
+    ObjectData, ObjectDataMut, ObjectId, OwnedObject, QObject, register_owned_qobject,
 };
 use ferrokit_core::timer::Timer;
 use ferrokit_gui::geometry::primitives::{Margins, Point, PointF, Rect, RectF, Size};
@@ -656,10 +656,10 @@ impl ButtonData {
     }
 
     fn update(&self) {
-        if let Some(w) = self.widget() {
-            if let Ok(w) = w.try_borrow() {
-                w.update();
-            }
+        if let Some(w) = self.widget()
+            && let Ok(w) = w.try_borrow()
+        {
+            w.update();
         }
     }
 
@@ -671,12 +671,11 @@ impl ButtonData {
         self.dragged.set(false);
         let was_reordering = self.reordering.replace(false);
         let was_down = self.down.replace(false);
-        if was_reordering {
-            if let Some(w) = self.widget() {
-                if let Ok(w) = w.try_borrow() {
-                    w.set_cursor(CursorShape::PointingHand);
-                }
-            }
+        if was_reordering
+            && let Some(w) = self.widget()
+            && let Ok(w) = w.try_borrow()
+        {
+            w.set_cursor(CursorShape::PointingHand);
         }
         if was_reordering || was_down {
             self.update();
@@ -697,10 +696,10 @@ impl ButtonData {
         }
         self.reordering.set(true);
         self.down.set(false);
-        if let Some(w) = self.widget() {
-            if let Ok(w) = w.try_borrow() {
-                w.set_cursor(CursorShape::ClosedHand);
-            }
+        if let Some(w) = self.widget()
+            && let Ok(w) = w.try_borrow()
+        {
+            w.set_cursor(CursorShape::ClosedHand);
         }
         self.update();
         owner.start_reorder(&self.kind);
@@ -1100,11 +1099,11 @@ impl Widget for SidebarButton {
 
     fn enter_event(&mut self, _pos: Point) {
         self.update();
-        if self.data.is_provider() {
-            if let Some(owner) = self.owner.upgrade() {
-                let kind = self.data.kind.clone();
-                defer(move || owner.hover(&kind));
-            }
+        if self.data.is_provider()
+            && let Some(owner) = self.owner.upgrade()
+        {
+            let kind = self.data.kind.clone();
+            defer(move || owner.hover(&kind));
         }
     }
 
@@ -1480,11 +1479,11 @@ pub fn scale_px_in_qss(sheet: &str, scale: f64) -> String {
             while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
                 i += 1;
             }
-            if sheet[i..].starts_with("px") {
-                if let Ok(value) = sheet[start..i].parse::<f64>() {
-                    out.push_str(&format_g(value * scale));
-                    continue;
-                }
+            if sheet[i..].starts_with("px")
+                && let Ok(value) = sheet[start..i].parse::<f64>()
+            {
+                out.push_str(&format_g(value * scale));
+                continue;
             }
             out.push_str(&sheet[start..i]);
         } else {
@@ -2448,11 +2447,11 @@ impl SidebarInner {
         self.animation_timer.stop();
         self.animation.borrow_mut().animation_mut().stop();
         let active = self.active.borrow_mut().take();
-        if let Some(key) = active {
-            if let Some(widget) = self.card_widget(&key) {
-                layout_remove(&self.flyout_root, &widget);
-                ferrokit_widgets::widget::set_widget_visible(&widget, false);
-            }
+        if let Some(key) = active
+            && let Some(widget) = self.card_widget(&key)
+        {
+            layout_remove(&self.flyout_root, &widget);
+            ferrokit_widgets::widget::set_widget_visible(&widget, false);
         }
         if let Ok(mut flyout) = self.flyout.try_borrow_mut() {
             flyout.hide();
@@ -2476,10 +2475,10 @@ impl SidebarInner {
         }
         let Some(key) = active else { return };
         let pos = Cursor::pos();
-        if let Some(tile) = self.button_rect(&key) {
-            if tile.contains(pos) {
-                return;
-            }
+        if let Some(tile) = self.button_rect(&key)
+            && tile.contains(pos)
+        {
+            return;
         }
         if self.flyout.borrow().geometry().contains(pos) {
             return;

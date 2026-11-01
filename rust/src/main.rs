@@ -17,8 +17,8 @@ mod ui;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use config::{Config, ConfigManager};
 use ferrokit_core::timer::Timer;
@@ -26,11 +26,11 @@ use ferrokit_gui::geometry::primitives::Point;
 use ferrokit_platform::platform_tray::TrayMessageIcon;
 use ferrokit_platform::tray_icon::TrayActivation;
 use ferrokit_widgets::application::Application;
-use hotkey::{click_through_startup_allowed, HotkeyAction, HotkeyManager};
+use hotkey::{HotkeyAction, HotkeyManager, click_through_startup_allowed};
 use log::info;
 use parking_lot::Mutex;
 use refresh_controller::RefreshController;
-use ui::hud_window::{with_hud_retry, HUDWindow};
+use ui::hud_window::{HUDWindow, with_hud_retry};
 use ui::tray_icon::HUDTrayIcon;
 
 pub static WAKE_MSG: AtomicU32 = AtomicU32::new(0);
@@ -101,17 +101,16 @@ impl ferrokit_core::event::NativeEventFilter for WakeFilter {
         _result: &mut isize,
     ) -> bool {
         let wake_msg = WAKE_MSG.load(Ordering::Relaxed);
-        if wake_msg != 0 {
-            if let ferrokit_core::event::NativeMessage::Windows(wmsg) = msg {
-                if wmsg.message == wake_msg {
-                    MAIN_HUD.with(|cell| {
-                        if let Some(hud) = cell.borrow().as_ref() {
-                            hud.borrow_mut().show();
-                        }
-                    });
-                    return true;
+        if wake_msg != 0
+            && let ferrokit_core::event::NativeMessage::Windows(wmsg) = msg
+            && wmsg.message == wake_msg
+        {
+            MAIN_HUD.with(|cell| {
+                if let Some(hud) = cell.borrow().as_ref() {
+                    hud.borrow_mut().show();
                 }
-            }
+            });
+            return true;
         }
         false
     }
@@ -409,7 +408,9 @@ fn main() -> std::process::ExitCode {
             guard
         }
         SingleInstanceResult::Secondary { command_sent } => {
-            log::warn!("[SingleInstance] Another instance is already running (wake command sent: {command_sent}). Exiting.");
+            log::warn!(
+                "[SingleInstance] Another instance is already running (wake command sent: {command_sent}). Exiting."
+            );
             return std::process::ExitCode::SUCCESS;
         }
     };
@@ -509,26 +510,26 @@ fn main() -> std::process::ExitCode {
         let menu = std::rc::Rc::new(std::cell::RefCell::new(ui::tray_icon::build_hud_menu(
             &cfg, &root, tray,
         )));
-        if let Some(action) = ferrokit_widgets::menu::Menu::exec_popup(&menu, global_pos) {
-            if let Some(id) = action.borrow().data().to_u64() {
-                let action_id = id as u32;
-                MAIN_TRAY.with(|t_cell| {
-                    if let Some(tray) = t_cell.borrow().as_ref() {
-                        MAIN_HUD.with(|h_cell| {
-                            if let Some(hud) = h_cell.borrow().as_ref() {
-                                let mut tray_ref = tray.borrow_mut();
-                                let mut hud_ref = hud.borrow_mut();
-                                if tray_ref.handle_action(action_id, &mut hud_ref) {
-                                    hud_ref.persist_geometry();
-                                    hud_ref.window.hide();
-                                    info!("Exit requested from context menu. Exiting cleanly.");
-                                    Application::exit(0);
-                                }
+        if let Some(action) = ferrokit_widgets::menu::Menu::exec_popup(&menu, global_pos)
+            && let Some(id) = action.borrow().data().to_u64()
+        {
+            let action_id = id as u32;
+            MAIN_TRAY.with(|t_cell| {
+                if let Some(tray) = t_cell.borrow().as_ref() {
+                    MAIN_HUD.with(|h_cell| {
+                        if let Some(hud) = h_cell.borrow().as_ref() {
+                            let mut tray_ref = tray.borrow_mut();
+                            let mut hud_ref = hud.borrow_mut();
+                            if tray_ref.handle_action(action_id, &mut hud_ref) {
+                                hud_ref.persist_geometry();
+                                hud_ref.window.hide();
+                                info!("Exit requested from context menu. Exiting cleanly.");
+                                Application::exit(0);
                             }
-                        });
-                    }
-                });
-            }
+                        }
+                    });
+                }
+            });
         }
     }
 
@@ -688,10 +689,10 @@ fn main() -> std::process::ExitCode {
     poll_timer.set_interval(100);
     poll_timer.timeout.connect_local(move |()| {
         MAIN_HUD.with(|cell| {
-            if let Some(hud) = cell.borrow().as_ref() {
-                if let Ok(mut hud) = hud.try_borrow_mut() {
-                    hud.poll_refresh();
-                }
+            if let Some(hud) = cell.borrow().as_ref()
+                && let Ok(mut hud) = hud.try_borrow_mut()
+            {
+                hud.poll_refresh();
             }
         });
     });
@@ -728,10 +729,11 @@ fn main() -> std::process::ExitCode {
 #[cfg(target_os = "windows")]
 unsafe fn windows_set_appid(wide: &[u16]) -> i32 {
     #[link(name = "shell32")]
-    extern "system" {
+    unsafe extern "system" {
         fn SetCurrentProcessExplicitAppUserModelID(appid: *const u16) -> i32;
     }
-    SetCurrentProcessExplicitAppUserModelID(wide.as_ptr())
+    // SAFETY: caller guarantees wide is a valid null-terminated wide string.
+    unsafe { SetCurrentProcessExplicitAppUserModelID(wide.as_ptr()) }
 }
 
 #[cfg(test)]

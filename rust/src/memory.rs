@@ -8,11 +8,11 @@ pub fn trim_memory() {
     #[cfg(target_os = "windows")]
     {
         #[link(name = "kernel32")]
-        extern "system" {
+        unsafe extern "system" {
             fn GetCurrentProcess() -> isize;
         }
         #[link(name = "psapi")]
-        extern "system" {
+        unsafe extern "system" {
             fn EmptyWorkingSet(hProcess: isize) -> i32;
         }
 

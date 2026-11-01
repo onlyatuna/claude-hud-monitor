@@ -1,7 +1,7 @@
 // src/logger.rs — Logging setup + open log directory
 // Mirrors Python core/logger.py
 
-use log::{info, LevelFilter, Metadata, Record};
+use log::{LevelFilter, Metadata, Record, info};
 use std::cell::Cell;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
@@ -62,10 +62,10 @@ impl log::Log for DualLogger {
     }
 
     fn flush(&self) {
-        if let Ok(mut lock) = self.file.lock() {
-            if let Some(ref mut f) = *lock {
-                let _ = f.flush();
-            }
+        if let Ok(mut lock) = self.file.lock()
+            && let Some(ref mut f) = *lock
+        {
+            let _ = f.flush();
         }
     }
 }
