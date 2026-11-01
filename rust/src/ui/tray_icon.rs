@@ -550,7 +550,8 @@ pub struct HUDTrayIcon {
 impl HUDTrayIcon {
     pub fn new(config: Arc<Mutex<Config>>) -> Self {
         let pixmap = create_default_tray_pixmap();
-        let mut tray = TrayIcon::from_pixmap("AI HUD Monitor (3-in-1)", &pixmap)
+        let icon = ferrokit_gui::image::Icon::from_pixmap(&pixmap);
+        let mut tray = TrayIcon::from_icon("AI HUD Monitor (3-in-1)", &icon)
             .expect("failed to create TrayIcon");
         let _ = tray.set_tooltip("AI HUD Monitor (3-in-1)\n• Alt+C: 顯隱\n• Alt+Shift+C: 穿透模式");
 

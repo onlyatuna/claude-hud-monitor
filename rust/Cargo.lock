@@ -173,7 +173,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-core"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=ad997a272fcf2398c1efb9076740461e9afc0307#ad997a272fcf2398c1efb9076740461e9afc0307"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=470664f11f84700188e4410827358daf033b8c15#470664f11f84700188e4410827358daf033b8c15"
 dependencies = [
  "ferrokit-derive",
  "libc",
@@ -184,7 +184,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-derive"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=ad997a272fcf2398c1efb9076740461e9afc0307#ad997a272fcf2398c1efb9076740461e9afc0307"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=470664f11f84700188e4410827358daf033b8c15#470664f11f84700188e4410827358daf033b8c15"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -194,7 +194,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-gui"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=ad997a272fcf2398c1efb9076740461e9afc0307#ad997a272fcf2398c1efb9076740461e9afc0307"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=470664f11f84700188e4410827358daf033b8c15#470664f11f84700188e4410827358daf033b8c15"
 dependencies = [
  "ab_glyph_rasterizer",
  "ferrokit-core",
@@ -203,6 +203,8 @@ dependencies = [
  "rustybuzz",
  "serde",
  "tiny-skia",
+ "unicode-bidi",
+ "unicode-linebreak",
  "unicode-segmentation",
  "windows",
 ]
@@ -210,7 +212,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-platform"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=ad997a272fcf2398c1efb9076740461e9afc0307#ad997a272fcf2398c1efb9076740461e9afc0307"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=470664f11f84700188e4410827358daf033b8c15#470664f11f84700188e4410827358daf033b8c15"
 dependencies = [
  "bitflags 2.13.2",
  "ferrokit-core",
@@ -222,7 +224,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-widgets"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=ad997a272fcf2398c1efb9076740461e9afc0307#ad997a272fcf2398c1efb9076740461e9afc0307"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=470664f11f84700188e4410827358daf033b8c15#470664f11f84700188e4410827358daf033b8c15"
 dependencies = [
  "ferrokit-core",
  "ferrokit-gui",
@@ -882,6 +884,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "unicode-bidi"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
+
+[[package]]
 name = "unicode-bidi-mirroring"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -898,6 +906,12 @@ name = "unicode-ident"
 version = "1.0.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab72a15cf68d77cb0987d3684aa8a45c5ef827e8cb49ee2f30bfd7ba2feb519f"
+
+[[package]]
+name = "unicode-linebreak"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
 
 [[package]]
 name = "unicode-properties"
