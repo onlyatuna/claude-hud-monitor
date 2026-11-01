@@ -12,8 +12,8 @@
 | 項目 | Rust 實作 (`rust/`) | Python 實作 (`python/`) |
 | :--- | :--- | :--- |
 | **執行檔名** | `ClaudeHUD.exe` (Windows) / `ClaudeHUD` (macOS, Linux) | `ClaudeHUD.exe` (Windows) / `ClaudeHUD.app` (macOS) |
-| **語言與版本** | Rust (2021 edition) | Python 3.12 |
-| **GUI 框架** | ferrokit（獨立的 Rust UI 函式庫，Qt 語意的子集實作，以 git 依賴引用：https://github.com/onlyatuna/ferrokit ；Windows 後端為 Win32，另有 Cocoa、X11、Wayland 後端原始碼） | PySide6 (Qt 6.7+) |
+| **語言與版本** | Rust (2024 edition) | Python 3.12 |
+| **GUI 框架** | 原生無邊框視窗架構（Windows Win32, Cocoa, X11/Wayland） | PySide6 (Qt 6.7+) |
 | **HTTP 客戶端** | ureq 2.12 (TLS) | urllib.request (標準函式庫) |
 | **行程與記憶體機制** | 原生編譯二進制，無額外 Runtime 依賴 | 內建 gc.collect() 與 Win32 EmptyWorkingSet 工作集釋放機制 |
 | **打包方式** | `cargo build --release` (opt-level="z"、strip、panic="abort"；lto=false、codegen-units=16；渲染相關 crate 以 opt-level=3 覆寫) | PyInstaller 6.x (自訂 spec 排除未使用的 Qt 模組與語系) |
