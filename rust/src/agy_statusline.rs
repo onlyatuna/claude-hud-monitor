@@ -101,7 +101,7 @@ pub fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-#[allow(dead_code)]
+#[cfg_attr(test, allow(dead_code))]
 pub fn quota_cache_path() -> PathBuf {
     ConfigManager::config_dir().join(QUOTA_CACHE_FILENAME)
 }
@@ -116,7 +116,7 @@ pub fn parse_utc(value: &Value) -> Option<DateTime<Utc>> {
 }
 
 /// `read_quota_cache()` against the default file and the current time.
-#[allow(dead_code)]
+#[cfg_attr(test, allow(dead_code))]
 pub fn read_default_quota_cache() -> Option<QuotaCache> {
     read_quota_cache(&quota_cache_path(), Utc::now())
 }

@@ -30,7 +30,7 @@ use hotkey::{click_through_startup_allowed, HotkeyAction, HotkeyManager};
 use log::info;
 use parking_lot::Mutex;
 use refresh_controller::RefreshController;
-use ui::hud_window::{with_hud_later, with_hud_retry, HUDWindow};
+use ui::hud_window::{with_hud_retry, HUDWindow};
 use ui::tray_icon::HUDTrayIcon;
 
 pub static WAKE_MSG: AtomicU32 = AtomicU32::new(0);
@@ -57,7 +57,7 @@ fn toggle_click_through_when_free() {
             None => true,
         });
         if !toggled {
-            with_hud_later(|_| toggle_click_through_when_free());
+            ferrokit_widgets::WidgetCommandQueue::post_task(toggle_click_through_when_free);
         }
     });
 }

@@ -1632,6 +1632,8 @@ fn run_on_hud<F: FnOnce(&mut HUDWindow) + 'static>(slot: Rc<RefCell<Option<F>>>,
         ferrokit_core::timer::Timer::single_shot_local(HUD_RETRY_MS, move || {
             run_on_hud(slot, tries_left - 1)
         });
+    } else if !ran && tries_left == 0 {
+        log::warn!("[HUD] with_hud_retry exhausted {} retries; HUD remained borrowed", HUD_RETRIES);
     }
 }
 
