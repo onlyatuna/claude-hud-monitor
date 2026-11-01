@@ -2912,7 +2912,7 @@ mod tests {
             220
         );
         let (w, h) = panel_preferred_size(1.0, Orientation::Horizontal, 4, 3, 100);
-        assert_eq!((w, h), (22 + 3 * 220 + 2 * (8 + 1) + 8, 22.max(100) + 8));
+        assert_eq!((w, h), (22 + 3 * 220 + 2 * (8 + 1) + 8, 100 + 8));
         assert_eq!(clamp_scale(0.5), Some(0.6));
         assert_eq!(clamp_scale(f64::NAN), None);
         assert_eq!(clamp_scale(3.0), Some(2.0));

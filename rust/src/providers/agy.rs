@@ -691,6 +691,7 @@ mod tests {
     type Script = VecDeque<Result<(u16, String), String>>;
 
     /// A provider whose POSTs answer from `script` in order; `requests` records `(url, token)`.
+    #[allow(clippy::type_complexity)]
     fn provider(
         script: Vec<Result<(u16, String), String>>,
         token: Option<&str>,

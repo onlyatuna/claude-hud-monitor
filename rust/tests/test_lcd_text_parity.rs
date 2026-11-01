@@ -4,6 +4,8 @@
 //! The fixtures are 48x24 RGBA dumps of `QPainter.drawText(2, 17, text)` with a 12 px font,
 //! text colour (226, 232, 240) over (22, 25, 32), at ClearType gamma 1.2 and RGB sub-pixel order.
 #![cfg(windows)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
 
 use ferrokit_gui::geometry::primitives::PointF;
 use ferrokit_gui::paint::{Painter, Pen, Pixmap};

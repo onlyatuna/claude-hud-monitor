@@ -1,5 +1,6 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 #![allow(clippy::upper_case_acronyms)]
+#![allow(clippy::field_reassign_with_default)]
 
 mod agy_rows;
 mod agy_statusline;
