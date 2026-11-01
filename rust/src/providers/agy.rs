@@ -15,7 +15,9 @@ use ureq::OrAnyStatus;
 const SUMMARY_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const QUOTA_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
+#[allow(dead_code)]
 const USER_AGENT: &str = "antigravity/1.2.4";
+#[allow(dead_code)]
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 
 const AUTH_MESSAGE: &str = "登入憑證已失效，請使用原 CLI 重新登入";
@@ -156,6 +158,7 @@ pub struct AgyProvider {
 }
 
 impl AgyProvider {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         let agent = ureq::AgentBuilder::new().timeout(HTTP_TIMEOUT).build();
         Self::from_parts(

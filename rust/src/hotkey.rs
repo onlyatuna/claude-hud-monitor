@@ -370,7 +370,7 @@ mod tests {
         /// Another registration of `mods + vk` in this process, held for the guard's lifetime: a
         /// second `GlobalHotkeyManager` holding the combination is what "the hotkey is taken by
         /// another program" looks like to `RegisterHotKey`.
-        struct Squatter(GlobalHotkeyManager);
+        struct Squatter(#[allow(dead_code)] GlobalHotkeyManager);
 
         impl Squatter {
             fn new(mods: HotkeyModifiers, vk: u32) -> Self {
