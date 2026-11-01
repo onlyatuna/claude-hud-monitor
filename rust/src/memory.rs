@@ -27,7 +27,7 @@ pub fn trim_memory() {
     }
     #[cfg(target_os = "macos")]
     {
-        extern "C" {
+        unsafe extern "C" {
             fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
         }
         unsafe {
@@ -37,7 +37,7 @@ pub fn trim_memory() {
     }
     #[cfg(target_os = "linux")]
     {
-        extern "C" {
+        unsafe extern "C" {
             fn malloc_trim(pad: usize) -> i32;
         }
         unsafe {
