@@ -423,6 +423,7 @@ fn main() -> std::process::ExitCode {
         let wide: Vec<u16> = OsStr::new("ClaudeHUD.Monitor.App\0")
             .encode_wide()
             .collect();
+        // SAFETY: wide is a null-terminated UTF-16 string.
         unsafe {
             let _ = windows_set_appid(&wide);
         }

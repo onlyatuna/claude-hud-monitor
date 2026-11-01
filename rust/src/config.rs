@@ -666,16 +666,20 @@ pub const SMOKE_OPACITY: f32 = 0.55;
 /// `root/ClaudeHUDMonitor/config.json`, the file a redirected `config_dir()` yields. The forced
 /// path also bypasses a portable `config.json` next to the executable, which would otherwise be
 /// the user's real settings. Dropping restores both and deletes `root`, like Python's `finally`.
+static SMOKE_ENV_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
+
 pub struct SmokeIsolation {
     root: PathBuf,
     previous_appdata: Option<std::ffi::OsString>,
     previous_override: Option<PathBuf>,
+    _env_guard: parking_lot::ReentrantMutexGuard<'static, ()>,
 }
 
 impl SmokeIsolation {
     pub fn enter(root: &std::path::Path) -> Self {
+        let env_guard = SMOKE_ENV_LOCK.lock();
         let previous_appdata = std::env::var_os("APPDATA");
-        // SAFETY: only invoked in single-threaded smoke test entry.
+        // SAFETY: serialized across threads via SMOKE_ENV_LOCK.
         unsafe { std::env::set_var("APPDATA", root) };
         let config_file = root.join("ClaudeHUDMonitor").join("config.json");
         let previous_override = CONFIG_PATH_OVERRIDE.lock().replace(config_file);
@@ -683,6 +687,7 @@ impl SmokeIsolation {
             root: root.to_path_buf(),
             previous_appdata,
             previous_override,
+            _env_guard: env_guard,
         }
     }
 }
@@ -1936,11 +1941,15 @@ mod tests {
     }
 
     /// Restores `APPDATA` on drop, so a failing assertion cannot leak the decoy value.
-    struct RestoreAppData(Option<std::ffi::OsString>);
+    struct RestoreAppData(
+        Option<std::ffi::OsString>,
+        #[expect(dead_code)] parking_lot::ReentrantMutexGuard<'static, ()>,
+    );
 
     impl RestoreAppData {
         fn capture() -> Self {
-            Self(std::env::var_os("APPDATA"))
+            let guard = SMOKE_ENV_LOCK.lock();
+            Self(std::env::var_os("APPDATA"), guard)
         }
     }
 
