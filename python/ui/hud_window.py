@@ -1119,6 +1119,13 @@ class HUDWindow(QWidget):
         self.move(screen_geom.x() + screen_geom.width() - w - 40, screen_geom.y() + 50)
         self._persist_geometry()
 
+    def wake(self):
+        """Show the window (a second launch asked for it); unlike toggle_visibility it never hides."""
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
     def toggle_visibility(self):
         if self.isVisible():
             self.hide()
