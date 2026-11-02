@@ -32,6 +32,10 @@ def pump(until, timeout=3.0):
     return until()
 
 
+IN_PROCESS_PIPE_NOTE = ('on Windows the wake-up never arrives when a process connects to its own named pipe (CI, cause '
+                        'unknown); real launches are other processes and are covered by TwoProcessTests / RealMainTests')
+
+
 def launch_from_another_thread(name):
     """A second launch is another process in real life. Running it in a thread keeps the primary's event loop
     turning while the newcomer blocks on its socket (on Windows' named pipes the in-thread version lost the wake-up)."""
@@ -68,6 +72,7 @@ class SingleInstanceTests(unittest.TestCase):
         self.assertFalse(second.acquire())
         self.assertFalse(second.is_primary())
 
+    @unittest.skipIf(sys.platform == 'win32', IN_PROCESS_PIPE_NOTE)
     def test_secondary_wakes_the_primary(self):
         name = unique()
         first = self.make(name)
@@ -77,6 +82,7 @@ class SingleInstanceTests(unittest.TestCase):
         self.assertIs(launch_from_another_thread(name), False)
         self.assertTrue(pump(lambda: len(woken) == 1))
 
+    @unittest.skipIf(sys.platform == 'win32', IN_PROCESS_PIPE_NOTE)
     def test_every_extra_launch_wakes_once(self):
         name = unique()
         first = self.make(name)
@@ -153,33 +159,46 @@ app = QCoreApplication([])
 instance = SingleInstance({name!r})
 if not instance.acquire():
     sys.exit(3)
+expect = {expect}
 woken = []
 instance.wakeRequested.connect(lambda: woken.append(1))
 print('READY', flush=True)
-end = time.monotonic() + 15
-while time.monotonic() < end and not woken:
+end = time.monotonic() + 25
+while time.monotonic() < end and len(woken) < expect:
     app.processEvents()
     time.sleep(0.01)
-sys.exit(0 if woken else 4)
+settle = time.monotonic() + 0.5          # nothing extra may arrive after the expected wake-ups
+while time.monotonic() < settle:
+    app.processEvents()
+    time.sleep(0.01)
+sys.exit(0 if len(woken) == expect else 4)
 """
 
 
 class TwoProcessTests(unittest.TestCase):
-    def test_a_second_process_exits_and_the_first_is_woken(self):
-        name = unique()
+    def _run(self, launches):
+        """Start a primary that expects `launches` wake-ups, then launch that many extra copies."""
+        name, expect = unique(), launches
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / 'child.py'
-            script.write_text(SCRIPT.format(root=str(ROOT), name=name), encoding='utf-8')
+            script.write_text(SCRIPT.format(root=str(ROOT), name=name, expect=expect), encoding='utf-8')
             first = subprocess.Popen([sys.executable, '-I', str(script)], stdout=subprocess.PIPE, text=True)
             try:
                 self.assertEqual(first.stdout.readline().strip(), 'READY')
-                second = subprocess.run([sys.executable, '-I', str(script)], timeout=20)
-                self.assertEqual(second.returncode, 3)            # not the primary: asked it to wake, then left
-                self.assertEqual(first.wait(timeout=20), 0)       # the primary saw the wake-up
+                for _ in range(launches):
+                    second = subprocess.run([sys.executable, '-I', str(script)], timeout=30)
+                    self.assertEqual(second.returncode, 3)        # not the primary: asked it to wake, then left
+                self.assertEqual(first.wait(timeout=40), 0)       # the primary saw exactly that many wake-ups
             finally:
                 if first.poll() is None:
                     first.kill()
                 first.stdout.close()
+
+    def test_a_second_process_exits_and_the_first_is_woken(self):
+        self._run(1)
+
+    def test_every_extra_process_wakes_the_first_once(self):
+        self._run(3)
 
 
 class RealMainTests(unittest.TestCase):
