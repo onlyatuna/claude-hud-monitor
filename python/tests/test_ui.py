@@ -673,6 +673,22 @@ class HudTests(unittest.TestCase):
                 finally:
                     self._close(hud)
 
+    def test_wake_brings_a_hidden_window_back_in_every_style(self):
+        for mode in ('table', 'sidebar'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+                _, hud = self._hud(directory, ui_mode=mode)
+                try:
+                    hud.show()
+                    APP.processEvents()
+                    hud.wake()                       # already visible: stays visible, no toggle
+                    self.assertTrue(hud.isVisible())
+                    hud.hide()
+                    self.assertFalse(hud.isVisible())
+                    hud.wake()
+                    self.assertTrue(hud.isVisible())
+                finally:
+                    self._close(hud)
+
     def test_classic_cards_style_is_gone(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
             _, hud = self._hud(directory, ui_mode='table')

@@ -15,6 +15,7 @@ from core.diagnostics import configure_logging
 from ui.hud_window import HUDWindow
 from ui.tray_icon import HUDTrayIcon, get_app_icon
 from system.hotkey import GlobalHotkeyManager
+from system.single_instance import SingleInstance
 
 def qt_message_handler(mode, context, message):
     if mode == QtMsgType.QtDebugMsg:
@@ -51,6 +52,12 @@ def main():
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
 
+    # One HUD per user: a second launch wakes the running one and leaves
+    instance = SingleInstance()
+    if not instance.acquire():
+        logger.info("Another HUD is already running; asked it to show itself. Exiting.")
+        sys.exit(0)
+
     app_icon = get_app_icon()
     app.setWindowIcon(app_icon)
 
@@ -62,6 +69,7 @@ def main():
     hud = HUDWindow(config)
     hud.setWindowIcon(app_icon)
     hud.show()
+    instance.wakeRequested.connect(hud.wake)
     logger.info("HUD window created and shown")
 
     # Create System Tray Icon
@@ -95,6 +103,7 @@ def main():
 
     def on_exit():
         logger.info("Application shutting down...")
+        instance.release()
         hotkey.stop()
         if hasattr(hud, "refresh_controller"):
             hud.refresh_controller.stop()
