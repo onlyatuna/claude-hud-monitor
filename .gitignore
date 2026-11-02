@@ -21,6 +21,9 @@ rust/target/
 # ClaudeHUD.spec is intentionally tracked because it contains custom
 # multi-platform build logic required for CI and release scripts.
 
+# Output of `python main.py --snapshot`
+snapshots/
+
 # Local user configuration & logs
 config.json
 *.log

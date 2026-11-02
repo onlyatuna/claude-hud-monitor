@@ -91,6 +91,9 @@ python -B -m unittest discover -s tests -v
 
 # 啟動應用程式
 python main.py
+
+# 離屏截圖：把表格／側邊欄各種狀態輸出成 PNG（合成資料、暫存設定、不連網），預設存到 ./snapshots
+python main.py --snapshot [資料夾]
 ```
 
 Windows 環境可使用 `python/build_exe.bat` 產出 `dist/ClaudeHUD.exe`；macOS 環境可使用 `python/build_mac.sh` 產出 `dist/ClaudeHUD.app`。

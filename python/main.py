@@ -118,4 +118,9 @@ if __name__ == "__main__":
     if "--smoke-test" in sys.argv:
         from core.smoke_check import run
         sys.exit(run())
+    if "--snapshot" in sys.argv:
+        from core.snapshot import parse_args, run as snapshot
+        for written in snapshot(parse_args(sys.argv)):
+            print(written)
+        sys.exit(0)
     main()

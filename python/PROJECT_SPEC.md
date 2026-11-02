@@ -61,6 +61,6 @@ macOS 功能需實機驗證，不以平台模擬視為已驗收。支援狀態�
 
 ## 驗證
 
-執行 `python -B -m unittest discover -s tests -v` 與 `python -B main.py --smoke-test`。
+執行 `python -B -m unittest discover -s tests -v` 與 `python -B main.py --smoke-test`。介面改動另可用 `python -B main.py --snapshot 資料夾` 離屏輸出各風格與狀態的 PNG（core/snapshot.py；合成資料、暫存設定、不連網），改動前後各輸出一次即可對照。
 測試使用合成資料，不使用真實帳號或開機啟動設定。
 發布前另做真實服務查詢、Windows 互動與重啟設定保存、macOS 實機驗證。
