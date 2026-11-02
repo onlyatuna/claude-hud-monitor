@@ -3,6 +3,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import uuid
@@ -31,6 +32,21 @@ def pump(until, timeout=3.0):
     return until()
 
 
+def launch_from_another_thread(name):
+    """A second launch is another process in real life. Running it in a thread keeps the primary's event loop
+    turning while the newcomer blocks on its socket (on Windows' named pipes the in-thread version lost the wake-up)."""
+    result = []
+
+    def work():
+        result.append(SingleInstance(name).acquire())
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    pump(lambda: not thread.is_alive(), 10)
+    thread.join(5)
+    return result[0] if result else None
+
+
 class SingleInstanceTests(unittest.TestCase):
     def setUp(self):
         self.opened = []
@@ -54,11 +70,11 @@ class SingleInstanceTests(unittest.TestCase):
 
     def test_secondary_wakes_the_primary(self):
         name = unique()
-        first, second = self.make(name), self.make(name)
+        first = self.make(name)
         woken = []
         first.wakeRequested.connect(lambda: woken.append(1))
         self.assertTrue(first.acquire())
-        self.assertFalse(second.acquire())
+        self.assertIs(launch_from_another_thread(name), False)
         self.assertTrue(pump(lambda: len(woken) == 1))
 
     def test_every_extra_launch_wakes_once(self):
@@ -68,7 +84,7 @@ class SingleInstanceTests(unittest.TestCase):
         first.wakeRequested.connect(lambda: woken.append(1))
         self.assertTrue(first.acquire())
         for _ in range(3):
-            self.assertFalse(self.make(name).acquire())
+            self.assertIs(launch_from_another_thread(name), False)
         self.assertTrue(pump(lambda: len(woken) == 3))
         pump(lambda: False, 0.2)
         self.assertEqual(len(woken), 3)
