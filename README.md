@@ -113,7 +113,11 @@ Windows 環境可使用 `python/build_exe.bat` 產出 `dist/ClaudeHUD.exe`；mac
 
 ### 啟用 AGY 週額度與 Argon（一次性設定）
 
-Gemini 週額度與 Argon 週額度沒有公開 API，agy 只會在互動模式把它們推給 `statusLine` 指令。HUD 提供一支只寫入額度的 hook：
+Gemini 週額度與 Argon 週額度沒有公開 API，agy 只會在互動模式把它們推給 `statusLine` 指令。HUD 提供一支只寫入額度的 hook。
+
+**最簡單的做法（Python 版，包含打包的 exe）**：右鍵選單 → 更多 → AGY 週額度掛鉤 → 啟用。選單會顯示目前狀態（未啟用／已啟用／需要更新／agy 已使用其他 statusLine／找不到 agy 設定檔）與資料最後更新時間，可以一鍵啟用、更新或停用，並以系統匣通知回報結果。啟用前會確認 `python`（macOS／Linux 為 `python3`）真的能執行，找不到時不會寫入任何設定。
+
+也可以用指令：
 
 ```
 cd python
@@ -132,7 +136,8 @@ ClaudeHUD --uninstall-agy-statusline
 
 * 需要 `python`（Windows）或 `python3` 在 PATH 上，agy 會用它執行 hook。
 * 只有 agy 互動模式開著時才會更新；agy 沒開時沿用最後一次的值，已過重置時間的項目會顯示 `--`。
-* 已設定其他 statusLine 時不會覆蓋；設定資料夾路徑含空白時無法安裝。
+* 已設定其他 statusLine 時不會覆蓋；設定資料夾路徑含空白時，Windows 會改用 8.3 短路徑名稱（磁碟需有啟用短檔名），否則無法安裝。
+* 找不到 agy 的設定檔（`~/.gemini/antigravity-cli/settings.json`）時不會代為建立，請先安裝並執行過 agy。
 * hook 只保存各項額度的剩餘比例與重置時間，不保存 email、路徑或 token。
 * 未啟用時，Weekly 與 Argon 顯示 `--`，其餘（5 小時、C/G）不受影響。
 * 預設更新週期為 60 秒。若請求失敗，採指數退避重試，若標頭含 `Retry-After` 則優先採用。
