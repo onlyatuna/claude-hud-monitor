@@ -1,7 +1,7 @@
 # ClaudeHUD Monitor
 
 桌面 AI 額度監控 HUD，支援 Claude Code、Antigravity CLI (AGY) 與 OpenAI Codex。
-支援「傳統卡片 (Classic Cards)」、「儀表表格 (Modern Table)」與「側邊欄 (Sidebar)」三種風格切換（Python 版只有「儀表表格」與「側邊欄」兩種，傳統卡片已併入側邊欄固定窄欄；Rust 版仍是傳統卡片）、水平橫排／垂直直排切換、主題配色切換、視窗置頂、透明度設定、系統匣常駐、額度重置倒數與滑鼠穿透。
+支援「儀表表格 (Modern Table)」與「側邊欄 (Sidebar)」兩種風格切換（傳統卡片已併入側邊欄固定窄欄）、主題配色切換、視窗置頂、透明度設定、系統匣常駐、額度重置倒數與滑鼠穿透。
 
 本專案採 Monorepo 架構維護，包含 Rust 實作 (`rust/`) 與 Python 實作 (`python/`)。兩者產生的執行檔名稱統一為 `ClaudeHUD`。
 
@@ -12,12 +12,12 @@
 | 項目 | Rust 實作 (`rust/`) | Python 實作 (`python/`) |
 | :--- | :--- | :--- |
 | **執行檔名** | `ClaudeHUD.exe` (Windows) / `ClaudeHUD` (macOS, Linux) | `ClaudeHUD.exe` (Windows) / `ClaudeHUD.app` (macOS) |
-| **語言與版本** | Rust (2021 edition) | Python 3.12 |
-| **GUI 框架** | egui 0.29 / eframe 0.29 | PySide6 (Qt 6.7+) |
+| **語言與版本** | Rust (2024 edition) | Python 3.12 |
+| **GUI 框架** | 原生無邊框視窗架構（Windows Win32, Cocoa, X11/Wayland） | PySide6 (Qt 6.7+) |
 | **HTTP 客戶端** | ureq 2.12 (TLS) | urllib.request (標準函式庫) |
 | **行程與記憶體機制** | 原生編譯二進制，無額外 Runtime 依賴 | 內建 gc.collect() 與 Win32 EmptyWorkingSet 工作集釋放機制 |
-| **打包方式** | `cargo build --release` (LTO, strip, opt-level="z") | PyInstaller 6.x (自訂 spec 排除未使用的 Qt 模組與語系) |
-| **支援平台與架構** | Windows (x86_64), macOS (Universal: arm64 + x86_64), Linux (x86_64) | Windows (x86_64), macOS (arm64) |
+| **打包方式** | `cargo build --release` (opt-level="z"、strip、panic="abort"；lto=false、codegen-units=16；渲染相關 crate 以 opt-level=3 覆寫) | PyInstaller 6.x (自訂 spec 排除未使用的 Qt 模組與語系) |
+| **支援平台與架構** | **正式支援：Windows (x86_64)**。實驗性（只保證能編譯，HUD 未實機驗證；macOS 的輸入、快捷鍵、剪貼簿與對話框只做過型別檢查與 mock 測試，從未在真機執行）：macOS (Universal：arm64 與 x86_64 以 lipo 合併)、Linux (x86_64, ubuntu-22.04) | Windows (x86_64), macOS (arm64) |
 
 ---
 
@@ -38,6 +38,9 @@ claude-hud-monitor/
 │   └── requirements.txt
 ├── rust/                      # Rust 實作原始碼與測試
 │   ├── src/                   # 狀態機、HTTP 客戶端、平台系統匣與視窗
+│   ├── docs/qt_parity/         # Python Qt 語意對照（Contract）與缺口狀態、規格文件
+│   ├── tests/                  # 與 PySide6 對照的 HUD 專屬測試及其預錄資料
+│   ├── tools/                  # PySide6 探針、量測與稽核腳本
 │   ├── assets/                # 專案圖示與資源
 │   ├── Cargo.toml             # 二進制名稱定義為 ClaudeHUD
 │   └── build.rs               # Windows 資源表與 DPI 設定
@@ -115,6 +118,13 @@ python main.py --install-agy-statusline      # 先備份 ~/.gemini/antigravity-c
 python main.py --uninstall-agy-statusline    # 移除
 ```
 
+Rust 版用同樣的旗標，並與 Python 版共用同一支 hook 與快取檔：
+
+```
+ClaudeHUD --install-agy-statusline
+ClaudeHUD --uninstall-agy-statusline
+```
+
 安裝後重開 agy 互動模式即可。注意：
 
 * 需要 `python`（Windows）或 `python3` 在 PATH 上，agy 會用它執行 hook。
@@ -132,8 +142,7 @@ python main.py --uninstall-agy-statusline    # 移除
 | :--- | :--- |
 | **Alt + C** (macOS: Option + C) | 顯示／隱藏視窗 |
 | **Alt + Shift + C** | 開關滑鼠穿透模式（亦可從系統匣圖示切換） |
-| **標題列 ⇄** (Rust 版卡片模式) | 切換水平橫排與垂直直排 |
-| **系統匣選單 → 介面風格** | Python 版：在「儀表表格」與「側邊欄」之間切換（舊設定的「傳統卡片」會自動改成側邊欄固定窄欄，位置與橫直排保留）；Rust 版：傳統卡片 |
+| **系統匣選單 → 介面風格** | 在「儀表表格」與「側邊欄」之間切換（舊設定的「傳統卡片」會自動改成側邊欄固定窄欄，位置與橫直排保留） |
 | **縮小儀表表格視窗** (Python 版) | 縮到 380×280 以下會收合成每個服務一顆圓盤（最小約 174×62，細節在滑過圓盤的提示裡）；拉大回 396×296 以上恢復完整表格。兩種尺寸分開記住 |
 | **右鍵選單 → 外觀 → 毛玻璃模糊** (Python 版表格) | Windows 的 Acrylic 毛玻璃；表格視窗會裁成圓角，拖曳或縮放時暫停模糊以免卡頓。關閉則改為不模糊的圓角面板 |
 | **側邊欄** | 貼在螢幕右緣的懸浮窄條（不保留螢幕空間，可半透明、滑鼠穿透）。細條 92 px：點或停留在服務圖示會向左彈出完整卡片，再點可釘住；頂端按鈕切換成 220 px 固定窄欄；可自由拖曳並吸附到螢幕任一邊（貼上下邊變橫條），Ctrl＋滾輪或拖拉邊角縮放，按住磚再拖曳可換服務順序；所有服務的詳細頁面都能直接拖拉整條換順序（前兩條為磚上顯示的主要兩條）；用量 ≥ 90% 時磚上出現警示三角，視窗重設時磚會短暫亮一下，閒置時自動淡化（可在「行為」關閉） |

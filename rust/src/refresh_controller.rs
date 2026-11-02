@@ -12,8 +12,8 @@ use crate::providers::{Provider, UsageMetrics};
 use chrono::Utc;
 use log::warn;
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -37,12 +37,27 @@ pub struct WorkerResult {
     pub metrics: UsageMetrics,
 }
 
+/// What one drain of the worker results produced.
+#[derive(Default)]
+pub struct Drained {
+    /// The results to show, in completion order (Python `updated`).
+    pub updates: Vec<UsageMetrics>,
+    /// Results after which no provider was running: Python `_complete` emits
+    /// `busy_changed(False)` for each. Counted at completion, so a provider that `poll` launches
+    /// right after the drain does not hide them.
+    pub idle_completions: usize,
+}
+
+type NotifyCallback = Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>>;
+
 pub struct RefreshController {
     pub interval: Duration,
     pub states: HashMap<String, ProviderState>,
     result_tx: Sender<WorkerResult>,
     pub result_rx: Receiver<WorkerResult>,
-    egui_ctx: Option<egui::Context>,
+    pub updated: ferrokit_core::signal::Signal<UsageMetrics>,
+    notify_callback: NotifyCallback,
+    closed: bool,
 }
 
 impl RefreshController {
@@ -53,38 +68,58 @@ impl RefreshController {
             states: HashMap::new(),
             result_tx: tx,
             result_rx: rx,
-            egui_ctx: None,
+            updated: ferrokit_core::signal::Signal::new(),
+            notify_callback: Arc::new(parking_lot::Mutex::new(None)),
+            closed: false,
         }
     }
 
-    /// Store egui Context to immediately request repaint when workers complete.
-    pub fn set_egui_ctx(&mut self, ctx: egui::Context) {
-        self.egui_ctx = Some(ctx);
+    /// Store callback to immediately request repaint / notify event loop when workers complete.
+    #[allow(dead_code)]
+    pub fn set_notify_callback<F: Fn() + Send + Sync + 'static>(&mut self, cb: F) {
+        *self.notify_callback.lock() = Some(Arc::new(cb));
     }
 
+    /// Python `stop()`: after shutdown nothing launches and late worker results are discarded.
+    pub fn stop(&mut self) {
+        self.closed = true;
+        for state in self.states.values_mut() {
+            state.generation += 1;
+        }
+    }
     /// Returns true if any provider worker is currently running.
+    #[allow(dead_code)]
     pub fn is_busy(&self) -> bool {
         self.states.values().any(|s| s.running)
     }
 
     /// Call regularly (e.g. every 1 second) from the UI thread to trigger
     /// scheduled refreshes and check for due providers.
-    pub fn poll(&mut self, providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>) {
+    pub fn poll(
+        &mut self,
+        providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
+    ) -> Drained {
+        if self.closed {
+            return Drained::default();
+        }
+        let drained = self.drain_results(providers);
         let now = Instant::now();
         let ids: Vec<String> = self.states.keys().cloned().collect();
         for id in ids {
             let state = self.states.get(&id).unwrap();
             let should_launch = !state.running && state.due.is_none_or(|due| now >= due);
-            if should_launch {
-                if let Some(provider) = providers.get(&id) {
-                    self.launch(&id, Arc::clone(provider));
-                }
+            if should_launch && let Some(provider) = providers.get(&id) {
+                self.launch(&id, Arc::clone(provider));
             }
         }
+        drained
     }
 
     /// Manual refresh: invalidate in-flight or schedule immediately.
     pub fn refresh(&mut self, providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>) {
+        if self.closed {
+            return;
+        }
         let ids: Vec<String> = self.states.keys().cloned().collect();
         for id in ids {
             let state = self.states.get_mut(&id).unwrap();
@@ -98,6 +133,7 @@ impl RefreshController {
     }
 
     /// Set a new interval and reset next-due timestamps.
+    #[allow(dead_code)]
     pub fn set_interval(&mut self, secs: u64) {
         self.interval = Duration::from_secs(secs.max(20));
         let now = Instant::now();
@@ -118,33 +154,33 @@ impl RefreshController {
 
         let tx = self.result_tx.clone();
         let id_owned = id.to_owned();
-        let ctx_opt = self.egui_ctx.clone();
+        let notify_cb_shared = Arc::clone(&self.notify_callback);
         thread::Builder::new()
             .name(format!("quota-{}", id))
             .spawn(move || {
                 let started = Instant::now();
-                let metrics_res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    provider.fetch_usage()
-                }));
+                // The provider's panic is logged once below (Python `except Exception` path), so the
+                // panic hook stays silent for this call only.
+                let metrics_res = crate::logger::with_panic_log_suppressed(|| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        provider.fetch_usage()
+                    }))
+                });
                 let metrics = match metrics_res {
                     Ok(m) => m,
-                    Err(panic_info) => {
-                        let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    Err(panic_payload) => {
+                        let msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
                             s.to_string()
-                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        } else if let Some(s) = panic_payload.downcast_ref::<String>() {
                             s.clone()
                         } else {
-                            "執行緒內部異常 (Worker thread panicked)".to_string()
+                            "非字串 panic payload".to_string()
                         };
-                        log::error!(
-                            "[RefreshController] Provider {} panicked: {}",
-                            id_owned,
-                            msg
-                        );
+                        warn!("provider={} failure=panic: {}", id_owned, msg);
                         UsageMetrics {
                             provider_id: id_owned.clone(),
-                            error: Some(format!("執行異常: {}", msg)),
-                            error_code: "PANIC".to_string(),
+                            error: Some("查詢失敗，請查看診斷紀錄".to_string()),
+                            error_code: "unexpected".to_string(),
                             ..Default::default()
                         }
                     }
@@ -180,26 +216,32 @@ impl RefreshController {
                     generation,
                     metrics,
                 });
-                if let Some(ctx) = ctx_opt {
-                    ctx.request_repaint();
+                if let Some(cb) = notify_cb_shared.lock().as_ref() {
+                    cb();
                 }
             })
             .expect("failed to spawn quota worker");
     }
 
     /// Drain all pending results from workers.
-    /// Returns Vec of updated UsageMetrics to emit to the UI.
     pub fn drain_results(
         &mut self,
         providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
-    ) -> Vec<UsageMetrics> {
-        let mut updates = Vec::new();
-        while let Ok(item) = self.result_rx.try_recv() {
+    ) -> Drained {
+        let mut drained = Drained::default();
+        while !self.closed {
+            let Ok(item) = self.result_rx.try_recv() else {
+                break;
+            };
             if let Some(result) = self.complete(item, providers) {
-                updates.push(result);
+                self.updated.emit(&result);
+                drained.updates.push(result);
+                if !self.is_busy() {
+                    drained.idle_completions += 1;
+                }
             }
         }
-        updates
+        drained
     }
 
     fn complete(
@@ -207,6 +249,9 @@ impl RefreshController {
         item: WorkerResult,
         providers: &HashMap<String, Arc<dyn Provider + Send + Sync>>,
     ) -> Option<UsageMetrics> {
+        if self.closed {
+            return None;
+        }
         let state = self.states.get_mut(&item.provider_id)?;
         state.running = false;
 
@@ -268,6 +313,34 @@ impl RefreshController {
 }
 
 #[cfg(test)]
+mod stop_tests {
+    use super::*;
+
+    #[test]
+    fn test_stop_ignores_late_results() {
+        let mut ctrl = RefreshController::new(60);
+        ctrl.states
+            .insert("test".to_owned(), ProviderState::default());
+        let generation = 1;
+        ctrl.states.get_mut("test").unwrap().generation = generation;
+        ctrl.states.get_mut("test").unwrap().running = true;
+        ctrl.stop();
+        ctrl.result_tx
+            .send(WorkerResult {
+                provider_id: "test".to_owned(),
+                generation,
+                metrics: UsageMetrics::default(),
+            })
+            .unwrap();
+        let providers = HashMap::new();
+        let drained = ctrl.drain_results(&providers);
+        assert!(drained.updates.is_empty());
+        assert!(ctrl.poll(&providers).updates.is_empty());
+        assert!(ctrl.states["test"].generation > generation);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -293,20 +366,23 @@ mod tests {
 
         ctrl.states
             .insert("mock_panic".to_string(), ProviderState::default());
+        // The worker calls the notify callback after it has sent its result.
+        let (finished, finished_rx) = std::sync::mpsc::channel();
+        ctrl.set_notify_callback(move || {
+            let _ = finished.send(());
+        });
         ctrl.launch("mock_panic", prov);
 
-        // Wait for worker thread to finish
-        std::thread::sleep(Duration::from_millis(200));
+        finished_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the worker did not finish");
 
-        let results = ctrl.drain_results(&providers);
+        let results = ctrl.drain_results(&providers).updates;
         assert_eq!(results.len(), 1);
         let r = &results[0];
         assert_eq!(r.provider_id, "mock_panic");
-        assert_eq!(r.error_code, "PANIC");
-        assert!(
-            r.error.as_ref().unwrap().contains("Worker thread panicked")
-                || r.error.as_ref().unwrap().contains("Intentional mock")
-        );
+        assert_eq!(r.error_code, "unexpected");
+        assert_eq!(r.error.as_deref(), Some("查詢失敗，請查看診斷紀錄"));
 
         let state = ctrl.states.get("mock_panic").unwrap();
         assert!(
@@ -375,5 +451,61 @@ mod tests {
         let mut ctrl = RefreshController::new(60);
         ctrl.set_interval(5); // Minimum is 20
         assert_eq!(ctrl.interval, Duration::from_secs(20));
+    }
+    /// Returns once the test sends on `release`, so the test decides when the worker finishes.
+    struct GatedProvider {
+        release: parking_lot::Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+    impl Provider for GatedProvider {
+        fn provider_id(&self) -> &str {
+            "mock_instant"
+        }
+        fn display_name(&self) -> &str {
+            "Mock Instant"
+        }
+        fn fetch_usage(&self) -> UsageMetrics {
+            let _ = self.release.lock().recv_timeout(Duration::from_secs(5));
+            UsageMetrics {
+                provider_id: "mock_instant".to_string(),
+                metric1_text: "42%".to_string(),
+                ..Default::default()
+            }
+        }
+    }
+
+    #[test]
+    fn test_refresh_controller_pipeline_and_late_notify() {
+        let mut ctrl = RefreshController::new(60);
+        let mut providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::new();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        let prov = Arc::new(GatedProvider {
+            release: parking_lot::Mutex::new(release_rx),
+        });
+        providers.insert("mock_instant".to_string(), prov.clone());
+
+        ctrl.states
+            .insert("mock_instant".to_string(), ProviderState::default());
+
+        // 1. Launch before setting the callback; the worker waits in `fetch_usage`.
+        ctrl.launch("mock_instant", prov);
+
+        // 2. Set the callback while the worker is still running, then let it finish.
+        let (notified, notified_rx) = std::sync::mpsc::channel();
+        ctrl.set_notify_callback(move || {
+            let _ = notified.send(());
+        });
+        release.send(()).unwrap();
+
+        // 3. The worker reads the callback when it finishes, so the late callback is called.
+        notified_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the callback set while the worker ran was not called");
+
+        // 4. Poll should drain and return the updates
+        let updates = ctrl.poll(&providers).updates;
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].provider_id, "mock_instant");
+        assert_eq!(updates[0].metric1_text, "42%");
+        assert!(!ctrl.states.get("mock_instant").unwrap().running);
     }
 }

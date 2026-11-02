@@ -4,7 +4,10 @@
 // Calls https://chatgpt.com/backend-api/wham/usage
 // Mirrors Python core/providers/codex_provider.py
 
-use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
+use super::base::{
+    Provider, UsageMetrics, format_error, now_str, object_field, percent_text, percentage,
+    retry_delay,
+};
 use chrono::{DateTime, TimeZone, Utc};
 use log::error;
 use serde_json::Value;
@@ -21,6 +24,7 @@ pub struct CodexProvider {
 }
 
 impl CodexProvider {
+    #[cfg_attr(test, allow(dead_code))] // only reached by the non-test `default_providers`
     pub fn new() -> Self {
         let timeout = Duration::from_secs(8);
         let client = ureq::AgentBuilder::new().timeout(timeout).build();
@@ -28,10 +32,9 @@ impl CodexProvider {
     }
 
     fn auth_path() -> PathBuf {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".to_owned());
-        PathBuf::from(home).join(".codex").join("auth.json")
+        crate::agy_statusline::home_dir()
+            .join(".codex")
+            .join("auth.json")
     }
 
     fn get_auth_data(&self) -> Option<Value> {
@@ -40,14 +43,16 @@ impl CodexProvider {
             return None;
         }
         let text = fs::read_to_string(&path).ok()?;
-        serde_json::from_str::<Value>(&text).ok()
+        let data = serde_json::from_str::<Value>(&text).ok()?;
+        // Python treats an empty object as "no auth file" (falsy).
+        (data.as_object().is_some_and(|o| !o.is_empty())).then_some(data)
     }
 }
 
 fn parse_timestamp(ts: Option<&Value>) -> Option<DateTime<Utc>> {
     let ts = ts?;
     if let Some(val) = ts.as_f64() {
-        if !val.is_finite() || val <= 0.0 || val > 1e14 {
+        if !val.is_finite() || val < 0.0 || val > 1e14 {
             return None;
         }
         let val = if val > 1e11 { val / 1000.0 } else { val };
@@ -57,7 +62,7 @@ fn parse_timestamp(ts: Option<&Value>) -> Option<DateTime<Utc>> {
     }
     if let Some(s) = ts.as_str() {
         if let Ok(val) = s.parse::<f64>() {
-            if !val.is_finite() || val <= 0.0 || val > 1e14 {
+            if !val.is_finite() || val < 0.0 || val > 1e14 {
                 return None;
             }
             let val = if val > 1e11 { val / 1000.0 } else { val };
@@ -73,16 +78,17 @@ fn parse_timestamp(ts: Option<&Value>) -> Option<DateTime<Utc>> {
 }
 
 fn window_title(window: &Value, fallback: &str) -> String {
-    if let Some(secs) = window.get("limit_window_seconds").and_then(|v| v.as_f64()) {
-        if secs.is_finite() && secs > 0.0 {
-            if secs % 86400.0 == 0.0 {
-                return format!("WINDOW {}D", secs / 86400.0);
-            }
-            if secs % 3600.0 == 0.0 {
-                return format!("WINDOW {}H", secs / 3600.0);
-            }
-            return format!("WINDOW {}M", secs / 60.0);
+    if let Some(secs) = window.get("limit_window_seconds").and_then(|v| v.as_f64())
+        && secs.is_finite()
+        && secs > 0.0
+    {
+        if secs % 86400.0 == 0.0 {
+            return format!("WINDOW {}D", secs / 86400.0);
         }
+        if secs % 3600.0 == 0.0 {
+            return format!("WINDOW {}H", secs / 3600.0);
+        }
+        return format!("WINDOW {}M", secs / 60.0);
     }
     fallback.to_owned()
 }
@@ -106,8 +112,19 @@ impl Provider for CodexProvider {
             );
         };
 
-        let tokens = auth_data.get("tokens").cloned().unwrap_or(Value::Null);
-        let access_token = match tokens.get("access_token").and_then(|v| v.as_str()) {
+        let Some(tokens) = object_field(&auth_data, "tokens") else {
+            return UsageMetrics::error_result(
+                "codex",
+                "OpenAI Codex",
+                "未找到 access_token\n請於終端機執行 codex 登入",
+                "",
+            );
+        };
+        let access_token = match tokens
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .filter(|t| !t.is_empty())
+        {
             Some(t) => t.to_owned(),
             None => {
                 return UsageMetrics::error_result(
@@ -121,6 +138,7 @@ impl Provider for CodexProvider {
         let account_id = tokens
             .get("account_id")
             .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_owned());
 
         let mut req = self
@@ -142,9 +160,7 @@ impl Provider for CodexProvider {
                     return UsageMetrics {
                         provider_id: "codex".to_owned(),
                         provider_name: "OpenAI Codex".to_owned(),
-                        metric1_title: "PRIMARY".to_owned(),
                         metric1_text: "--".to_owned(),
-                        metric2_title: "SECONDARY".to_owned(),
                         metric2_text: "--".to_owned(),
                         last_updated_time: now,
                         error: Some("登入憑證已失效，請使用原 CLI 重新登入".to_owned()),
@@ -158,9 +174,7 @@ impl Provider for CodexProvider {
                     return UsageMetrics {
                         provider_id: "codex".to_owned(),
                         provider_name: "OpenAI Codex".to_owned(),
-                        metric1_title: "PRIMARY".to_owned(),
                         metric1_text: "--".to_owned(),
-                        metric2_title: "SECONDARY".to_owned(),
                         metric2_text: "--".to_owned(),
                         last_updated_time: now,
                         error: Some(format!("配額查詢 HTTP {}", status)),
@@ -173,7 +187,7 @@ impl Provider for CodexProvider {
                     return UsageMetrics::error_result(
                         "codex",
                         "OpenAI Codex",
-                        &format!("API 回應異常: HTTP {}", status),
+                        &format!("配額查詢 HTTP {}", status),
                         "http",
                     );
                 }
@@ -201,9 +215,18 @@ impl Provider for CodexProvider {
 }
 
 fn parse_codex_response(data: Value, now_str: &str) -> UsageMetrics {
-    let rl = data.get("rate_limit").cloned().unwrap_or(Value::Null);
-    let primary = rl.get("primary_window").cloned().unwrap_or(Value::Null);
-    let secondary = rl.get("secondary_window").cloned().unwrap_or(Value::Null);
+    if !data.is_object() {
+        return format_error("codex", "OpenAI Codex", now_str);
+    }
+    let Some(rl) = object_field(&data, "rate_limit") else {
+        return format_error("codex", "OpenAI Codex", now_str);
+    };
+    let (Some(primary), Some(secondary)) = (
+        object_field(&rl, "primary_window"),
+        object_field(&rl, "secondary_window"),
+    ) else {
+        return format_error("codex", "OpenAI Codex", now_str);
+    };
 
     let s_used_pct = percentage(primary.get("used_percent").and_then(|v| v.as_f64()), 100.0);
     let s_reset_dt = parse_timestamp(primary.get("reset_at"));
@@ -216,14 +239,7 @@ fn parse_codex_response(data: Value, now_str: &str) -> UsageMetrics {
 
     let plan = data.get("plan_type").and_then(|v| v.as_str()).unwrap_or("");
     let plan_badge = if !plan.is_empty() {
-        let mut c = plan.chars();
-        format!(
-            "Plan: {}",
-            c.next()
-                .map(|ch| ch.to_uppercase().to_string())
-                .unwrap_or_default()
-                + c.as_str()
-        )
+        format!("Plan: {}", python_title(plan))
     } else {
         String::new()
     };
@@ -256,7 +272,48 @@ fn parse_codex_response(data: Value, now_str: &str) -> UsageMetrics {
 }
 
 fn parse_retry_after(resp: &ureq::Response) -> Option<f64> {
-    resp.header("Retry-After")?.parse::<f64>().ok()
+    retry_delay(resp.header("Retry-After")?)
+}
+
+/// Python `str.title()`: upper-case a letter that follows a non-letter, lower-case the rest.
+fn python_title(s: &str) -> String {
+    let mut prev_letter = false;
+    s.chars()
+        .flat_map(|c| {
+            let out: Vec<char> = if prev_letter {
+                c.to_lowercase().collect()
+            } else {
+                c.to_uppercase().collect()
+            };
+            prev_letter = c.is_alphabetic();
+            out
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod parity_tests {
+    use super::*;
+
+    #[test]
+    fn test_plan_title_is_python_title_case() {
+        assert_eq!(python_title("plus_team"), "Plus_Team");
+        assert_eq!(python_title("pro"), "Pro");
+        assert_eq!(python_title("PLUS"), "Plus");
+    }
+
+    #[test]
+    fn test_malformed_schema_is_reported() {
+        for bad in [
+            serde_json::json!([]),
+            serde_json::json!({"rate_limit": "x"}),
+            serde_json::json!({"rate_limit": {"primary_window": 3}}),
+        ] {
+            let m = parse_codex_response(bad, "10:00:00");
+            assert_eq!(m.error.as_deref(), Some("配額資料格式不相容"));
+            assert_eq!(m.error_code, "schema");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -317,7 +374,7 @@ mod tests {
         assert!(parse_timestamp(None).is_none());
         assert!(parse_timestamp(Some(&json!("invalid"))).is_none());
         assert!(parse_timestamp(Some(&json!(-100))).is_none());
-        assert!(parse_timestamp(Some(&json!(0))).is_none());
+        assert_eq!(parse_timestamp(Some(&json!(0))).unwrap().timestamp(), 0);
         assert!(parse_timestamp(Some(&json!(1e18))).is_none());
         assert!(parse_timestamp(Some(&json!("-500"))).is_none());
     }
