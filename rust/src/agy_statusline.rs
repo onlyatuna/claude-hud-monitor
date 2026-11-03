@@ -221,37 +221,327 @@ fn write_settings(path: &Path, settings: &Map<String, Value>) -> std::io::Result
     result
 }
 
+/// When the hook last wrote the quota cache (UTC), or `None` if there is no readable cache yet
+/// (Python `cache_written_at`).
+pub fn cache_written_at(path: Option<&Path>) -> Option<DateTime<Utc>> {
+    let target = path.map_or_else(quota_cache_path, Path::to_path_buf);
+    let text = fs::read_to_string(&target).ok()?;
+    let data: Value = serde_json::from_str(&text).ok()?;
+    parse_utc(data.get("written_at")?)
+}
+
+/// Locates `name` on `PATH` (`shutil.which`).
+fn which_executable(name: &str) -> Option<PathBuf> {
+    let path_var = std::env::var_os("PATH")?;
+    #[cfg(windows)]
+    let exts: Vec<String> = std::env::var_os("PATHEXT")
+        .map(|v| {
+            v.to_string_lossy()
+                .split(';')
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_owned())
+                .collect()
+        })
+        .unwrap_or_else(|| vec![".COM".into(), ".EXE".into(), ".BAT".into(), ".CMD".into()]);
+    #[cfg(windows)]
+    let has_pathext = exts.iter().any(|ext| {
+        name.len() >= ext.len() && name[name.len() - ext.len()..].eq_ignore_ascii_case(ext)
+    });
+    for dir in std::env::split_paths(&path_var) {
+        #[cfg(windows)]
+        {
+            if has_pathext {
+                let direct = dir.join(name);
+                if direct.is_file() {
+                    return Some(direct);
+                }
+            } else {
+                for ext in &exts {
+                    let candidate = dir.join(format!("{name}{ext}"));
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let direct = dir.join(name);
+            if let Ok(meta) = fs::metadata(&direct)
+                && meta.is_file()
+                && (meta.permissions().mode() & 0o111) != 0
+            {
+                return Some(direct);
+            }
+        }
+    }
+    None
+}
+
+/// Runs `[executable, "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 6) else 1)"]` with a
+/// 10s deadline; `true` iff it exits with 0.
+fn verify_python_executable(executable: &Path) -> bool {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut cmd = Command::new(executable);
+    cmd.args([
+        "-c",
+        "import sys; sys.exit(0 if sys.version_info >= (3, 6) else 1)",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let Ok(mut child) = cmd.spawn() else {
+        return false;
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Python `find_python`: the command agy will run the hook with (`"python"` on Windows, `"python3"`
+/// elsewhere), if it really runs Python >= 3.6.
+pub fn find_python(platform: Option<&str>) -> Option<&'static str> {
+    find_python_with(platform, which_executable, verify_python_executable)
+}
+
+fn find_python_with(
+    platform: Option<&str>,
+    which_fn: impl FnOnce(&str) -> Option<PathBuf>,
+    verify_fn: impl FnOnce(&Path) -> bool,
+) -> Option<&'static str> {
+    let default_plat = if cfg!(windows) { "win32" } else { "linux" };
+    let name = if platform.unwrap_or(default_plat) == "win32" {
+        "python"
+    } else {
+        "python3"
+    };
+    let executable = which_fn(name)?;
+    verify_fn(&executable).then_some(name)
+}
+
+fn needs_quoting(text: &str) -> bool {
+    text.chars()
+        .any(|c| c.is_whitespace() || c == '"' || c == '\'')
+}
+
+/// Windows 8.3 name of an existing directory (`GetShortPathNameW`), or `None`.
+#[cfg(windows)]
+fn win32_short_path(path: &Path) -> Option<PathBuf> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetShortPathNameW(
+            lpsz_long_path: *const u16,
+            lpsz_short_path: *mut u16,
+            cch_buffer: u32,
+        ) -> u32;
+    }
+
+    let abs = absolute(path);
+    let wide: Vec<u16> = abs
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut buffer = [0u16; 1024];
+    // SAFETY: `wide` is null-terminated UTF-16 and `buffer` has room for `buffer.len()` u16s.
+    let len = unsafe { GetShortPathNameW(wide.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) }
+        as usize;
+    if len > 0 && len < buffer.len() {
+        Some(PathBuf::from(OsString::from_wide(&buffer[..len])))
+    } else {
+        None
+    }
+}
+
+#[cfg(not(windows))]
+fn win32_short_path(_path: &Path) -> Option<PathBuf> {
+    None
+}
+
+/// Python `_command_hook_path`: the hook path as it can appear in the command (agy's parsing of
+/// quotes is not known, so none is used). A path with spaces on Windows uses its 8.3 directory name
+/// when the volume has one; otherwise returns `None`.
+fn command_hook_path_with(
+    hook_path: &Path,
+    is_win32: bool,
+    short_path_fn: impl FnOnce(&Path) -> Option<PathBuf>,
+) -> Option<String> {
+    let text = hook_path.to_string_lossy().into_owned();
+    if !needs_quoting(&text) {
+        return Some(text);
+    }
+    if !is_win32 {
+        return None;
+    }
+    let directory = hook_path.parent()?;
+    let _ = fs::create_dir_all(directory); // a short name only exists for a directory that exists
+    let short_dir = short_path_fn(directory)?;
+    let candidate = short_dir.join(hook_path.file_name()?);
+    let candidate_text = candidate.to_string_lossy().into_owned();
+    (!needs_quoting(&candidate_text)).then_some(candidate_text)
+}
+
+fn hook_current(hook_path: &Path) -> bool {
+    fs::read_to_string(hook_path).is_ok_and(|content| content == HOOK_SOURCE)
+}
+
+fn normcase_abspath(path: &Path) -> String {
+    let abs = absolute(path).to_string_lossy().into_owned();
+    if cfg!(windows) {
+        abs.replace('/', "\\").to_lowercase()
+    } else {
+        abs
+    }
+}
+
+fn points_at(statusline: &Value, command_path: Option<&str>) -> bool {
+    let Some(command_path) = command_path.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    if statusline.get("type").and_then(Value::as_str) != Some("command")
+        || statusline.get("enabled").and_then(Value::as_bool) != Some(true)
+    {
+        return false;
+    }
+    let Some(command) = statusline.get("command").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(last) = command.split_whitespace().last() else {
+        return false;
+    };
+    normcase_abspath(Path::new(last)) == normcase_abspath(Path::new(command_path))
+}
+
+/// Python `statusline_status` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Status {
+    Installed,
+    NeedsUpdate,
+    NotInstalled,
+    Conflict,
+    AgyMissing,
+    Error,
+}
+
+impl Status {
+    /// Python `STATUS_LABELS`.
+    pub fn label(self) -> &'static str {
+        match self {
+            Status::Installed => "狀態：已啟用",
+            Status::NeedsUpdate => "狀態：需要更新",
+            Status::NotInstalled => "狀態：未啟用",
+            Status::Conflict => "狀態：agy 已使用其他 statusLine（不會覆蓋）",
+            Status::AgyMissing => "狀態：找不到 agy 設定檔",
+            Status::Error => "狀態：無法讀取 agy 設定",
+        }
+    }
+}
+
+/// Python `statusline_status`: `'installed'`, `'needs_update'`, `'not_installed'`, `'conflict'`,
+/// `'agy_missing'` or `'error'`. Changes nothing.
+pub fn statusline_status(settings_path: Option<&Path>, config_dir: Option<&Path>) -> Status {
+    statusline_status_with(settings_path, config_dir, cfg!(windows), win32_short_path)
+}
+
+fn statusline_status_with(
+    settings_path: Option<&Path>,
+    config_dir: Option<&Path>,
+    is_win32: bool,
+    short_path_fn: impl FnOnce(&Path) -> Option<PathBuf>,
+) -> Status {
+    let settings_path = settings_path.map_or_else(agy_settings_path, Path::to_path_buf);
+    if !settings_path.is_file() {
+        return Status::AgyMissing;
+    }
+    let Ok(settings) = load_settings(&settings_path) else {
+        return Status::Error;
+    };
+    let Some(statusline) = settings.get("statusLine") else {
+        return Status::NotInstalled;
+    };
+    if !owned(statusline) {
+        return Status::Conflict;
+    }
+    let config_dir = config_dir.map_or_else(ConfigManager::config_dir, Path::to_path_buf);
+    let hook_path = absolute(&config_dir.join(HOOK_FILENAME));
+    let cmd_path = command_hook_path_with(&hook_path, is_win32, short_path_fn);
+    if !hook_current(&hook_path) || !points_at(statusline, cmd_path.as_deref()) {
+        return Status::NeedsUpdate;
+    }
+    Status::Installed
+}
+
 /// What `install_statusline` and `uninstall_statusline` report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Installed,
+    Updated,
     Already,
     Conflict,
     UnsupportedPath,
+    AgyMissing,
+    PythonMissing,
     Error,
     Removed,
     NotInstalled,
 }
 
 impl Outcome {
-    /// The one line `cli` prints (Python `messages`).
+    /// The one line `cli` and the tray notice print (Python `RESULT_MESSAGES`).
     pub fn message(self) -> &'static str {
         match self {
             Outcome::Installed => "已安裝 agy statusLine（請重開 agy 互動模式）",
+            Outcome::Updated => "已更新 agy statusLine 掛鉤（請重開 agy 互動模式）",
             Outcome::Already => "已安裝，無需變更",
             Outcome::Conflict => "agy 已設定其他 statusLine，未變更",
             Outcome::UnsupportedPath => "設定資料夾路徑含空白，無法安裝",
+            Outcome::AgyMissing => "找不到 agy 設定檔，請先安裝並執行過 agy",
+            Outcome::PythonMissing => {
+                "找不到可用的 python（需要 PATH 上有 python 或 python3），未變更"
+            }
             Outcome::Error => "無法讀寫 agy 設定",
             Outcome::Removed => "已移除 agy statusLine",
             Outcome::NotInstalled => "尚未安裝",
         }
     }
 
-    /// 0 for the outcomes that leave things as asked, 1 for a failure.
+    /// 0 for `SUCCESS_RESULTS` (`installed`, `updated`, `already`, `removed`, `not_installed`), 1 for a failure.
     pub fn exit_code(self) -> i32 {
         match self {
-            Outcome::Installed | Outcome::Already | Outcome::Removed | Outcome::NotInstalled => 0,
-            Outcome::Conflict | Outcome::UnsupportedPath | Outcome::Error => 1,
+            Outcome::Installed
+            | Outcome::Updated
+            | Outcome::Already
+            | Outcome::Removed
+            | Outcome::NotInstalled => 0,
+            Outcome::Conflict
+            | Outcome::UnsupportedPath
+            | Outcome::AgyMissing
+            | Outcome::PythonMissing
+            | Outcome::Error => 1,
         }
     }
 }
@@ -261,54 +551,106 @@ fn absolute(path: &Path) -> PathBuf {
 }
 
 /// Python `install_statusline`. `None` arguments take the defaults: agy's settings file, the HUD's
-/// config folder, and `python` (`python3` outside Windows) as the interpreter.
+/// config folder, and `find_python(None)` as the interpreter.
 pub fn install_statusline(
     settings_path: Option<&Path>,
     config_dir: Option<&Path>,
     python_cmd: Option<&str>,
 ) -> Outcome {
+    install_statusline_with(
+        settings_path,
+        config_dir,
+        python_cmd,
+        cfg!(windows),
+        win32_short_path,
+        || find_python(None),
+    )
+}
+
+fn install_statusline_with(
+    settings_path: Option<&Path>,
+    config_dir: Option<&Path>,
+    python_cmd: Option<&str>,
+    is_win32: bool,
+    short_path_fn: impl FnOnce(&Path) -> Option<PathBuf>,
+    find_python_fn: impl FnOnce() -> Option<&'static str>,
+) -> Outcome {
     let config_dir = config_dir.map_or_else(ConfigManager::config_dir, Path::to_path_buf);
     let hook_path = absolute(&config_dir.join(HOOK_FILENAME));
-    let python_cmd = python_cmd.unwrap_or(if cfg!(windows) { "python" } else { "python3" });
-    let quoted = |text: &str| text.chars().any(|c| c == '"' || c == '\'');
-    let hook_text = hook_path.to_string_lossy().into_owned();
-    if hook_text.chars().any(|c| c.is_whitespace()) || quoted(&hook_text) || quoted(python_cmd) {
+    if python_cmd.is_some_and(|cmd| cmd.chars().any(|c| c == '"' || c == '\'')) {
         return Outcome::UnsupportedPath;
     }
+    let Some(command_path) = command_hook_path_with(&hook_path, is_win32, short_path_fn) else {
+        return Outcome::UnsupportedPath;
+    };
     let settings_path = settings_path.map_or_else(agy_settings_path, Path::to_path_buf);
+    if !settings_path.is_file() {
+        return Outcome::AgyMissing;
+    }
     let Ok(mut settings) = load_settings(&settings_path) else {
         return Outcome::Error;
     };
-    let desired = json!({
-        "type": "command",
-        "command": format!("{python_cmd} {hook_text}"),
-        "enabled": true,
-    });
-    if let Some(current) = settings.get("statusLine") {
-        if !owned(current) {
-            return Outcome::Conflict;
+    let statusline = settings.get("statusLine");
+    if let Some(current) = statusline
+        && !owned(current)
+    {
+        return Outcome::Conflict;
+    }
+    let ours_before = statusline.is_some();
+    let settings_ok = statusline.is_some_and(|s| points_at(s, Some(&command_path)));
+    let hook_ok = hook_current(&hook_path);
+    if settings_ok && hook_ok {
+        return Outcome::Already;
+    }
+    let resolved_python = if !settings_ok {
+        match python_cmd {
+            Some(cmd) => Some(cmd.to_owned()),
+            None => find_python_fn().map(str::to_owned),
         }
-        if *current == desired {
-            return Outcome::Already;
-        }
+    } else {
+        None
+    };
+    if !settings_ok && resolved_python.is_none() {
+        return Outcome::PythonMissing;
     }
     let written = (|| -> std::io::Result<()> {
-        backup(&settings_path)?;
+        if !settings_ok {
+            backup(&settings_path)?;
+        }
         fs::create_dir_all(&config_dir)?;
         fs::write(&hook_path, HOOK_SOURCE)?;
-        settings.insert("statusLine".to_owned(), desired);
-        write_settings(&settings_path, &settings)
+        if let Some(py) = resolved_python {
+            // A stale hook file alone leaves the settings untouched.
+            settings.insert(
+                "statusLine".to_owned(),
+                json!({
+                    "type": "command",
+                    "command": format!("{py} {command_path}"),
+                    "enabled": true,
+                }),
+            );
+            write_settings(&settings_path, &settings)?;
+        }
+        Ok(())
     })();
-    if written.is_ok() {
-        Outcome::Installed
-    } else {
-        Outcome::Error
+    match written {
+        Ok(()) => {
+            if ours_before {
+                Outcome::Updated
+            } else {
+                Outcome::Installed
+            }
+        }
+        Err(_) => Outcome::Error,
     }
 }
 
 /// Python `uninstall_statusline`: removes our `statusLine` entry; the hook file stays.
 pub fn uninstall_statusline(settings_path: Option<&Path>) -> Outcome {
     let settings_path = settings_path.map_or_else(agy_settings_path, Path::to_path_buf);
+    if !settings_path.is_file() {
+        return Outcome::NotInstalled;
+    }
     let Ok(mut settings) = load_settings(&settings_path) else {
         return Outcome::Error;
     };
@@ -344,7 +686,6 @@ pub fn cli(args: &[String]) -> Option<i32> {
     println!("{}", outcome.message());
     Some(outcome.exit_code())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,12 +865,23 @@ mod tests {
         for name in ["has space", "has\"quote", "has'quote"] {
             let folder = dir.path().join(name);
             assert_eq!(
-                install_statusline(Some(&settings), Some(&folder), Some("python")),
+                install_statusline_with(
+                    Some(&settings),
+                    Some(&folder),
+                    Some("python"),
+                    false,
+                    |_| None,
+                    || Some("python"),
+                ),
                 Outcome::UnsupportedPath
             );
             assert!(!folder.exists());
         }
-        assert_eq!(install(&dir, &settings), Outcome::Error, "no settings file");
+        assert_eq!(
+            install(&dir, &settings),
+            Outcome::AgyMissing,
+            "no settings file"
+        );
         for raw in ["[]", "{"] {
             fs::write(&settings, raw).unwrap();
             assert_eq!(install(&dir, &settings), Outcome::Error);
@@ -580,15 +932,193 @@ mod tests {
         assert_eq!(cli(&["--other".to_owned()]), None);
         for (outcome, code) in [
             (Outcome::Installed, 0),
+            (Outcome::Updated, 0),
             (Outcome::Already, 0),
             (Outcome::Removed, 0),
             (Outcome::NotInstalled, 0),
             (Outcome::Conflict, 1),
             (Outcome::UnsupportedPath, 1),
+            (Outcome::AgyMissing, 1),
+            (Outcome::PythonMissing, 1),
             (Outcome::Error, 1),
         ] {
             assert_eq!(outcome.exit_code(), code);
+            assert!(!outcome.message().is_empty());
             assert!(!outcome.message().contains('\n'));
         }
+        for status in [
+            Status::Installed,
+            Status::NeedsUpdate,
+            Status::NotInstalled,
+            Status::Conflict,
+            Status::AgyMissing,
+            Status::Error,
+        ] {
+            assert!(!status.label().is_empty());
+        }
+    }
+
+    #[test]
+    fn statusline_status_covers_all_states() {
+        let dir = Dir::new("status_states");
+        let settings = dir.path().join("settings.json");
+        let config = dir.path().join("config");
+        let hook = config.join(HOOK_FILENAME);
+
+        assert_eq!(
+            statusline_status(Some(&settings), Some(&config)),
+            Status::AgyMissing
+        );
+        fs::write(&settings, r#"{"model":"x"}"#).unwrap();
+        assert_eq!(
+            statusline_status(Some(&settings), Some(&config)),
+            Status::NotInstalled
+        );
+        assert_eq!(install(&dir, &settings), Outcome::Installed);
+        assert_eq!(
+            statusline_status(Some(&settings), Some(&config)),
+            Status::Installed
+        );
+        fs::write(&hook, "# stale").unwrap();
+        assert_eq!(
+            statusline_status(Some(&settings), Some(&config)),
+            Status::NeedsUpdate
+        );
+        fs::remove_file(&hook).unwrap();
+        assert_eq!(
+            statusline_status(Some(&settings), Some(&config)),
+            Status::NeedsUpdate
+        );
+        fs::write(
+            &settings,
+            r#"{"statusLine":{"type":"command","command":"other"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            statusline_status(Some(&settings), Some(&config)),
+            Status::Conflict
+        );
+        for raw in ["{", "[]"] {
+            fs::write(&settings, raw).unwrap();
+            assert_eq!(
+                statusline_status(Some(&settings), Some(&config)),
+                Status::Error
+            );
+        }
+    }
+
+    #[test]
+    fn stale_or_missing_hook_is_updated_without_touching_settings_or_making_a_backup() {
+        let dir = Dir::new("stale_hook");
+        let settings = dir.path().join("settings.json");
+        let config = dir.path().join("config");
+        let hook = config.join(HOOK_FILENAME);
+        fs::write(&settings, "{}").unwrap();
+        assert_eq!(install(&dir, &settings), Outcome::Installed);
+        assert_eq!(install(&dir, &settings), Outcome::Already);
+
+        fs::write(&hook, "# stale").unwrap();
+        let before = fs::read_to_string(&settings).unwrap();
+        let count_backups = || {
+            fs::read_dir(dir.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with("settings.json.bak-hud-")
+                })
+                .count()
+        };
+        let backups = count_backups();
+        assert_eq!(install(&dir, &settings), Outcome::Updated);
+        assert_eq!(fs::read_to_string(&hook).unwrap(), HOOK_SOURCE);
+        assert_eq!(fs::read_to_string(&settings).unwrap(), before);
+        assert_eq!(count_backups(), backups);
+        assert_eq!(install(&dir, &settings), Outcome::Already);
+
+        fs::remove_file(&hook).unwrap();
+        assert_eq!(install(&dir, &settings), Outcome::Updated);
+        assert!(hook.exists());
+    }
+
+    #[test]
+    fn python_detection_and_missing_python_handling() {
+        let dir = Dir::new("py_detect");
+        let settings = dir.path().join("settings.json");
+        let config = dir.path().join("config");
+        fs::write(&settings, r#"{"model":"x"}"#).unwrap();
+        let raw = fs::read_to_string(&settings).unwrap();
+        assert_eq!(
+            install_statusline_with(
+                Some(&settings),
+                Some(&config),
+                None,
+                false,
+                |_| None,
+                || None,
+            ),
+            Outcome::PythonMissing
+        );
+        assert_eq!(fs::read_to_string(&settings).unwrap(), raw);
+        assert!(!config.exists());
+
+        assert_eq!(
+            find_python_with(Some("win32"), |n| Some(PathBuf::from(n)), |_| true),
+            Some("python")
+        );
+        assert_eq!(
+            find_python_with(Some("darwin"), |n| Some(PathBuf::from(n)), |_| true),
+            Some("python3")
+        );
+        assert_eq!(
+            find_python_with(Some("linux"), |n| Some(PathBuf::from(n)), |_| true),
+            Some("python3")
+        );
+        assert_eq!(find_python_with(Some("win32"), |_| None, |_| true), None);
+        assert_eq!(
+            find_python_with(Some("win32"), |n| Some(PathBuf::from(n)), |_| false),
+            None
+        );
+    }
+
+    #[test]
+    fn windows_short_path_fallback_and_cache_written_at() {
+        let dir = Dir::new("short_path");
+        let settings = dir.path().join("settings.json");
+        fs::write(&settings, "{}").unwrap();
+        let spaced = dir.path().join("John Smith").join("config");
+        let short = dir.path().join("JOHNSM~1").join("config");
+
+        assert_eq!(
+            install_statusline_with(
+                Some(&settings),
+                Some(&spaced),
+                Some("python"),
+                true,
+                |_| Some(short.clone()),
+                || Some("python"),
+            ),
+            Outcome::Installed
+        );
+        assert_eq!(
+            statusline_status_with(Some(&settings), Some(&spaced), true, |_| Some(
+                short.clone()
+            )),
+            Status::Installed
+        );
+        assert!(spaced.join(HOOK_FILENAME).exists());
+
+        let cache = dir.path().join(QUOTA_CACHE_FILENAME);
+        assert_eq!(cache_written_at(Some(&cache)), None);
+        fs::write(
+            &cache,
+            r#"{"written_at":"2026-11-02T08:30:00+00:00","quota":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cache_written_at(Some(&cache)),
+            Some(Utc.with_ymd_and_hms(2026, 11, 2, 8, 30, 0).unwrap())
+        );
     }
 }

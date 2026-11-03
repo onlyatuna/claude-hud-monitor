@@ -66,6 +66,8 @@ pub const ACTION_IDLE_FADE_TOGGLE: u32 = 130;
 pub const ACTION_IDLE_LEVEL_BASE: u32 = 2000; // + percent
 pub const ACTION_IDLE_DELAY_BASE: u32 = 100_000; // + milliseconds
 pub const ACTION_AGY_ORDER_RESET: u32 = 150;
+pub const ACTION_AGY_STATUSLINE_INSTALL: u32 = 160;
+pub const ACTION_AGY_STATUSLINE_UNINSTALL: u32 = 161;
 
 pub const SIDEBAR_SCALES: [u32; 6] = [60, 80, 100, 125, 150, 200];
 pub const IDLE_LEVELS: [u32; 4] = [80, 60, 40, 25];
@@ -493,10 +495,59 @@ fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
     });
 }
 
+/// Python `hud_menu._build_agy_statusline`: one click to enable, update or disable the agy
+/// `statusLine` hook that feeds Gemini's weekly quota and Argon.
+fn build_agy_statusline(
+    menu: &mut Menu,
+    cfg: &Config,
+    status: crate::agy_statusline::Status,
+    written: Option<chrono::DateTime<chrono::Utc>>,
+) {
+    use crate::agy_statusline::Status;
+    add_submenu(menu, "AGY 週額度掛鉤 (statusLine)", cfg, |sub| {
+        add_disabled(sub, status.label());
+        if status == Status::Installed {
+            let note = match written {
+                Some(dt) => format!(
+                    "資料最後更新：{}",
+                    dt.with_timezone(&chrono::Local).format("%m-%d %H:%M")
+                ),
+                None => "尚未收到資料（需開啟 agy 互動模式）".to_string(),
+            };
+            add_disabled(sub, &note);
+        }
+        sub.add_separator();
+        match status {
+            Status::Installed => {
+                add_item(sub, ACTION_AGY_STATUSLINE_UNINSTALL, "停用掛鉤 (Disable)");
+            }
+            Status::NeedsUpdate => {
+                add_item(sub, ACTION_AGY_STATUSLINE_INSTALL, "更新掛鉤 (Update)");
+            }
+            _ => {
+                let act = Action::new_ref("啟用 Gemini 週額度與 Argon (Enable)");
+                {
+                    let mut a = act.borrow_mut();
+                    a.set_enabled(status == Status::NotInstalled);
+                    a.set_data(Variant::uint(ACTION_AGY_STATUSLINE_INSTALL as u64));
+                }
+                sub.add_action(act);
+            }
+        }
+        sub.add_separator();
+        add_disabled(sub, "需要 PATH 上有 python；啟用後請重開 agy 互動模式");
+    });
+}
+
 /// Python `hud_menu._build_more`.
 fn build_more(menu: &mut Menu, cfg: &Config) {
     add_submenu(menu, "更多 (More)", cfg, |sub| {
         build_claude_accounts(sub, cfg);
+        let status = crate::agy_statusline::statusline_status(None, None);
+        let written = (status == crate::agy_statusline::Status::Installed)
+            .then(|| crate::agy_statusline::cache_written_at(None))
+            .flatten();
+        build_agy_statusline(sub, cfg, status, written);
         sub.add_separator();
         add_item(sub, ACTION_OPEN_LOGS, "開啟記錄檔目錄 (Open Logs)");
         add_item(sub, ACTION_RESET_GEOMETRY, "重設預設尺寸與位置");
@@ -540,6 +591,33 @@ pub(crate) fn run_autostart_toggle(
             10000,
         );
     }
+}
+
+/// Python `HUDWindow.run_agy_statusline`: enable (`install`, also brings a stale hook up to date)
+/// or disable (`uninstall`) the agy `statusLine` hook and report the result via the tray icon.
+pub(crate) fn run_agy_statusline_action(
+    install: bool,
+    show_message: ShowMessage<'_>,
+) -> crate::agy_statusline::Outcome {
+    let (action, outcome) = if install {
+        (
+            "install",
+            crate::agy_statusline::install_statusline(None, None, None),
+        )
+    } else {
+        (
+            "uninstall",
+            crate::agy_statusline::uninstall_statusline(None),
+        )
+    };
+    log::info!("[AGY statusLine] {action}: {outcome:?}");
+    show_message(
+        "AGY 週額度掛鉤",
+        outcome.message(),
+        TrayMessageIcon::Information,
+        5000,
+    );
+    outcome
 }
 
 pub struct HUDTrayIcon {
@@ -756,6 +834,14 @@ impl HUDTrayIcon {
                     hud.set_claude_profile(&id);
                     self.update_menu_state();
                 }
+            }
+            ACTION_AGY_STATUSLINE_INSTALL | ACTION_AGY_STATUSLINE_UNINSTALL => {
+                let install = action_id == ACTION_AGY_STATUSLINE_INSTALL;
+                let tray = &mut self.tray;
+                run_agy_statusline_action(install, &mut |title, msg, icon, ms| {
+                    let _ = tray.show_message(title, msg, icon, ms);
+                });
+                self.update_menu_state();
             }
             ACTION_EXIT => {
                 return true; // signals app exit
@@ -1171,6 +1257,7 @@ mod menu_parity_tests {
             sub_labels(&menu, &["更多 (More)"]),
             strings(&[
                 "Claude 帳號 (Claude Account)",
+                "AGY 週額度掛鉤 (statusLine)",
                 "---",
                 "開啟記錄檔目錄 (Open Logs)",
                 "重設預設尺寸與位置",
@@ -1368,5 +1455,77 @@ mod menu_parity_tests {
         let rows = sub_labels(&menu, &["介面 (Interface)", "AGY 項目順序 (Row order)"]);
         assert!(rows.iter().any(|l| l.starts_with("1. ")));
         assert!(rows.contains(&"還原預設順序".to_string()));
+    }
+
+    #[test]
+    fn agy_statusline_submenu_offers_enable_update_or_disable_by_state() {
+        use crate::agy_statusline::Status;
+        use chrono::TimeZone;
+
+        let cfg = config("table");
+        let build = |status: Status, written: Option<chrono::DateTime<chrono::Utc>>| {
+            let mut root = Menu::new("");
+            build_agy_statusline(&mut root, &cfg, status, written);
+            submenu(&root, &["AGY 週額度掛鉤 (statusLine)"])
+        };
+
+        let not_inst = build(Status::NotInstalled, None);
+        assert_eq!(
+            labels(&not_inst.borrow()),
+            strings(&[
+                "狀態：未啟用",
+                "---",
+                "啟用 Gemini 週額度與 Argon (Enable)",
+                "---",
+                "需要 PATH 上有 python；啟用後請重開 agy 互動模式",
+            ])
+        );
+        let enable = item(
+            &not_inst.borrow(),
+            &[],
+            "啟用 Gemini 週額度與 Argon (Enable)",
+        );
+        assert!(enable.borrow().is_enabled());
+        assert_eq!(
+            enable.borrow().data().to_u64(),
+            Some(ACTION_AGY_STATUSLINE_INSTALL as u64)
+        );
+
+        for st in [Status::Conflict, Status::AgyMissing, Status::Error] {
+            let m = build(st, None);
+            let enable = item(&m.borrow(), &[], "啟用 Gemini 週額度與 Argon (Enable)");
+            assert!(!enable.borrow().is_enabled(), "{st:?}");
+        }
+
+        let upd = build(Status::NeedsUpdate, None);
+        let upd_act = item(&upd.borrow(), &[], "更新掛鉤 (Update)");
+        assert!(upd_act.borrow().is_enabled());
+        assert_eq!(
+            upd_act.borrow().data().to_u64(),
+            Some(ACTION_AGY_STATUSLINE_INSTALL as u64)
+        );
+
+        let inst_no_data = build(Status::Installed, None);
+        assert_eq!(
+            labels(&inst_no_data.borrow()),
+            strings(&[
+                "狀態：已啟用",
+                "尚未收到資料（需開啟 agy 互動模式）",
+                "---",
+                "停用掛鉤 (Disable)",
+                "---",
+                "需要 PATH 上有 python；啟用後請重開 agy 互動模式",
+            ])
+        );
+        let dis_act = item(&inst_no_data.borrow(), &[], "停用掛鉤 (Disable)");
+        assert_eq!(
+            dis_act.borrow().data().to_u64(),
+            Some(ACTION_AGY_STATUSLINE_UNINSTALL as u64)
+        );
+
+        let ts = chrono::Utc.with_ymd_and_hms(2026, 11, 2, 8, 30, 0).unwrap();
+        let inst_with_data = build(Status::Installed, Some(ts));
+        let rows = labels(&inst_with_data.borrow());
+        assert!(rows[1].starts_with("資料最後更新："), "{}", rows[1]);
     }
 }

@@ -1081,6 +1081,16 @@ impl HUDWindow {
         persist_rect(&self.debouncer, self.window.geometry());
     }
 
+    /// Python `HUDWindow.wake`: show the window (a second launch asked for it); unlike
+    /// `toggle_visibility` it never hides.
+    pub fn wake(&mut self) {
+        if !self.window.is_visible() {
+            self.show();
+        }
+        self.window.raise();
+        self.window.activate_window();
+    }
+
     pub fn toggle_visibility(&mut self) {
         if self.window.is_visible() {
             self.hide();
