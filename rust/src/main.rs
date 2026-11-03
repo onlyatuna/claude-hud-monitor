@@ -106,8 +106,10 @@ impl ferrokit_core::event::NativeEventFilter for WakeFilter {
             && wmsg.message == wake_msg
         {
             MAIN_HUD.with(|cell| {
-                if let Some(hud) = cell.borrow().as_ref() {
-                    hud.borrow_mut().show();
+                if let Some(hud) = cell.borrow().as_ref()
+                    && let Ok(mut hud) = hud.try_borrow_mut()
+                {
+                    hud.wake();
                 }
             });
             return true;
@@ -679,7 +681,7 @@ fn main() -> std::process::ExitCode {
                 };
                 hud.on_clock_tick(std::time::SystemTime::now());
                 if WAKE_REQUESTED.swap(false, Ordering::Relaxed) {
-                    hud.show();
+                    hud.wake();
                 }
             }
         });
