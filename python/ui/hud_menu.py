@@ -6,6 +6,7 @@ A setting appears exactly once. The menu is rebuilt each time it is shown, so ch
 
 from PySide6.QtWidgets import QMenu
 
+from core import agy_statusline
 from core.agy_rows import DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.autostart import is_autostart_enabled
 from core.logger import open_log_dir
@@ -129,9 +130,38 @@ def _build_claude_accounts(hud, menu):
         _check(sub, profile.display_name, selected, lambda pid=profile.id: hud._set_claude_profile(pid))
 
 
+def _note(menu, text):
+    action = menu.addAction(text)
+    action.setEnabled(False)
+    return action
+
+
+def _build_agy_statusline(hud, menu):
+    """One click to enable the agy statusLine hook that feeds Gemini's weekly quota and Argon."""
+    status = hud.agy_statusline_status()
+    sub = menu.addMenu("AGY 週額度掛鉤 (statusLine)")
+    _note(sub, agy_statusline.STATUS_LABELS.get(status, agy_statusline.STATUS_LABELS["error"]))
+    if status == "installed":
+        written = agy_statusline.cache_written_at()
+        _note(sub, f"資料最後更新：{written.astimezone().strftime('%m-%d %H:%M')}" if written
+              else "尚未收到資料（需開啟 agy 互動模式）")
+    sub.addSeparator()
+    if status == "installed":
+        sub.addAction("停用掛鉤 (Disable)").triggered.connect(lambda: hud.run_agy_statusline("uninstall"))
+    elif status == "needs_update":
+        sub.addAction("更新掛鉤 (Update)").triggered.connect(lambda: hud.run_agy_statusline("install"))
+    else:
+        enable = sub.addAction("啟用 Gemini 週額度與 Argon (Enable)")
+        enable.setEnabled(status == "not_installed")
+        enable.triggered.connect(lambda: hud.run_agy_statusline("install"))
+    sub.addSeparator()
+    _note(sub, "需要 PATH 上有 python；啟用後請重開 agy 互動模式")
+
+
 def _build_more(hud, menu):
     sub = menu.addMenu("更多 (More)")
     _build_claude_accounts(hud, sub)
+    _build_agy_statusline(hud, sub)
     sub.addSeparator()
     sub.addAction("開啟記錄檔目錄 (Open Logs)").triggered.connect(open_log_dir)
     sub.addAction("重設預設尺寸與位置").triggered.connect(hud._reset_geometry)

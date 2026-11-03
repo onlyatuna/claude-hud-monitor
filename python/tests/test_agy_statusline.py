@@ -117,17 +117,20 @@ class StatuslineTests(unittest.TestCase):
         self.assertFalse(self.config.exists())
 
     def test_unsupported_and_missing(self):
-        for name in ['has space', 'has"quote', "has'quote"]:
-            self.assertEqual(agy.install_statusline(self.settings, self.root / name), 'unsupported_path')
+        # Windows may spell a path with spaces by its 8.3 name (see ShortPathTests), so only elsewhere is it refused
+        names = ['has"quote', "has'quote"] if sys.platform == 'win32' else ['has space', 'has"quote', "has'quote"]
+        for name in names:
+            self.assertEqual(agy.install_statusline(self.settings, self.root / name), 'unsupported_path' if sys.platform != 'win32' else 'agy_missing')
             self.assertFalse((self.root / name).exists())
-        self.assertEqual(self.install(), 'error')
+        self.assertEqual(self.install(), 'agy_missing')       # no settings file: agy was never run, nothing is invented
+        self.assertFalse(self.settings.exists())
         for raw in ['[]', '{']:
             self.settings.write_text(raw, encoding='utf-8')
             self.assertEqual(self.install(), 'error')
             self.assertEqual(self.settings.read_text(encoding='utf-8'), raw)
 
     def test_cli(self):
-        for flag, function, outcomes in [('--install-agy-statusline', 'install_statusline', {'installed': 0, 'already': 0, 'conflict': 1, 'unsupported_path': 1, 'error': 1}),
+        for flag, function, outcomes in [('--install-agy-statusline', 'install_statusline', {'installed': 0, 'updated': 0, 'already': 0, 'conflict': 1, 'unsupported_path': 1, 'agy_missing': 1, 'python_missing': 1, 'error': 1}),
                                          ('--uninstall-agy-statusline', 'uninstall_statusline', {'removed': 0, 'not_installed': 0, 'conflict': 1, 'error': 1})]:
             for outcome, code in outcomes.items():
                 with patch.object(agy, function, return_value=outcome) as call, contextlib.redirect_stdout(io.StringIO()) as output:
