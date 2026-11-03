@@ -19,6 +19,48 @@ pub fn percentage(value: Option<f64>, max: f64) -> Option<f64> {
     }
 }
 
+/// Python `retry_delay`: `Retry-After` as non-negative finite seconds or an HTTP date.
+pub fn retry_delay(value: &str) -> Option<f64> {
+    if value.is_empty() {
+        return None;
+    }
+    if let Ok(seconds) = value.trim().parse::<f64>() {
+        return (seconds.is_finite() && seconds >= 0.0).then_some(seconds);
+    }
+    let target = DateTime::parse_from_rfc2822(value.trim()).ok()?;
+    let ms = target
+        .with_timezone(&Utc)
+        .signed_duration_since(Utc::now())
+        .num_milliseconds();
+    Some((ms as f64 / 1000.0).max(0.0))
+}
+
+/// Python `data.get(key) or {}` followed by `.get(..)`: a missing/null/falsy value is an empty
+/// object (`Some(Null)`), an object is itself, anything else is a schema error (`None`).
+pub fn object_field(data: &serde_json::Value, key: &str) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    match data.get(key) {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Some(Value::Null),
+        Some(Value::Object(_)) => data.get(key).cloned(),
+        Some(Value::String(s)) if s.is_empty() => Some(Value::Null),
+        Some(Value::Array(a)) if a.is_empty() => Some(Value::Null),
+        Some(Value::Number(n)) if n.as_f64() == Some(0.0) => Some(Value::Null),
+        _ => None,
+    }
+}
+
+/// The shared `配額資料格式不相容` schema failure of Python `safe_parse`.
+pub fn format_error(provider_id: &str, provider_name: &str, now_str: &str) -> UsageMetrics {
+    UsageMetrics {
+        provider_id: provider_id.to_owned(),
+        provider_name: provider_name.to_owned(),
+        last_updated_time: now_str.to_owned(),
+        error: Some("配額資料格式不相容".to_owned()),
+        error_code: "schema".to_owned(),
+        ..Default::default()
+    }
+}
+
 /// Format a float percentage as "72%" or "--" if None.
 pub fn percent_text(value: Option<f64>) -> String {
     match value {
@@ -27,9 +69,37 @@ pub fn percent_text(value: Option<f64>) -> String {
     }
 }
 
+/// One extra quota row (Python `MetricRow`): agy's five buckets beyond the main pair.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricRow {
+    pub title: String,
+    pub val: Option<f64>,
+    pub text: String,
+    pub reset: Option<DateTime<Utc>>,
+    pub subtext: String,
+}
+
+impl MetricRow {
+    pub fn new(title: &str, val: Option<f64>, text: &str) -> Self {
+        Self {
+            title: title.to_owned(),
+            val,
+            text: text.to_owned(),
+            reset: None,
+            subtext: String::new(),
+        }
+    }
+}
+
+impl Default for MetricRow {
+    fn default() -> Self {
+        Self::new("", None, "--")
+    }
+}
+
 /// Core data contract shared by all providers.
 /// `metric1_val` / `metric2_val` are Some(0.0..=100.0) or None (shown as "--").
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct UsageMetrics {
     pub provider_id: String,
@@ -39,11 +109,13 @@ pub struct UsageMetrics {
     pub metric1_val: Option<f64>,
     pub metric1_text: String,
     pub metric1_reset: Option<DateTime<Utc>>,
+    pub metric1_subtext: String,
 
     pub metric2_title: String,
     pub metric2_val: Option<f64>,
     pub metric2_text: String,
     pub metric2_reset: Option<DateTime<Utc>>,
+    pub metric2_subtext: String,
 
     pub badge1_text: String,
     pub badge2_text: String,
@@ -54,6 +126,35 @@ pub struct UsageMetrics {
     pub retry_after: Option<f64>,
     pub stale: bool,
     pub last_success: Option<DateTime<Utc>>,
+    /// Rows beyond the main pair (agy's other quota buckets); empty for providers with two rows.
+    pub extra_metrics: Vec<MetricRow>,
+}
+impl Default for UsageMetrics {
+    fn default() -> Self {
+        Self {
+            provider_id: String::new(),
+            provider_name: String::new(),
+            metric1_title: "SESSION 5H".to_string(),
+            metric1_val: None,
+            metric1_text: "--".to_string(),
+            metric1_reset: None,
+            metric1_subtext: String::new(),
+            metric2_title: "WEEKLY 7D".to_string(),
+            metric2_val: None,
+            metric2_text: "--".to_string(),
+            metric2_reset: None,
+            metric2_subtext: String::new(),
+            badge1_text: String::new(),
+            badge2_text: String::new(),
+            last_updated_time: String::new(),
+            error: None,
+            error_code: String::new(),
+            retry_after: None,
+            stale: false,
+            last_success: None,
+            extra_metrics: Vec::new(),
+        }
+    }
 }
 
 impl UsageMetrics {
@@ -136,6 +237,32 @@ mod tests {
         assert_eq!(percentage(Some(f64::NAN), 100.0), None);
         assert_eq!(percentage(Some(f64::INFINITY), 100.0), None);
         assert_eq!(percentage(None, 100.0), None);
+    }
+
+    #[test]
+    fn test_retry_delay() {
+        assert_eq!(retry_delay("30"), Some(30.0));
+        assert_eq!(retry_delay("0"), Some(0.0));
+        assert_eq!(retry_delay(""), None);
+        assert_eq!(retry_delay("-1"), None);
+        assert_eq!(retry_delay("nan"), None);
+        assert_eq!(retry_delay("inf"), None);
+        assert_eq!(retry_delay("garbage"), None);
+        assert_eq!(retry_delay("Wed, 21 Oct 2015 07:28:00 GMT"), Some(0.0));
+        let future = (Utc::now() + chrono::Duration::seconds(120)).to_rfc2822();
+        let d = retry_delay(&future).unwrap();
+        assert!(d > 100.0 && d <= 120.0, "{d}");
+    }
+
+    #[test]
+    fn test_object_field_shapes() {
+        let v = serde_json::json!({"a": {"x": 1}, "b": null, "c": "text", "d": [], "e": 5});
+        assert!(object_field(&v, "a").unwrap().is_object());
+        assert!(object_field(&v, "b").unwrap().is_null());
+        assert!(object_field(&v, "missing").unwrap().is_null());
+        assert!(object_field(&v, "d").unwrap().is_null());
+        assert!(object_field(&v, "c").is_none());
+        assert!(object_field(&v, "e").is_none());
     }
 
     #[test]

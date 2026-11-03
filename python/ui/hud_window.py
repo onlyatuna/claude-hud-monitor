@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon, QRegion
 
 from core.providers import PROVIDERS, UsageMetrics
+from core import agy_statusline
 from core.agy_rows import arrange_agy, arrange_by_order, normalize_order, DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.config_manager import ConfigManager, UI_MODES
 from core.refresh_controller import RefreshController
@@ -1118,6 +1119,27 @@ class HUDWindow(QWidget):
         screen_geom = primary_screen.availableGeometry() if primary_screen else self.screen().availableGeometry()
         self.move(screen_geom.x() + screen_geom.width() - w - 40, screen_geom.y() + 50)
         self._persist_geometry()
+
+    def wake(self):
+        """Show the window (a second launch asked for it); unlike toggle_visibility it never hides."""
+        if not self.isVisible():
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    # ================= AGY statusLine hook =================
+    def agy_statusline_status(self) -> str:
+        return agy_statusline.statusline_status()
+
+    def run_agy_statusline(self, action: str) -> str:
+        """Enable ('install', also brings a stale hook up to date) or disable ('uninstall') the agy statusLine hook."""
+        result = (agy_statusline.install_statusline() if action == "install"
+                  else agy_statusline.uninstall_statusline())
+        message = agy_statusline.RESULT_MESSAGES.get(result, result)
+        logger.info(f"[AGY statusLine] {action}: {result}")
+        if self.tray_icon:
+            self.tray_icon.showMessage("AGY 週額度掛鉤", message, self.tray_icon.icon(), 5000)
+        return result
 
     def toggle_visibility(self):
         if self.isVisible():

@@ -17,7 +17,7 @@ AGY 第三方徽章為名称含 claude/gpt 群組週窗口的最小剩餘比例�
 - 資料來源：只用 HTTP `POST {}` 讀取 `https://daily-cloudcode-pa.googleapis.com/v1internal` 的 `retrieveUserQuotaSummary`（C/G 週額度徽章）與 `retrieveUserQuota`（Gemini 5 小時）。`daily-cloudcode-pa` 是 agy 實際使用的後端；正式端點 `cloudcode-pa` 的 Gemini 數字是過期值，已不再使用
 - 認證：Windows 認證管理員 `gemini:antigravity`（macOS 為 Keychain 同名項目），備援 `~/.gemini/antigravity-cli/antigravity-oauth-token`；token 只在記憶體使用
 - statusLine 快取（Gemini 週額度與 Argon 週額度的來源）：agy 互動模式會把 session JSON 從 stdin 餵給設定的 `statusLine.command`，其中 `quota` 含 `gemini-5h`、`gemini-weekly`、`3p-5h`、`3p-weekly`、`gemini-argon-wtu-weekly`（Argon，只有每週）五個 bucket（AGY 1.4.0 實測）。HUD 的 hook 只把 bucket 的 `remaining_fraction` 與 `reset_time` 寫到設定資料夾的 `agy-quota.json`，不保存 email、路徑或其他欄位
-  - 啟用：`python main.py --install-agy-statusline`（會先備份 `settings.json` 為 `settings.json.bak-hud-<時間>`；已有其他 statusLine 時不覆蓋）；停用：`--uninstall-agy-statusline`。啟用後需重開 agy 互動模式
+  - 啟用：右鍵選單 → 更多 → AGY 週額度掛鉤 → 啟用（或 `python main.py --install-agy-statusline`）（會先備份 `settings.json` 為 `settings.json.bak-hud-<時間>`；已有其他 statusLine 時不覆蓋）；停用：`--uninstall-agy-statusline`。啟用後需重開 agy 互動模式
   - 限制：只有 agy 互動模式開著時才會更新；agy 沒開時沿用最後一次的值，已過重置時間的 bucket 會被丟棄。設定資料夾路徑含空白時無法安裝（agy 會把含引號的指令路徑當相對路徑）
   - Argon 以徽章顯示剩餘百分比（`Argon: NN%`），與 C/G 徽章方向一致
 - 已知限制：agy 面板的資料可能另走 gRPC（`google.gca.aicode.v1main`，對 REST 回 404）或需 CSRF token 的本機 language server，HUD 都不使用

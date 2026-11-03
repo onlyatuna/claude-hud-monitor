@@ -43,7 +43,7 @@ jobs:
             asset_name: ClaudeHUD-Rust-Linux-x64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -85,7 +85,7 @@ jobs:
           chmod +x "${{ matrix.asset_name }}"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
@@ -98,7 +98,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Download macOS slices
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: ClaudeHUD-Rust-macos-*
           merge-multiple: true
@@ -110,7 +110,7 @@ jobs:
           zip -r ClaudeHUD-Rust-macOS-Universal.zip ClaudeHUD
 
       - name: Upload universal binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ClaudeHUD-Rust-macOS-Universal.zip
           path: ClaudeHUD-Rust-macOS-Universal.zip
@@ -121,10 +121,10 @@ jobs:
     name: Build Python (windows-x86_64)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -147,7 +147,7 @@ jobs:
           if (Test-Path "dist/ClaudeHUD.exe") { Copy-Item "dist/ClaudeHUD.exe" "..\ClaudeHUD-Python-Windows-x64.exe" }
 
       - name: Upload Windows Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ClaudeHUD-Python-Windows-x64.exe
           path: ClaudeHUD-Python-Windows-x64.exe
@@ -157,10 +157,10 @@ jobs:
     name: Build Python (macos-arm64)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -184,7 +184,7 @@ jobs:
           zip -r ../../ClaudeHUD-Python-macOS-arm64.zip ClaudeHUD.app
 
       - name: Upload macOS Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ClaudeHUD-Python-macOS-arm64.zip
           path: ClaudeHUD-Python-macOS-arm64.zip
@@ -197,7 +197,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: release-dist/
           merge-multiple: true
@@ -209,7 +209,7 @@ jobs:
           cat SHA256SUMS.txt
 
       - name: Publish Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             release-dist/ClaudeHUD-Rust-Windows-x64.exe
@@ -218,6 +218,8 @@ jobs:
             release-dist/ClaudeHUD-Python-Windows-x64.exe
             release-dist/ClaudeHUD-Python-macOS-arm64.zip
             release-dist/SHA256SUMS.txt
+          body: |
+            **Rust 版平台支援**：正式支援 Windows x64（`ClaudeHUD-Rust-Windows-x64.exe`）。`ClaudeHUD-Rust-macOS-Universal.zip` 與 `ClaudeHUD-Rust-Linux-x64` 為實驗性產物：只保證能編譯，HUD 未在 macOS／Linux 實機驗證，macOS 上的滑鼠與鍵盤輸入尚未接到視窗。
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}

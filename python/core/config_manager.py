@@ -5,6 +5,7 @@ import tempfile
 import threading
 
 from core.logger import logger
+from core.config_schema import sanitize
 
 DEFAULT_CONFIG = {
     "window_x": None,
@@ -116,6 +117,9 @@ class ConfigManager:
                         self.data.update(saved)
                         if migrate_style(self.data, saved):
                             self.save()
+                        repaired = sanitize(self.data, DEFAULT_CONFIG)
+                        if repaired:
+                            logger.warning(f"[Config] Replaced invalid settings with defaults: {', '.join(repaired)}")
                 except Exception as e:
                     logger.error(f"[Config] Error loading config from {self.path}: {e}", exc_info=True)
 

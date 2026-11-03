@@ -1,0 +1,2411 @@
+{
+ "meta": {
+  "mode": "horizontal",
+  "dpr": 1.0,
+  "hud": [
+   0,
+   0,
+   690,
+   145
+  ]
+ },
+ "w": {
+  "claude.card": {
+   "rect": [
+    12,
+    32,
+    211,
+    103
+   ],
+   "sizeHint": [
+    122,
+    108
+   ],
+   "minimumSizeHint": [
+    122,
+    108
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "layout": {
+    "spacing": 5,
+    "margins": [
+     6,
+     4,
+     6,
+     4
+    ],
+    "sizeHint": [
+     122,
+     108
+    ],
+    "minimumSize": [
+     122,
+     108
+    ]
+   }
+  },
+  "claude.header": {
+   "spacing": 4,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    110,
+    14
+   ],
+   "minimumSize": [
+    110,
+    14
+   ],
+   "rect": [
+    18,
+    36,
+    199,
+    14
+   ]
+  },
+  "claude.m1_box": {
+   "spacing": 1,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    99,
+    38
+   ],
+   "minimumSize": [
+    99,
+    38
+   ],
+   "rect": [
+    18,
+    55,
+    199,
+    35
+   ],
+   "hdr": {
+    "spacing": 1,
+    "margins": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "sizeHint": [
+     82,
+     17
+    ],
+    "minimumSize": [
+     82,
+     17
+    ],
+    "rect": [
+     18,
+     55,
+     199,
+     14
+    ]
+   }
+  },
+  "claude.m2_box": {
+   "spacing": 1,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    99,
+    38
+   ],
+   "minimumSize": [
+    99,
+    38
+   ],
+   "rect": [
+    18,
+    95,
+    199,
+    36
+   ],
+   "hdr": {
+    "spacing": 1,
+    "margins": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "sizeHint": [
+     75,
+     17
+    ],
+    "minimumSize": [
+     75,
+     17
+    ],
+    "rect": [
+     18,
+     95,
+     199,
+     15
+    ]
+   }
+  },
+  "claude.dot": {
+   "rect": [
+    18,
+    36,
+    6,
+    14
+   ],
+   "sizeHint": [
+    6,
+    14
+   ],
+   "minimumSizeHint": [
+    6,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "●",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 6
+  },
+  "claude.title": {
+   "rect": [
+    28,
+    36,
+    71,
+    14
+   ],
+   "sizeHint": [
+    71,
+    14
+   ],
+   "minimumSizeHint": [
+    71,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    1,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "CLAUDE CODE",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 70
+  },
+  "claude.badge": {
+   "rect": [
+    192,
+    36,
+    25,
+    14
+   ],
+   "sizeHint": [
+    25,
+    14
+   ],
+   "minimumSizeHint": [
+    25,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 9,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 10,
+    "ascent": 8,
+    "descent": 2
+   },
+   "contentsMargins": [
+    5,
+    2,
+    5,
+    2
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 10
+  },
+  "claude.badge2": {
+   "visible": false
+  },
+  "claude.m1_label": {
+   "rect": [
+    18,
+    55,
+    65,
+    14
+   ],
+   "sizeHint": [
+    65,
+    14
+   ],
+   "minimumSizeHint": [
+    65,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 700,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "SESSION 5H",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 65
+  },
+  "claude.m1_val": {
+   "rect": [
+    201,
+    55,
+    16,
+    14
+   ],
+   "sizeHint": [
+    16,
+    17
+   ],
+   "minimumSizeHint": [
+    16,
+    17
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 14,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 17,
+    "ascent": 13,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 16
+  },
+  "claude.m1_bar": {
+   "rect": [
+    18,
+    70,
+    199,
+    5
+   ],
+   "sizeHint": [
+    99,
+    5
+   ],
+   "minimumSizeHint": [
+    99,
+    21
+   ],
+   "minimumSize": [
+    0,
+    5
+   ],
+   "maximumSize": [
+    16777215,
+    5
+   ],
+   "sizePolicy": [
+    7,
+    0
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "claude.m1_sub": {
+   "rect": [
+    18,
+    76,
+    199,
+    14
+   ],
+   "sizeHint": [
+    43,
+    14
+   ],
+   "minimumSizeHint": [
+    43,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "重設於: --",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 43
+  },
+  "claude.m2_label": {
+   "rect": [
+    18,
+    95,
+    58,
+    15
+   ],
+   "sizeHint": [
+    58,
+    14
+   ],
+   "minimumSizeHint": [
+    58,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 700,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "WEEKLY 7D",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 57
+  },
+  "claude.m2_val": {
+   "rect": [
+    201,
+    95,
+    16,
+    15
+   ],
+   "sizeHint": [
+    16,
+    17
+   ],
+   "minimumSizeHint": [
+    16,
+    17
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 14,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 17,
+    "ascent": 13,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 16
+  },
+  "claude.m2_bar": {
+   "rect": [
+    18,
+    111,
+    199,
+    5
+   ],
+   "sizeHint": [
+    99,
+    5
+   ],
+   "minimumSizeHint": [
+    99,
+    21
+   ],
+   "minimumSize": [
+    0,
+    5
+   ],
+   "maximumSize": [
+    16777215,
+    5
+   ],
+   "sizePolicy": [
+    7,
+    0
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "claude.m2_sub": {
+   "rect": [
+    18,
+    117,
+    199,
+    14
+   ],
+   "sizeHint": [
+    43,
+    14
+   ],
+   "minimumSizeHint": [
+    43,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "重設於: --",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 43
+  },
+  "agy.card": {
+   "rect": [
+    240,
+    32,
+    210,
+    103
+   ],
+   "sizeHint": [
+    122,
+    108
+   ],
+   "minimumSizeHint": [
+    122,
+    108
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "layout": {
+    "spacing": 5,
+    "margins": [
+     6,
+     4,
+     6,
+     4
+    ],
+    "sizeHint": [
+     122,
+     108
+    ],
+    "minimumSize": [
+     122,
+     108
+    ]
+   }
+  },
+  "agy.header": {
+   "spacing": 4,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    110,
+    14
+   ],
+   "minimumSize": [
+    110,
+    14
+   ],
+   "rect": [
+    246,
+    36,
+    198,
+    14
+   ]
+  },
+  "agy.m1_box": {
+   "spacing": 1,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    99,
+    38
+   ],
+   "minimumSize": [
+    99,
+    38
+   ],
+   "rect": [
+    246,
+    55,
+    198,
+    35
+   ],
+   "hdr": {
+    "spacing": 1,
+    "margins": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "sizeHint": [
+     82,
+     17
+    ],
+    "minimumSize": [
+     82,
+     17
+    ],
+    "rect": [
+     246,
+     55,
+     198,
+     14
+    ]
+   }
+  },
+  "agy.m2_box": {
+   "spacing": 1,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    99,
+    38
+   ],
+   "minimumSize": [
+    99,
+    38
+   ],
+   "rect": [
+    246,
+    95,
+    198,
+    36
+   ],
+   "hdr": {
+    "spacing": 1,
+    "margins": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "sizeHint": [
+     75,
+     17
+    ],
+    "minimumSize": [
+     75,
+     17
+    ],
+    "rect": [
+     246,
+     95,
+     198,
+     15
+    ]
+   }
+  },
+  "agy.dot": {
+   "rect": [
+    246,
+    36,
+    6,
+    14
+   ],
+   "sizeHint": [
+    6,
+    14
+   ],
+   "minimumSizeHint": [
+    6,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "●",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 6
+  },
+  "agy.title": {
+   "rect": [
+    256,
+    36,
+    71,
+    14
+   ],
+   "sizeHint": [
+    71,
+    14
+   ],
+   "minimumSizeHint": [
+    71,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    1,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "ANTIGRAVITY",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 70
+  },
+  "agy.badge": {
+   "rect": [
+    419,
+    36,
+    25,
+    14
+   ],
+   "sizeHint": [
+    25,
+    14
+   ],
+   "minimumSizeHint": [
+    25,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 9,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 10,
+    "ascent": 8,
+    "descent": 2
+   },
+   "contentsMargins": [
+    5,
+    2,
+    5,
+    2
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 10
+  },
+  "agy.badge2": {
+   "visible": false
+  },
+  "agy.m1_label": {
+   "rect": [
+    246,
+    55,
+    65,
+    14
+   ],
+   "sizeHint": [
+    65,
+    14
+   ],
+   "minimumSizeHint": [
+    65,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 700,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "SESSION 5H",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 65
+  },
+  "agy.m1_val": {
+   "rect": [
+    428,
+    55,
+    16,
+    14
+   ],
+   "sizeHint": [
+    16,
+    17
+   ],
+   "minimumSizeHint": [
+    16,
+    17
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 14,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 17,
+    "ascent": 13,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 16
+  },
+  "agy.m1_bar": {
+   "rect": [
+    246,
+    70,
+    198,
+    5
+   ],
+   "sizeHint": [
+    99,
+    5
+   ],
+   "minimumSizeHint": [
+    99,
+    21
+   ],
+   "minimumSize": [
+    0,
+    5
+   ],
+   "maximumSize": [
+    16777215,
+    5
+   ],
+   "sizePolicy": [
+    7,
+    0
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "agy.m1_sub": {
+   "rect": [
+    246,
+    76,
+    198,
+    14
+   ],
+   "sizeHint": [
+    43,
+    14
+   ],
+   "minimumSizeHint": [
+    43,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "重設於: --",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 43
+  },
+  "agy.m2_label": {
+   "rect": [
+    246,
+    95,
+    58,
+    15
+   ],
+   "sizeHint": [
+    58,
+    14
+   ],
+   "minimumSizeHint": [
+    58,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 700,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "WEEKLY 7D",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 57
+  },
+  "agy.m2_val": {
+   "rect": [
+    428,
+    95,
+    16,
+    15
+   ],
+   "sizeHint": [
+    16,
+    17
+   ],
+   "minimumSizeHint": [
+    16,
+    17
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 14,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 17,
+    "ascent": 13,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 16
+  },
+  "agy.m2_bar": {
+   "rect": [
+    246,
+    111,
+    198,
+    5
+   ],
+   "sizeHint": [
+    99,
+    5
+   ],
+   "minimumSizeHint": [
+    99,
+    21
+   ],
+   "minimumSize": [
+    0,
+    5
+   ],
+   "maximumSize": [
+    16777215,
+    5
+   ],
+   "sizePolicy": [
+    7,
+    0
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "agy.m2_sub": {
+   "rect": [
+    246,
+    117,
+    198,
+    14
+   ],
+   "sizeHint": [
+    43,
+    14
+   ],
+   "minimumSizeHint": [
+    43,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "重設於: --",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 43
+  },
+  "codex.card": {
+   "rect": [
+    467,
+    32,
+    211,
+    103
+   ],
+   "sizeHint": [
+    129,
+    108
+   ],
+   "minimumSizeHint": [
+    129,
+    108
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "layout": {
+    "spacing": 5,
+    "margins": [
+     6,
+     4,
+     6,
+     4
+    ],
+    "sizeHint": [
+     129,
+     108
+    ],
+    "minimumSize": [
+     129,
+     108
+    ]
+   }
+  },
+  "codex.header": {
+   "spacing": 4,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    117,
+    14
+   ],
+   "minimumSize": [
+    117,
+    14
+   ],
+   "rect": [
+    473,
+    36,
+    199,
+    14
+   ]
+  },
+  "codex.m1_box": {
+   "spacing": 1,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    99,
+    38
+   ],
+   "minimumSize": [
+    99,
+    38
+   ],
+   "rect": [
+    473,
+    55,
+    199,
+    35
+   ],
+   "hdr": {
+    "spacing": 1,
+    "margins": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "sizeHint": [
+     82,
+     17
+    ],
+    "minimumSize": [
+     82,
+     17
+    ],
+    "rect": [
+     473,
+     55,
+     199,
+     14
+    ]
+   }
+  },
+  "codex.m2_box": {
+   "spacing": 1,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    99,
+    38
+   ],
+   "minimumSize": [
+    99,
+    38
+   ],
+   "rect": [
+    473,
+    95,
+    199,
+    36
+   ],
+   "hdr": {
+    "spacing": 1,
+    "margins": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "sizeHint": [
+     75,
+     17
+    ],
+    "minimumSize": [
+     75,
+     17
+    ],
+    "rect": [
+     473,
+     95,
+     199,
+     15
+    ]
+   }
+  },
+  "codex.dot": {
+   "rect": [
+    473,
+    36,
+    6,
+    14
+   ],
+   "sizeHint": [
+    6,
+    14
+   ],
+   "minimumSizeHint": [
+    6,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "●",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 6
+  },
+  "codex.title": {
+   "rect": [
+    483,
+    36,
+    78,
+    14
+   ],
+   "sizeHint": [
+    78,
+    14
+   ],
+   "minimumSizeHint": [
+    78,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    1,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "OPENAI CODEX",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 78
+  },
+  "codex.badge": {
+   "rect": [
+    647,
+    36,
+    25,
+    14
+   ],
+   "sizeHint": [
+    25,
+    14
+   ],
+   "minimumSizeHint": [
+    25,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 9,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 10,
+    "ascent": 8,
+    "descent": 2
+   },
+   "contentsMargins": [
+    5,
+    2,
+    5,
+    2
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 10
+  },
+  "codex.badge2": {
+   "visible": false
+  },
+  "codex.m1_label": {
+   "rect": [
+    473,
+    55,
+    65,
+    14
+   ],
+   "sizeHint": [
+    65,
+    14
+   ],
+   "minimumSizeHint": [
+    65,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 700,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "SESSION 5H",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 65
+  },
+  "codex.m1_val": {
+   "rect": [
+    656,
+    55,
+    16,
+    14
+   ],
+   "sizeHint": [
+    16,
+    17
+   ],
+   "minimumSizeHint": [
+    16,
+    17
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 14,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 17,
+    "ascent": 13,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 16
+  },
+  "codex.m1_bar": {
+   "rect": [
+    473,
+    70,
+    199,
+    5
+   ],
+   "sizeHint": [
+    99,
+    5
+   ],
+   "minimumSizeHint": [
+    99,
+    21
+   ],
+   "minimumSize": [
+    0,
+    5
+   ],
+   "maximumSize": [
+    16777215,
+    5
+   ],
+   "sizePolicy": [
+    7,
+    0
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "codex.m1_sub": {
+   "rect": [
+    473,
+    76,
+    199,
+    14
+   ],
+   "sizeHint": [
+    43,
+    14
+   ],
+   "minimumSizeHint": [
+    43,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "重設於: --",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 43
+  },
+  "codex.m2_label": {
+   "rect": [
+    473,
+    95,
+    58,
+    15
+   ],
+   "sizeHint": [
+    58,
+    14
+   ],
+   "minimumSizeHint": [
+    58,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 700,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "WEEKLY 7D",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 57
+  },
+  "codex.m2_val": {
+   "rect": [
+    656,
+    95,
+    16,
+    15
+   ],
+   "sizeHint": [
+    16,
+    17
+   ],
+   "minimumSizeHint": [
+    16,
+    17
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 14,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 17,
+    "ascent": 13,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 16
+  },
+  "codex.m2_bar": {
+   "rect": [
+    473,
+    111,
+    199,
+    5
+   ],
+   "sizeHint": [
+    99,
+    5
+   ],
+   "minimumSizeHint": [
+    99,
+    21
+   ],
+   "minimumSize": [
+    0,
+    5
+   ],
+   "maximumSize": [
+    16777215,
+    5
+   ],
+   "sizePolicy": [
+    7,
+    0
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "codex.m2_sub": {
+   "rect": [
+    473,
+    117,
+    199,
+    14
+   ],
+   "sizeHint": [
+    43,
+    14
+   ],
+   "minimumSizeHint": [
+    43,
+    14
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "重設於: --",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 43
+  },
+  "hud.title_label": {
+   "rect": [
+    25,
+    8,
+    142,
+    18
+   ],
+   "sizeHint": [
+    142,
+    15
+   ],
+   "minimumSizeHint": [
+    142,
+    15
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 11,
+    "pt": -1.0,
+    "weight": 800,
+    "height": 15,
+    "ascent": 12,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "AI AGENT HUD (3-IN-1)",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 142
+  },
+  "hud.time_label": {
+   "rect": [
+    638,
+    8,
+    40,
+    18
+   ],
+   "sizeHint": [
+    40,
+    12
+   ],
+   "minimumSizeHint": [
+    40,
+    12
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Consolas",
+    "px": 10,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 12,
+    "ascent": 9,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "--:--:--",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 40
+  },
+  "hud.layout_toggle_btn": {
+   "rect": [
+    173,
+    8,
+    28,
+    18
+   ],
+   "sizeHint": [
+    28,
+    18
+   ],
+   "minimumSizeHint": [
+    28,
+    18
+   ],
+   "minimumSize": [
+    28,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    22
+   ],
+   "sizePolicy": [
+    1,
+    0
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": 11,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 14,
+    "ascent": 11,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "hud.status_dot": {
+   "rect": [
+    12,
+    8,
+    7,
+    18
+   ],
+   "sizeHint": [
+    7,
+    15
+   ],
+   "minimumSizeHint": [
+    7,
+    15
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Segoe UI",
+    "px": 11,
+    "pt": -1.0,
+    "weight": 400,
+    "height": 15,
+    "ascent": 12,
+    "descent": 3
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "text": "●",
+   "alignment": 129,
+   "margin": 0,
+   "indent": -1,
+   "textWidth": 7
+  },
+  "hud.ghost_label": {
+   "visible": false
+  },
+  "hud.header": {
+   "spacing": 6,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    235,
+    18
+   ],
+   "minimumSize": [
+    235,
+    18
+   ],
+   "rect": [
+    12,
+    8,
+    666,
+    18
+   ],
+   "expanding": 1
+  },
+  "hud.cards_container": {
+   "rect": [
+    12,
+    32,
+    666,
+    103
+   ],
+   "sizeHint": [
+    407,
+    108
+   ],
+   "minimumSizeHint": [
+    407,
+    108
+   ],
+   "minimumSize": [
+    0,
+    0
+   ],
+   "maximumSize": [
+    16777215,
+    16777215
+   ],
+   "sizePolicy": [
+    5,
+    5
+   ],
+   "font": {
+    "family": "Microsoft JhengHei UI",
+    "px": -1,
+    "pt": 9.0,
+    "weight": 400,
+    "height": 19,
+    "ascent": 15,
+    "descent": 4
+   },
+   "contentsMargins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "layout": {
+    "spacing": 6,
+    "margins": [
+     0,
+     0,
+     0,
+     0
+    ],
+    "sizeHint": [
+     407,
+     108
+    ],
+    "minimumSize": [
+     407,
+     108
+    ]
+   }
+  },
+  "hud.inner_layout": {
+   "spacing": 6,
+   "margins": [
+    12,
+    8,
+    12,
+    10
+   ],
+   "sizeHint": [
+    431,
+    150
+   ],
+   "minimumSize": [
+    431,
+    150
+   ],
+   "count": 2
+  },
+  "hud.root_layout": {
+   "spacing": 7,
+   "margins": [
+    0,
+    0,
+    0,
+    0
+   ],
+   "sizeHint": [
+    431,
+    150
+   ],
+   "minimumSize": [
+    431,
+    150
+   ]
+  }
+ }
+}

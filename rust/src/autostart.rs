@@ -1,7 +1,7 @@
 // src/autostart.rs — Platform autostart management
 // Mirrors Python core/autostart.py
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 use log::error;
 
 #[cfg(target_os = "windows")]
@@ -15,7 +15,10 @@ pub fn is_autostart_enabled() -> bool {
     #[cfg(target_os = "macos")]
     return macos_plist_path().exists();
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    return linux_desktop_path().exists();
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     false
 }
 
@@ -27,15 +30,18 @@ pub fn set_autostart(_enable: bool) -> bool {
     #[cfg(target_os = "macos")]
     return macos_set(_enable);
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    return linux_set(_enable);
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     false
 }
 
 // ── Windows ───────────────────────────────────────────────────────────────────
 #[cfg(target_os = "windows")]
 fn windows_is_enabled() -> bool {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let Ok(key) = hkcu.open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Run") else {
         return false;
@@ -45,8 +51,8 @@ fn windows_is_enabled() -> bool {
 
 #[cfg(target_os = "windows")]
 fn windows_set(enable: bool) -> bool {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     match hkcu.open_subkey_with_flags(
         r"Software\Microsoft\Windows\CurrentVersion\Run",
@@ -69,6 +75,24 @@ fn windows_set(enable: bool) -> bool {
             error!("[AutoStart] Cannot open registry key: {e}");
             false
         }
+    }
+}
+
+/// XML text escaping for plist values (Python `plistlib` escapes `&`, `<`, `>`).
+#[cfg(any(target_os = "macos", test))]
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::xml_escape;
+
+    #[test]
+    fn plist_values_are_xml_escaped() {
+        assert_eq!(xml_escape("/a&b/<c>"), "/a&amp;b/&lt;c&gt;");
     }
 }
 
@@ -102,7 +126,7 @@ fn macos_set(enable: bool) -> bool {
     <true/>
 </dict>
 </plist>"#,
-            exe
+            xml_escape(&exe)
         );
         if let Some(dir) = plist_path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -118,6 +142,50 @@ fn macos_set(enable: bool) -> bool {
             std::fs::remove_file(&plist_path)
                 .map_err(|e| error!("[AutoStart] {e}"))
                 .is_ok()
+        } else {
+            true
+        }
+    }
+}
+
+// ── Linux ─────────────────────────────────────────────────────────────────────
+#[cfg(target_os = "linux")]
+fn linux_desktop_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_owned());
+    std::path::PathBuf::from(home)
+        .join(".config")
+        .join("autostart")
+        .join("claude-hud-monitor.desktop")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_set(enable: bool) -> bool {
+    let desktop_path = linux_desktop_path();
+    if enable {
+        if let Some(parent) = desktop_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let exe = match std::env::current_exe() {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(e) => {
+                error!("[Autostart] Cannot determine current exe path: {e}");
+                return false;
+            }
+        };
+        let content = format!(
+            "[Desktop Entry]\nType=Application\nName=ClaudeHUDMonitor\nExec={}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
+            exe
+        );
+        match std::fs::write(&desktop_path, content) {
+            Ok(_) => true,
+            Err(e) => {
+                error!("[Autostart] Failed to write .desktop file: {e}");
+                false
+            }
+        }
+    } else {
+        if desktop_path.exists() {
+            std::fs::remove_file(&desktop_path).is_ok()
         } else {
             true
         }

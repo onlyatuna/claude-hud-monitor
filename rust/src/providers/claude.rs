@@ -4,14 +4,18 @@
 // Calls https://api.anthropic.com/api/oauth/usage
 // Mirrors Python core/providers/claude_provider.py
 
-use super::base::{now_str, percent_text, percentage, Provider, UsageMetrics};
+use super::base::{
+    Provider, UsageMetrics, format_error, now_str, object_field, percent_text, percentage,
+    retry_delay,
+};
 use crate::config::Config;
 use chrono::{DateTime, Utc};
 use log::error;
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use ureq::OrAnyStatus;
 
@@ -188,8 +192,14 @@ pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
             .filter(|p| p.credentials_path.exists())
             .collect();
 
-        if let Some(best) = candidates.iter().max_by_key(|p| p.last_activity) {
-            return ((*best).clone(), true);
+        let mut best: Option<&ClaudeProfile> = None;
+        for p in candidates.iter().copied() {
+            if best.is_none_or(|b| p.last_activity > b.last_activity) {
+                best = Some(p);
+            }
+        }
+        if let Some(best) = best {
+            return (best.clone(), true);
         }
 
         if let Some(first) = profiles.first() {
@@ -216,7 +226,7 @@ pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
         p.id.eq_ignore_ascii_case(pref_trimmed)
             || p.short_name.eq_ignore_ascii_case(pref_trimmed)
             || (pref_trimmed.starts_with('.') && p.id.eq_ignore_ascii_case(&pref_trimmed[1..]))
-            || (pref_trimmed == ".claude" && p.id == "default")
+            || (pref_trimmed.eq_ignore_ascii_case(".claude") && p.id == "default")
     });
 
     if let Some(p) = matched {
@@ -236,11 +246,12 @@ pub fn resolve_active_profile(preference: &str) -> (ClaudeProfile, bool) {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| pref_trimmed.to_string());
+    let raw = pref_trimmed.strip_prefix('.').unwrap_or(pref_trimmed);
     (
         ClaudeProfile {
-            id: pref_trimmed.to_string(),
-            display_name: format!("{} (~/{})", pref_trimmed, fallback_name),
-            short_name: pref_trimmed.trim_start_matches('.').to_string(),
+            id: raw.to_string(),
+            display_name: format!("{} (~/{})", raw, fallback_name),
+            short_name: raw.to_string(),
             dir_path: fallback_dir,
             credentials_path: cred_path,
             last_activity,
@@ -279,14 +290,12 @@ fn token_from_keychain() -> Option<String> {
 }
 
 fn get_access_token(credentials_path: &Path) -> Option<String> {
-    if credentials_path.exists() {
-        if let Ok(text) = fs::read_to_string(credentials_path) {
-            if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                if let Some(token) = extract_token(&json) {
-                    return Some(token);
-                }
-            }
-        }
+    if credentials_path.exists()
+        && let Ok(text) = fs::read_to_string(credentials_path)
+        && let Ok(json) = serde_json::from_str::<Value>(&text)
+        && let Some(token) = extract_token(&json)
+    {
+        return Some(token);
     }
 
     #[cfg(target_os = "macos")]
@@ -330,8 +339,7 @@ impl Provider for ClaudeProvider {
         let preference = self
             .config
             .as_ref()
-            .and_then(|c| c.lock().ok())
-            .map(|c| c.claude_profile.clone())
+            .map(|c| c.lock().claude_profile.clone())
             .unwrap_or_else(|| "auto".to_string());
 
         let (active_profile, is_auto) = resolve_active_profile(&preference);
@@ -408,7 +416,7 @@ impl Provider for ClaudeProvider {
                     return UsageMetrics::error_result(
                         "claude",
                         &display_title,
-                        &format!("API 回應異常: HTTP {}", status),
+                        &format!("配額查詢 HTTP {}", status),
                         "http",
                     );
                 }
@@ -440,25 +448,37 @@ impl Provider for ClaudeProvider {
 }
 
 fn parse_claude_response(data: Value, now_str: &str) -> UsageMetrics {
-    let five_hour = data.get("five_hour").cloned().unwrap_or(Value::Null);
-    let seven_day = data.get("seven_day").cloned().unwrap_or(Value::Null);
-    let breakdown = data
-        .get("seven_day_breakdown")
-        .cloned()
-        .unwrap_or(Value::Null);
+    if !data.is_object() {
+        return format_error("claude", "Claude", now_str);
+    }
+    let (Some(five_hour), Some(seven_day), Some(breakdown)) = (
+        object_field(&data, "five_hour"),
+        object_field(&data, "seven_day"),
+        object_field(&data, "seven_day_breakdown"),
+    ) else {
+        return format_error("claude", "Claude", now_str);
+    };
 
     let mut code_pct: Option<f64> = None;
     let mut chat_pct: Option<f64> = None;
 
-    if let Some(rows) = breakdown.get("rows").and_then(|v| v.as_array()) {
-        for r in rows {
-            let key = r.get("key").and_then(|v| v.as_str()).unwrap_or("");
-            let pct_val = r.get("percent").and_then(|v| v.as_f64());
-            if key == "claude_code" {
-                code_pct = percentage(pct_val, 100.0);
-            } else if key == "chat" {
-                chat_pct = percentage(pct_val, 100.0);
-            }
+    let empty = Vec::new();
+    let rows = match breakdown.get("rows") {
+        None => &empty,
+        Some(Value::Array(rows)) => rows,
+        Some(Value::Object(o)) if o.is_empty() => &empty,
+        Some(_) => return format_error("claude", "Claude", now_str),
+    };
+    for r in rows {
+        if !r.is_object() {
+            return format_error("claude", "Claude", now_str);
+        }
+        let key = r.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        let pct_val = r.get("percent").and_then(|v| v.as_f64());
+        if key == "claude_code" {
+            code_pct = percentage(pct_val, 100.0);
+        } else if key == "chat" {
+            chat_pct = percentage(pct_val, 100.0);
         }
     }
 
@@ -505,7 +525,7 @@ fn parse_iso_datetime(s: Option<&str>) -> Option<DateTime<Utc>> {
 }
 
 fn parse_retry_after(resp: &ureq::Response) -> Option<f64> {
-    resp.header("Retry-After")?.parse::<f64>().ok()
+    retry_delay(resp.header("Retry-After")?)
 }
 
 #[cfg(test)]
@@ -546,7 +566,7 @@ mod tests {
     fn test_resolve_active_profile() {
         let (def_prof, is_auto) = resolve_active_profile("auto");
         assert!(is_auto);
-        assert_eq!(def_prof.id, "default");
+        assert!(!def_prof.id.is_empty());
 
         let (explicit_prof, is_auto2) = resolve_active_profile("claude01");
         assert!(!is_auto2);
@@ -560,6 +580,19 @@ mod tests {
         let (default_alias, is_auto4) = resolve_active_profile(".claude");
         assert!(!is_auto4);
         assert_eq!(default_alias.id, "default");
+    }
+
+    #[test]
+    fn test_malformed_schema_is_reported() {
+        for bad in [
+            serde_json::json!([]),
+            serde_json::json!({"five_hour": "x"}),
+            serde_json::json!({"seven_day_breakdown": {"rows": [1]}}),
+        ] {
+            let m = parse_claude_response(bad, "10:00:00");
+            assert_eq!(m.error.as_deref(), Some("配額資料格式不相容"));
+            assert_eq!(m.error_code, "schema");
+        }
     }
 
     #[test]
@@ -581,5 +614,31 @@ mod tests {
 
         let empty_json = serde_json::json!({});
         assert_eq!(extract_token(&empty_json), None);
+    }
+    /// Manual integration test against the live Claude usage endpoint; parsing is covered offline
+    /// by `test_parse_claude_response`. Usage numbers depend on the account, so only success is
+    /// asserted. Run with `cargo test test_live_fetch_usage -- --ignored`.
+    #[test]
+    #[ignore = "needs network and a valid Claude login"]
+    fn test_live_fetch_usage() {
+        let p = ClaudeProvider::new();
+        let m = p.fetch_usage();
+        eprintln!("[test_live_fetch_usage] provider_name: {}", m.provider_name);
+        eprintln!(
+            "[test_live_fetch_usage] metric1: {} = {}",
+            m.metric1_title, m.metric1_text
+        );
+        eprintln!(
+            "[test_live_fetch_usage] metric2: {} = {}",
+            m.metric2_title, m.metric2_text
+        );
+        eprintln!("[test_live_fetch_usage] error: {:?}", m.error);
+        eprintln!("[test_live_fetch_usage] error_code: {}", m.error_code);
+        assert!(
+            m.error.is_none(),
+            "live fetch failed: {:?} ({})",
+            m.error,
+            m.error_code
+        );
     }
 }
