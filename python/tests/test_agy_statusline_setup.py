@@ -201,6 +201,32 @@ class ShortPathTests(Workspace):
         self.assertEqual(self.read_settings()['statusLine']['command'], f'python {short / HOOK}')
         self.assertTrue((config / HOOK).exists())                       # the file is written at the real path
 
+    def test_a_refused_attempt_leaves_no_directories_behind(self):
+        self.write_settings({})
+        config = self.spaced()
+        for answer in (None, str(config)):
+            with patch.object(agy.sys, 'platform', 'win32'), patch.object(agy, '_short_path', return_value=answer):
+                self.assertEqual(agy.install_statusline(self.settings, config, 'python'), 'unsupported_path')
+            self.assertFalse(config.exists())
+            self.assertFalse(config.parent.exists())          # the intermediate directory it made is gone too
+
+    def test_a_directory_that_was_already_there_is_kept(self):
+        self.write_settings({})
+        config = self.spaced()
+        config.mkdir(parents=True)
+        with patch.object(agy.sys, 'platform', 'win32'), patch.object(agy, '_short_path', return_value=None):
+            self.assertEqual(agy.install_statusline(self.settings, config, 'python'), 'unsupported_path')
+        self.assertTrue(config.is_dir())
+
+    def test_the_status_check_never_creates_anything(self):
+        self.write_settings({'statusLine': {'type': 'command', 'command': f'python {self.root / "JOHNSM~1" / HOOK}',
+                                            'enabled': True}})
+        config = self.spaced()
+        with patch.object(agy.sys, 'platform', 'win32'), patch.object(agy, '_short_path', return_value=str(self.root / 'JOHNSM~1')):
+            self.assertEqual(agy.statusline_status(self.settings, config), 'needs_update')
+        self.assertFalse(config.exists())
+        self.assertFalse(config.parent.exists())
+
     def test_windows_without_short_names_is_refused(self):
         self.write_settings({})
         for answer in (None, str(self.spaced())):

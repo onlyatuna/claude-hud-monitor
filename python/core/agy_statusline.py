@@ -192,21 +192,36 @@ def _short_path(path):
         return None
 
 
-def _command_hook_path(hook_path):
+def _command_hook_path(hook_path, create=True):
     """The hook path as it can appear in the command (agy's parsing of quotes is not known, so none is used).
 
     A path with spaces (a Windows user name such as 'John Smith') is written with its 8.3 directory name when the
-    volume has one; otherwise there is no safe spelling and the caller reports 'unsupported_path'.
+    volume has one; otherwise there is no safe spelling and None is returned. A short name only exists for a
+    directory that exists, so `create` makes it (and removes it again when it did not help); a read-only status
+    check passes create=False and creates nothing.
     """
     if not _needs_quoting(hook_path):
         return hook_path
     if sys.platform != 'win32':
         return None
     directory = os.path.dirname(hook_path)
-    os.makedirs(directory, exist_ok=True)           # a short name only exists for a directory that exists
-    short = _short_path(directory)
+    made = []                                              # directories created here, deepest first
+    if create:
+        ancestor = directory
+        while not os.path.isdir(ancestor) and ancestor != os.path.dirname(ancestor):
+            made.append(ancestor)
+            ancestor = os.path.dirname(ancestor)
+        os.makedirs(directory, exist_ok=True)
+    short = _short_path(directory) if os.path.isdir(directory) else None
     candidate = os.path.join(short, os.path.basename(hook_path)) if short else None
-    return candidate if candidate and not _needs_quoting(candidate) else None
+    if candidate and not _needs_quoting(candidate):
+        return candidate
+    for created in made:                                   # no short name: leave nothing behind
+        try:
+            os.rmdir(created)
+        except OSError:
+            break
+    return None
 
 
 def _hook_current(hook_path) -> bool:
@@ -238,7 +253,7 @@ def statusline_status(settings_path=None, config_dir=None) -> str:
             return 'conflict'
         config_dir = config_dir if config_dir is not None else get_user_config_dir()
         hook_path = os.path.abspath(os.path.join(config_dir, HOOK_FILENAME))
-        if not _hook_current(hook_path) or not _points_at(settings['statusLine'], _command_hook_path(hook_path)):
+        if not _hook_current(hook_path) or not _points_at(settings['statusLine'], _command_hook_path(hook_path, create=False)):
             return 'needs_update'
         return 'installed'
     except Exception:
@@ -253,9 +268,8 @@ def install_statusline(settings_path=None, config_dir=None, python_cmd=None):
         hook_path = os.path.abspath(os.path.join(config_dir, HOOK_FILENAME))
         if python_cmd is not None and any(character in '"\'' for character in python_cmd):
             return 'unsupported_path'
-        command_path = _command_hook_path(hook_path)
-        if command_path is None:
-            return 'unsupported_path'
+        if _needs_quoting(hook_path) and sys.platform != 'win32':
+            return 'unsupported_path'                       # nothing to try: refuse before touching anything
         settings_path = settings_path if settings_path is not None else agy_settings_path()
         if not os.path.isfile(settings_path):
             return 'agy_missing'
@@ -263,6 +277,9 @@ def install_statusline(settings_path=None, config_dir=None, python_cmd=None):
         statusline = settings.get('statusLine')
         if 'statusLine' in settings and not _owned(statusline):
             return 'conflict'
+        command_path = _command_hook_path(hook_path)        # on Windows this may need the directory to exist
+        if command_path is None:
+            return 'unsupported_path'
         ours_before = 'statusLine' in settings
         settings_ok = ours_before and _points_at(statusline, command_path)
         hook_ok = _hook_current(hook_path)
