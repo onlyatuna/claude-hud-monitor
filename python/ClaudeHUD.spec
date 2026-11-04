@@ -11,9 +11,9 @@ HIDDEN_IMPORTS = []
 if IS_MAC:
     HIDDEN_IMPORTS.extend(["pynput.keyboard._darwin", "pynput.mouse._darwin"])
 
-# Modules completely unused by ClaudeHUD (QWidget-only, standard urllib HTTP)
+# Modules completely unused by ClaudeHUD (QWidget-only, standard urllib HTTP).
+# QtNetwork is NOT excluded: system/single_instance.py needs QLocalServer/QLocalSocket.
 EXCLUDES = [
-    "PySide6.QtNetwork",
     "PySide6.QtQml",
     "PySide6.QtQuick",
     "PySide6.QtPdf",
@@ -34,7 +34,6 @@ EXCLUDED_MODULE_SUBSTRINGS = (
     "qtquick", "qt6quick",
     "qtsvg", "qt6svg",
     "qtvirtualkeyboard", "qt6virtualkeyboard",
-    "qtnetwork", "qt6network",
 )
 
 EXCLUDED_IMAGE_FORMATS = (
