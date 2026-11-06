@@ -28,6 +28,7 @@ ui/
   hud_window.rs          — main HUD window (header, cards/table/sidebar stack, ghost mode, sidebar docking, snap, resize, idle fade)
   sidebar.rs             — sidebar style: strip / panel / flyout tiles (port of ui/sidebar.py)
   dock_geometry.rs       — pure dock / snap / scale geometry (port of ui/dock_geometry.py)
+  dock_preview.rs        — translucent outline of where the dragged sidebar will dock (port of ui/dock_preview.py)
   gauge.rs               — green-to-red gauge colours and GaugeBar (port of ui/gauge.py)
   brand.rs               — service identity colours
   provider_card.rs       — provider metric card (gauge bars, drag-reorderable rows)
@@ -44,6 +45,8 @@ tools/                  — PySide6 probes, measurement and audit scripts
 ## Sidebar style
 
 `ui_mode = "sidebar"` is the default and is selectable from the UI Style menu next to `table` (the Classic Cards style is retired, as in the Python HUD; an old `ui_mode = "cards"` file migrates to the sidebar panel). The bar docks to a screen edge (`sidebar_edge`, `sidebar_offset`, or a free `sidebar_x`/`sidebar_y` when the edge is `none`), snaps to edges and corners when dragged, resizes by dragging any edge or corner or with Ctrl+wheel (`sidebar_scale`, 0.6–2.0), shows tiles (`strip`) or full cards (`panel`) per `sidebar_state`, opens a flyout on hover or click, and lets you reorder tiles (press-hold and drag; `provider_order`) and card rows (drag a row; `row_order`, `agy_order`). While idle it dims to `sidebar_idle_level` of the chosen opacity after `sidebar_idle_delay_ms` (`sidebar_idle_fade`). The keys, their names and defaults are those of the Python `config.json`, so the two builds share one file.
+
+While the bar is dragged within 24 px of a screen edge or corner, a translucent outline (`ui/dock_preview.rs`: a frameless, click-through, non-activating window; topmost only when `always_on_top`) shows the rectangle, size and orientation the bar takes when the drag ends. It is computed by the same `plan_sidebar_snap` / `dock_to_edge` steps `finish_sidebar_move` uses, so it cannot differ from the result; it is hidden when the drag ends, leaves the threshold, the bar is locked, in the table style, or during an edge/corner resize. Fill alpha 46, border alpha 235 (of 255), 2 px border, sidebar focus colour of the current theme, corner radius = sidebar radius × scale; the Python HUD uses the same values.
 
 ## Features
 

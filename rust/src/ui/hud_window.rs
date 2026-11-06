@@ -30,8 +30,9 @@ use parking_lot::Mutex;
 
 use super::dock_geometry::{
     DEFAULT_MARGIN, EDGES, Offset, Rect as GeoRect, dock_to_edge, orientation_for_edge,
-    pick_work_area, snap_rect, snap_rect_corner, step_scale,
+    pick_work_area, plan_sidebar_snap, sidebar_dock_target, snap_rect, step_scale,
 };
+use super::dock_preview::DockPreview;
 use super::provider_card::ProviderCardWidget;
 use super::round_mask::rounded_rects;
 use super::sidebar::{DEFAULT_ORDER, Orientation, Scheme, SidebarWidget, State};
@@ -478,6 +479,12 @@ pub struct HUDWindow {
     sidebar_hud: Rc<SidebarHud>,
     /// Python `QApplication.instance().installEventFilter(self)`.
     hud_filter: Option<OwnedObject<HudFilter>>,
+    /// Python `_dock_preview`: the outline of where the dragged bar will settle, created by the
+    /// first drag near an edge (`dock_preview_failed`: the window could not be made; logged once).
+    dock_preview: Option<DockPreview>,
+    dock_preview_failed: bool,
+    /// Python `_preview_sizes`: the bar's size per orientation, measured once per drag.
+    preview_sizes: HashMap<&'static str, (i32, i32)>,
     /// The root layout is the sidebar's (no header, no margins) rather than the cards / table one.
     sidebar_layout: bool,
     chrome: TableChrome,
@@ -801,6 +808,7 @@ impl HUDWindow {
             grip_cursor: Cell::new(false),
             snap_timer,
             fade_timer,
+            preview_pending: Cell::new(false),
             geom: Rc::clone(&geom_now),
             root: root.clone(),
             root_id: root.borrow().id(),
@@ -862,6 +870,11 @@ impl HUDWindow {
                     // `_finish_sidebar_move`; the position is saved there, not here
                     if !hud_state_events.docking.get() {
                         hud_state_events.snap_timer.start();
+                        // Python `moveEvent`: the dock preview follows the drag (one update per
+                        // burst of moves)
+                        if !hud_state_events.preview_pending.replace(true) {
+                            with_hud_later(|hud| hud.run_dock_preview_update());
+                        }
                     }
                     return;
                 }
@@ -919,6 +932,9 @@ impl HUDWindow {
             sidebar_cards: sidebar_cards.into_iter().collect(),
             sidebar_hud: Rc::clone(&sidebar_hud),
             hud_filter: None,
+            dock_preview: None,
+            dock_preview_failed: false,
+            preview_sizes: HashMap::new(),
             sidebar_layout: ui_mode == "sidebar",
             chrome,
             mask_key,
@@ -1027,6 +1043,7 @@ impl HUDWindow {
         self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
+        self.hide_dock_preview();
         self.sidebar.close_flyout();
     }
 
@@ -1144,6 +1161,7 @@ impl HUDWindow {
     }
 
     fn apply_ui_mode_internal(&mut self, mode: &str) {
+        self.hide_dock_preview();
         // Python `_apply_theme`: the mode picks which style sheet the labels cascade from.
         // `HUDWindow.setStyleSheet` is the window's own sheet; `Window::set_style_sheet` is scoped
         // to it now (RC-10) and a stale window sheet would win over the application's.
@@ -1513,6 +1531,8 @@ pub struct SidebarHud {
     snap_timer: Timer,
     /// Python `_fade_timer`.
     fade_timer: Timer,
+    /// An update of the dock preview is queued (moves arrive in bursts; one update serves them).
+    preview_pending: Cell<bool>,
     /// The window geometry as the window's events report it.
     geom: Rc<Cell<Rect>>,
     root: WidgetRef,
@@ -1924,32 +1944,29 @@ impl HUDWindow {
     /// and remember the position.
     pub fn finish_sidebar_move(&mut self) {
         if !self.is_sidebar_mode() || self.sidebar_hud.docking.get() {
+            self.hide_dock_preview();
             return;
         }
         if !ferrokit_widgets::application::Application::mouse_buttons().is_empty() {
             self.sidebar_hud.snap_timer.start();
+            self.update_dock_preview(true); // still dragging: follow a screen or layout change
             return;
         }
+        self.hide_dock_preview();
         let Some(work) = self.sidebar_work_area() else {
             return;
         };
         let g = self.window.geometry();
-        let current = {
-            let cfg = self.config.lock();
-            if cfg.sidebar_orientation == "horizontal" {
-                "horizontal"
-            } else {
-                "vertical"
-            }
-        };
+        let current = self.current_sidebar_orientation();
         // near a corner the bar keeps its orientation and sticks to the corner instead of turning sideways
-        let (rect, edge, offset) = snap_rect_corner(
+        let plan = plan_sidebar_snap(
             (g.x, g.y, g.width, g.height),
             work,
             SIDEBAR_SNAP_PX,
-            Some(current),
+            current,
         );
-        let orientation = orientation_for_edge(edge, current);
+        let (rect, edge, offset, orientation) =
+            (plan.rect, plan.edge, plan.offset, plan.orientation);
         ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.sidebar_edge = edge.unwrap_or("none").to_owned();
             cfg.sidebar_orientation = orientation.to_owned();
@@ -1969,6 +1986,96 @@ impl HUDWindow {
         self.dock_sidebar();
     }
 
+    /// The saved orientation (`config.get("sidebar_orientation", "vertical")`).
+    fn current_sidebar_orientation(&self) -> &'static str {
+        if self.config.lock().sidebar_orientation == "horizontal" {
+            "horizontal"
+        } else {
+            "vertical"
+        }
+    }
+
+    // ---- dock preview: the outline of where the dragged bar will settle ----
+
+    /// Python `_dock_preview_rect`: the rectangle `finish_sidebar_move` would dock the window to
+    /// right now, or None when there is nothing to preview: not a drag of the sidebar, locked, not
+    /// near an edge, or the window already sits there. `dragging`: a mouse button is held.
+    fn dock_preview_rect(&mut self, dragging: bool) -> Option<Rect> {
+        if !dragging
+            || !self.is_sidebar_mode()
+            || self.sidebar_hud.docking.get()
+            || self.sidebar_hud.resize.borrow().is_some()
+            || self.config.lock().locked
+        {
+            return None;
+        }
+        let work = self.sidebar_work_area()?;
+        let g = self.window.geometry();
+        let current = self.current_sidebar_orientation();
+        let target = {
+            let (sidebar, sizes) = (&self.sidebar, &mut self.preview_sizes);
+            sidebar_dock_target(
+                (g.x, g.y, g.width, g.height),
+                work,
+                SIDEBAR_SNAP_PX,
+                current,
+                |orientation| {
+                    *sizes.entry(orientation).or_insert_with(|| {
+                        sidebar.preferred_size_for(
+                            Orientation::parse(orientation).unwrap_or(Orientation::Vertical),
+                        )
+                    })
+                },
+            )?
+        };
+        let (x, y, w, h) = target.rect;
+        (target.rect != (g.x, g.y, g.width, g.height)).then(|| Rect::new(x, y, w, h))
+    }
+
+    /// The queued update of the dock preview (see `SidebarHud::preview_pending`).
+    fn run_dock_preview_update(&mut self) {
+        self.sidebar_hud.preview_pending.set(false);
+        self.update_dock_preview(
+            !ferrokit_widgets::application::Application::mouse_buttons().is_empty(),
+        );
+    }
+
+    /// Python `_update_dock_preview`.
+    pub(crate) fn update_dock_preview(&mut self, dragging: bool) {
+        let Some(rect) = self.dock_preview_rect(dragging) else {
+            if let Some(preview) = self.dock_preview.as_mut() {
+                preview.hide();
+            }
+            return;
+        };
+        if self.dock_preview.is_none() && !self.dock_preview_failed {
+            match DockPreview::new(&self.window) {
+                Ok(preview) => self.dock_preview = Some(preview),
+                Err(error) => {
+                    self.dock_preview_failed = true;
+                    log::warn!("[HUD] dock preview window not created: {error}");
+                }
+            }
+        }
+        let (scale, on_top) = {
+            let cfg = self.config.lock();
+            (cfg.sidebar_scale_setting(), cfg.always_on_top)
+        };
+        let dark = self.is_dark;
+        if let Some(preview) = self.dock_preview.as_mut() {
+            preview.show_at(rect, dark, scale, on_top);
+        }
+    }
+
+    /// Python `_hide_dock_preview`: the drag is over (or never was one): hide the outline and
+    /// forget the sizes measured for it.
+    pub(crate) fn hide_dock_preview(&mut self) {
+        self.preview_sizes.clear();
+        if let Some(preview) = self.dock_preview.as_mut() {
+            preview.hide();
+        }
+    }
+
     /// Python `_start_sidebar_drag`.
     fn start_sidebar_drag(&self) {
         if self.config.lock().locked {
@@ -1980,6 +2087,7 @@ impl HUDWindow {
     /// Python `_begin_resize` after the press (the state is set by the filter).
     fn begin_resize(&mut self) {
         self.sidebar.close_flyout();
+        self.hide_dock_preview();
         self.sidebar_hud.snap_timer.stop();
         self.window.root_widget().borrow().grab_mouse();
     }
@@ -3176,5 +3284,245 @@ mod sidebar_geometry_tests {
         assert_eq!(faded_opacity(0.88, 0.6, false), 0.88);
         assert!((faded_opacity(0.88, 0.6, true) - 0.528).abs() < 1e-6);
         assert!((faded_opacity(1.0, 0.2, true) - 0.2).abs() < 1e-6);
+    }
+}
+
+/// The dock preview against the real HUD window and the real preview window (Win32): the
+/// providers are stubs; a drag is the window's own move, as the system's drag loop makes it.
+#[cfg(all(test, windows))]
+mod dock_preview_tests {
+    use super::*;
+    use crate::config::SidebarOffset;
+    use crate::refresh_controller::RefreshController;
+
+    type Hwnd = *mut core::ffi::c_void;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
+        fn GetForegroundWindow() -> Hwnd;
+    }
+
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_TOPMOST: u32 = 0x0000_0008;
+    const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+
+    fn sidebar_hud(state: &str, configure: impl FnOnce(&mut Config)) -> HUDWindow {
+        let mut c = Config::default();
+        c.ui_mode = "sidebar".into();
+        c.sidebar_state = state.into();
+        c.sidebar_edge = "right".into();
+        c.sidebar_orientation = "vertical".into();
+        c.sidebar_offset = Some(SidebarOffset::At(100));
+        configure(&mut c);
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        HUDWindow::with_providers(
+            Arc::new(Mutex::new(c)),
+            ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap()
+    }
+
+    fn work(hud: &HUDWindow) -> GeoRect {
+        hud.sidebar_work_area().expect("a screen")
+    }
+
+    /// Moves the window the way a native drag does (the window's own move, not a docking) and lets
+    /// the preview follow; `dragging` stands for the held mouse button.
+    fn drag_to(hud: &mut HUDWindow, x: i32, y: i32, dragging: bool) {
+        let g = hud.window.geometry();
+        hud.window.set_geometry(Rect::new(x, y, g.width, g.height));
+        hud.update_dock_preview(dragging);
+    }
+
+    fn shown(hud: &HUDWindow) -> bool {
+        hud.dock_preview.as_ref().is_some_and(|p| p.is_visible())
+    }
+
+    fn preview_rect(hud: &HUDWindow) -> Rect {
+        hud.dock_preview.as_ref().expect("a preview").geometry()
+    }
+
+    #[test]
+    fn the_preview_shows_where_the_bar_docks_and_finish_docks_onto_it() {
+        for state in ["strip", "panel"] {
+            let mut hud = sidebar_hud(state, |_| {});
+            let w = work(&hud);
+            let start = hud.window.geometry();
+            assert!(hud.dock_preview.is_none());
+            let orientation = hud.sidebar.orientation();
+
+            // far from every edge: no preview
+            drag_to(&mut hud, w.0 + w.2 / 2 - 40, w.1 + w.3 / 2 - 60, true);
+            assert!(!shown(&hud), "{state}");
+
+            // near the top edge: the bar would turn horizontal and the preview has that shape
+            drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+            assert!(shown(&hud), "{state}");
+            let top = preview_rect(&hud);
+            assert!(top.width > top.height, "{state}");
+            assert_eq!(top.y, w.1, "{state}");
+            // the real window and its layout are untouched while the preview is up
+            let g = hud.window.geometry();
+            assert_eq!((g.width, g.height), (start.width, start.height), "{state}");
+            assert_eq!((g.x, g.y), (w.0 + 150, w.1 + 4), "{state}");
+            assert_eq!(hud.sidebar.orientation(), orientation, "{state}");
+
+            // dragging on along the edge follows the pointer
+            drag_to(&mut hud, w.0 + 60, w.1 + 9, true);
+            assert_eq!(preview_rect(&hud).x, w.0 + 60, "{state}");
+
+            // the left edge flips it back to the vertical shape
+            drag_to(&mut hud, w.0 + 6, w.1 + 120, true);
+            let left = preview_rect(&hud);
+            assert!(left.height > left.width, "{state}");
+
+            // back at the top edge: finishing docks exactly onto the preview and hides it
+            drag_to(&mut hud, w.0 + 200, w.1 + 4, true);
+            let before_finish = preview_rect(&hud);
+            hud.finish_sidebar_move();
+            assert_eq!(hud.window.geometry(), before_finish, "{state}");
+            assert!(!shown(&hud), "{state}");
+            assert_eq!(hud.config.lock().sidebar_edge, "top", "{state}");
+        }
+    }
+
+    #[test]
+    fn a_corner_keeps_the_orientation_and_the_preview_matches_the_result() {
+        let mut hud = sidebar_hud("strip", |_| {});
+        let w = work(&hud);
+        let g = hud.window.geometry();
+        drag_to(
+            &mut hud,
+            w.0 + w.2 - g.width - 3,
+            w.1 + w.3 - g.height - 8,
+            true,
+        );
+        let target = preview_rect(&hud);
+        assert_eq!((target.width, target.height), (g.width, g.height));
+        assert_eq!(
+            (target.x + target.width, target.y + target.height),
+            (w.0 + w.2, w.1 + w.3)
+        );
+        hud.finish_sidebar_move();
+        assert_eq!(hud.window.geometry(), target);
+        assert_eq!(hud.config.lock().sidebar_edge, "right");
+    }
+
+    #[test]
+    fn the_preview_hides_when_there_is_nothing_to_dock() {
+        let mut hud = sidebar_hud("strip", |_| {});
+        let w = work(&hud);
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        // left the snap distance
+        drag_to(&mut hud, w.0 + 150, w.1 + 60, true);
+        assert!(!shown(&hud));
+        // a move with no button held is not a drag
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        drag_to(&mut hud, w.0 + 151, w.1 + 4, false);
+        assert!(!shown(&hud));
+        // locked
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        hud.config.lock().locked = true;
+        drag_to(&mut hud, w.0 + 152, w.1 + 4, true);
+        assert!(!shown(&hud));
+        hud.config.lock().locked = false;
+        // a resize drag
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        *hud.sidebar_hud.resize.borrow_mut() = Some(ResizeState {
+            start: Point::new(0, 0),
+            geom: hud.window.geometry(),
+            scale: 1.0,
+            zone: "l".into(),
+        });
+        hud.update_dock_preview(true);
+        assert!(!shown(&hud));
+        *hud.sidebar_hud.resize.borrow_mut() = None;
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        hud.begin_resize();
+        assert!(!shown(&hud));
+        hud.cancel_resize();
+        // the window already sits where it would dock
+        hud.dock_sidebar();
+        let g = hud.window.geometry();
+        drag_to(&mut hud, g.x, g.y, true);
+        assert!(!shown(&hud));
+        // the table style
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        hud.apply_ui_mode("table");
+        assert!(!shown(&hud));
+        assert!(hud.dock_preview_rect(true).is_none());
+    }
+
+    #[test]
+    fn the_preview_window_is_click_through_and_never_takes_the_focus() {
+        for on_top in [true, false] {
+            let mut hud = sidebar_hud("strip", |c| c.always_on_top = on_top);
+            let w = work(&hud);
+            let foreground = unsafe { GetForegroundWindow() };
+            drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+            assert!(shown(&hud));
+            let preview = hud.dock_preview.as_ref().unwrap();
+            let flags = preview.window().window_flags();
+            for flag in [
+                WindowFlags::FRAMELESS,
+                WindowFlags::TOOL,
+                WindowFlags::TOOLTIP,
+                WindowFlags::CLICK_THROUGH,
+            ] {
+                assert!(flags.contains(flag), "{flag:?}");
+            }
+            assert_eq!(flags.contains(WindowFlags::STAYS_ON_TOP), on_top);
+            let style = unsafe {
+                GetWindowLongW(preview.window().native_handle() as Hwnd, GWL_EXSTYLE) as u32
+            };
+            for bit in [WS_EX_TRANSPARENT, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW] {
+                assert_ne!(style & bit, 0, "{bit:#x} in {style:#x}");
+            }
+            assert_eq!(style & WS_EX_TOPMOST != 0, on_top);
+            assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+
+            // the setting can change between drags
+            hud.config.lock().always_on_top = !on_top;
+            drag_to(&mut hud, w.0 + 152, w.1 + 4, true);
+            let preview = hud.dock_preview.as_ref().unwrap();
+            let style = unsafe {
+                GetWindowLongW(preview.window().native_handle() as Hwnd, GWL_EXSTYLE) as u32
+            };
+            assert_eq!(style & WS_EX_TOPMOST != 0, !on_top);
+        }
+    }
+
+    #[test]
+    fn the_preview_paints_a_translucent_rounded_outline_in_the_theme_colour() {
+        use crate::ui::dock_preview::{DOCK_PREVIEW_BORDER_ALPHA, DOCK_PREVIEW_FILL_ALPHA};
+        for dark in [true, false] {
+            let mut hud = sidebar_hud("strip", |c| {
+                c.appearance = if dark { "dark" } else { "light" }.into()
+            });
+            hud.is_dark = dark;
+            let w = work(&hud);
+            drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+            let preview = hud.dock_preview.as_ref().unwrap();
+            let store = preview.window().backing_store();
+            let pixmap = store.pixmap();
+            let (pw, ph) = (store.physical_width(), store.physical_height());
+            let alpha = |x: u32, y: u32| pixmap.pixel(x, y).unwrap().alpha();
+            assert_eq!(alpha(pw / 2, ph / 2), DOCK_PREVIEW_FILL_ALPHA);
+            assert_eq!(alpha(0, 0), 0, "the rounded corner is see-through");
+            assert!(
+                alpha(pw / 2, 0) > DOCK_PREVIEW_BORDER_ALPHA - 10,
+                "the outline"
+            );
+        }
     }
 }
