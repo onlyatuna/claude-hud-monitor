@@ -557,9 +557,9 @@ class HUDWindow(QWidget):
                 self._dock_preview.hide()
             return
         if self._dock_preview is None:
-            self._dock_preview = DockPreview(self)
+            self._dock_preview = DockPreview()
         self._dock_preview.show_at(rect, self.theme() is THEMES["dark"], self._sidebar_scale(),
-                                   bool(self.config.get("always_on_top", True)))
+                                   bool(self.config.get("always_on_top", True)), anchor=self)
 
     def _hide_dock_preview(self):
         """The drag is over (or never was one): hide the outline and forget the sizes measured for it."""
@@ -1032,6 +1032,9 @@ class HUDWindow(QWidget):
 
     def closeEvent(self, event):
         self._hide_dock_preview()
+        if self._dock_preview is not None:      # not owned by the HUD (it has to sit below it), so it goes with it
+            self._dock_preview.deleteLater()
+            self._dock_preview = None
         self._persist_geometry()
         super().closeEvent(event)
 

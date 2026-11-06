@@ -514,6 +514,28 @@ class HudTests(unittest.TestCase):
             finally:
                 self._close(hud)
 
+    def test_dock_preview_is_an_unowned_window_stacked_directly_below_the_hud(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                with patch('ui.dock_preview.stack_below') as stack:
+                    self._drag_to(hud, work.x() + 150, work.y() + 4)
+                    self._drag_to(hud, work.x() + 160, work.y() + 4)
+                # an owned window would be kept above its owner by Windows
+                self.assertIsNone(hud._dock_preview.parent())
+                # every update re-stacks the outline under the HUD
+                self.assertEqual([c.args for c in stack.call_args_list], [(hud._dock_preview, hud)] * 2)
+                with patch('ui.dock_preview.stack_below') as stack:
+                    self._drag_to(hud, work.x() + 160, work.y() + 80)      # no preview, nothing to stack
+                    stack.assert_not_called()
+                preview = hud._dock_preview
+            finally:
+                self._close(hud)
+            self.assertIsNone(hud._dock_preview)
+            self.assertFalse(preview.isVisible())
+
     def test_dock_preview_window_is_click_through_and_never_takes_focus(self):
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QGuiApplication
