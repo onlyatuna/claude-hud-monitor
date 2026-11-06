@@ -53,8 +53,8 @@ pub fn preview_flags() -> WindowFlags {
         | WindowFlags::CLICK_THROUGH
 }
 
-/// Python `DockPreview`: a frameless, click-through, non-activating top-level, owned by the HUD
-/// window, that outlines the docked rectangle of the dragged HUD.
+/// Python `DockPreview`: a frameless, click-through, non-activating top-level (it has no owner
+/// window), that outlines the docked rectangle of the dragged HUD.
 pub struct DockPreview {
     window: Window,
     /// `(dark, scale)` the paint handler reads.
@@ -64,8 +64,10 @@ pub struct DockPreview {
 }
 
 impl DockPreview {
-    pub fn new(owner: &Window) -> Result<Self, &'static str> {
-        let window = Window::with_parent(owner, "", Rect::new(0, 0, 1, 1), preview_flags())?;
+    pub fn new() -> Result<Self, &'static str> {
+        // No owner window: Windows keeps an owned window above its owner, and the outline must
+        // sit behind the HUD.
+        let window = Window::new("", Rect::new(0, 0, 1, 1), preview_flags())?;
         let style = Rc::new(Cell::new((true, 1.0)));
         {
             let style = Rc::clone(&style);
@@ -115,6 +117,14 @@ impl DockPreview {
         if !self.window.is_visible() {
             self.window.show();
         }
+    }
+
+    /// Keeps the outline directly below the dragged HUD in the window stacking order (Python
+    /// `stack_below`). The single place that orders the two windows; called after every `show_at`.
+    /// Waits for ferrokit's `Window::stack_under(&self, sibling: &Window)` (not in the pinned
+    /// revision): until the pin moves, the order is whatever the system gave the new window.
+    pub fn stack_below(&self, hud: &Window) {
+        let _ = hud;
     }
 
     pub fn hide(&mut self) {

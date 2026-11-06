@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::Local;
 use ferrokit_core::QObject;
@@ -29,8 +29,9 @@ use ferrokit_widgets::{
 use parking_lot::Mutex;
 
 use super::dock_geometry::{
-    DEFAULT_MARGIN, EDGES, Offset, Rect as GeoRect, dock_to_edge, orientation_for_edge,
-    pick_work_area, plan_sidebar_snap, sidebar_dock_target, snap_rect, step_scale,
+    DEFAULT_MARGIN, EDGES, Offset, Rect as GeoRect, SNAP_ANIM_FRAME_MS, SnapAnimation,
+    dock_to_edge, orientation_for_edge, pick_work_area, plan_sidebar_snap, sidebar_dock_target,
+    snap_rect, step_scale,
 };
 use super::dock_preview::DockPreview;
 use super::provider_card::ProviderCardWidget;
@@ -802,6 +803,13 @@ impl HUDWindow {
         fade_timer.timeout.connect_local(|()| {
             with_hud_retry(|hud| hud.apply_opacity());
         });
+        // Python `_snap_frame_timer`: one frame of the glide onto the docked rectangle; a frame that
+        // finds the HUD busy is skipped (the next one carries on from the clock).
+        let snap_frame_timer = Timer::new();
+        snap_frame_timer.set_interval(SNAP_ANIM_FRAME_MS);
+        snap_frame_timer.timeout.connect_local(|()| {
+            with_hud(|hud| hud.snap_animation_step());
+        });
         let sidebar_hud = Rc::new(SidebarHud {
             docking: Cell::new(false),
             resize: RefCell::new(None),
@@ -809,6 +817,9 @@ impl HUDWindow {
             snap_timer,
             fade_timer,
             preview_pending: Cell::new(false),
+            snap_anim: RefCell::new(None),
+            snap_clock: Cell::new(None),
+            snap_frame_timer,
             geom: Rc::clone(&geom_now),
             root: root.clone(),
             root_id: root.borrow().id(),
@@ -869,6 +880,7 @@ impl HUDWindow {
                     // Python `moveEvent`: a move that is not the docking itself settles in
                     // `_finish_sidebar_move`; the position is saved there, not here
                     if !hud_state_events.docking.get() {
+                        hud_state_events.stop_snap_animation(); // not the glide's own move: the user took the bar over
                         hud_state_events.snap_timer.start();
                         // Python `moveEvent`: the dock preview follows the drag (one update per
                         // burst of moves)
@@ -888,7 +900,10 @@ impl HUDWindow {
             EventKind::MouseButtonRelease { .. } | EventKind::Close => {
                 persist_rect(&debouncer_events, geom_now.get());
             }
-            EventKind::Hide => schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS),
+            EventKind::Hide => {
+                hud_state_events.stop_snap_animation();
+                schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS)
+            }
             // Python `mouseDoubleClickEvent` (left): refresh now
             EventKind::MouseButtonDblClick { button: 1, .. } => {
                 event.accept();
@@ -1040,6 +1055,7 @@ impl HUDWindow {
     }
 
     pub fn hide(&mut self) {
+        self.cancel_snap_animation(true); // a hide (hotkey, tray) leaves the bar on its docked place
         self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
@@ -1161,6 +1177,7 @@ impl HUDWindow {
     }
 
     fn apply_ui_mode_internal(&mut self, mode: &str) {
+        self.cancel_snap_animation(false);
         self.hide_dock_preview();
         // Python `_apply_theme`: the mode picks which style sheet the labels cascade from.
         // `HUDWindow.setStyleSheet` is the window's own sheet; `Window::set_style_sheet` is scoped
@@ -1533,6 +1550,12 @@ pub struct SidebarHud {
     fade_timer: Timer,
     /// An update of the dock preview is queued (moves arrive in bursts; one update serves them).
     preview_pending: Cell<bool>,
+    /// Python `_snap_anim`: the glide onto the docked rectangle, while there is one.
+    snap_anim: RefCell<Option<SnapAnimation>>,
+    /// When the glide started (Python `_snap_clock`).
+    snap_clock: Cell<Option<Instant>>,
+    /// Python `_snap_frame_timer`.
+    snap_frame_timer: Timer,
     /// The window geometry as the window's events report it.
     geom: Rc<Cell<Rect>>,
     root: WidgetRef,
@@ -1705,6 +1728,14 @@ fn is_filtered_kind(kind: &EventKind) -> bool {
 }
 
 impl SidebarHud {
+    /// Python `_cancel_snap_animation` without the settling: stops the glide's frame timer and
+    /// forgets it, so the window stays where it is. Returns whether a glide was running.
+    fn stop_snap_animation(&self) -> bool {
+        self.snap_frame_timer.stop();
+        self.snap_clock.set(None);
+        self.snap_anim.borrow_mut().take().is_some()
+    }
+
     /// Python `_set_grip_cursor`.
     fn set_grip_cursor(&self, zone: Option<&str>) {
         use ferrokit_widgets::application::Application;
@@ -1774,6 +1805,10 @@ impl QObject for HudFilter {
                 }),
                 _ => {}
             }
+        }
+        // the user takes the bar over: a running glide stops and the window stays where it is
+        if matches!(event.kind, EventKind::MouseButtonPress { .. }) {
+            hud.stop_snap_animation();
         }
         if hud.resize.borrow().is_some() {
             let buttons_up = ferrokit_widgets::application::Application::mouse_buttons().is_empty();
@@ -1907,37 +1942,100 @@ impl HUDWindow {
         pick_work_area((c.x, c.y), &areas)
     }
 
-    /// Python `_dock_sidebar`: places the bar on its saved edge (or saved free position) of the
-    /// current screen.
-    fn dock_sidebar(&mut self) {
-        let Some(work) = self.sidebar_work_area() else {
-            return;
-        };
+    /// Python `_dock_rect`: the rectangle the bar takes on its saved edge (or saved free position)
+    /// of the current screen.
+    fn dock_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        let work = self.sidebar_work_area()?;
         let (w, h) = self.sidebar.preferred_size();
-        let rect = {
-            let cfg = self.config.lock();
-            match self.sidebar_edge_of(&cfg) {
-                Some(edge) => {
-                    let offset = cfg.sidebar_offset.map(|o| match o {
-                        crate::config::SidebarOffset::At(n) => Offset::Start(n),
-                        crate::config::SidebarOffset::End => Offset::End,
-                    });
-                    dock_to_edge(work, edge, w, h, offset, DEFAULT_MARGIN)
-                }
-                None => {
-                    let (x, y) = match (cfg.sidebar_x, cfg.sidebar_y) {
-                        (Some(x), Some(y)) => (x, y),
-                        _ => (work.0 + work.2, work.1 + work.3),
-                    };
-                    Some(snap_rect((x, y, w, h), work, -1_000_000).0)
-                }
+        let cfg = self.config.lock();
+        match self.sidebar_edge_of(&cfg) {
+            Some(edge) => {
+                let offset = cfg.sidebar_offset.map(|o| match o {
+                    crate::config::SidebarOffset::At(n) => Offset::Start(n),
+                    crate::config::SidebarOffset::End => Offset::End,
+                });
+                dock_to_edge(work, edge, w, h, offset, DEFAULT_MARGIN)
             }
-        };
-        let Some((x, y, w, h)) = rect else { return };
+            None => {
+                let (x, y) = match (cfg.sidebar_x, cfg.sidebar_y) {
+                    (Some(x), Some(y)) => (x, y),
+                    _ => (work.0 + work.2, work.1 + work.3),
+                };
+                Some(snap_rect((x, y, w, h), work, -1_000_000).0)
+            }
+        }
+    }
+
+    /// Python `_place`: gives the window exactly `rect`; the move is the docking's own, so it does
+    /// not restart the snap timer.
+    fn place(&mut self, (x, y, w, h): (i32, i32, i32, i32)) {
         self.sidebar_hud.docking.set(true);
         self.window.set_fixed_size(w, h);
         self.window.set_geometry(Rect::new(x, y, w, h));
         self.sidebar_hud.docking.set(false);
+    }
+
+    /// Python `_dock_sidebar`: places the bar on its saved edge (or saved free position) of the
+    /// current screen.
+    fn dock_sidebar(&mut self) {
+        self.cancel_snap_animation(false);
+        if let Some(rect) = self.dock_rect() {
+            self.place(rect);
+        }
+    }
+
+    /// Python `_dock_sidebar_animated`: `dock_sidebar`, gliding from where the window is to the
+    /// docked rectangle (`SNAP_ANIM_MS`, ease-out). Docks at once when there is nothing to glide:
+    /// same rectangle, hidden window, reduced motion.
+    fn dock_sidebar_animated(&mut self) {
+        let rect = self.dock_rect();
+        let g = self.window.geometry();
+        let start = (g.x, g.y, g.width, g.height);
+        let Some(rect) = rect.filter(|rect| {
+            *rect != start && self.window.is_visible() && super::sidebar::animations_enabled()
+        }) else {
+            self.dock_sidebar();
+            return;
+        };
+        self.cancel_snap_animation(false);
+        *self.sidebar_hud.snap_anim.borrow_mut() = Some(SnapAnimation::new(start, rect));
+        self.sidebar_hud.snap_clock.set(Some(Instant::now()));
+        self.sidebar_hud.snap_frame_timer.start();
+    }
+
+    /// One frame of the glide (the frame timer's slot).
+    fn snap_animation_step(&mut self) {
+        let elapsed = self
+            .sidebar_hud
+            .snap_clock
+            .get()
+            .map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
+        self.snap_animation_step_at(elapsed);
+    }
+
+    /// The frame of the glide `elapsed_ms` after its start.
+    fn snap_animation_step_at(&mut self, elapsed_ms: f64) {
+        let Some(anim) = *self.sidebar_hud.snap_anim.borrow() else {
+            self.sidebar_hud.snap_frame_timer.stop();
+            return;
+        };
+        let (rect, done) = anim.frame(elapsed_ms);
+        if done {
+            self.dock_sidebar(); // the last frame is the plain docking: identical result with or without glide
+        } else {
+            self.place(rect);
+        }
+    }
+
+    /// Python `_cancel_snap_animation`: stops a running snap animation. The window stays where it
+    /// is, unless `settle`: then it takes its docked rectangle at once (for a lock, a hide:
+    /// nothing is left half way). Returns whether one was running.
+    pub fn cancel_snap_animation(&mut self, settle: bool) -> bool {
+        let was_running = self.sidebar_hud.stop_snap_animation();
+        if was_running && settle {
+            self.dock_sidebar();
+        }
+        was_running
     }
 
     /// Python `_finish_sidebar_move`: after a drag, snap to the nearest screen edge (or stay free)
@@ -1953,6 +2051,9 @@ impl HUDWindow {
             return;
         }
         self.hide_dock_preview();
+        if self.sidebar_hud.snap_anim.borrow().is_some() {
+            return; // already gliding onto its place
+        }
         let Some(work) = self.sidebar_work_area() else {
             return;
         };
@@ -1983,7 +2084,7 @@ impl HUDWindow {
         self.sidebar
             .set_orientation(Orientation::parse(orientation).unwrap_or(Orientation::Vertical));
         self.sidebar.set_dock_edge(edge);
-        self.dock_sidebar();
+        self.dock_sidebar_animated();
     }
 
     /// The saved orientation (`config.get("sidebar_orientation", "vertical")`).
@@ -2049,7 +2150,7 @@ impl HUDWindow {
             return;
         };
         if self.dock_preview.is_none() && !self.dock_preview_failed {
-            match DockPreview::new(&self.window) {
+            match DockPreview::new() {
                 Ok(preview) => self.dock_preview = Some(preview),
                 Err(error) => {
                     self.dock_preview_failed = true;
@@ -2064,6 +2165,7 @@ impl HUDWindow {
         let dark = self.is_dark;
         if let Some(preview) = self.dock_preview.as_mut() {
             preview.show_at(rect, dark, scale, on_top);
+            preview.stack_below(&self.window);
         }
     }
 
@@ -2087,6 +2189,7 @@ impl HUDWindow {
     /// Python `_begin_resize` after the press (the state is set by the filter).
     fn begin_resize(&mut self) {
         self.sidebar.close_flyout();
+        self.cancel_snap_animation(false);
         self.hide_dock_preview();
         self.sidebar_hud.snap_timer.stop();
         self.window.root_widget().borrow().grab_mouse();
@@ -3301,6 +3404,15 @@ mod dock_preview_tests {
     unsafe extern "system" {
         fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
         fn GetForegroundWindow() -> Hwnd;
+        fn SetWindowPos(
+            hwnd: Hwnd,
+            after: Hwnd,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
     }
 
     const GWL_EXSTYLE: i32 = -20;
@@ -3524,5 +3636,224 @@ mod dock_preview_tests {
                 "the outline"
             );
         }
+    }
+
+    // ---- the snap glide ----
+
+    /// Forces the system motion setting for a test and puts it back afterwards.
+    struct Motion(ferrokit_gui::application::MotionPreference);
+
+    impl Motion {
+        fn set(reduced: bool) -> Self {
+            use ferrokit_gui::application::{
+                GuiApplication, MotionPreference, set_system_motion_preference,
+            };
+            let before = GuiApplication::motion_preference();
+            set_system_motion_preference(if reduced {
+                MotionPreference::ReducedMotion
+            } else {
+                MotionPreference::NoPreference
+            });
+            Motion(before)
+        }
+    }
+
+    impl Drop for Motion {
+        fn drop(&mut self) {
+            ferrokit_gui::application::set_system_motion_preference(self.0);
+        }
+    }
+
+    fn shown_hud(state: &str) -> HUDWindow {
+        let mut hud = sidebar_hud(state, |_| {});
+        hud.window.show();
+        hud
+    }
+
+    /// The window dropped `y` px below the top edge with no button held, and the snap timer's slot run.
+    fn release_at_top(hud: &mut HUDWindow, w: GeoRect, y: i32) {
+        hud.sidebar_hud.stop_snap_animation();
+        hud.sidebar_hud.snap_timer.stop();
+        let g = hud.window.geometry();
+        hud.sidebar_hud.docking.set(true);
+        hud.window
+            .set_geometry(Rect::new(w.0 + 150, w.1 + y, g.width, g.height));
+        hud.sidebar_hud.docking.set(false);
+        hud.finish_sidebar_move();
+    }
+
+    fn gliding(hud: &HUDWindow) -> bool {
+        hud.sidebar_hud.snap_anim.borrow().is_some()
+    }
+
+    fn geometry(hud: &HUDWindow) -> (i32, i32, i32, i32) {
+        let g = hud.window.geometry();
+        (g.x, g.y, g.width, g.height)
+    }
+
+    #[test]
+    fn the_snap_glides_and_ends_exactly_where_a_jump_would() {
+        let mut results = Vec::new();
+        for animate in [true, false] {
+            let _motion = Motion::set(!animate);
+            let mut hud = shown_hud("strip");
+            let w = work(&hud);
+            let start = hud.window.geometry();
+            release_at_top(&mut hud, w, 4);
+            if animate {
+                assert!(gliding(&hud));
+                // the config is saved once, at the release, with the final values
+                {
+                    let cfg = hud.config.lock();
+                    assert_eq!(cfg.sidebar_edge, "top");
+                    assert_eq!(cfg.sidebar_orientation, "horizontal");
+                }
+                // nothing moved yet
+                hud.snap_animation_step_at(0.0);
+                assert_eq!(geometry(&hud).1, w.1 + 4);
+                hud.snap_animation_step_at(70.0);
+                let mid = geometry(&hud);
+                assert!(
+                    mid.1 > w.1 && mid.1 <= w.1 + 4,
+                    "part of the way up: {mid:?}"
+                );
+                assert_ne!((mid.2, mid.3), (start.width, start.height));
+                // the glide's own moves neither cancel it nor restart the snap timer
+                assert!(gliding(&hud));
+                assert!(!hud.sidebar_hud.docking.get());
+                hud.snap_animation_step_at(140.0);
+                assert!(!gliding(&hud));
+            } else {
+                assert!(!gliding(&hud));
+            }
+            let cfg = hud.config.lock();
+            results.push((
+                geometry(&hud),
+                hud.sidebar.orientation(),
+                cfg.sidebar_edge.clone(),
+                cfg.sidebar_orientation.clone(),
+                cfg.sidebar_offset,
+            ));
+        }
+        assert_eq!(results[0], results[1]);
+    }
+
+    #[test]
+    fn the_user_cancels_the_glide_and_the_window_stays_put() {
+        let _motion = Motion::set(false);
+        let mut hud = shown_hud("strip");
+        let w = work(&hud);
+        // a press (the application filter's call), a move that is not the glide's own, a resize grab
+        let cancels: [fn(&mut HUDWindow); 3] = [
+            |hud| {
+                hud.sidebar_hud.stop_snap_animation();
+            },
+            |hud| {
+                // the system's own move (a native drag), not `Window::set_geometry`
+                let g = hud.window.geometry();
+                let hwnd = hud.window.native_handle() as Hwnd;
+                let ok = unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        core::ptr::null_mut(),
+                        g.x + 3,
+                        g.y + 3,
+                        0,
+                        0,
+                        0x0001 | 0x0004 | 0x0010,
+                    )
+                };
+                assert_ne!(ok, 0);
+            },
+            |hud| hud.begin_resize(),
+        ];
+        for (i, cancel) in cancels.into_iter().enumerate() {
+            release_at_top(&mut hud, w, 4);
+            assert!(gliding(&hud));
+            hud.snap_animation_step_at(70.0);
+            assert!(gliding(&hud), "the glide's own frame did not cancel it");
+            let before = hud.window.geometry();
+            cancel(&mut hud);
+            assert!(!gliding(&hud), "cancel {i}");
+            assert!(!hud.sidebar_hud.docking.get());
+            // the window did not jump to the target (the native move above is in physical pixels)
+            let after = hud.window.geometry();
+            assert!(
+                (after.x - before.x).abs() <= 40 && (after.y - before.y).abs() <= 3,
+                "{before:?} -> {after:?}"
+            );
+            hud.cancel_resize();
+            hud.sidebar_hud.snap_timer.stop();
+            // the bar docks again on its saved edge
+            hud.dock_sidebar();
+            hud.config.lock().sidebar_edge = "right".into();
+            hud.config.lock().sidebar_orientation = "vertical".into();
+            hud.sidebar.set_orientation(Orientation::Vertical);
+            hud.sidebar.set_dock_edge(Some("right"));
+            hud.dock_sidebar();
+        }
+    }
+
+    #[test]
+    fn a_lock_or_a_hide_settles_the_glide_and_a_redock_or_style_switch_drops_it() {
+        let _motion = Motion::set(false);
+        let mut hud = shown_hud("strip");
+        let w = work(&hud);
+        let settle: [fn(&mut HUDWindow); 4] = [
+            |hud| {
+                hud.cancel_snap_animation(true);
+            },
+            |hud| hud.hide(),
+            |hud| hud.dock_sidebar(),
+            |hud| hud.apply_ui_mode("table"),
+        ];
+        for (i, action) in settle.into_iter().enumerate() {
+            release_at_top(&mut hud, w, 4);
+            assert!(gliding(&hud), "{i}");
+            action(&mut hud);
+            assert!(!gliding(&hud), "{i}");
+            assert!(!hud.sidebar_hud.docking.get(), "{i}");
+            if i < 3 {
+                assert_eq!(geometry(&hud).1, w.1, "{i}: on the top edge, not half way");
+            }
+            hud.apply_ui_mode("sidebar");
+            {
+                let mut cfg = hud.config.lock();
+                cfg.sidebar_edge = "right".into();
+                cfg.sidebar_orientation = "vertical".into();
+            }
+            hud.sidebar.set_orientation(Orientation::Vertical);
+            hud.sidebar.set_dock_edge(Some("right"));
+            hud.dock_sidebar();
+            hud.window.show();
+        }
+    }
+
+    #[test]
+    fn there_is_no_glide_when_there_is_nothing_to_glide() {
+        let _motion = Motion::set(false);
+        let mut hud = sidebar_hud("strip", |_| {});
+        let w = work(&hud);
+        // a hidden window
+        release_at_top(&mut hud, w, 4);
+        assert!(!gliding(&hud));
+        assert_eq!(geometry(&hud).1, w.1);
+        // already docked on the target
+        hud.window.show();
+        release_at_top(&mut hud, w, 0);
+        assert!(!gliding(&hud));
+        // reduced motion
+        let _reduced = Motion::set(true);
+        {
+            let mut cfg = hud.config.lock();
+            cfg.sidebar_edge = "right".into();
+            cfg.sidebar_orientation = "vertical".into();
+        }
+        hud.sidebar.set_orientation(Orientation::Vertical);
+        hud.sidebar.set_dock_edge(Some("right"));
+        hud.dock_sidebar();
+        release_at_top(&mut hud, w, 4);
+        assert!(!gliding(&hud));
+        assert_eq!(geometry(&hud).1, w.1);
     }
 }
