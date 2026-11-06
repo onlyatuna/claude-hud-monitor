@@ -1836,6 +1836,11 @@ impl SidebarWidget {
         self.inner.preferred_size()
     }
 
+    /// Python `preferred_size_for(orientation)`.
+    pub fn preferred_size_for(&self, orientation: Orientation) -> (i32, i32) {
+        self.inner.preferred_size_for(orientation)
+    }
+
     pub fn close_flyout(&self) {
         self.inner.close_flyout();
     }
@@ -2277,6 +2282,27 @@ impl SidebarInner {
             })
             .unwrap_or(0);
         panel_preferred_size(s, orientation, spacing, self.cards.len() as i32, height)
+    }
+
+    /// Python `preferred_size_for`: the size the bar would have in `orientation`, without changing
+    /// it. The panel's size needs its cards laid out that way, so it is measured by laying them out
+    /// and restoring the current layout.
+    fn preferred_size_for(self: &Rc<Self>, orientation: Orientation) -> (i32, i32) {
+        let current = self.orientation.get();
+        if orientation == current {
+            return self.preferred_size();
+        }
+        self.orientation.set(orientation);
+        let panel = self.state.get() == State::Panel;
+        if panel {
+            self.relayout();
+        }
+        let size = self.preferred_size();
+        self.orientation.set(current);
+        if panel {
+            self.relayout();
+        }
+        size
     }
 
     /// Python `_hover`.
