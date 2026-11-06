@@ -449,6 +449,166 @@ class HudTests(unittest.TestCase):
             finally:
                 self._close(hud)
 
+    class _Clock:
+        """Stands in for the animation's QElapsedTimer: the test sets the time."""
+        def __init__(self):
+            self.ms = 0
+
+        def start(self):
+            self.ms = 0
+
+        def elapsed(self):
+            return self.ms
+
+    def _released_at_top(self, hud, work, y=4):
+        """Drop the shown HUD near the top edge with no button held and let the snap timer's slot run."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        hud._snap_timer.stop()               # the real timer must not settle the bar behind the test's back
+        hud._cancel_snap_animation()
+        hud._docking = True
+        hud.move(work.x() + 150, work.y() + y)
+        hud._docking = False
+        clock = self._Clock()
+        hud._snap_clock = clock
+        with patch.object(QGuiApplication, 'mouseButtons', return_value=Qt.MouseButton.NoButton):
+            hud._finish_sidebar_move()
+        return clock
+
+    def test_snap_glides_onto_the_docked_rectangle_and_ends_exactly_where_a_jump_would(self):
+        from PySide6.QtGui import QGuiApplication
+        results = []
+        for animate in (True, False):
+            with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                    patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=animate):
+                config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+                try:
+                    hud.show()
+                    APP.processEvents()
+                    work = QGuiApplication.primaryScreen().availableGeometry()
+                    start_size = hud.size()
+                    clock = self._released_at_top(hud, work)
+                    if animate:
+                        self.assertIsNotNone(hud._snap_anim)
+                        # the config is saved once, at the release, with the final values
+                        self.assertEqual(config.get('sidebar_edge'), 'top')
+                        self.assertEqual(config.get('sidebar_orientation'), 'horizontal')
+                        # nothing moved yet
+                        hud._snap_animation_step()
+                        self.assertEqual(hud.pos().y(), work.y() + 4)
+                        clock.ms = 70
+                        hud._snap_animation_step()
+                        mid = hud.geometry()
+                        self.assertGreater(mid.y(), work.y())           # part of the way to the top edge
+                        self.assertLessEqual(mid.y(), work.y() + 4)
+                        self.assertNotEqual(mid.size(), start_size)
+                        self.assertIsNotNone(hud._snap_anim)
+                        self.assertFalse(hud._docking)
+                        clock.ms = 140
+                        hud._snap_animation_step()
+                        self.assertIsNone(hud._snap_anim)
+                        self.assertFalse(hud._snap_frame_timer.isActive())
+                    else:
+                        self.assertIsNone(hud._snap_anim)
+                    results.append((tuple(hud.geometry().getRect()), hud.sidebar.orientation(), config.get('sidebar_edge'),
+                                    config.get('sidebar_orientation'), config.get('sidebar_offset')))
+                finally:
+                    self._close(hud)
+        self.assertEqual(results[0], results[1])
+
+    def test_snap_glide_is_cancelled_by_the_user_and_the_window_stays_put(self):
+        from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+        from PySide6.QtGui import QGuiApplication, QMouseEvent
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=True):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                hud.show()
+                APP.processEvents()
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(5, 5), QPointF(5, 5), Qt.MouseButton.LeftButton,
+                                    Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+                for cancel in (lambda: hud.eventFilter(hud, press),
+                               lambda: hud.move(hud.x() + 3, hud.y() + 3),
+                               lambda: hud._begin_resize(QPoint(0, 0), 'l')):
+                    clock = self._released_at_top(hud, work)
+                    self.assertIsNotNone(hud._snap_anim)
+                    clock.ms = 70
+                    hud._snap_animation_step()
+                    where = hud.geometry()
+                    cancel()
+                    self.assertIsNone(hud._snap_anim)
+                    self.assertFalse(hud._snap_frame_timer.isActive())
+                    APP.processEvents()
+                    hud._resize = None
+                    hud.releaseMouse()
+                    hud._snap_timer.stop()
+                    self.assertFalse(hud._docking)
+                    # the window did not jump to the target, and no second animation is left behind
+                    self.assertIn(hud.geometry().topLeft(), (where.topLeft(), where.topLeft() + QPoint(3, 3)))
+                    hud._dock_sidebar()
+                    hud.config.set_many({'sidebar_edge': 'right', 'sidebar_orientation': 'vertical'})
+                    hud.sidebar.set_orientation('vertical')
+                    hud.sidebar.set_dock_edge('right')
+                    hud._dock_sidebar()
+            finally:
+                self._close(hud)
+
+    def test_snap_glide_settles_on_lock_and_hide_and_is_dropped_by_a_redock(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=True):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                hud.show()
+                APP.processEvents()
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                for settle in (hud._toggle_lock, hud.hide, hud._dock_sidebar, lambda: hud.toggle_ui_mode()):
+                    self._released_at_top(hud, work)
+                    self.assertIsNotNone(hud._snap_anim)
+                    settle()
+                    self.assertIsNone(hud._snap_anim)
+                    self.assertFalse(hud._snap_frame_timer.isActive())
+                    self.assertFalse(hud._docking)
+                    if config.get('ui_mode') == 'sidebar':
+                        self.assertEqual(hud.geometry().y(), work.y())      # on the top edge, not half way
+                    hud.config.set('locked', False)
+                    hud.config.set_many({'ui_mode': 'sidebar', 'sidebar_edge': 'right', 'sidebar_orientation': 'vertical'})
+                    hud._apply_ui_mode('sidebar')
+                    hud.show()
+                    APP.processEvents()
+            finally:
+                self._close(hud)
+
+    def test_snap_does_not_glide_when_there_is_nothing_to_glide(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                with patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=True):
+                    # hidden window
+                    self._released_at_top(hud, work)
+                    self.assertIsNone(hud._snap_anim)
+                    self.assertEqual(hud.geometry().y(), work.y())
+                    # same target: already docked
+                    hud.show()
+                    APP.processEvents()
+                    self._released_at_top(hud, work, y=0)
+                    self.assertIsNone(hud._snap_anim)
+                    # reduced motion
+                with patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=False):
+                    hud._dock_sidebar()
+                    hud.config.set_many({'sidebar_edge': 'right', 'sidebar_orientation': 'vertical'})
+                    hud.sidebar.set_orientation('vertical')
+                    hud.sidebar.set_dock_edge('right')
+                    hud._dock_sidebar()
+                    self._released_at_top(hud, work)
+                    self.assertIsNone(hud._snap_anim)
+                    self.assertEqual(hud.geometry().y(), work.y())
+            finally:
+                self._close(hud)
+
     def test_dock_preview_follows_real_window_moves(self):
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QGuiApplication

@@ -19,6 +19,11 @@ from ui.dock_geometry import (
     sidebar_dock_target,
     snap_rect,
     snap_rect_corner,
+    SnapAnimation,
+    SNAP_ANIM_FRAME_MS,
+    SNAP_ANIM_MS,
+    ease_out_cubic,
+    interpolate_rect,
     step_scale,
 )
 
@@ -280,6 +285,29 @@ class TestDockGeometry(unittest.TestCase):
                 snapped, edge, offset = snap_rect_corner(rect, wa, 24, prefer=current)
                 plan = plan_sidebar_snap(rect, wa, 24, current)
                 self.assertEqual(tuple(plan), (snapped, edge, offset, orientation_for_edge(edge, current)))
+
+    def test_snap_animation_easing_and_interpolation(self):
+        # the same vectors are pinned in the Rust HUD (dock_geometry.rs)
+        self.assertEqual((SNAP_ANIM_MS, SNAP_ANIM_FRAME_MS), (140, 16))
+        self.assertEqual([ease_out_cubic(t) for t in (-1, 0, 0.25, 0.5, 1, 2)], [0.0, 0.0, 0.578125, 0.875, 1.0, 1.0])
+        start, end = (0, 0, 100, 200), (100, 50, 300, 100)
+        self.assertEqual(interpolate_rect(start, end, 0), start)
+        self.assertEqual(interpolate_rect(start, end, 0.25), (58, 29, 216, 142))
+        self.assertEqual(interpolate_rect(start, end, 0.5), (88, 44, 275, 113))
+        self.assertEqual(interpolate_rect(start, end, 1), end)
+        self.assertEqual(interpolate_rect(start, end, 1.5), end)
+        # negative coordinates (a monitor left of the primary) round the same way
+        self.assertEqual(interpolate_rect((-100, 0, 10, 10), (-200, 0, 10, 10), 0.5), (-187, 0, 10, 10))
+
+    def test_snap_animation_frames(self):
+        anim = SnapAnimation((0, 0, 100, 200), (100, 50, 300, 100))
+        self.assertEqual(anim.duration_ms, 140)
+        self.assertEqual(anim.frame(-5), ((0, 0, 100, 200), False))
+        self.assertEqual(anim.frame(0), ((0, 0, 100, 200), False))
+        self.assertEqual(anim.frame(35), ((58, 29, 216, 142), False))
+        self.assertEqual(anim.frame(70), ((88, 44, 275, 113), False))
+        self.assertEqual(anim.frame(140), ((100, 50, 300, 100), True))
+        self.assertEqual(anim.frame(999), ((100, 50, 300, 100), True))
 
     def test_offset_along_edge_round_trip(self):
         wa = (100, 50, 1920, 1040)

@@ -238,3 +238,39 @@ def scale_size(base_width: int, base_height: int, scale: float) -> tuple[int, in
     s = clamp_scale(scale)
     return (max(1, round(base_width * s)), max(1, round(base_height * s)))
 
+
+# Snap animation of the sidebar (shared with the Rust HUD: keep the values identical).
+SNAP_ANIM_MS = 140           # duration of the glide from the released position onto the docked rectangle
+SNAP_ANIM_FRAME_MS = 16      # frame timer interval (about 60 fps)
+
+
+def ease_out_cubic(t: float) -> float:
+    """1 - (1 - t)^3 with t held to [0, 1]."""
+    t = min(1.0, max(0.0, t))
+    return 1.0 - (1.0 - t) ** 3
+
+
+def _round_half_up(value: float) -> int:
+    return math.floor(value + 0.5)
+
+
+def interpolate_rect(start: Rect, end: Rect, t: float) -> Rect:
+    """The rectangle `t` (0 = start, 1 = end) of the way from start to end, eased out; exactly `end` once t >= 1."""
+    if t >= 1.0:
+        return end
+    e = ease_out_cubic(t)
+    return tuple(_round_half_up(a + (b - a) * e) for a, b in zip(start, end))
+
+
+class SnapAnimation:
+    """The glide of the window from `start` onto `end` over `duration_ms`; driven by elapsed time, no Qt."""
+
+    def __init__(self, start: Rect, end: Rect, duration_ms: int = SNAP_ANIM_MS):
+        self.start, self.end, self.duration_ms = start, end, duration_ms
+
+    def frame(self, elapsed_ms: float):
+        """(rect, done) at `elapsed_ms` after the start; the last frame is exactly `end`."""
+        if elapsed_ms >= self.duration_ms:
+            return self.end, True
+        return interpolate_rect(self.start, self.end, max(0.0, elapsed_ms) / self.duration_ms), False
+
