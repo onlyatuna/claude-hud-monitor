@@ -688,6 +688,24 @@ class SidebarWidget(QWidget):
         panel_width = count*round(BASE_PANEL_W*s) + max(0,count-1)*(2*round(4*s)+max(1,round(s)))
         return QSize(round(22*s)+panel_width+pad,max(round(22*s),height)+pad)
 
+    def preferred_size_for(self, orientation):
+        """preferred_size() the bar would have in `orientation`, without changing it (the panel's size needs its
+        cards laid out that way, so it is measured by laying them out and restoring the current layout)."""
+        if orientation not in ('vertical', 'horizontal'):
+            raise ValueError(orientation)
+        if orientation == self._orientation:
+            return self.preferred_size()
+        current = self._orientation
+        self._orientation = orientation
+        try:
+            if self._state == 'panel':
+                self._relayout()
+            return self.preferred_size()
+        finally:
+            self._orientation = current
+            if self._state == 'panel':
+                self._relayout()
+
     def _hover(self, key):
         self._leave_timer.stop()
         if self._state != 'strip':

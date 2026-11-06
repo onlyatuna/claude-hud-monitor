@@ -23,7 +23,9 @@ from ui.provider_card import ProviderCardWidget
 from ui.usage_table import UsageTable
 from ui.sidebar import SidebarWidget, DEFAULT_ORDER
 from ui.dock_geometry import (EDGES, dock_to_edge, offset_along_edge, orientation_for_edge, pick_work_area,
-                              snap_rect, snap_rect_corner, step_scale, clamp_scale)
+                              plan_sidebar_snap, sidebar_dock_target, snap_rect, snap_rect_corner, step_scale,
+                              clamp_scale)
+from ui.dock_preview import DockPreview
 from ui.hud_menu import build_hud_menu
 from ui.table_layout import (FULL_MIN_W, FULL_MIN_H, DEF_COMPACT_W, DEF_COMPACT_H, COMPACT_MARGIN,
                              compact_min_size, table_state)
@@ -129,6 +131,8 @@ class HUDWindow(QWidget):
         self._fade_timer.timeout.connect(self._apply_opacity)
         QApplication.instance().installEventFilter(self)
         self._docking = False
+        self._dock_preview = None           # DockPreview, created on the first drag near an edge
+        self._preview_sizes = {}
         self._snap_timer = QTimer(self)
         self._snap_timer.setSingleShot(True)
         self._snap_timer.setInterval(180)
@@ -348,6 +352,7 @@ class HUDWindow(QWidget):
         self._restoring_geometry = True
         self._clear_layout(self.inner_layout)
         self.sidebar.close_flyout()
+        self._hide_dock_preview()
         self.sidebar.hide()
         self.table.hide()
         self.setMinimumSize(0, 0)
@@ -494,18 +499,21 @@ class HUDWindow(QWidget):
     def _finish_sidebar_move(self):
         """After a drag: snap to the nearest screen edge (or stay free) and remember the position."""
         if self.config.get("ui_mode") != "sidebar" or self._docking:
+            self._hide_dock_preview()
             return
         if QGuiApplication.mouseButtons() != Qt.MouseButton.NoButton:
             self._snap_timer.start()
+            self._update_dock_preview()      # still dragging: follow a screen or layout change
             return
+        self._hide_dock_preview()
         work = self._sidebar_work_area()
         if work is None:
             return
         g = self.geometry()
         current = self.config.get("sidebar_orientation", "vertical")
         # near a corner the bar keeps its orientation and sticks to the corner instead of turning sideways
-        rect, edge, offset = snap_rect_corner((g.x(), g.y(), g.width(), g.height()), work, SIDEBAR_SNAP_PX, prefer=current)
-        orientation = orientation_for_edge(edge, current)
+        rect, edge, offset, orientation = plan_sidebar_snap(
+            (g.x(), g.y(), g.width(), g.height()), work, SIDEBAR_SNAP_PX, current)
         updates = {"sidebar_edge": edge or "none", "sidebar_orientation": orientation}
         if edge is not None:
             updates["sidebar_offset"] = offset
@@ -515,6 +523,49 @@ class HUDWindow(QWidget):
         self.sidebar.set_orientation(orientation)
         self.sidebar.set_dock_edge(edge)
         self._dock_sidebar()
+
+    # ---- dock preview: the outline of where the dragged bar will settle ----
+    def _dock_preview_size(self, orientation: str):
+        """The bar's size in `orientation`; measured once per drag (the panel has to lay its cards out to know)."""
+        size = self._preview_sizes.get(orientation)
+        if size is None:
+            hint = self.sidebar.preferred_size_for(orientation)
+            size = self._preview_sizes[orientation] = (hint.width(), hint.height())
+        return size
+
+    def _dock_preview_rect(self):
+        """The rectangle _finish_sidebar_move would dock the window to right now, or None when there is nothing to
+        preview: not a drag of the sidebar, locked, not near an edge, or the window already sits there."""
+        if (self.config.get("ui_mode") != "sidebar" or self._docking or self._resize is not None
+                or self.config.get("locked", False)
+                or QGuiApplication.mouseButtons() == Qt.MouseButton.NoButton):
+            return None
+        work = self._sidebar_work_area()
+        if work is None:
+            return None
+        g = self.geometry()
+        target = sidebar_dock_target((g.x(), g.y(), g.width(), g.height()), work, SIDEBAR_SNAP_PX,
+                                     self.config.get("sidebar_orientation", "vertical"), self._dock_preview_size)
+        if target is None or target.rect == (g.x(), g.y(), g.width(), g.height()):
+            return None
+        return QRect(*target.rect)
+
+    def _update_dock_preview(self):
+        rect = self._dock_preview_rect()
+        if rect is None:
+            if self._dock_preview is not None and self._dock_preview.isVisible():
+                self._dock_preview.hide()
+            return
+        if self._dock_preview is None:
+            self._dock_preview = DockPreview(self)
+        self._dock_preview.show_at(rect, self.theme() is THEMES["dark"], self._sidebar_scale(),
+                                   bool(self.config.get("always_on_top", True)))
+
+    def _hide_dock_preview(self):
+        """The drag is over (or never was one): hide the outline and forget the sizes measured for it."""
+        self._preview_sizes.clear()
+        if self._dock_preview is not None and self._dock_preview.isVisible():
+            self._dock_preview.hide()
 
     def _start_sidebar_drag(self):
         if self.config.get("locked", False):
@@ -561,6 +612,7 @@ class HUDWindow(QWidget):
 
     def _begin_resize(self, pos: QPoint, zone: str):
         self.sidebar.close_flyout()
+        self._hide_dock_preview()
         self._snap_timer.stop()
         self._resize = {"start": pos, "geom": QRect(self.geometry()), "scale": self._sidebar_scale(), "zone": zone}
         self.grabMouse()
@@ -975,9 +1027,11 @@ class HUDWindow(QWidget):
             self._blur_resume_timer.start()
         if self.config.get("ui_mode") == "sidebar" and not self._docking and not self._restoring_geometry:
             self._snap_timer.start()
+            self._update_dock_preview()
         self._save_geometry()
 
     def closeEvent(self, event):
+        self._hide_dock_preview()
         self._persist_geometry()
         super().closeEvent(event)
 

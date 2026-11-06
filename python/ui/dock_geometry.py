@@ -1,6 +1,7 @@
 """Pure geometry helpers for the right-edge docked HUD window (no Qt)."""
 
 import math
+from typing import NamedTuple
 
 Rect = tuple[int, int, int, int]  # (x, y, w, h)
 EDGES = ("left", "right", "top", "bottom")
@@ -184,6 +185,39 @@ def offset_along_edge(rect: Rect, work_area: Rect, edge: str) -> int:
     if edge in ("left", "right"):
         return max(0, ry - wy)
     return max(0, rx - wx)
+
+
+class SnapPlan(NamedTuple):
+    """What the sidebar does when a drag settles: `rect` is snap_rect_corner's rectangle (the free position when
+    `edge` is None), `offset` the distance along the edge ("end" = far end), `orientation` the layout orientation."""
+    rect: Rect
+    edge: "str | None"
+    offset: "int | str | None"
+    orientation: str
+
+
+def plan_sidebar_snap(rect: Rect, work_area: Rect, threshold: int, current: str) -> SnapPlan:
+    """The snap decision of a finished sidebar drag (corner-aware: near a corner the bar keeps `current` orientation)."""
+    snapped, edge, offset = snap_rect_corner(rect, work_area, threshold, prefer=current)
+    return SnapPlan(snapped, edge, offset, orientation_for_edge(edge, current))
+
+
+class DockTarget(NamedTuple):
+    """Where a dragged sidebar would end up: the docked rectangle plus the plan that produced it."""
+    rect: Rect
+    plan: SnapPlan
+
+
+def sidebar_dock_target(rect: Rect, work_area: Rect, threshold: int, current: str, size_for) -> "DockTarget | None":
+    """The rectangle the bar takes once `rect` (its current geometry) settles, or None when it would not dock to an
+    edge. `size_for(orientation)` -> (width, height) is the bar's preferred size in that orientation. Uses the same
+    plan_sidebar_snap / dock_to_edge steps as the real docking, so a preview and the result cannot differ."""
+    plan = plan_sidebar_snap(rect, work_area, threshold, current)
+    if plan.edge is None:
+        return None
+    width, height = size_for(plan.orientation)
+    offset = plan.offset if isinstance(plan.offset, int) or plan.offset == "end" else None
+    return DockTarget(dock_to_edge(work_area, plan.edge, width, height, offset), plan)
 
 
 def clamp_scale(scale: float) -> float:
