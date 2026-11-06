@@ -1,7 +1,7 @@
 """Translucent outline shown while the sidebar is dragged near a screen edge: where the bar will dock."""
 
 from PySide6.QtCore import Qt, QRect, QRectF
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from ui.sidebar import SIDEBAR_TOKENS
@@ -26,11 +26,30 @@ def preview_radius(dark: bool, scale: float) -> float:
     return SIDEBAR_TOKENS['dark' if dark else 'light']['radius'] * scale
 
 
-class DockPreview(QWidget):
-    """Frameless, click-through, non-activating top-level that outlines the docked rectangle of the dragged HUD."""
+def stack_below(widget, anchor):
+    """Put top-level `widget` directly below top-level `anchor` in the window stacking order, without activating
+    anything. Qt's stackUnder ignores top-level windows, so Windows uses SetWindowPos(widget, insert-after =
+    anchor); elsewhere the anchor is raised over it."""
+    if QGuiApplication.platformName() == "windows":
+        import ctypes
+        from ctypes import wintypes
+        SWP_NOSIZE, SWP_NOMOVE, SWP_NOACTIVATE = 0x0001, 0x0002, 0x0010
+        user32 = ctypes.WinDLL("user32")
+        user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                        ctypes.c_int, wintypes.UINT]
+        user32.SetWindowPos.restype = wintypes.BOOL
+        user32.SetWindowPos(int(widget.winId()), int(anchor.winId()), 0, 0, 0, 0,
+                            SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+    elif QGuiApplication.platformName() != "offscreen":      # offscreen has no stacking order
+        anchor.raise_()
 
-    def __init__(self, owner=None):
-        super().__init__(owner)
+
+class DockPreview(QWidget):
+    """Frameless, click-through, non-activating top-level that outlines the docked rectangle of the dragged HUD.
+    It has no owner window: Windows keeps an owned window above its owner, and the outline must sit behind the HUD."""
+
+    def __init__(self):
+        super().__init__()
         self._dark, self._scale, self._on_top = True, 1.0, None
         self._apply_flags(True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
@@ -48,8 +67,9 @@ class DockPreview(QWidget):
             flags |= Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
 
-    def show_at(self, rect: QRect, dark: bool, scale: float, on_top: bool):
-        """Outline `rect` (global coordinates); the HUD itself is not moved and does not lose the focus."""
+    def show_at(self, rect: QRect, dark: bool, scale: float, on_top: bool, anchor=None):
+        """Outline `rect` (global coordinates) directly below `anchor` (the dragged HUD) in the stacking order; the
+        HUD itself is not moved and does not lose the focus."""
         self._apply_flags(on_top)
         self._dark, self._scale = bool(dark), float(scale)
         if self.geometry() != rect:
@@ -57,6 +77,8 @@ class DockPreview(QWidget):
         self.update()
         if not self.isVisible():
             self.show()
+        if anchor is not None:
+            stack_below(self, anchor)
 
     def paintEvent(self, event):
         fill, border = preview_colors(self._dark)
