@@ -298,6 +298,67 @@ pub fn sidebar_dock_target(
     Some(DockTarget { rect, plan })
 }
 
+/// Snap animation of the sidebar (shared with the Python HUD: keep the values identical).
+/// Duration of the glide from the released position onto the docked rectangle.
+pub const SNAP_ANIM_MS: u64 = 140;
+/// Frame timer interval (about 60 fps).
+pub const SNAP_ANIM_FRAME_MS: u64 = 16;
+
+/// Python `ease_out_cubic`: `1 - (1 - t)^3` with `t` held to [0, 1].
+pub fn ease_out_cubic(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Python `_round_half_up`: `floor(value + 0.5)`.
+fn round_half_up(value: f64) -> i32 {
+    (value + 0.5).floor() as i32
+}
+
+/// Python `interpolate_rect`: the rectangle `t` (0 = start, 1 = end) of the way from start to end,
+/// eased out; exactly `end` once `t >= 1`.
+pub fn interpolate_rect(start: Rect, end: Rect, t: f64) -> Rect {
+    if t >= 1.0 {
+        return end;
+    }
+    let e = ease_out_cubic(t);
+    let mix = |a: i32, b: i32| round_half_up(a as f64 + (b - a) as f64 * e);
+    (
+        mix(start.0, end.0),
+        mix(start.1, end.1),
+        mix(start.2, end.2),
+        mix(start.3, end.3),
+    )
+}
+
+/// Python `SnapAnimation`: the glide of the window from `start` onto `end` over `duration_ms`,
+/// driven by elapsed time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapAnimation {
+    pub start: Rect,
+    pub end: Rect,
+    pub duration_ms: u64,
+}
+
+impl SnapAnimation {
+    pub fn new(start: Rect, end: Rect) -> Self {
+        Self {
+            start,
+            end,
+            duration_ms: SNAP_ANIM_MS,
+        }
+    }
+
+    /// `(rect, done)` at `elapsed_ms` after the start; the last frame is exactly `end`.
+    pub fn frame(&self, elapsed_ms: f64) -> (Rect, bool) {
+        if elapsed_ms >= self.duration_ms as f64 {
+            return (self.end, true);
+        }
+        let t = elapsed_ms.max(0.0) / self.duration_ms as f64;
+        (interpolate_rect(self.start, self.end, t), false)
+    }
+}
+
 /// Python `clamp_scale`: NaN -> 1.0; clamp to [SCALE_MIN, SCALE_MAX]; round to 0.1.
 pub fn clamp_scale(scale: f64) -> f64 {
     if scale.is_nan() {
@@ -608,6 +669,40 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn snap_animation_easing_and_interpolation() {
+        // the same vectors are pinned in the Python HUD (tests/test_dock_geometry.py)
+        assert_eq!((SNAP_ANIM_MS, SNAP_ANIM_FRAME_MS), (140, 16));
+        let eased: Vec<f64> = [-1.0, 0.0, 0.25, 0.5, 1.0, 2.0]
+            .iter()
+            .map(|t| ease_out_cubic(*t))
+            .collect();
+        assert_eq!(eased, [0.0, 0.0, 0.578125, 0.875, 1.0, 1.0]);
+        let (start, end) = ((0, 0, 100, 200), (100, 50, 300, 100));
+        assert_eq!(interpolate_rect(start, end, 0.0), start);
+        assert_eq!(interpolate_rect(start, end, 0.25), (58, 29, 216, 142));
+        assert_eq!(interpolate_rect(start, end, 0.5), (88, 44, 275, 113));
+        assert_eq!(interpolate_rect(start, end, 1.0), end);
+        assert_eq!(interpolate_rect(start, end, 1.5), end);
+        // negative coordinates (a monitor left of the primary) round the same way
+        assert_eq!(
+            interpolate_rect((-100, 0, 10, 10), (-200, 0, 10, 10), 0.5),
+            (-187, 0, 10, 10)
+        );
+    }
+
+    #[test]
+    fn snap_animation_frames() {
+        let anim = SnapAnimation::new((0, 0, 100, 200), (100, 50, 300, 100));
+        assert_eq!(anim.duration_ms, 140);
+        assert_eq!(anim.frame(-5.0), ((0, 0, 100, 200), false));
+        assert_eq!(anim.frame(0.0), ((0, 0, 100, 200), false));
+        assert_eq!(anim.frame(35.0), ((58, 29, 216, 142), false));
+        assert_eq!(anim.frame(70.0), ((88, 44, 275, 113), false));
+        assert_eq!(anim.frame(140.0), ((100, 50, 300, 100), true));
+        assert_eq!(anim.frame(999.0), ((100, 50, 300, 100), true));
     }
 
     #[test]
