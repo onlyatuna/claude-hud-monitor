@@ -28,6 +28,8 @@ QTimer / 手動刷新 / 休眠恢復
 - ui/usage_table.py：渲染現代表格與圓盤儀表，不查網路；平均進度虛線與超出段斜紋只表達速度，不改變顏色。視窗縮到 380×280 以下時收合成每服務一顆圓盤（每個欄位另有一顆精簡圓盤，tooltip 帶完整細節）。
 - ui/table_layout.py：表格收合的門檻、遲滯與收合最小尺寸（純函式，有單元測試）。
 - ui/round_mask.py：圓角視窗遮罩的幾何（純函式）；Windows 的 Acrylic 模糊整個矩形，需裁掉四角。
+- ui/dock_geometry.py：側邊欄吸附／貼邊的純函式；`plan_sidebar_snap`、`sidebar_dock_target` 是「放開後會停在哪」的唯一計算，真正貼邊與預覽框共用，兩者不可能不一致。
+- ui/dock_preview.py：拖曳側邊欄靠近螢幕邊緣（24 px 內）時顯示的半透明預覽框（無邊框、滑鼠穿透、不搶焦點，是否置頂跟隨 `always_on_top`）；顏色、透明度（填色 46／邊框 235，皆為 0–255）、邊框 2 px、圓角（側邊欄 radius × 縮放）與 Rust 版相同。鎖定、表格風格、邊角縮放時不顯示。
 - ui/styles.py：側邊欄窄欄／飛出面板用的卡片樣式（深色／淺色）與表格的毛玻璃淺色／深色主題樣式表。
 - ui/vibrancy.py：macOS 原生毛玻璃背景（NSVisualEffectView）、Windows Acrylic（拖曳／縮放時可暫停模糊）；其他平台自動改用不透明面板。`table_blur` 設定可關閉毛玻璃。
 - core/pace.py：倒數格式、視窗長度解析、平均進度與色階門檻（純函式，具完整單元測試）。
