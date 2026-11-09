@@ -20,7 +20,7 @@ Steps, in order, each printing the rectangle of every visible item (hidden items
 Each step calls `setVisible`, then the outer `invalidate()` and `activate()` and prints the result.
 (Qt's `QLayout::activate` invalidates the nested layout; see above.)
 
-Run (Windows; PySide6 6.11.2): DPR 1.25 -> QT_SCREEN_SCALE_FACTORS=1.25; DPR 1.0 -> QT_ENABLE_HIGHDPI_SCALING=0
+Run (Windows; PySide6 6.12.0): DPR 1.25 -> QT_SCREEN_SCALE_FACTORS=1.25; DPR 1.0 -> QT_ENABLE_HIGHDPI_SCALING=0
   python header_row_visibility.py
 """
 

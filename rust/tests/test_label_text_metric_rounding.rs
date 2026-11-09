@@ -2,8 +2,9 @@
 //! `font-family: 'Segoe UI', 'SF Pro Display', 'Microsoft JhengHei', sans-serif`.
 //! `setFontFamilyFromValues` (`qcssparser.cpp:1252`) turns the list into `QFont::setFamilies`, and
 //! the first installed family (Segoe UI) is used. The expected numbers are PySide6 measurements
-//! (Qt 6, Windows, DirectWrite) of the same sheet at DPR 1.25 (`QT_SCREEN_SCALE_FACTORS=1.25`) and
-//! DPR 1.0 (`QT_ENABLE_HIGHDPI_SCALING=0`): the text widths are 59/144/88 and 58/142/80.
+//! (Qt 6.12.0, Windows, DirectWrite; `rust/tools/pyside_probes/label_text_widths.py`) of the same sheet at DPR 1.25
+//! (`QT_SCREEN_SCALE_FACTORS=1.25`) and DPR 1.0 (`QT_ENABLE_HIGHDPI_SCALING=0`): the text widths are
+//! 59/144/88 and 58/142/96. At DPR 1.0 Consolas 9.5 px digits are 6 px wide in Qt 6.12 (5 px, so 80, in Qt 6.11).
 #![cfg(windows)]
 use ferrokit_core::object::QObject;
 use ferrokit_widgets::{Label, Widget};
@@ -41,5 +42,5 @@ fn label_widths_with_a_font_family_list_match_pyside6_at_dpr_1_25() {
 
 #[test]
 fn label_widths_with_a_font_family_list_match_pyside6_at_dpr_1_0() {
-    assert_eq!(widths(1.0), [58, 142, 80]);
+    assert_eq!(widths(1.0), [58, 142, 96]);
 }

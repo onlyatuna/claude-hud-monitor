@@ -12,7 +12,7 @@ For each label the line reports sizeHint, minimumSizeHint and minimumSize; for t
 sizeHint and minimumSize, and then both item rectangles for a layout rectangle that is exactly the
 size hint, 100 wider, and 10 narrower than the layout minimum (height 30 in all three).
 
-Run (Windows, the platform the HUD ships on; PySide6 6.11.2):
+Run (Windows, the platform the HUD ships on; PySide6 6.12.0):
   DPR 1.25: set QT_SCREEN_SCALE_FACTORS=1.25
   DPR 1.0 : set QT_ENABLE_HIGHDPI_SCALING=0
   python label_header_row.py
