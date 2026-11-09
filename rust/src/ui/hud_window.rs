@@ -816,7 +816,6 @@ impl HUDWindow {
             grip_cursor: Cell::new(false),
             snap_timer,
             fade_timer,
-            preview_pending: Cell::new(false),
             snap_anim: RefCell::new(None),
             snap_clock: Cell::new(None),
             snap_frame_timer,
@@ -882,11 +881,12 @@ impl HUDWindow {
                     if !hud_state_events.docking.get() {
                         hud_state_events.stop_snap_animation(); // not the glide's own move: the user took the bar over
                         hud_state_events.snap_timer.start();
-                        // Python `moveEvent`: the dock preview follows the drag (one update per
-                        // burst of moves)
-                        if !hud_state_events.preview_pending.replace(true) {
-                            with_hud_later(|hud| hud.run_dock_preview_update());
-                        }
+                        // Python `moveEvent`: the dock preview follows the drag. It runs now, not
+                        // through `with_hud_later`: the system's move loop dispatches no widget
+                        // event, so a queued update would wait until the pointer stops. A move that
+                        // finds the HUD busy skips its update; the next move, or the snap timer
+                        // (`finish_sidebar_move`), carries on.
+                        with_hud(|hud| hud.run_dock_preview_update());
                     }
                     return;
                 }
@@ -1548,8 +1548,6 @@ pub struct SidebarHud {
     snap_timer: Timer,
     /// Python `_fade_timer`.
     fade_timer: Timer,
-    /// An update of the dock preview is queued (moves arrive in bursts; one update serves them).
-    preview_pending: Cell<bool>,
     /// Python `_snap_anim`: the glide onto the docked rectangle, while there is one.
     snap_anim: RefCell<Option<SnapAnimation>>,
     /// When the glide started (Python `_snap_clock`).
@@ -2133,9 +2131,8 @@ impl HUDWindow {
         (target.rect != (g.x, g.y, g.width, g.height)).then(|| Rect::new(x, y, w, h))
     }
 
-    /// The queued update of the dock preview (see `SidebarHud::preview_pending`).
+    /// `update_dock_preview` for the current mouse state: a move of the window while a button is held.
     fn run_dock_preview_update(&mut self) {
-        self.sidebar_hud.preview_pending.set(false);
         self.update_dock_preview(
             !ferrokit_widgets::application::Application::mouse_buttons().is_empty(),
         );
@@ -3414,6 +3411,8 @@ mod dock_preview_tests {
             cy: i32,
             flags: u32,
         ) -> i32;
+        fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn ReleaseCapture() -> i32;
     }
 
     const GWL_EXSTYLE: i32 = -20;
@@ -3468,8 +3467,14 @@ mod dock_preview_tests {
             assert!(hud.dock_preview.is_none());
             let orientation = hud.sidebar.orientation();
 
-            // far from every edge: no preview
-            drag_to(&mut hud, w.0 + w.2 / 2 - 40, w.1 + w.3 / 2 - 60, true);
+            // far from every edge (centred: a tall panel on a small screen is within the snap
+            // distance of an edge anywhere else): no preview
+            drag_to(
+                &mut hud,
+                w.0 + (w.2 - start.width) / 2,
+                w.1 + (w.3 - start.height) / 2,
+                true,
+            );
             assert!(!shown(&hud), "{state}");
 
             // near the top edge: the bar would turn horizontal and the preview has that shape
@@ -3883,5 +3888,184 @@ mod dock_preview_tests {
         release_at_top(&mut hud, w, 4);
         assert!(!gliding(&hud));
         assert_eq!(geometry(&hud).1, w.1);
+    }
+
+    // ---- the drag as Windows delivers it ----
+    //
+    // The bar is dragged by the system's own move loop (`start_system_move`). While it runs, the
+    // window gets native moves and nothing else: no mouse messages, no widget events (so nothing
+    // flushes `with_hud_later`), and the button stays held. Measured with a real press, then moves
+    // and a release (SendInput): `WM_LBUTTONDOWN`, the `ReleaseCapture` of the drag request, the
+    // posted `SC_DRAGMOVE`, then (when the pointer has moved, 140 ms later in that run) the loop's own
+    // `WM_CAPTURECHANGED` with no new owner, `WM_ENTERSIZEMOVE`, a `WM_MOVE` every 15-30 ms, and
+    // `WM_EXITSIZEMOVE` after the release. The tests above move the window and call
+    // `update_dock_preview(true)` themselves; these send those messages and leave the update to
+    // the HUD's move handler, which the application registers the HUD for (`register_hud`).
+
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_CAPTURECHANGED: u32 = 0x0215;
+    const WM_ENTERSIZEMOVE: u32 = 0x0231;
+    const WM_EXITSIZEMOVE: u32 = 0x0232;
+    const MK_LBUTTON: usize = 0x0001;
+    const GW_HWNDNEXT: u32 = 2;
+
+    /// The HUD as the application holds it: shared and registered, so its window handlers reach it.
+    fn registered_hud() -> Rc<RefCell<HUDWindow>> {
+        let mut hud = sidebar_hud("strip", |_| {});
+        hud.window.show();
+        let hud = Rc::new(RefCell::new(hud));
+        register_hud(&hud);
+        hud
+    }
+
+    /// What the move loop does to the window: a native move (physical pixels), made outside any
+    /// borrow of the HUD, as in the real loop.
+    fn native_move_to(hud: &Rc<RefCell<HUDWindow>>, x: i32, y: i32) {
+        let hwnd = hud.borrow().window.native_handle() as Hwnd;
+        let at = ferrokit_platform::screen::logical_point_to_native(Point::new(x, y));
+        // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+        let ok = unsafe {
+            SetWindowPos(
+                hwnd,
+                core::ptr::null_mut(),
+                at.x,
+                at.y,
+                0,
+                0,
+                0x0001 | 0x0004 | 0x0010,
+            )
+        };
+        assert_ne!(ok, 0);
+    }
+
+    /// Takes the `SC_DRAGMOVE` the drag request posted out of the queue unread: dispatching it
+    /// would enter the real move loop, which only the mouse ends.
+    fn discard_posted_system_commands(hwnd: Hwnd) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            MSG, PM_REMOVE, PeekMessageW, WM_SYSCOMMAND,
+        };
+        // SAFETY: `msg` is a live, zeroed MSG for the call to fill in; `hwnd` is the HUD's window.
+        unsafe {
+            let mut msg: MSG = core::mem::zeroed();
+            while PeekMessageW(&mut msg, hwnd as _, WM_SYSCOMMAND, WM_SYSCOMMAND, PM_REMOVE) != 0 {}
+        }
+    }
+
+    /// Forgets the held button and the capture, which a failed assertion would leave behind for the
+    /// next test.
+    struct NativeDragGuard;
+
+    impl Drop for NativeDragGuard {
+        fn drop(&mut self) {
+            ferrokit_platform::window::set_app_mouse_buttons(
+                ferrokit_core::event::MouseButtons::NO_BUTTON,
+            );
+            unsafe { ReleaseCapture() };
+        }
+    }
+
+    fn held_buttons() -> ferrokit_core::event::MouseButtons {
+        ferrokit_widgets::application::Application::mouse_buttons()
+    }
+
+    /// A drag of the bar to the top edge and along it, then the release, as the move loop
+    /// delivers it. `loop_takes_the_capture`: the loop's own `WM_CAPTURECHANGED` (no new owner).
+    fn drag_through_the_move_loop(loop_takes_the_capture: bool) {
+        use ferrokit_core::event::MouseButtons;
+        let hud = registered_hud();
+        let hwnd = hud.borrow().window.native_handle() as Hwnd;
+        let w = work(&hud.borrow());
+        let _guard = NativeDragGuard;
+
+        unsafe { SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, 0x0020_0020) };
+        assert_eq!(
+            held_buttons(),
+            MouseButtons::LEFT,
+            "a press is a held button"
+        );
+        hud.borrow().start_sidebar_drag();
+        discard_posted_system_commands(hwnd);
+        if loop_takes_the_capture {
+            unsafe { SendMessageW(hwnd, WM_CAPTURECHANGED, 0, 0) };
+        }
+        unsafe { SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0) };
+        // the loop swallows the release: the button stays held until `WM_EXITSIZEMOVE`
+        assert_eq!(
+            held_buttons(),
+            MouseButtons::LEFT,
+            "the button is held in the move loop"
+        );
+
+        // far from every edge (centred): nothing to preview
+        let g = hud.borrow().window.geometry();
+        native_move_to(&hud, w.0 + (w.2 - g.width) / 2, w.1 + (w.3 - g.height) / 2);
+        assert!(!shown(&hud.borrow()));
+
+        // near the top edge: the outline is there when the move returns (the move handler ran the
+        // update; no widget event was dispatched since to flush a queued one), directly below the HUD
+        native_move_to(&hud, w.0 + 160, w.1 + 4);
+        {
+            let hud = hud.borrow();
+            assert!(shown(&hud), "the preview shows while the bar is dragged");
+            let top = preview_rect(&hud);
+            assert!(top.width > top.height, "the bar turns horizontal: {top:?}");
+            let preview = hud.dock_preview.as_ref().unwrap().window().native_handle() as Hwnd;
+            let below = unsafe { GetWindow(hud.window.native_handle() as Hwnd, GW_HWNDNEXT) };
+            assert_eq!(
+                below, preview,
+                "the outline is the window right below the HUD"
+            );
+        }
+
+        // along the edge it follows the pointer
+        native_move_to(&hud, w.0 + 60, w.1 + 8);
+        assert_eq!(preview_rect(&hud.borrow()).x, w.0 + 60);
+
+        // the pointer rests (the snap timer runs out) with the button still held: the drag is not over
+        hud.borrow_mut().finish_sidebar_move();
+        {
+            let hud = hud.borrow();
+            assert!(shown(&hud), "a pause in the drag keeps the preview");
+            assert!(!gliding(&hud), "a pause in the drag does not dock the bar");
+        }
+
+        // the release: the loop ends, the application learns the button is up, the bar docks on the preview
+        let before_finish = preview_rect(&hud.borrow());
+        unsafe { SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0) };
+        assert!(
+            held_buttons().is_empty(),
+            "the loop end releases the button: {:?}",
+            held_buttons()
+        );
+        hud.borrow_mut().finish_sidebar_move();
+        {
+            let hud = hud.borrow();
+            assert!(!shown(&hud), "the preview goes with the release");
+            assert!(gliding(&hud), "the bar glides onto its docked place");
+        }
+        hud.borrow_mut().snap_animation_step_at(140.0);
+        let hud = hud.borrow();
+        assert!(!gliding(&hud));
+        assert_eq!(
+            hud.window.geometry(),
+            before_finish,
+            "it settles exactly on the outline"
+        );
+    }
+
+    #[test]
+    fn the_preview_follows_a_drag_in_the_system_move_loop() {
+        let _motion = Motion::set(false);
+        drag_through_the_move_loop(false);
+    }
+
+    /// The loop's own `WM_CAPTURECHANGED` (no new owner) must not make the application forget the
+    /// held button: with ferrokit 5422e87 `Application::mouse_buttons()` was empty for the whole
+    /// drag, so the preview never showed and the bar docked mid-drag. Qt keeps the button until
+    /// `WM_EXITSIZEMOVE` (`QWindowsContext::handleExitSizeMove`); ferrokit does since #264.
+    #[test]
+    fn the_preview_follows_a_drag_when_the_loop_takes_the_capture() {
+        let _motion = Motion::set(false);
+        drag_through_the_move_loop(true);
     }
 }
