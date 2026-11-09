@@ -2,7 +2,7 @@
 
 `qtrs` 與 Python/PySide6 Claude HUD 之間的 **可觀察行為契約**。
 
-- 基準：PySide6 / Qt **6.11.2**，Windows。Qt 原始碼在 repo 根目錄 `qtbase/`（與 `rust/` 同層的 `qtbase/src/...`）。
+- 基準：PySide6 / Qt **6.12.0**（HUD 釘選版本），Windows。下文的證據標記多數記錄於 6.11.2；已用 6.12.0 重跑 `rust/tools/pyside_probes/` 與 LCD 傾印，除 DPR 1.0 的 Consolas 字寬（`label_header_row.py`、`header_row_visibility.py`、`label_text_widths.py`）外輸出相同。Qt 原始碼在 repo 根目錄 `qtbase/`（與 `rust/` 同層的 `qtbase/src/...`）。
 - 稽核對象：commit `701d36b`（`rust/qtrs` 五個 crate + `rust/src` 應用層）。檔案行號會漂移；以符號名稱為準，行號僅作定位。
 - 本文件 **只定義行為**，不規定實作。`qtrs` 的實作方式可以和 Qt 完全不同，但 §2–§11 每一項的「qtrs required」在可觀察層面必須成立。
 - **搬遷說明（目前狀態）**：`qtrs` 已匯出成獨立的函式庫 ferrokit（https://github.com/onlyatuna/ferrokit），本 repo 不再含 `rust/qtrs/`，HUD 以 git 依賴使用它。讀本文件時：
@@ -98,7 +98,7 @@ python tools/second_layer_harness/qt_layout_compare.py 7500 1
 - 目標：**Rust HUD（`rust/src`，跑在 `qtrs` 上）與 Python HUD（`python/`，PySide6）在使用者可觀察層面一致**：像素、版面、互動、時序、持久化、錯誤處理。
 - `qtrs` 本身要成為「可替代 PySide6 的 Qt 子集」：契約以 **Qt 的 observable behavior** 定義（object / thread / event-loop 行為），不是 API 外觀。
 - 平台：**Windows 為唯一驗證平台**。`window_x11.rs`、`window_wayland.rs`、`window_cocoa.rs`、`dispatcher_unix.rs`、`dispatcher_cocoa.rs`、pynput/macOS 熱鍵都未在真機驗證；本契約對它們 **不作任何通過宣稱**。
-- PySide6 版本：6.11.2。Python HUD 實際使用的 Qt 符號清單見 §12.2。
+- PySide6 版本：6.12.0（HUD 釘選於 `python/requirements.txt`；既有證據多數記錄於 6.11.2）。Python HUD 實際使用的 Qt 符號清單見 §12.2。
 
 ### 1.2 範圍外（需要時先在本文件新增章節）
 
