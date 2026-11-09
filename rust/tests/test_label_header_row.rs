@@ -3,7 +3,7 @@
 //! The configuration is the HUD header row reduced to its two text-driven labels
 //! (`hud_window.py:280-288`): a horizontal layout (margins 0, spacing 6) of `QLabel#HeaderTitle`,
 //! a stretch and `QLabel#HeaderStatus`, under the HUD's QLabel style sheet. The expected numbers are
-//! PySide6 6.11.2 measurements on Windows (DirectWrite) from `rust/tools/pyside_probes/label_header_row.py`
+//! PySide6 6.12.0 measurements on Windows (DirectWrite) from `rust/tools/pyside_probes/label_header_row.py`
 //! at DPR 1.25 (`QT_SCREEN_SCALE_FACTORS=1.25`) and DPR 1.0 (`QT_ENABLE_HIGHDPI_SCALING=0`).
 //!
 //! Text widths of these labels are also pinned by `test_label_text_metric_rounding.rs`; this file adds
@@ -149,13 +149,13 @@ fn the_header_row_matches_pyside6_at_dpr_1_0() {
         1.0,
         &Expected {
             title_hint: (142, 15),
-            status_hint: (80, 12),
-            layout_hint: (228, 15),
-            layout_min: (228, 15),
+            status_hint: (96, 12),
+            layout_hint: (244, 15),
+            layout_min: (244, 15),
             cases: [
-                (228, (0, 0, 142, 30), (148, 0, 80, 30)),
-                (328, (0, 0, 142, 30), (248, 0, 80, 30)),
-                (218, (0, 0, 132, 30), (138, 0, 80, 30)),
+                (244, (0, 0, 142, 30), (148, 0, 96, 30)),
+                (344, (0, 0, 142, 30), (248, 0, 96, 30)),
+                (234, (0, 0, 132, 30), (138, 0, 96, 30)),
             ],
         },
     );
