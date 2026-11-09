@@ -3404,6 +3404,7 @@ mod dock_preview_tests {
     unsafe extern "system" {
         fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
         fn GetForegroundWindow() -> Hwnd;
+        fn GetWindow(hwnd: Hwnd, cmd: u32) -> Hwnd;
         fn SetWindowPos(
             hwnd: Hwnd,
             after: Hwnd,
@@ -3573,6 +3574,33 @@ mod dock_preview_tests {
         hud.apply_ui_mode("table");
         assert!(!shown(&hud));
         assert!(hud.dock_preview_rect(true).is_none());
+    }
+
+    #[test]
+    fn the_preview_sits_directly_below_the_hud_in_both_stacking_bands() {
+        const GW_HWNDNEXT: u32 = 2;
+        for on_top in [true, false] {
+            let mut hud = sidebar_hud("strip", |c| c.always_on_top = on_top);
+            hud.window.set_stays_on_top(on_top);
+            hud.window.show();
+            let w = work(&hud);
+            let foreground = unsafe { GetForegroundWindow() };
+            let hud_hwnd = hud.window.native_handle() as Hwnd;
+            // every update re-stacks the outline right under the HUD, also while it moves
+            for x in [150, 160, 170] {
+                drag_to(&mut hud, w.0 + x, w.1 + 4, true);
+                assert!(shown(&hud), "{on_top}");
+                let preview = hud.dock_preview.as_ref().unwrap();
+                let preview_hwnd = preview.window().native_handle() as Hwnd;
+                assert_eq!(
+                    unsafe { GetWindow(hud_hwnd, GW_HWNDNEXT) },
+                    preview_hwnd,
+                    "on_top {on_top}: the outline is the window right below the HUD"
+                );
+                assert!(preview.stack_below(&hud.window));
+            }
+            assert_eq!(unsafe { GetForegroundWindow() }, foreground, "{on_top}");
+        }
     }
 
     #[test]

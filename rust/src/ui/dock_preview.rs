@@ -121,10 +121,15 @@ impl DockPreview {
 
     /// Keeps the outline directly below the dragged HUD in the window stacking order (Python
     /// `stack_below`). The single place that orders the two windows; called after every `show_at`.
-    /// Waits for ferrokit's `Window::stack_under(&self, sibling: &Window)` (not in the pinned
-    /// revision): until the pin moves, the order is whatever the system gave the new window.
-    pub fn stack_below(&self, hud: &Window) {
-        let _ = hud;
+    /// `show_at` has already put the outline in the HUD's stacking band (`always_on_top`), which
+    /// `Window::stack_under` needs; it answers `false` when the bands differ or the system refuses
+    /// (the outline then keeps the place the system gave it).
+    pub fn stack_below(&self, hud: &Window) -> bool {
+        let stacked = self.window.stack_under(hud);
+        if !stacked {
+            log::debug!("[HUD] dock preview could not be stacked below the HUD");
+        }
+        stacked
     }
 
     pub fn hide(&mut self) {
