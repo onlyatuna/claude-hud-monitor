@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QEvent, QPoint
 from PySide6.QtWidgets import QApplication
 from core.config_manager import ConfigManager
 from core.providers.base import UsageMetrics, MetricRow
@@ -230,7 +230,19 @@ class HudTests(unittest.TestCase):
         from ui.hud_window import HUDWindow
         config = ConfigManager(Path(directory) / 'config.json')
         config.update(settings)
-        return config, HUDWindow(config)
+        hud = HUDWindow(config)
+        self.addCleanup(self._release, hud)
+        return config, hud
+
+    def _release(self, hud):
+        # An undeleted window keeps its app-wide event filter, colour-scheme connection and 1 s timer, so
+        # every later test would pay for every earlier window.
+        hud.refresh_controller.stop()
+        hud.countdown_timer.stop()
+        hud.geometry_timer.stop()
+        APP.processEvents()          # zero-delay callbacks (QTimer.singleShot(0, self._x)) must run while it is alive
+        hud.deleteLater()
+        APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def _close(self, hud):
         hud.refresh_controller.stop()
