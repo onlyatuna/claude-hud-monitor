@@ -7,6 +7,7 @@ A setting appears exactly once. The menu is rebuilt each time it is shown, so ch
 from PySide6.QtWidgets import QMenu
 
 from core import agy_statusline
+from core import tray_quota
 from core.agy_rows import DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.autostart import is_autostart_enabled
 from core.logger import open_log_dir
@@ -115,6 +116,29 @@ def _build_behaviour(hud, menu):
         _check(interval_menu, f"{sec} 秒", current == sec, lambda s=sec: hud._set_interval(s))
 
 
+def _build_tray_quota(hud, menu):
+    """Which quota's number the tray icon shows; rows are the live ones, so the labels carry current values."""
+    sub = menu.addMenu("系統匣數字 (Tray number)")
+    setting = hud.config.get("tray_quota", tray_quota.OFF)
+    rows = hud.tray_quota_readings()
+    _check(sub, "關閉 (Off)", setting == tray_quota.OFF, lambda: hud.set_tray_quota(tray_quota.OFF))
+    _check(sub, "自動：最緊的額度 (Auto)", setting == tray_quota.AUTO, lambda: hud.set_tray_quota(tray_quota.AUTO))
+    if setting not in (tray_quota.OFF, tray_quota.AUTO) and all(r.key != setting for r in rows):
+        _check(sub, f"{setting}  unavailable", True, lambda: None).setEnabled(False)
+    header = None
+    for row in rows:
+        if row.provider_id != header:
+            header = row.provider_id
+            sub.addSeparator()
+            _note(sub, row.provider_name)
+        _check(sub, tray_quota.menu_label(row), row.key == setting, lambda k=row.key: hud.set_tray_quota(k))
+    sub.addSeparator()
+    mode = hud.config.get("tray_quota_mode", tray_quota.USED)
+    _check(sub, "顯示已用 (Show used)", mode == tray_quota.USED, lambda: hud.set_tray_quota_mode(tray_quota.USED))
+    _check(sub, "顯示剩餘 (Show remaining)", mode == tray_quota.REMAINING,
+           lambda: hud.set_tray_quota_mode(tray_quota.REMAINING))
+
+
 def _build_claude_accounts(hud, menu):
     from core.providers.claude_provider import discover_profiles, resolve_active_profile
     sub = menu.addMenu("Claude 帳號 (Claude Account)")
@@ -180,6 +204,8 @@ def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
     _build_interface(hud, menu)
     _build_appearance(hud, menu)
     _build_behaviour(hud, menu)
+    if tray:
+        _build_tray_quota(hud, menu)
     if not tray:
         _build_more(hud, menu)
     menu.addSeparator()

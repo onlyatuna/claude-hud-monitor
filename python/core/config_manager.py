@@ -40,7 +40,9 @@ DEFAULT_CONFIG = {
     "hotkey": "Alt+C",
     "locked": False,
     "autostart": False,
-    "claude_profile": "auto"
+    "claude_profile": "auto",
+    "tray_quota": "off",  # tray icon number: "off", "auto" (fullest row) or a row key like "claude:5h" (see core/tray_quota.py)
+    "tray_quota_mode": "used"  # "used" or "remaining"
 }
 
 UI_MODES = ("table", "sidebar")

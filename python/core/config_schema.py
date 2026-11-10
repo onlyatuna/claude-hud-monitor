@@ -111,7 +111,8 @@ RULES = {
     "hotkey_enabled": _boolean,
     "opacity": _float_between(0.1, 1.0, reject_non_positive=True),
     "refresh_interval_sec": _int_between(20, 86400),
-    "hotkey": _text, "claude_profile": _text,
+    "hotkey": _text, "claude_profile": _text, "tray_quota": _text,
+    "tray_quota_mode": _choice("used", "remaining"),
 }
 
 
