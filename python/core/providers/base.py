@@ -73,6 +73,11 @@ class MetricRow:
     text: str = "--"
     reset: Optional[datetime] = None
     subtext: str = ""
+    key: str = ""  # stable identity; defaults to the title
+
+    def __post_init__(self):
+        if not self.key:
+            self.key = self.title
 
 
 @dataclass
@@ -102,6 +107,12 @@ class UsageMetrics:
     stale: bool = False
     last_success: Optional[datetime] = None
     extra_metrics: List[MetricRow] = field(default_factory=list)
+    metric1_key: str = ""  # stable identity of the first / second main row; empty means "use the title"
+    metric2_key: str = ""
+
+    def main_key(self, index: int) -> str:
+        """Stable key of main row `index` (1 or 2), falling back to its title."""
+        return (self.metric1_key or self.metric1_title) if index == 1 else (self.metric2_key or self.metric2_title)
 
 class BaseProvider:
     provider_id: str = "base"

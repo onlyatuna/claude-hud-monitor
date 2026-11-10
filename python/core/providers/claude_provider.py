@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -8,8 +9,87 @@ import urllib.error
 from datetime import datetime
 from typing import Optional, List, Tuple
 
-from core.providers.base import BaseProvider, UsageMetrics, percentage, percent_text, safe_parse, retry_delay, ssl_context
+from core.providers.base import BaseProvider, UsageMetrics, MetricRow, percentage, percent_text, safe_parse, retry_delay, ssl_context
 from core.logger import logger
+
+# limits[] kinds / groups we understand; anything else is rendered generically and logged once per process.
+_KNOWN_KINDS = {"session", "weekly_all", "weekly_scoped"}
+_MAIN_KINDS = {"session", "weekly_all"}  # duplicates of five_hour / seven_day
+_WINDOW_TAGS = {"weekly": "7D", "session": "5H"}
+_logged_unknown = set()
+
+
+def _text(value) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def slugify(text: str) -> str:
+    """Lower-case, every run of non-alphanumerics becomes one '-', no leading/trailing '-'."""
+    return re.sub(r"[\W_]+", "-", text.strip().lower()).strip("-")
+
+
+def _parse_dt(value) -> Optional[datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _note_unknown(field: str, value: str):
+    token = (field, value[:40])
+    if token not in _logged_unknown:
+        _logged_unknown.add(token)
+        logger.info(f"[ClaudeProvider] unknown limits[] {field}: {token[1]!r}")
+
+
+def _scope_names(entry: dict) -> List[str]:
+    """[model display name, surface] of the entry's scope, keeping only the ones with a usable slug."""
+    scope = entry.get("scope")
+    scope = scope if isinstance(scope, dict) else {}
+    model = scope.get("model")
+    model = model if isinstance(model, dict) else {}
+    names = [_text(model.get("display_name")), _text(scope.get("surface"))]
+    return [name for name in names if slugify(name)]
+
+
+def parse_limits(limits):
+    """(scoped rows, fallback) from the OAuth usage `limits[]` array. Never raises on odd shapes.
+
+    Rows come in API order, one per distinct (kind, model, surface); session / weekly_all entries never become
+    rows, the first valid one of each is returned as {kind: (percent, reset)} for a missing five_hour / seven_day."""
+    rows: List[MetricRow] = []
+    fallback = {}
+    if not isinstance(limits, list):
+        return rows, fallback
+    seen = set()
+    for entry in limits:
+        if not isinstance(entry, dict):
+            continue
+        kind = _text(entry.get("kind")).lower()
+        if not kind:
+            continue
+        group = _text(entry.get("group")).lower()
+        if kind not in _KNOWN_KINDS:
+            _note_unknown("kind", kind)
+        if group and group not in _WINDOW_TAGS:
+            _note_unknown("group", group)
+        val = percentage(entry.get("percent"))
+        if val is None:
+            continue
+        reset = _parse_dt(entry.get("resets_at"))
+        if kind in _MAIN_KINDS:
+            fallback.setdefault(kind, (val, reset))
+            continue
+        names = _scope_names(entry)
+        key = ":".join(["claude", kind] + [slugify(name) for name in names])
+        if key in seen:
+            continue
+        seen.add(key)
+        title = (names[0].upper() if names else kind.upper()) + (f" {_WINDOW_TAGS[group]}" if group in _WINDOW_TAGS else "")
+        rows.append(MetricRow(title, val, percent_text(val), reset, key=key))
+    return rows, fallback
 
 @dataclass
 class ClaudeProfile:
@@ -291,19 +371,34 @@ class ClaudeProvider(BaseProvider):
         s_val = percentage(five_hour.get("utilization"))
         w_val = percentage(seven_day.get("utilization"))
 
+        # limits[] carries model-scoped weekly windows (and mirrors the main pair). A broken array must never
+        # discard the valid five_hour / seven_day data, so it is parsed in isolation.
+        try:
+            scoped_rows, fallback = parse_limits(data.get("limits"))
+        except (ValueError, TypeError, AttributeError, KeyError, OverflowError) as exc:
+            logger.warning(f"[ClaudeProvider] ignoring malformed limits[]: {type(exc).__name__}")
+            scoped_rows, fallback = [], {}
+        if not five_hour and "session" in fallback:
+            s_val, five_h_dt = fallback["session"]
+        if not seven_day and "weekly_all" in fallback:
+            w_val, seven_d_dt = fallback["weekly_all"]
+
         return UsageMetrics(
             provider_name="Claude Code",
             provider_id=self.provider_id,
             metric1_title="SESSION 5H",
+            metric1_key="claude:5h",
             metric1_val=s_val,
             metric1_text=percent_text(s_val),
             metric1_reset=five_h_dt,
             metric2_title="WEEKLY 7D",
+            metric2_key="claude:7d",
             metric2_val=w_val,
             metric2_text=percent_text(w_val),
             metric2_reset=seven_d_dt,
             badge1_text=f"Code: {percent_text(code_pct)}",
             badge2_text=f"Chat: {percent_text(chat_pct)}",
             last_updated_time=now_str,
+            extra_metrics=scoped_rows,
             error="未取得有效配額資料" if s_val is None and w_val is None else None
         )

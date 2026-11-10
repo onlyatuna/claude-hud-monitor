@@ -42,6 +42,8 @@ QTimer / 手動刷新 / 休眠恢復
 metric1_val、metric2_val 是 0–100 的已使用比例或 None。None 對應 --；0 為有效讀值。
 兩個窗口均不可用時回傳 schema 錯誤；單窗口可用時允許部分顯示。
 徽章不可填入未證實的方案或模型。沒有重設時間就顯示 --。
+MetricRow（`extra_metrics` 的元素）含 `key`：穩定識別字，預設等於 `title`；固定主列的 key 在 `UsageMetrics.metric1_key` / `metric2_key`（空字串表示用標題，用 `main_key(1|2)` 讀取）。Claude 固定列為 `claude:5h`、`claude:7d`，模型別額度列為 `claude:<kind>:<模型名 slug>`（如 `claude:weekly_scoped:fable`），不得由陣列索引或 `model.id` 推導。`row_order` 仍以標題比對，重排時 key 跟著該列移動。
+Claude 的 `limits[]`：非 `session` / `weekly_all` 且 percent 為 0–100 有限值的項目，各自成為一個 `extra_metrics` 列（API 順序、同 key 取第一個、不看 `is_active`）；`session` / `weekly_all` 只在頂層 `five_hour` / `seven_day` 缺漏時作為主列備援。`limits` 不是陣列、項目格式錯誤或 kind 未知都不得拋出例外，也不得丟棄有效的主列資料；未知 kind / group 每程序只記一次 log。
 error_code 為診斷分類；error 是使用者可讀訊息，不能包含 token 或原始 payload。
 stale 與 last_success 由協調層管理，最後成功資料不可假裝是最新值。
 

@@ -5,12 +5,22 @@
 
 | Adapter | 解析欄位 | 缺失處理 |
 | --- | --- | --- |
-| Claude | five_hour / seven_day.utilization、resets_at；可選 seven_day_breakdown.rows | 未知窗口顯示 -- |
+| Claude | five_hour / seven_day.utilization、resets_at；可選 seven_day_breakdown.rows；`limits[]`（模型別週額度，見下） | 未知窗口顯示 -- |
 | Codex | rate_limit.primary_window / secondary_window 的 used_percent、reset_at、limit_window_seconds；plan_type | 不猜模型、方案或窗口 |
 | AGY | `retrieveUserQuotaSummary` 的 `groups[].name`、`buckets[].id`、`remainingFraction`、`resetTime`；`retrieveUserQuota` 的 `buckets[].modelId`、`remainingFraction`、`resetTime`；statusLine 快取的 `quota.<bucket>.remaining_fraction`、`reset_time` | Gemini 5h 取 `modelId` 含 gemini 的 bucket 中最受限者；Gemini 週額度與 Argon 週額度只來自 statusLine 快取，未啟用時顯示 `--`；不認得的群組只在 log 記名稱 |
 
 AGY 第三方徽章為名称含 claude/gpt 群組週窗口的最小剩餘比例，不表示每個模型均有該額度。
 上游改名／缺欄位時，新增合成或脫敏 fixture 與 adapter 修正，不以預設 0/100 掩蓋差異。
+
+## Claude `limits[]`（模型別額度）
+
+OAuth 用量回應的 `limits[]` 會帶出只存在於此陣列的額度，例如單一模型的週額度（`kind: weekly_scoped`、`scope.model.display_name: "Fable"`）；頂層 `seven_day_sonnet` 等欄位在這種帳號為 null。欄位形狀來自公開、已脫敏的回應紀錄，尚未以本專案維護者的帳號實測。
+
+- `kind` 為 `session` / `weekly_all` 的項目與 `five_hour` / `seven_day` 重複，不另開列；只有在頂層 `five_hour`（或 `seven_day`）缺漏時才拿來當主列的備援。
+- 其餘每個項目（只要 `percent` 是 0–100 的有限數值）都會成為一個額外列，依 API 順序排列，標題為 `<模型名大寫> 7D`（`group: weekly`）或 `… 5H`（`group: session`）；沒有模型名時改用 surface 名，再沒有就用 `kind` 大寫。同一 kind 與範圍重複時取第一個。
+- 不看 `is_active`（它代表「目前是否為限制關鍵」，不代表有效）。`percent` 為 0、`resets_at` 為 null 的安靜項目照樣顯示，重設時間為 `--`。
+- 每列另有穩定的 `key`（`MetricRow.key`，預設等於標題）：固定列為 `claude:5h`、`claude:7d`；模型別列為 `claude:<kind>:<模型名 slug>`，例如 `claude:weekly_scoped:fable`（slug＝小寫、連續非英數字元合成一個 `-`）。不使用陣列索引或 `model.id`（目前為 null）。`row_order` 仍以標題比對。
+- 未知的 `kind` / `group` 不會造成錯誤：照上述規則顯示，並每個程序只在 log 記一次名稱（不寫入檔案）。非陣列的 `limits`、非物件的項目、缺 `percent` 或數值無效的項目一律略過；`limits[]` 的任何異常都不會丟掉有效的 `five_hour` / `seven_day`。
 
 ## AGY 資料來源與已知限制
 
