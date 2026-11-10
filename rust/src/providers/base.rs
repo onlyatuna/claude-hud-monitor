@@ -69,7 +69,8 @@ pub fn percent_text(value: Option<f64>) -> String {
     }
 }
 
-/// One extra quota row (Python `MetricRow`): agy's five buckets beyond the main pair.
+/// One extra quota row (Python `MetricRow`): agy's five buckets beyond the main pair, Claude's
+/// model-scoped limits.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricRow {
     pub title: String,
@@ -77,6 +78,8 @@ pub struct MetricRow {
     pub text: String,
     pub reset: Option<DateTime<Utc>>,
     pub subtext: String,
+    /// Stable identity of the row (defaults to the title). Never derived from an array index.
+    pub key: String,
 }
 
 impl MetricRow {
@@ -87,6 +90,7 @@ impl MetricRow {
             text: text.to_owned(),
             reset: None,
             subtext: String::new(),
+            key: title.to_owned(),
         }
     }
 }
@@ -116,6 +120,9 @@ pub struct UsageMetrics {
     pub metric2_text: String,
     pub metric2_reset: Option<DateTime<Utc>>,
     pub metric2_subtext: String,
+    /// Stable row keys of the main pair; empty means "same as the title" (see `MetricRow::key`).
+    pub metric1_key: String,
+    pub metric2_key: String,
 
     pub badge1_text: String,
     pub badge2_text: String,
@@ -144,6 +151,8 @@ impl Default for UsageMetrics {
             metric2_text: "--".to_string(),
             metric2_reset: None,
             metric2_subtext: String::new(),
+            metric1_key: String::new(),
+            metric2_key: String::new(),
             badge1_text: String::new(),
             badge2_text: String::new(),
             last_updated_time: String::new(),

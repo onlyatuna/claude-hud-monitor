@@ -82,6 +82,11 @@ pub fn toggle_primary(current: &[String], title: &str) -> [String; 2] {
     [second, title]
 }
 
+/// A main-pair key; empty means the title.
+fn row_key(key: &str, title: &str) -> String {
+    if key.is_empty() { title } else { key }.to_owned()
+}
+
 fn main_rows(m: &UsageMetrics) -> [MetricRow; 2] {
     [
         MetricRow {
@@ -90,6 +95,7 @@ fn main_rows(m: &UsageMetrics) -> [MetricRow; 2] {
             text: m.metric1_text.clone(),
             reset: m.metric1_reset,
             subtext: m.metric1_subtext.clone(),
+            key: row_key(&m.metric1_key, &m.metric1_title),
         },
         MetricRow {
             title: m.metric2_title.clone(),
@@ -97,6 +103,7 @@ fn main_rows(m: &UsageMetrics) -> [MetricRow; 2] {
             text: m.metric2_text.clone(),
             reset: m.metric2_reset,
             subtext: m.metric2_subtext.clone(),
+            key: row_key(&m.metric2_key, &m.metric2_title),
         },
     ]
 }
@@ -112,11 +119,13 @@ fn with_rows(m: &UsageMetrics, mut rows: Vec<MetricRow>) -> UsageMetrics {
     out.metric1_text = a.text;
     out.metric1_reset = a.reset;
     out.metric1_subtext = a.subtext;
+    out.metric1_key = a.key;
     out.metric2_title = b.title;
     out.metric2_val = b.val;
     out.metric2_text = b.text;
     out.metric2_reset = b.reset;
     out.metric2_subtext = b.subtext;
+    out.metric2_key = b.key;
     out.extra_metrics = extras;
     out
 }

@@ -1297,6 +1297,32 @@ mod card_logic_tests {
         assert_eq!(value(&card.m1_bar), Some((82, false)));
     }
 
+    /// A Claude model-scoped limit (`limits[]`) shows as an extra row of the detail card.
+    #[test]
+    fn claude_scoped_limit_rows_show_in_the_card() {
+        use crate::providers::base::MetricRow;
+        let mut fable = MetricRow::new("FABLE 7D", Some(84.0), "84%");
+        fable.key = "claude:weekly_scoped:fable".to_string();
+        let mut card = ProviderCardWidget::new("claude");
+        card.set_appearance(true);
+        card.update_metrics(&UsageMetrics {
+            provider_id: "claude".to_string(),
+            metric1_val: Some(28.0),
+            metric1_text: "28%".to_string(),
+            metric2_val: Some(64.0),
+            metric2_text: "64%".to_string(),
+            extra_metrics: vec![fable, MetricRow::new("QUIET 7D", Some(0.0), "0%")],
+            ..Default::default()
+        });
+        assert_eq!(
+            card.row_titles(),
+            ["SESSION 5H", "WEEKLY 7D", "FABLE 7D", "QUIET 7D"].map(String::from)
+        );
+        let rows = card.core.extra_rows.borrow();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.cell.borrow().is_visible()));
+    }
+
     #[test]
     fn rows_are_not_reorderable_while_offline() {
         let mut card = ProviderCardWidget::new("claude");
