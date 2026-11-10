@@ -1530,6 +1530,21 @@ pub struct SidebarHud {
     root_id: ObjectId,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam: the pointer position the grips read instead of the real cursor.
+    static POINTER_OVERRIDE: Cell<Option<Point>> = const { Cell::new(None) };
+}
+
+/// The pointer position the grips read (`Cursor::pos()`).
+fn pointer_pos() -> Point {
+    #[cfg(test)]
+    if let Some(p) = POINTER_OVERRIDE.with(|c| c.get()) {
+        return p;
+    }
+    Cursor::pos()
+}
+
 /// Python `HUDWindow._resize_zone`: `"l"`, `"r"`, `"t"`, `"b"` or a corner (`"lt"`, `"rt"`, ...) when
 /// `pos` (global) is within `RESIZE_GRIP_PX` of an edge of the window, `None` elsewhere. `QRect`
 /// edges are inclusive (`right() == x + width - 1`).
@@ -1775,7 +1790,7 @@ impl QObject for HudFilter {
                     true
                 }
                 EventKind::MouseMove { .. } => {
-                    let pos = Cursor::pos();
+                    let pos = pointer_pos();
                     with_hud_later(move |hud| hud.resize_to(pos));
                     true
                 }
@@ -1783,8 +1798,13 @@ impl QObject for HudFilter {
                     with_hud_later(|hud| hud.end_resize());
                     true
                 }
-                // the window lost the keyboard focus or the pointer mid-drag
-                EventKind::FocusOut { .. } | EventKind::Leave if watched == hud.root_id => {
+                // the window lost the keyboard focus mid-drag. A leave is not that: the window system
+                // reports the pointer outside the window (the dragged window lags the pointer) while the
+                // mouse is captured, but Qt delivers no leave while a window holds the capture
+                // (`QWindowsPointerHandler::handleEnterLeave`, qwindowspointerhandler.cpp:368 in Qt
+                // 6.12.0) and Python's drag goes on; ending the drag there left the scale unsaved and
+                // the next drag started from the old one
+                EventKind::FocusOut { .. } if watched == hud.root_id => {
                     with_hud_later(|hud| hud.cancel_resize());
                     false
                 }
@@ -1801,7 +1821,7 @@ impl QObject for HudFilter {
             }
             EventKind::MouseMove { .. } | EventKind::MouseButtonPress { .. } => {
                 // Python: `isinstance(obj, QWidget) and (obj is self or self.isAncestorOf(obj))`
-                let pos = Cursor::pos();
+                let pos = pointer_pos();
                 let zone =
                     resize_zone(hud.geom.get(), pos).filter(|_| tree_contains(&hud.root, watched));
                 match &event.kind {
@@ -3261,6 +3281,133 @@ mod grip_geometry_tests {
                 grips_on_all_edges(&hud),
                 "round {round}: after docking again"
             );
+        }
+    }
+}
+
+/// The sidebar's resize through the real window procedure: the messages the window system sends
+/// (as `SendMessage` calls) reach the grips and the deferred tasks. The pointer is a test seam,
+/// never the real cursor.
+#[cfg(all(test, windows))]
+mod resize_pipeline_tests {
+    use super::*;
+    use crate::config::SidebarOffset;
+    use crate::refresh_controller::RefreshController;
+
+    type Hwnd = *mut core::ffi::c_void;
+
+    const WM_MOUSEMOVE: u32 = 0x0200;
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_LBUTTONUP: u32 = 0x0202;
+    const WM_MOUSELEAVE: u32 = 0x02A3;
+    const MK_LBUTTON: usize = 0x0001;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn GetWindowRect(hwnd: Hwnd, rect: *mut [i32; 4]) -> i32;
+        fn ReleaseCapture() -> i32;
+    }
+
+    /// The client position (packed, physical) of the logical global point `p`.
+    fn client(hwnd: Hwnd, p: Point) -> isize {
+        let native = ferrokit_platform::screen::logical_point_to_native(p);
+        let mut r = [0i32; 4];
+        // SAFETY: `r` is a local out array of the four RECT fields; `hwnd` is the HUD's window.
+        unsafe { GetWindowRect(hwnd, &mut r) };
+        (((native.x - r[0]) & 0xffff) | (((native.y - r[1]) & 0xffff) << 16)) as isize
+    }
+
+    fn send(hwnd: Hwnd, msg: u32, wparam: usize, p: Point) {
+        POINTER_OVERRIDE.with(|c| c.set(Some(p)));
+        // SAFETY: `hwnd` is the HUD's window on this thread; the message carries no pointer.
+        unsafe { SendMessageW(hwnd, msg, wparam, client(hwnd, p)) };
+    }
+
+    /// A free-floating strip, registered as the application holds it.
+    fn free_strip() -> Rc<RefCell<HUDWindow>> {
+        let mut c = Config::default();
+        c.ui_mode = "sidebar".into();
+        c.sidebar_state = "strip".into();
+        c.sidebar_edge = "none".into();
+        c.sidebar_orientation = "horizontal".into();
+        c.sidebar_offset = Some(SidebarOffset::End);
+        c.sidebar_x = Some(740);
+        c.sidebar_y = Some(286);
+        c.sidebar_scale = 1.0;
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let hud = HUDWindow::with_providers(
+            Arc::new(Mutex::new(c)),
+            ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap();
+        let hud = Rc::new(RefCell::new(hud));
+        register_hud(&hud);
+        hud
+    }
+
+    /// Forgets the held button and the capture, which a failed assertion would leave behind.
+    struct Guard;
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            POINTER_OVERRIDE.with(|c| c.set(None));
+            ferrokit_platform::window::set_app_mouse_buttons(
+                ferrokit_core::event::MouseButtons::NO_BUTTON,
+            );
+            // SAFETY: ReleaseCapture takes no arguments.
+            unsafe { ReleaseCapture() };
+        }
+    }
+
+    /// While the right edge is dragged the window system reports `WM_MOUSELEAVE` when the pointer is
+    /// outside the window, which the dragged window leaves behind for a moment. Qt delivers no leave
+    /// while the mouse is captured, and Python's drag goes on; here it ended the drag without saving
+    /// the scale, so the next drag started from the old scale and shrank the bar back.
+    #[test]
+    fn a_pointer_that_leaves_the_window_mid_drag_does_not_end_the_resize() {
+        let _guard = Guard;
+        let hud = free_strip();
+        let hwnd = hud.borrow().window.native_handle() as Hwnd;
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        let mut last_scale = 1.0;
+        for round in 1..=3 {
+            let w = hud.borrow().window.geometry();
+            let start = Point::new(w.x + w.width - 3, w.y + w.height / 2);
+            // the pointer is over the window before the press, and no message is pumped until the
+            // leave below, so the hover it set up is still there
+            send(hwnd, WM_MOUSEMOVE, 0, start);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            send(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, start);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            assert!(
+                hud.borrow().sidebar_hud.resize.borrow().is_some(),
+                "round {round}: the press on the right edge starts a resize"
+            );
+            let step = Point::new(start.x + 20, start.y);
+            send(hwnd, WM_MOUSEMOVE, MK_LBUTTON, step);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            // the window system reports the pointer outside the window
+            send(hwnd, WM_MOUSELEAVE, 0, step);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            assert!(
+                hud.borrow().sidebar_hud.resize.borrow().is_some(),
+                "round {round}: the leave ended the resize"
+            );
+            let end = Point::new(start.x + 40, start.y);
+            send(hwnd, WM_MOUSEMOVE, MK_LBUTTON, end);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            send(hwnd, WM_LBUTTONUP, 0, end);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            let (shown, saved) = {
+                let hud = hud.borrow();
+                let saved = hud.config.lock().sidebar_scale;
+                (hud.sidebar.scale(), saved)
+            };
+            assert_eq!(saved, shown, "round {round}: the release saves the scale");
+            assert!(shown > last_scale, "round {round}: the bar grew: {shown}");
+            last_scale = shown;
         }
     }
 }
