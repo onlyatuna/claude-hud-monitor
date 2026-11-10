@@ -68,8 +68,8 @@ pub fn tokens(dark: bool) -> Tokens {
             spacing: 4,
             radius: 6,
             focus_width: 2,
-            hover_ms: 300,
-            leave_ms: 600,
+            hover_ms: 200,
+            leave_ms: 300,
             animation_ms: 160,
         }
     } else {
@@ -88,8 +88,8 @@ pub fn tokens(dark: bool) -> Tokens {
             spacing: 4,
             radius: 6,
             focus_width: 2,
-            hover_ms: 300,
-            leave_ms: 600,
+            hover_ms: 200,
+            leave_ms: 300,
             animation_ms: 160,
         }
     }
@@ -1836,11 +1836,6 @@ impl SidebarWidget {
         self.inner.preferred_size()
     }
 
-    /// Python `preferred_size_for(orientation)`.
-    pub fn preferred_size_for(&self, orientation: Orientation) -> (i32, i32) {
-        self.inner.preferred_size_for(orientation)
-    }
-
     pub fn close_flyout(&self) {
         self.inner.close_flyout();
     }
@@ -2284,27 +2279,6 @@ impl SidebarInner {
         panel_preferred_size(s, orientation, spacing, self.cards.len() as i32, height)
     }
 
-    /// Python `preferred_size_for`: the size the bar would have in `orientation`, without changing
-    /// it. The panel's size needs its cards laid out that way, so it is measured by laying them out
-    /// and restoring the current layout.
-    fn preferred_size_for(self: &Rc<Self>, orientation: Orientation) -> (i32, i32) {
-        let current = self.orientation.get();
-        if orientation == current {
-            return self.preferred_size();
-        }
-        self.orientation.set(orientation);
-        let panel = self.state.get() == State::Panel;
-        if panel {
-            self.relayout();
-        }
-        let size = self.preferred_size();
-        self.orientation.set(current);
-        if panel {
-            self.relayout();
-        }
-        size
-    }
-
     /// Python `_hover`.
     fn hover(self: &Rc<Self>, key: &str) {
         self.leave_timer.stop();
@@ -2600,7 +2574,7 @@ mod tests {
                 tokens(true).leave_ms,
                 tokens(true).animation_ms
             ),
-            (300, 600, 160)
+            (200, 300, 160)
         );
     }
 
@@ -3012,6 +2986,53 @@ mod tests {
         assert_eq!(wheel_steps(0, 60), (vec![], 60));
         assert_eq!(wheel_steps(60, 60), (vec![1], 0));
         assert_eq!(wheel_steps(-100, -50), (vec![-1], -30));
+    }
+}
+
+/// A cursor that crosses a tile faster than `hover_ms` must not open the flyout (Python
+/// `_Button.enterEvent` starts the hover timer, `leaveEvent` stops it).
+#[cfg(test)]
+mod hover_delay_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::refresh_controller::RefreshController;
+    use crate::ui::hud_window::HUDWindow;
+    use ferrokit_core::event_loop::EventLoop;
+    use std::time::Duration;
+
+    fn pump(el: &mut EventLoop, ms: u64) {
+        let end = Instant::now() + Duration::from_millis(ms);
+        while Instant::now() < end {
+            el.process_events(false);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn passing_over_a_tile_faster_than_the_hover_delay_never_opens_the_flyout() {
+        let mut el = EventLoop::new();
+        let cfg = Arc::new(parking_lot::Mutex::new(Config::default()));
+        let ctrl = Arc::new(parking_lot::Mutex::new(RefreshController::new(60)));
+        let hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let sidebar = hud.sidebar.clone();
+        sidebar.set_state(State::Strip);
+        let tile = Rc::clone(&sidebar.inner().button("claude").expect("claude tile").1);
+        let wait = tokens(true).hover_ms + 300;
+
+        tile.borrow_mut().enter_event(Point::new(5, 5));
+        // the enter handler defers the hover call until the dispatch is over
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        pump(&mut el, 20);
+        tile.borrow_mut().leave_event(); // gone before hover_ms is up
+        pump(&mut el, wait);
+        assert_eq!(sidebar.active(), None, "a pass-over opened the flyout");
+
+        // control: staying on the tile for hover_ms does open it
+        tile.borrow_mut().enter_event(Point::new(5, 5));
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        pump(&mut el, wait);
+        assert_eq!(sidebar.active().as_deref(), Some("claude"));
     }
 }
 
