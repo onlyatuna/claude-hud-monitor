@@ -83,3 +83,12 @@ opt-level = 3
 [profile.dev]
 opt-level = 1
 incremental = true
+
+# LOCAL BUILD ONLY (branch local/integration-v4, never pushed): ferrokit with the fix that sends a
+# buttonless mouse move over a widget without tracking through the application filters
+# (branch fix/untracked-mouse-move-reaches-app-filters, one commit on top of origin/main fbde555).
+[patch."https://github.com/onlyatuna/ferrokit"]
+ferrokit-core = { path = "C:/Users/sss19/AppData/Local/Temp/wt_fk_hover/crates/ferrokit-core" }
+ferrokit-gui = { path = "C:/Users/sss19/AppData/Local/Temp/wt_fk_hover/crates/ferrokit-gui" }
+ferrokit-platform = { path = "C:/Users/sss19/AppData/Local/Temp/wt_fk_hover/crates/ferrokit-platform" }
+ferrokit-widgets = { path = "C:/Users/sss19/AppData/Local/Temp/wt_fk_hover/crates/ferrokit-widgets" }

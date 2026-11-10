@@ -4254,6 +4254,8 @@ mod resize_pipeline_tests {
         fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
         fn GetWindowRect(hwnd: Hwnd, rect: *mut [i32; 4]) -> i32;
         fn ReleaseCapture() -> i32;
+        fn GetCursor() -> Hwnd;
+        fn LoadCursorW(instance: Hwnd, name: usize) -> Hwnd;
     }
 
     /// The client position (packed, physical) of the logical global point `p`.
@@ -4300,6 +4302,9 @@ mod resize_pipeline_tests {
     impl Drop for Guard {
         fn drop(&mut self) {
             POINTER_OVERRIDE.with(|c| c.set(None));
+            while ferrokit_widgets::application::Application::override_cursor().is_some() {
+                ferrokit_widgets::application::Application::restore_override_cursor();
+            }
             ferrokit_platform::window::set_app_mouse_buttons(
                 ferrokit_core::event::MouseButtons::NO_BUTTON,
             );
@@ -4356,5 +4361,72 @@ mod resize_pipeline_tests {
             assert!(shown > last_scale, "round {round}: the bar grew: {shown}");
             last_scale = shown;
         }
+    }
+
+    /// The pointer over a grip, with no button held, shows that grip's resize cursor, and loses it
+    /// when the pointer leaves the window (Python `_set_grip_cursor`). The HUD's widgets have no mouse
+    /// tracking, so the move reaches the filter only through `QApplication::notify`'s pass of
+    /// buttonless moves over such widgets through the application filters.
+    #[test]
+    fn the_pointer_over_a_grip_shows_its_resize_cursor() {
+        use ferrokit_platform::cursor::CursorShape;
+        const WM_SETCURSOR: u32 = 0x0020;
+        const HTCLIENT: isize = 1;
+        let _guard = Guard;
+        let hud = free_strip();
+        let hwnd = hud.borrow().window.native_handle() as Hwnd;
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        let w = hud.borrow().window.geometry();
+        let (cx, cy) = (w.x + w.width / 2, w.y + w.height / 2);
+        let (l, r, t, b) = (w.x + 2, w.x + w.width - 3, w.y + 2, w.y + w.height - 3);
+        // the pointer position, the cursor Qt maps the zone to, and its system id (IDC_SIZE*)
+        let grips = [
+            ("right", Point::new(r, cy), CursorShape::SizeHor, 32644),
+            ("left", Point::new(l, cy), CursorShape::SizeHor, 32644),
+            ("top", Point::new(cx, t), CursorShape::SizeVer, 32645),
+            ("bottom", Point::new(cx, b), CursorShape::SizeVer, 32645),
+            ("top left", Point::new(l, t), CursorShape::SizeFDiag, 32642),
+            (
+                "bottom right",
+                Point::new(r, b),
+                CursorShape::SizeFDiag,
+                32642,
+            ),
+            ("top right", Point::new(r, t), CursorShape::SizeBDiag, 32643),
+            (
+                "bottom left",
+                Point::new(l, b),
+                CursorShape::SizeBDiag,
+                32643,
+            ),
+        ];
+        let override_cursor = ferrokit_widgets::application::Application::override_cursor;
+        send(hwnd, WM_MOUSEMOVE, 0, Point::new(cx, cy));
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        assert_eq!(override_cursor(), None, "no cursor in the middle");
+        for (name, at, shape, system_id) in grips {
+            send(hwnd, WM_MOUSEMOVE, 0, at);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            assert_eq!(override_cursor(), Some(shape), "{name}");
+            // SAFETY: a null instance with an IDC_* id loads a shared system cursor; GetCursor takes no
+            // arguments; the message carries the window handle and the hit test, no pointer.
+            let (shown, system) = unsafe {
+                SendMessageW(
+                    hwnd,
+                    WM_SETCURSOR,
+                    hwnd as usize,
+                    HTCLIENT | ((WM_MOUSEMOVE as isize) << 16),
+                );
+                (GetCursor(), LoadCursorW(core::ptr::null_mut(), system_id))
+            };
+            assert_eq!(
+                shown, system,
+                "{name}: the system shows the {shape:?} cursor"
+            );
+        }
+        // the pointer leaves the window: the cursor goes (the window is still hovered here)
+        send(hwnd, WM_MOUSELEAVE, 0, Point::new(r, cy));
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        assert_eq!(override_cursor(), None, "after the pointer left");
     }
 }
