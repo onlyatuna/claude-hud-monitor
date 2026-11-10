@@ -51,6 +51,13 @@ class LogicTests(unittest.TestCase):
             self.assertEqual((reading.state, tq.display(reading, 'used')[0]), (tq.UNAVAILABLE, '--'))
             self.assertEqual(config.get('tray_quota'), FABLE)
 
+    def test_selection_on_an_offline_provider_shows_offline_not_unavailable(self):
+        offline = UsageMetrics(provider_id='claude', error='not signed in')  # error result: default titles, no keys
+        for key in ('claude:5h', FABLE):
+            reading = tq.select(key, rows(claude=offline))
+            self.assertEqual((reading.state, tq.display(reading, 'used')[0]), (tq.OFFLINE, '!'))
+            self.assertEqual(tq.tooltip_line(reading, 'used'), 'Claude: offline')
+
     def test_states_follow_the_sidebar_and_age(self):
         def shown(m):
             return tq.display(tq.select('codex:WINDOW 5H', rows(codex=m)), 'used')

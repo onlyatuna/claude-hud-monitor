@@ -123,7 +123,8 @@ def _build_tray_quota(hud, menu):
     rows = hud.tray_quota_readings()
     _check(sub, "關閉 (Off)", setting == tray_quota.OFF, lambda: hud.set_tray_quota(tray_quota.OFF))
     _check(sub, "自動：最緊的額度 (Auto)", setting == tray_quota.AUTO, lambda: hud.set_tray_quota(tray_quota.AUTO))
-    if setting not in (tray_quota.OFF, tray_quota.AUTO) and all(r.key != setting for r in rows):
+    selected = tray_quota.select(setting, rows)
+    if selected is not None and selected.state == tray_quota.UNAVAILABLE:
         _check(sub, f"{setting}  unavailable", True, lambda: None).setEnabled(False)
     header = None
     for row in rows:
@@ -131,6 +132,9 @@ def _build_tray_quota(hud, menu):
             header = row.provider_id
             sub.addSeparator()
             _note(sub, row.provider_name)
+        if row.state == tray_quota.OFFLINE and not row.title:  # offline provider: nothing to choose yet
+            _note(sub, "offline")
+            continue
         _check(sub, tray_quota.menu_label(row), row.key == setting, lambda k=row.key: hud.set_tray_quota(k))
     sub.addSeparator()
     mode = hud.config.get("tray_quota_mode", tray_quota.USED)
