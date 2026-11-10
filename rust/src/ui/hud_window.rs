@@ -1230,7 +1230,7 @@ impl HUDWindow {
             Some(super::placement::Screens::of_window(&self.window)),
             screens.primary,
         );
-        self.window.set_geometry(Rect::new(nx, ny, w, h));
+        self.set_window_geometry(Rect::new(nx, ny, w, h));
         self.chrome.relayout();
         self.republish_all();
         self.apply_opacity();
@@ -1507,8 +1507,19 @@ impl HUDWindow {
         let screen = ferrokit_platform::platform().primary_screen();
         let (nx, ny) = super::placement::reset_position(w, screen.available_geometry());
 
-        self.window.set_geometry(Rect::new(nx, ny, w, h));
+        self.set_window_geometry(Rect::new(nx, ny, w, h));
         self.persist_geometry();
+    }
+
+    /// `QWidget::setGeometry` for the HUD's own placements (the dock, the edge drag, the style
+    /// switch, the reset). Qt sends the window a `QMoveEvent` from inside `setGeometry`
+    /// (`QWidgetPrivate::setGeometry_sys`, qwidget.cpp:7348-7351 in Qt 6.12.0), which is how Python's
+    /// `moveEvent` and `self.geometry()` follow it. `Window::set_geometry` sends no `Move`, so the
+    /// copy of the geometry that the grips and the saved position read (`SidebarHud::geom`) is
+    /// refreshed here; a native move, the system's drag loop, still reports itself.
+    fn set_window_geometry(&mut self, rect: Rect) {
+        self.window.set_geometry(rect);
+        self.sidebar_hud.geom.set(self.window.geometry());
     }
 }
 
@@ -1986,7 +1997,7 @@ impl HUDWindow {
     fn place(&mut self, (x, y, w, h): (i32, i32, i32, i32)) {
         self.sidebar_hud.docking.set(true);
         self.window.set_fixed_size(w, h);
-        self.window.set_geometry(Rect::new(x, y, w, h));
+        self.set_window_geometry(Rect::new(x, y, w, h));
         self.sidebar_hud.docking.set(false);
     }
 
@@ -2229,7 +2240,7 @@ impl HUDWindow {
         let (x, y) = resize_origin(&r.zone, r.geom, w, h);
         self.sidebar_hud.docking.set(true);
         self.window.set_fixed_size(w, h);
-        self.window.set_geometry(Rect::new(x, y, w, h));
+        self.set_window_geometry(Rect::new(x, y, w, h));
         self.sidebar_hud.docking.set(false);
     }
 
@@ -4123,5 +4134,80 @@ mod dock_preview_tests {
     fn the_preview_follows_a_drag_when_the_loop_takes_the_capture() {
         let _motion = Motion::set(false);
         drag_through_the_move_loop(true);
+    }
+}
+
+/// The sidebar's grips (`resize_zone`) read `SidebarHud::geom`, which has to follow every placement
+/// of the window. Measured on the real window (Win32); no pointer is involved.
+#[cfg(all(test, windows))]
+mod grip_geometry_tests {
+    use super::*;
+    use crate::config::SidebarOffset;
+    use crate::refresh_controller::RefreshController;
+
+    fn docked_strip() -> HUDWindow {
+        let mut c = Config::default();
+        c.ui_mode = "sidebar".into();
+        c.sidebar_state = "strip".into();
+        c.sidebar_edge = "top".into();
+        c.sidebar_orientation = "horizontal".into();
+        c.sidebar_offset = Some(SidebarOffset::End);
+        c.sidebar_scale = 0.6;
+        // far from where the bar docks: the construction position is not the docked one
+        c.window_x = Some(522);
+        c.window_y = Some(285);
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        HUDWindow::with_providers(
+            Arc::new(Mutex::new(c)),
+            ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap()
+    }
+
+    /// Whether the pointer 3 px inside each edge of the real window is on a grip.
+    fn grips_on_all_edges(hud: &HUDWindow) -> bool {
+        let w = hud.window.geometry();
+        let (cx, cy) = (w.x + w.width / 2, w.y + w.height / 2);
+        [
+            Point::new(w.x + w.width - 3, cy),
+            Point::new(cx, w.y + w.height - 3),
+            Point::new(w.x + 2, cy),
+            Point::new(cx, w.y + 2),
+        ]
+        .into_iter()
+        .all(|p| resize_zone(hud.sidebar_hud.geom.get(), p).is_some())
+    }
+
+    #[test]
+    fn the_grips_stay_on_the_window_edges_after_it_is_docked_and_enlarged() {
+        let mut hud = docked_strip();
+        assert!(grips_on_all_edges(&hud), "after docking at construction");
+        // each enlargement ends by docking the bar again, which moves it along its edge
+        for round in 1..=2 {
+            let before = hud.window.geometry();
+            let start = Point::new(before.x + before.width - 3, before.y + before.height / 2);
+            let zone = resize_zone(hud.sidebar_hud.geom.get(), start).expect("a grip");
+            *hud.sidebar_hud.resize.borrow_mut() = Some(ResizeState {
+                start,
+                geom: hud.sidebar_hud.geom.get(),
+                scale: hud.config.lock().sidebar_scale_setting(),
+                zone,
+            });
+            hud.begin_resize();
+            hud.resize_to(Point::new(start.x + 24, start.y));
+            hud.end_resize();
+            let after = hud.window.geometry();
+            assert!(after.width > before.width, "round {round}: it grew");
+            assert_ne!(
+                (after.x, after.y),
+                (before.x, before.y),
+                "round {round}: it moved"
+            );
+            assert!(
+                grips_on_all_edges(&hud),
+                "round {round}: after docking again"
+            );
+        }
     }
 }
