@@ -220,12 +220,24 @@ class SidebarTests(unittest.TestCase):
         self.assertFalse(self.sidebar._flyout.isVisible())
         self.assertTrue(all(c.isVisible() for c in self.cards.values()))
     def test_unpinned_leave_and_hover(self):
-        self.sidebar._hover('claude'); self.assertEqual(self.sidebar._hover_timer.interval(),300)
+        self.sidebar._hover('claude'); self.assertEqual(self.sidebar._hover_timer.interval(),200)
         self.sidebar._hover_timer.timeout.emit(); self.assertEqual(self.sidebar._active,'claude')
         with patch('ui.sidebar.QCursor.pos',return_value=QPoint(-1000,-1000)):
             self.sidebar._schedule_close(); self.assertEqual(self.sidebar._leave_timer.interval(),300)
             self.sidebar._maybe_close()
         self.assertIsNone(self.sidebar._active)
+    def test_passing_over_a_tile_faster_than_the_hover_delay_never_opens_the_flyout(self):
+        button = self.sidebar.buttons['claude']
+        self.sidebar._hover('claude')                      # the cursor enters the tile ...
+        self.assertTrue(self.sidebar._hover_timer.isActive())
+        button.leaveEvent(QEvent(QEvent.Leave))            # ... and leaves before hover_ms is up
+        self.assertFalse(self.sidebar._hover_timer.isActive())
+        QTest.qWait(self.sidebar.tokens['hover_ms'] + 150)
+        self.assertIsNone(self.sidebar._active)
+        self.assertFalse(self.sidebar._flyout.isVisible())
+        self.sidebar._hover('claude')                      # control: staying for hover_ms does open it
+        QTest.qWait(self.sidebar.tokens['hover_ms'] + 150)
+        self.assertEqual(self.sidebar._active, 'claude')
     def test_keyboard_and_geometry_without_motion(self):
         button = self.sidebar.buttons['codex']
         button.setFocus()
