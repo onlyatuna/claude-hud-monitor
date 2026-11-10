@@ -13,6 +13,7 @@ pub mod pace;
 mod panic_guard;
 mod providers;
 mod refresh_controller;
+mod tray_quota;
 mod ui;
 
 use std::cell::RefCell;
@@ -39,6 +40,25 @@ pub static WAKE_REQUESTED: AtomicBool = AtomicBool::new(false);
 thread_local! {
     static MAIN_HUD: RefCell<Option<Rc<RefCell<HUDWindow>>>> = const { RefCell::new(None) };
     static MAIN_TRAY: RefCell<Option<Rc<RefCell<HUDTrayIcon>>>> = const { RefCell::new(None) };
+}
+
+/// Redraws the tray number from the HUD's latest data. A busy HUD or tray (a menu is open) is
+/// skipped: the next publish refreshes again.
+fn refresh_tray_quota() {
+    let Some(data) = MAIN_HUD.with(|cell| {
+        let hud = cell.borrow();
+        let hud = hud.as_ref()?.try_borrow().ok()?;
+        Some(hud.quota_data())
+    }) else {
+        return;
+    };
+    MAIN_TRAY.with(|cell| {
+        if let Some(tray) = cell.borrow().as_ref()
+            && let Ok(mut tray) = tray.try_borrow_mut()
+        {
+            tray.refresh_quota(&data);
+        }
+    });
 }
 
 /// The click-through hotkey: `HUDTrayIcon::toggle_click_through` on the HUD. A nested event loop
@@ -485,6 +505,21 @@ fn main() -> std::process::ExitCode {
         *cell.borrow_mut() = Some(Rc::clone(&tray));
     });
 
+    // The tray number follows the HUD's data: the window tells `main` (it has no tray reference),
+    // which refreshes the tray once per event-loop turn however many providers published.
+    hud.borrow_mut().set_quota_changed(|| {
+        static PENDING: AtomicBool = AtomicBool::new(false);
+        if PENDING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        Timer::single_shot(0, || {
+            PENDING.store(false, Ordering::Release);
+            refresh_tray_quota();
+        });
+    });
+    // Draw the stored choice at start-up, before the first data arrives.
+    refresh_tray_quota();
+
     // Connect tray activations
     tray.borrow()
         .tray
@@ -510,9 +545,21 @@ fn main() -> std::process::ExitCode {
         }) else {
             return;
         };
-        let menu = std::rc::Rc::new(std::cell::RefCell::new(ui::tray_icon::build_hud_menu(
-            &cfg, &root, tray,
-        )));
+        let data = MAIN_HUD
+            .with(|h_cell| {
+                h_cell
+                    .borrow()
+                    .as_ref()
+                    .map(|hud| hud.borrow().quota_data())
+            })
+            .unwrap_or_default();
+        let quota_keys = ui::tray_icon::quota_keys(&data);
+        let menu = if tray {
+            ui::tray_icon::build_tray_menu(&cfg, &root, &data)
+        } else {
+            ui::tray_icon::build_hud_menu(&cfg, &root, false)
+        };
+        let menu = std::rc::Rc::new(std::cell::RefCell::new(menu));
         if let Some(action) = ferrokit_widgets::menu::Menu::exec_popup(&menu, global_pos)
             && let Some(id) = action.borrow().data().to_u64()
         {
@@ -523,6 +570,9 @@ fn main() -> std::process::ExitCode {
                         if let Some(hud) = h_cell.borrow().as_ref() {
                             let mut tray_ref = tray.borrow_mut();
                             let mut hud_ref = hud.borrow_mut();
+                            if tray_ref.apply_quota_action(action_id, &quota_keys, &data) {
+                                return;
+                            }
                             if tray_ref.handle_action(action_id, &mut hud_ref) {
                                 hud_ref.persist_geometry();
                                 hud_ref.window.hide();

@@ -470,6 +470,9 @@ pub struct HUDWindow {
     set_backdrop: BackdropFn,
     /// What each provider last reported, before any row order is applied (Python `_raw_metrics`).
     raw_metrics: HashMap<String, UsageMetrics>,
+    /// Called whenever a provider's data is published; `main` points it at the tray icon, which
+    /// the window does not know about.
+    quota_changed: Option<Rc<dyn Fn()>>,
     /// Python `self.sidebar`: the docked strip / panel (a page of `stack`).
     pub sidebar: SidebarWidget,
     /// Python `self.sidebar_cards`: the provider cards of the sidebar's panel and flyout.
@@ -915,6 +918,7 @@ impl HUDWindow {
             vibrant,
             set_backdrop,
             raw_metrics: HashMap::new(),
+            quota_changed: None,
             sidebar,
             sidebar_cards: sidebar_cards.into_iter().collect(),
             sidebar_hud: Rc::clone(&sidebar_hud),
@@ -1252,8 +1256,25 @@ impl HUDWindow {
         }
     }
 
+    /// Connects the tray icon's refresh (see `quota_changed`).
+    pub fn set_quota_changed(&mut self, changed: impl Fn() + 'static) {
+        self.quota_changed = Some(Rc::new(changed));
+    }
+
+    /// The latest data of each provider as it reported it (rows not rearranged), in the saved
+    /// provider order: what the tray number is chosen from.
+    pub fn quota_data(&self) -> Vec<UsageMetrics> {
+        self.provider_order()
+            .iter()
+            .filter_map(|id| self.raw_metrics.get(id).cloned())
+            .collect()
+    }
+
     /// Python `_publish`.
     fn publish(&mut self, data: &UsageMetrics) {
+        if let Some(changed) = &self.quota_changed {
+            changed();
+        }
         if let Some(card) = self.sidebar_cards.get(&data.provider_id) {
             card.borrow_mut().update_metrics(data);
         }
