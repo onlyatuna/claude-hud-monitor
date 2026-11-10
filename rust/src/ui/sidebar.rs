@@ -69,7 +69,7 @@ pub fn tokens(dark: bool) -> Tokens {
             radius: 6,
             focus_width: 2,
             hover_ms: 300,
-            leave_ms: 600,
+            leave_ms: 300,
             animation_ms: 160,
         }
     } else {
@@ -89,7 +89,7 @@ pub fn tokens(dark: bool) -> Tokens {
             radius: 6,
             focus_width: 2,
             hover_ms: 300,
-            leave_ms: 600,
+            leave_ms: 300,
             animation_ms: 160,
         }
     }
@@ -2574,7 +2574,7 @@ mod tests {
                 tokens(true).leave_ms,
                 tokens(true).animation_ms
             ),
-            (300, 600, 160)
+            (300, 300, 160)
         );
     }
 
