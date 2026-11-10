@@ -836,6 +836,20 @@ class HudTests(unittest.TestCase):
             finally:
                 self._close(hud)
 
+    def test_a_corner_drag_does_not_jump_where_one_edge_grows_and_the_other_shrinks(self):
+        from PySide6.QtCore import QRect
+        from ui.hud_window import resize_scale
+        g = QRect(0, 0, 72, 222)
+        # the pointer 7 px to the right of the press and moving up: the width grows 10 %, the height
+        # shrinks as it goes. The scale followed the one furthest from 1, which flipped from +10 % to
+        # -10 % between dy -18 and -22; now the changes add up
+        scales = [resize_scale('rb', g, 1.0, 7, -up) for up in range(0, 61)]
+        self.assertLessEqual(max(abs(a - b) for a, b in zip(scales, scales[1:])), 0.02)
+        self.assertEqual([scales[up] for up in (0, 18, 22, 60)], [1.1, 1.02, 1.0, 0.83])
+        # edges and same-direction corners are unchanged, and the 2 decimals are round()'s (ties to even)
+        self.assertEqual(resize_scale('r', g, 1.0, 45, 0), 1.62)
+        self.assertEqual(resize_scale('rb', QRect(100, 100, 64, 200), 1.0, 3, 100), 1.5)
+
     def test_menu_offers_agy_rows_inside_interface(self):
         from PySide6.QtWidgets import QMenu
         captured = []

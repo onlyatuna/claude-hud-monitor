@@ -71,6 +71,38 @@ else:
     user32 = None
 
 
+def grip_ratio(ratios):
+    """The ratio of the grabbed edge(s) that sets the sidebar scale. A drag that grows (or shrinks) every
+    grabbed edge follows the edge that moved the furthest from 1. When one edge of a corner grows and the
+    other shrinks the changes add up: taking the one furthest from 1 made the scale jump between growing
+    and shrinking where the two are equal (20 % of the size within 2 px of pointer movement for a 72 x 222
+    bar)."""
+    if all(v >= 1.0 for v in ratios):
+        return max(ratios)
+    if all(v <= 1.0 for v in ratios):
+        return min(ratios)
+    total = ratios[0]
+    for v in ratios[1:]:
+        total += v - 1.0
+    return total
+
+
+def resize_scale(zone, g, start_scale, dx, dy):
+    """The scale a drag of the grip `zone` asks for: the start scale times the ratio the pointer's move
+    (dx, dy) changed the grabbed edge(s) of the window geometry `g` by, rounded to 2 decimals, held to 0.6 - 2.0."""
+    ratios = []
+    if "r" in zone:
+        ratios.append((g.width() + dx) / g.width())
+    if "l" in zone:
+        ratios.append((g.width() - dx) / g.width())
+    if "b" in zone:
+        ratios.append((g.height() + dy) / g.height())
+    if "t" in zone:
+        ratios.append((g.height() - dy) / g.height())
+    ratio = grip_ratio(ratios) if ratios else 1.0
+    return max(0.6, min(2.0, round(start_scale * ratio, 2)))
+
+
 class HUDWindow(QWidget):
     RESIZE_MARGIN = 8
 
@@ -569,17 +601,7 @@ class HUDWindow(QWidget):
         r = self._resize
         g, zone = r["geom"], r["zone"]
         dx, dy = pos.x() - r["start"].x(), pos.y() - r["start"].y()
-        ratios = []
-        if "r" in zone:
-            ratios.append((g.width() + dx) / g.width())
-        if "l" in zone:
-            ratios.append((g.width() - dx) / g.width())
-        if "b" in zone:
-            ratios.append((g.height() + dy) / g.height())
-        if "t" in zone:
-            ratios.append((g.height() - dy) / g.height())
-        ratio = max(ratios, key=lambda v: abs(v - 1.0))
-        scale = max(0.6, min(2.0, round(r["scale"] * ratio, 2)))
+        scale = resize_scale(zone, g, r["scale"], dx, dy)
         if scale == self.sidebar.scale():
             return
         self.sidebar.set_scale(scale)
