@@ -62,7 +62,7 @@ def _build_agy_rows(hud, menu):
         sub.addAction(f"{index}. {title}").setEnabled(False)
     sub.addSeparator()
     reset = sub.addAction("還原預設順序")
-    reset.setEnabled(tuple(order) != tuple(AGY_DEFAULT_ORDER))
+    reset.setEnabled(tuple(order) != tuple(AGY_DEFAULT_ORDER) + tuple(hud.agy_dynamic_titles()))
     reset.triggered.connect(hud.reset_agy_order)
 
 
