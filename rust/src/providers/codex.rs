@@ -108,7 +108,7 @@ impl Provider for CodexProvider {
                 "codex",
                 "OpenAI Codex",
                 "未找到 Codex 授權檔 (~/.codex/auth.json)\n請執行 codex 登入",
-                "",
+                "auth",
             );
         };
 
@@ -117,7 +117,7 @@ impl Provider for CodexProvider {
                 "codex",
                 "OpenAI Codex",
                 "未找到 access_token\n請於終端機執行 codex 登入",
-                "",
+                "auth",
             );
         };
         let access_token = match tokens
@@ -131,7 +131,7 @@ impl Provider for CodexProvider {
                     "codex",
                     "OpenAI Codex",
                     "未找到 access_token\n請於終端機執行 codex 登入",
-                    "",
+                    "auth",
                 );
             }
         };
@@ -155,7 +155,7 @@ impl Provider for CodexProvider {
         match req.call().or_any_status() {
             Ok(resp) => {
                 let status = resp.status();
-                if status == 401 {
+                if status == 401 || status == 403 {
                     let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "codex".to_owned(),

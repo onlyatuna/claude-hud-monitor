@@ -332,8 +332,12 @@ impl RefreshController {
             );
             state.due = Some(now + delay);
 
-            // Preserve last successful data as stale
-            if let Some(cached) = &state.cached {
+            if result.error_code == "auth" {
+                // An authentication failure is terminal: the account shows OFF, not the last
+                // good value as stale. Only transient failures keep the previous data (below).
+                state.cached = None;
+            } else if let Some(cached) = &state.cached {
+                // Preserve last successful data as stale
                 let mut stale = cached.clone();
                 stale.error = Some(err.clone());
                 stale.error_code = result.error_code.clone();
@@ -405,6 +409,53 @@ mod stop_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the controller publishes for a failure with `code` after one good result.
+    fn failure_after_success(code: &str) -> UsageMetrics {
+        let mut ctrl = RefreshController::new(60);
+        let providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::new();
+        ctrl.states.insert("x".to_owned(), ProviderState::default());
+        let send = |ctrl: &RefreshController, metrics: UsageMetrics| {
+            ctrl.result_tx
+                .send(WorkerResult {
+                    provider_id: "x".to_owned(),
+                    generation: 0,
+                    metrics,
+                })
+                .unwrap();
+        };
+        send(
+            &ctrl,
+            UsageMetrics {
+                provider_id: "x".to_owned(),
+                metric1_val: Some(40.0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(ctrl.drain_results(&providers).updates.len(), 1);
+        send(
+            &ctrl,
+            UsageMetrics {
+                provider_id: "x".to_owned(),
+                error: Some("failed".to_owned()),
+                error_code: code.to_owned(),
+                ..Default::default()
+            },
+        );
+        ctrl.drain_results(&providers).updates.remove(0)
+    }
+
+    #[test]
+    fn an_auth_failure_is_offline_and_a_transient_one_keeps_the_value() {
+        let auth = failure_after_success("auth");
+        assert!(!auth.stale);
+        assert_eq!(auth.metric1_val, None);
+        for code in ["network", "rate_limit", "http"] {
+            let kept = failure_after_success(code);
+            assert!(kept.stale, "{code}");
+            assert_eq!(kept.metric1_val, Some(40.0), "{code}");
+        }
+    }
 
     struct Quick;
     impl Provider for Quick {

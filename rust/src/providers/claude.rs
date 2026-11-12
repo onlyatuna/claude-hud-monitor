@@ -384,7 +384,7 @@ impl Provider for ClaudeProvider {
                     active_profile.short_name, active_profile.short_name
                 )
             };
-            return UsageMetrics::error_result("claude", &display_title, &error_msg, "");
+            return UsageMetrics::error_result("claude", &display_title, &error_msg, "auth");
         };
 
         let result = self
@@ -400,7 +400,7 @@ impl Provider for ClaudeProvider {
         match result {
             Ok(resp) => {
                 let status = resp.status();
-                if status == 401 {
+                if status == 401 || status == 403 {
                     let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "claude".to_owned(),
