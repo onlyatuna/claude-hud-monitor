@@ -105,7 +105,7 @@ The number is coloured like the gauge (green, yellow, orange, red by used percen
 
 - `accounts` (list, absent by default): extra Claude accounts, `{"id": "claude@<slug>", "provider": "claude", "profile": "<profile id>", "nickname": "<optional>"}`. The id is generated once when you tick 更多 → Claude 帳號 → 同時顯示 (Also show) and then kept; the default profile and a profile the main tile is pinned to cannot be added; at most 6. Invalid entries are ignored, never rewritten. Row keys of an account are `claude@<slug>:5h`, `claude@<slug>:weekly_scoped:fable`, ...; a stored `claude:5h` still means the main tile.
 - `sidebar_tiles` (list, absent by default): the visible sidebar tiles in order (`claude`, `claude@<slug>`, `agy`, `codex`). Absent = every tile in `provider_order`, the accounts after `claude`. Drag a tile in the strip to reorder (writes this list and the base-id `provider_order`); 介面 → 側邊欄項目 (Sidebar tiles) shows or hides one. Hiding a tile does not stop its fetching.
-- The main Claude tile stays on `claude_profile`: pin it (`auto` flips between profiles). The tile text of an account is its directory name without the leading dot, cut to 8 characters (`claude-a` fits); card headers use 16, the full name is in the tooltip. Both keys apply live, no restart. The table style ignores them.
+- The main Claude tile stays on `claude_profile`: pin it (`auto` flips between profiles). The tile text of an account is its directory name without the leading dot, cut to 8 characters (`claude-a` fits); the panel card header is the label only, cut to 13 characters (it shares the line with two badges), menu entries 16; the full name is in the tooltip. Both keys apply live, no restart. The table style ignores them.
 
 ## Credential Files
 

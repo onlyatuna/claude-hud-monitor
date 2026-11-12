@@ -462,7 +462,7 @@ fn build_sidebar_tiles(menu: &mut Menu, cfg: &Config) {
                 "codex" => "Codex".to_owned(),
                 other => resolved.iter().find(|r| r.spec.id == other).map_or_else(
                     || other.to_owned(),
-                    |r| accounts::elide(&r.label, accounts::CARD_LABEL_MAX),
+                    |r| accounts::elide(&r.label, accounts::MENU_LABEL_MAX),
                 ),
             };
             let visible = tiles.visible.contains(id);

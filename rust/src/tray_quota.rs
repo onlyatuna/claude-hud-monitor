@@ -66,16 +66,11 @@ pub fn display_name(provider_id: &str) -> String {
 }
 
 /// The tray name of the provider behind `m`: a built-in one by its id, an extra account by its tile
-/// text (the label inside the `CLAUDE (label)` header its provider reports, at most 8 chars).
+/// text, `elide(label, 8)`. Its provider reports `elide(label, 13)` as its name and cutting that
+/// to 8 gives the same text as cutting the label itself.
 pub fn display_name_of(m: &UsageMetrics) -> String {
-    if m.provider_id.contains('@') {
-        let label = m
-            .provider_name
-            .strip_prefix("CLAUDE (")
-            .and_then(|rest| rest.strip_suffix(')'));
-        if let Some(label) = label {
-            return crate::accounts::elide(label, crate::accounts::TILE_LABEL_MAX);
-        }
+    if m.provider_id.contains('@') && !m.provider_name.is_empty() {
+        return crate::accounts::elide(&m.provider_name, crate::accounts::TILE_LABEL_MAX);
     }
     display_name(&m.provider_id)
 }

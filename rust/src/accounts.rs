@@ -15,8 +15,10 @@ pub const BASE_IDS: [&str; 3] = ["claude", "agy", "codex"];
 pub const MAX_ACCOUNTS: usize = 6;
 /// Characters of a label on a 64 px strip tile.
 pub const TILE_LABEL_MAX: usize = 8;
-/// Characters of a label in a card header or a menu entry.
-pub const CARD_LABEL_MAX: usize = 16;
+/// Characters of a label in a panel card header (it shares the line with two badges).
+pub const CARD_LABEL_MAX: usize = 13;
+/// Characters of a label in a menu entry.
+pub const MENU_LABEL_MAX: usize = 16;
 const NICKNAME_MAX: usize = 32;
 const PROFILE_MAX: usize = 128;
 
@@ -271,9 +273,9 @@ pub struct ResolvedAccount {
 }
 
 impl ResolvedAccount {
-    /// The card header: `CLAUDE (label)`.
+    /// The card header (and the provider's name): the label only, `elide(label, 13)`.
     pub fn provider_name(&self) -> String {
-        format!("CLAUDE ({})", elide(&self.label, CARD_LABEL_MAX))
+        elide(&self.label, CARD_LABEL_MAX)
     }
 
     /// The tile text and the tray header.
@@ -476,6 +478,29 @@ mod tests {
         // the same leaf elsewhere widens with the parent
         let other = PathBuf::from("/x/claude-a");
         assert_eq!(account_label("", dir, &[other], 1), "h/claude-a");
+    }
+
+    #[test]
+    fn card_header_is_the_label_and_the_tray_name_is_the_tile_text() {
+        let account = ResolvedAccount {
+            spec: AccountSpec {
+                id: "claude@x".to_owned(),
+                profile: "x".to_owned(),
+                nickname: String::new(),
+            },
+            dir: PathBuf::from("/h/.x"),
+            label: "a-very-long-account-label".to_owned(),
+        };
+        assert_eq!(account.provider_name(), "a-very-long-\u{2026}");
+        let metrics = crate::providers::base::UsageMetrics {
+            provider_id: "claude@x".to_owned(),
+            provider_name: account.provider_name(),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::tray_quota::display_name_of(&metrics),
+            account.tile_text()
+        );
     }
 
     #[test]
