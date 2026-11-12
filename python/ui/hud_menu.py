@@ -159,9 +159,9 @@ def _build_tray_quota(hud, menu):
            lambda: hud.set_tray_quota_mode(tray_quota.REMAINING))
 
 
-def _build_claude_accounts(hud, menu):
+def _build_claude_main_account(hud, menu):
     from core.providers.claude_provider import discover_profiles, resolve_active_profile
-    sub = menu.addMenu("Claude 帳號 (Claude Account)")
+    sub = menu.addMenu("Claude 主帳號 (Main Account)")
     current = hud.config.get("claude_profile", "auto")
     is_auto = current == "auto"
     active, _ = resolve_active_profile(current)
@@ -172,13 +172,11 @@ def _build_claude_accounts(hud, menu):
     for profile in discover_profiles()[:40]:
         selected = not is_auto and (current == profile.id or (current == ".claude" and profile.id == "default"))
         _check(sub, profile.display_name, selected, lambda pid=profile.id: hud._set_claude_profile(pid))
-    sub.addSeparator()
-    _build_also_show(hud, sub, discover_profiles())
 
 
 def _build_also_show(hud, menu, profiles):
     """Show a second Claude profile as its own tile next to the main one (the main tile stays on its pinned profile)."""
-    sub = menu.addMenu("同時顯示 (Also show)")
+    sub = menu.addMenu("Claude 同時顯示 (Also show)")
     if str(hud.config.get("claude_profile", "auto")).strip().lower() == "auto":
         _note(sub, "主分頁為「自動」，可能與下列帳號重複，建議先在上方固定帳號 (Main tile is on Auto: pin an account above first)")
         sub.addSeparator()
@@ -230,18 +228,24 @@ def _build_agy_statusline(hud, menu):
     _note(sub, "需要 PATH 上有 python；啟用後請重開 agy 互動模式")
 
 
+def _build_accounts(hud, menu):
+    from core.providers.claude_provider import discover_profiles
+    sub = menu.addMenu("帳號 (Accounts)")
+    _build_claude_main_account(hud, sub)
+    _build_also_show(hud, sub, discover_profiles())
+    sub.addSeparator()
+    _build_agy_statusline(hud, sub)
+
+
 def _build_more(hud, menu):
     sub = menu.addMenu("更多 (More)")
-    _build_claude_accounts(hud, sub)
-    _build_agy_statusline(hud, sub)
-    sub.addSeparator()
     sub.addAction("開啟記錄檔目錄 (Open Logs)").triggered.connect(open_log_dir)
     sub.addAction("重設預設尺寸與位置").triggered.connect(hud._reset_geometry)
     sub.addAction("隱藏 HUD (Alt+C 重新喚出)").triggered.connect(hud.hide)
 
 
 def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
-    """tray=True adds show/hide on top and drops the 更多 group (rarely needed from the tray).
+    """tray=True adds show/hide on top and drops the 帳號 and 更多 groups (rarely needed from the tray).
     Pass `menu` to fill an existing QMenu (the tray rebuilds its own menu each time it opens)."""
     if menu is None:
         menu = QMenu(parent if parent is not None else hud)
@@ -250,6 +254,8 @@ def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
     menu.addAction("立即重新整理所有 AI (Refresh All)").triggered.connect(hud.trigger_async_refresh)
     menu.addSeparator()
     _build_interface(hud, menu)
+    if not tray:
+        _build_accounts(hud, menu)
     _build_appearance(hud, menu)
     _build_behaviour(hud, menu)
     if tray:
