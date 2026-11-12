@@ -557,7 +557,7 @@ fn main() -> std::process::ExitCode {
         let menu = if tray {
             ui::tray_icon::build_tray_menu(&cfg, &root, &data)
         } else {
-            ui::tray_icon::build_hud_menu(&cfg, &root, false)
+            ui::tray_icon::build_context_menu(&cfg, &root, &data)
         };
         let menu = std::rc::Rc::new(std::cell::RefCell::new(menu));
         if let Some(action) = ferrokit_widgets::menu::Menu::exec_popup(&menu, global_pos)

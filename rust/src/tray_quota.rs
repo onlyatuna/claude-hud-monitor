@@ -408,4 +408,26 @@ mod tests {
         assert_eq!(r.tooltip_line(MODE_USED), "Claude FABLE 7D: 84% used");
         assert_eq!(r.tooltip_line(MODE_REMAINING), "Claude FABLE 7D: 16% left");
     }
+
+    #[test]
+    fn a_dynamic_agy_row_is_selectable_until_it_disappears() {
+        let mut carbon = MetricRow::new("CARBON 7D", Some(40.0), "40%");
+        carbon.key = "agy:carbon-7d".into();
+        let mut agy = UsageMetrics {
+            provider_id: "agy".into(),
+            metric1_title: "GEMINI 5H".into(),
+            extra_metrics: vec![carbon],
+            ..Default::default()
+        };
+        let now = Utc::now();
+        let r = resolve("agy:carbon-7d", std::slice::from_ref(&agy), now).unwrap();
+        assert_eq!(
+            (r.label.as_str(), r.used, r.state),
+            ("AGY CARBON 7D", Some(40.0), State::Ok)
+        );
+        agy.extra_metrics.clear();
+        let r = resolve("agy:carbon-7d", &[agy], now).unwrap();
+        assert_eq!(r.state, State::Unavailable);
+        assert_eq!(r.icon_spec(MODE_USED).text, "--");
+    }
 }

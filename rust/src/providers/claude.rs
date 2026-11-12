@@ -566,7 +566,7 @@ fn note_unknown(label: &str, value: &str) {
 }
 
 /// Lower-case slug: every run of non-alphanumeric characters becomes one '-', edges trimmed.
-fn slug(s: &str) -> String {
+pub(super) fn slug(s: &str) -> String {
     let mut out = String::new();
     for c in s.trim().chars().flat_map(char::to_lowercase) {
         if c.is_alphanumeric() {
