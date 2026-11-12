@@ -12,10 +12,10 @@ path = "src/main.rs"
 [dependencies]
 # UI library, a Rust implementation of a subset of Qt: https://github.com/onlyatuna/ferrokit
 # Pinned to a commit. CI's `diagnostics` job checks out the same commit; change both together.
-ferrokit-core = { git = "https://github.com/onlyatuna/ferrokit", rev = "69f995685ee7205d1426416fd9906f40a64d559d" }
-ferrokit-gui = { git = "https://github.com/onlyatuna/ferrokit", rev = "69f995685ee7205d1426416fd9906f40a64d559d" }
-ferrokit-platform = { git = "https://github.com/onlyatuna/ferrokit", rev = "69f995685ee7205d1426416fd9906f40a64d559d" }
-ferrokit-widgets = { git = "https://github.com/onlyatuna/ferrokit", rev = "69f995685ee7205d1426416fd9906f40a64d559d" }
+ferrokit-core = { git = "https://github.com/onlyatuna/ferrokit", rev = "8f6312c54cc57bccb30359790d32831af72d281a" }
+ferrokit-gui = { git = "https://github.com/onlyatuna/ferrokit", rev = "8f6312c54cc57bccb30359790d32831af72d281a" }
+ferrokit-platform = { git = "https://github.com/onlyatuna/ferrokit", rev = "8f6312c54cc57bccb30359790d32831af72d281a" }
+ferrokit-widgets = { git = "https://github.com/onlyatuna/ferrokit", rev = "8f6312c54cc57bccb30359790d32831af72d281a" }
 parking_lot = "0.12"
 
 # HTTP (synchronous TLS client; providers already run on worker threads)
@@ -83,12 +83,3 @@ opt-level = 3
 [profile.dev]
 opt-level = 1
 incremental = true
-
-# LOCAL BUILD ONLY (branch local/integration-v4, never pushed): ferrokit with the fix that sends a
-# buttonless mouse move over a widget without tracking through the application filters
-# (branch fix/untracked-mouse-move-reaches-app-filters, one commit on top of origin/main fbde555).
-[patch."https://github.com/onlyatuna/ferrokit"]
-ferrokit-core = { path = "C:/Users/sss19/AppData/Local/Temp/wt_fk_hover/crates/ferrokit-core" }
-ferrokit-gui = { path = "C:/Users/sss19/AppData/Local/Temp/wt_fk_hover/crates/ferrokit-gui" }
-ferrokit-platform = { path = "C:/Users/sss19/AppData/Local/Temp/wt_fk_hover/crates/ferrokit-platform" }
-ferrokit-widgets = { path = "C:/Users/sss19/AppData/Local/Temp/wt_fk_hover/crates/ferrokit-widgets" }
