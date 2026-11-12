@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QMenu
 
 from core import agy_statusline
 from core import tray_quota
+from core.accounts import MAX_ACCOUNTS, MENU_LABEL_MAX, elide, profile_is_valid, profile_key
 from core.agy_rows import DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.autostart import is_autostart_enabled
 from core.logger import open_log_dir
@@ -47,9 +48,24 @@ def _build_interface(hud, menu):
         size_menu = sub.addMenu("大小 (Ctrl＋滾輪)")
         for pct in SIDEBAR_SCALES:
             _check(size_menu, f"{pct}%", pct == current, lambda p=pct: hud.set_sidebar_scale(p / 100))
+        _build_sidebar_tiles(hud, sub)
     sub.addSeparator()
     _build_agy_rows(hud, sub)
 
+
+
+def _build_sidebar_tiles(hud, menu):
+    """Show/hide each tile (hiding does not stop its fetching); order is changed by holding and dragging a tile."""
+    all_ids, visible, _hidden = hud._tile_state()
+    sub = menu.addMenu("側邊欄項目 (Sidebar tiles)")
+    for tile_id in all_ids:
+        spec = hud._tile_spec(tile_id)
+        label = spec.label if tile_id not in hud._accounts else elide(spec.label, MENU_LABEL_MAX)
+        shown = tile_id in visible
+        action = _check(sub, label, shown, lambda t=tile_id, v=not shown: hud.set_tile_visible(t, v))
+        action.setEnabled(not (shown and len(visible) == 1))
+    sub.addSeparator()
+    _note(sub, "細條模式下長按磚塊拖曳可調整順序 (Hold and drag a tile in the strip to reorder)")
 
 def _build_agy_rows(hud, menu):
     """Shows the current agy row order; the order itself is changed by dragging rows in the detail page."""
@@ -156,6 +172,34 @@ def _build_claude_accounts(hud, menu):
     for profile in discover_profiles()[:40]:
         selected = not is_auto and (current == profile.id or (current == ".claude" and profile.id == "default"))
         _check(sub, profile.display_name, selected, lambda pid=profile.id: hud._set_claude_profile(pid))
+    sub.addSeparator()
+    _build_also_show(hud, sub, discover_profiles())
+
+
+def _build_also_show(hud, menu, profiles):
+    """Show a second Claude profile as its own tile next to the main one (the main tile stays on its pinned profile)."""
+    sub = menu.addMenu("同時顯示 (Also show)")
+    if str(hud.config.get("claude_profile", "auto")).strip().lower() == "auto":
+        _note(sub, "主分頁為「自動」，可能與下列帳號重複，建議先在上方固定帳號 (Main tile is on Auto: pin an account above first)")
+        sub.addSeparator()
+    shown = {profile_key(spec.profile): spec for spec in hud._accounts.values()}
+    main_key = hud._main_profile_key()
+    entries, listed = [], set()
+    for profile in profiles[:40]:
+        key = profile_key(profile.id)
+        if not profile_is_valid(profile.id) or (key == main_key and key not in shown):
+            continue
+        entries.append((profile.display_name, profile.id, key in shown))
+        listed.add(key)
+    entries += [(f"{spec.profile}  找不到 (Not found)", spec.profile, True) for key, spec in shown.items() if key not in listed]
+    full = len(shown) >= MAX_ACCOUNTS
+    for label, profile_id, checked in entries:
+        action = _check(sub, label, checked, lambda p=profile_id: hud.toggle_account(p))
+        action.setEnabled(checked or not full)
+    if not entries:
+        _note(sub, "沒有其他帳號 (No other profile found)")
+    if full:
+        _note(sub, f"最多 {MAX_ACCOUNTS} 個帳號 (Max {MAX_ACCOUNTS} accounts)")
 
 
 def _note(menu, text):

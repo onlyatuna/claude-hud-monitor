@@ -25,10 +25,11 @@ class Reading:
     title: str
     used: Optional[float]
     state: str
+    name: str = ""   # display name of an extra account (its tile text); empty = the built-in provider names
 
     @property
     def provider_name(self) -> str:
-        return PROVIDER_NAMES.get(self.provider_id, self.provider_id.title())
+        return self.name or PROVIDER_NAMES.get(self.provider_id, self.provider_id.title())
 
 
 def qualified_key(provider_id: str, row_key: str) -> str:
@@ -45,23 +46,25 @@ def _state(metrics, used, now) -> str:
     return STALE if metrics.stale else OK
 
 
-def readings(raw_metrics: dict, provider_order, now: Optional[datetime] = None) -> list:
+def readings(raw_metrics: dict, provider_order, now: Optional[datetime] = None, names: Optional[dict] = None) -> list:
     """Every row of every provider, in provider order (main pair, then extras); `raw_metrics` is unarranged.
     A provider that is offline has no real rows (its error result carries default titles and no keys), so it
     contributes one placeholder: key `<provider_id>:`, empty title, state OFFLINE."""
     now = now or datetime.now(timezone.utc)
+    names = names or {}
     result = []
     for provider_id in provider_order:
         m = raw_metrics.get(provider_id)
         if m is None:
             continue
         if _state(m, 0, now) == OFFLINE:
-            result.append(Reading(provider_id + ":", provider_id, "", None, OFFLINE))
+            result.append(Reading(provider_id + ":", provider_id, "", None, OFFLINE, names.get(provider_id, "")))
             continue
         rows = [(m.main_key(1), m.metric1_title, m.metric1_val), (m.main_key(2), m.metric2_title, m.metric2_val)]
         rows += [(r.key, r.title, r.val) for r in m.extra_metrics]
         for key, title, used in rows:
-            result.append(Reading(qualified_key(provider_id, key), provider_id, title, used, _state(m, used, now)))
+            result.append(Reading(qualified_key(provider_id, key), provider_id, title, used, _state(m, used, now),
+                                  names.get(provider_id, "")))
     return result
 
 
@@ -79,7 +82,7 @@ def select(setting: str, rows: list) -> Optional[Reading]:
             return r
     for r in rows:  # the provider of the selected row is offline: show that, not "unavailable"
         if r.state == OFFLINE and setting.startswith(r.key):
-            return Reading(setting, r.provider_id, "", None, OFFLINE)
+            return Reading(setting, r.provider_id, "", None, OFFLINE, r.name)
     return Reading(setting, "", "", None, UNAVAILABLE)
 
 
