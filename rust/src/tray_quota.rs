@@ -86,18 +86,19 @@ pub fn rows(m: &UsageMetrics) -> Vec<QuotaRow> {
     }
     let id = &m.provider_id;
     let main_key = |key: &str, title: &str| qualify(id, if key.is_empty() { title } else { key });
-    let mut out = vec![
-        QuotaRow {
-            key: main_key(&m.metric1_key, &m.metric1_title),
-            title: m.metric1_title.clone(),
-            val: m.metric1_val,
-        },
-        QuotaRow {
-            key: main_key(&m.metric2_key, &m.metric2_title),
-            title: m.metric2_title.clone(),
-            val: m.metric2_val,
-        },
-    ];
+    let mut out: Vec<QuotaRow> = [
+        (&m.metric1_key, &m.metric1_title, m.metric1_val),
+        (&m.metric2_key, &m.metric2_title, m.metric2_val),
+    ]
+    .into_iter()
+    // A provider with a single window leaves its second main row empty: no row, no key.
+    .filter(|(key, title, _)| !(key.is_empty() && title.is_empty()))
+    .map(|(key, title, val)| QuotaRow {
+        key: main_key(key, title),
+        title: title.clone(),
+        val,
+    })
+    .collect();
     out.extend(m.extra_metrics.iter().map(|r| QuotaRow {
         key: qualify(id, &r.key),
         title: r.title.clone(),
