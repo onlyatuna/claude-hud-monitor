@@ -269,6 +269,9 @@ fn build_menu(
     );
     menu.add_separator();
     build_interface(&mut menu, cfg);
+    if tray_data.is_none() {
+        build_accounts(&mut menu, cfg);
+    }
     build_appearance(&mut menu, cfg);
     build_behaviour(&mut menu, cfg);
     match tray_data {
@@ -639,10 +642,12 @@ thread_local! {
     static MENU_TILES: std::cell::RefCell<Vec<(String, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// `更多 > Claude 帳號 > 同時顯示 (Also show)`: one extra Claude account per other profile.
-fn build_also_show(menu: &mut Menu, cfg: &Config, main_is_auto: bool) {
+/// `帳號 > Claude 同時顯示 (Also show)`: one extra Claude account per other profile.
+fn build_also_show(menu: &mut Menu, cfg: &Config) {
+    let current = cfg.claude_profile.as_str();
+    let main_is_auto = current.is_empty() || current.eq_ignore_ascii_case("auto");
     use crate::accounts;
-    add_submenu(menu, "同時顯示 (Also show)", cfg, |sub| {
+    add_submenu(menu, "Claude 同時顯示 (Also show)", cfg, |sub| {
         if main_is_auto {
             add_disabled(
                 sub,
@@ -678,9 +683,9 @@ fn build_also_show(menu: &mut Menu, cfg: &Config, main_is_auto: bool) {
     });
 }
 
-/// Python `hud_menu._build_claude_accounts`.
-fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
-    add_submenu(menu, "Claude 帳號 (Claude Account)", cfg, |sub| {
+/// Python `hud_menu._build_claude_main_account`.
+fn build_claude_main_profile(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "Claude 主帳號 (Main Account)", cfg, |sub| {
         let current = cfg.claude_profile.as_str();
         let is_auto = current.is_empty() || current.eq_ignore_ascii_case("auto");
         let (active, _) = crate::providers::claude::resolve_active_profile(current);
@@ -706,8 +711,6 @@ fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
                 selected,
             );
         }
-        sub.add_separator();
-        build_also_show(sub, cfg, is_auto);
     });
 }
 
@@ -755,16 +758,23 @@ fn build_agy_statusline(
     });
 }
 
-/// Python `hud_menu._build_more`.
-fn build_more(menu: &mut Menu, cfg: &Config) {
-    add_submenu(menu, "更多 (More)", cfg, |sub| {
-        build_claude_accounts(sub, cfg);
+/// Python `hud_menu._build_accounts`.
+fn build_accounts(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "帳號 (Accounts)", cfg, |sub| {
+        build_claude_main_profile(sub, cfg);
+        build_also_show(sub, cfg);
+        sub.add_separator();
         let status = crate::agy_statusline::statusline_status(None, None);
         let written = (status == crate::agy_statusline::Status::Installed)
             .then(|| crate::agy_statusline::cache_written_at(None))
             .flatten();
         build_agy_statusline(sub, cfg, status, written);
-        sub.add_separator();
+    });
+}
+
+/// Python `hud_menu._build_more`.
+fn build_more(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "更多 (More)", cfg, |sub| {
         add_item(sub, ACTION_OPEN_LOGS, "開啟記錄檔目錄 (Open Logs)");
         add_item(sub, ACTION_RESET_GEOMETRY, "重設預設尺寸與位置");
         add_item(sub, ACTION_HIDE_HUD, "隱藏 HUD (Alt+C 重新喚出)");
@@ -1446,6 +1456,7 @@ mod menu_parity_tests {
                     "立即重新整理所有 AI (Refresh All)",
                     "---",
                     "介面 (Interface)",
+                    "帳號 (Accounts)",
                     "外觀 (Appearance)",
                     "行為 (Behaviour)",
                     "更多 (More)",
@@ -1572,11 +1583,17 @@ mod menu_parity_tests {
             ])
         );
         assert_eq!(
+            sub_labels(&menu, &["帳號 (Accounts)"]),
+            strings(&[
+                "Claude 主帳號 (Main Account)",
+                "Claude 同時顯示 (Also show)",
+                "---",
+                "AGY 週額度掛鉤 (statusLine)",
+            ])
+        );
+        assert_eq!(
             sub_labels(&menu, &["更多 (More)"]),
             strings(&[
-                "Claude 帳號 (Claude Account)",
-                "AGY 週額度掛鉤 (statusLine)",
-                "---",
                 "開啟記錄檔目錄 (Open Logs)",
                 "重設預設尺寸與位置",
                 "隱藏 HUD (Alt+C 重新喚出)",
