@@ -21,6 +21,9 @@ class ProviderState:
     cached: object = None
 
 
+AUTH_ERROR = "auth"   # 401/403, missing or expired credentials: shown as OFF, never as amber STALE
+
+
 class RefreshController(QObject):
     updated = Signal(object)
     busy_changed = Signal(bool)
@@ -144,7 +147,9 @@ class RefreshController(QObject):
                 delay = min(86400, max(delay, retry_after))
             logging.getLogger(__name__).warning("provider=%s error=%s retry_seconds=%.1f", pid, result.error_code or "unknown", delay)
             state.due = now + self._delay(delay)
-            if state.cached is not None:
+            if result.error_code == AUTH_ERROR:
+                state.cached = None     # terminal: the old values are no longer this account's truth, show OFF
+            elif state.cached is not None:
                 result = replace(state.cached, error=result.error, error_code=result.error_code,
                                  retry_after=result.retry_after, stale=True)
         else:

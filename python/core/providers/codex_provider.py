@@ -48,7 +48,8 @@ class CodexProvider(BaseProvider):
                 provider_name="OpenAI Codex",
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error="未找到 Codex 授權檔 (~/.codex/auth.json)\n請執行 codex 登入"
+                error="未找到 Codex 授權檔 (~/.codex/auth.json)\n請執行 codex 登入",
+                error_code="auth"
             )
 
         tokens = auth_data.get("tokens") or {}
@@ -60,7 +61,8 @@ class CodexProvider(BaseProvider):
                 provider_name="OpenAI Codex",
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error="未找到 access_token\n請於終端機執行 codex 登入"
+                error="未找到 access_token\n請於終端機執行 codex 登入",
+                error_code="auth"
             )
 
         headers = {
@@ -78,8 +80,8 @@ class CodexProvider(BaseProvider):
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
             logger.warning(f"[CodexProvider] HTTP error: {e.code}")
-            code = "auth" if e.code == 401 else ("rate_limit" if e.code == 429 else "http")
-            message = "登入憑證已失效，請使用原 CLI 重新登入" if e.code == 401 else f"配額查詢 HTTP {e.code}"
+            code = "auth" if e.code in (401, 403) else ("rate_limit" if e.code == 429 else "http")
+            message = "登入憑證已失效，請使用原 CLI 重新登入" if code == "auth" else f"配額查詢 HTTP {e.code}"
             return UsageMetrics(provider_name="OpenAI Codex", provider_id=self.provider_id,
                                 last_updated_time=now_str, error=message, error_code=code,
                                 retry_after=retry_delay(e.headers.get("Retry-After")) if e.headers else None)

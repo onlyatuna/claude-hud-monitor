@@ -306,7 +306,8 @@ class ClaudeProvider(BaseProvider):
                 provider_name=display_title,
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error=err_msg
+                error=err_msg,
+                error_code="auth"
             )
 
         headers = {
@@ -332,8 +333,8 @@ class ClaudeProvider(BaseProvider):
                 return metrics
         except urllib.error.HTTPError as e:
             logger.warning(f"[ClaudeProvider] HTTP error: {e.code}")
-            code = "auth" if e.code == 401 else ("rate_limit" if e.code == 429 else "http")
-            message = "登入憑證已失效，請使用原 CLI 重新登入" if e.code == 401 else f"配額查詢 HTTP {e.code}"
+            code = "auth" if e.code in (401, 403) else ("rate_limit" if e.code == 429 else "http")
+            message = "登入憑證已失效，請使用原 CLI 重新登入" if code == "auth" else f"配額查詢 HTTP {e.code}"
             return UsageMetrics(provider_name=display_title, provider_id=self.provider_id,
                                 last_updated_time=now_str, error=message, error_code=code,
                                 retry_after=retry_delay(e.headers.get("Retry-After")) if e.headers else None)
