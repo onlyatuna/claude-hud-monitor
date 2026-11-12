@@ -101,6 +101,12 @@ Tray number (both HUDs read the same two keys):
 
 The number is coloured like the gauge (green, yellow, orange, red by used percentage), amber while the last refresh failed and the previous value is kept, grey when the value is older than 30 minutes or missing, `!` in red when the provider failed with nothing to show. The tray menu's 系統匣數字 (Tray number) submenu chooses the quota and the mode; the tooltip gets a first line such as `Claude FABLE 7D: 84% used`.
 
+### Two Claude accounts at once (sidebar)
+
+- `accounts` (list, absent by default): extra Claude accounts, `{"id": "claude@<slug>", "provider": "claude", "profile": "<profile id>", "nickname": "<optional>"}`. The id is generated once when you tick 更多 → Claude 帳號 → 同時顯示 (Also show) and then kept; the default profile and a profile the main tile is pinned to cannot be added; at most 6. Invalid entries are ignored, never rewritten. Row keys of an account are `claude@<slug>:5h`, `claude@<slug>:weekly_scoped:fable`, ...; a stored `claude:5h` still means the main tile.
+- `sidebar_tiles` (list, absent by default): the visible sidebar tiles in order (`claude`, `claude@<slug>`, `agy`, `codex`). Absent = every tile in `provider_order`, the accounts after `claude`. Drag a tile in the strip to reorder (writes this list and the base-id `provider_order`); 介面 → 側邊欄項目 (Sidebar tiles) shows or hides one. Hiding a tile does not stop its fetching.
+- The main Claude tile stays on `claude_profile`: pin it (`auto` flips between profiles). The tile text of an account is its directory name without the leading dot, cut to 8 characters (`claude-a` fits); card headers use 16, the full name is in the tooltip. Both keys apply live, no restart. The table style ignores them.
+
 ## Credential Files
 
 | Provider | File |

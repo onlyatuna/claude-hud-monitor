@@ -34,12 +34,13 @@ use super::dock_geometry::{
 };
 use super::provider_card::ProviderCardWidget;
 use super::round_mask::rounded_rects;
-use super::sidebar::{DEFAULT_ORDER, Orientation, Scheme, SidebarWidget, State};
+use super::sidebar::{DEFAULT_ORDER, Orientation, Scheme, SidebarWidget, State, TileSpec};
 use super::styles::{Theme, get_theme};
 use super::table_layout::{
     COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W, compact_min_size, table_state,
 };
 use super::usage_table::{PROVIDER_ORDER, TableViews, UsageTable};
+use crate::accounts::{self, ResolvedAccount};
 use crate::config::{
     Config, ConfigManager, DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH, MIN_TABLE_HEIGHT,
     MIN_TABLE_WIDTH, ResizeDebouncer,
@@ -477,6 +478,12 @@ pub struct HUDWindow {
     pub sidebar: SidebarWidget,
     /// Python `self.sidebar_cards`: the provider cards of the sidebar's panel and flyout.
     pub sidebar_cards: HashMap<String, Rc<RefCell<ProviderCardWidget>>>,
+    /// The extra Claude accounts that are running (instance id -> account), see `apply_accounts`.
+    accounts: HashMap<String, ResolvedAccount>,
+    /// A first apply has run: an unusable `accounts` / `sidebar_tiles` value no longer resets tiles.
+    accounts_applied: bool,
+    /// An apply is queued (`request_apply_accounts`): a burst of menu clicks runs it once.
+    apply_pending: bool,
     /// The sidebar style's window state (`_docking`, `_resize`, `_snap_timer`, `_fade_timer`).
     sidebar_hud: Rc<SidebarHud>,
     /// Python `QApplication.instance().installEventFilter(self)`.
@@ -514,6 +521,29 @@ fn default_providers(
             Arc::new(CodexProvider::new()) as Arc<dyn Provider + Send + Sync>,
         ),
     ])
+}
+
+/// The provider of an extra account.
+#[cfg(not(test))]
+fn account_provider(account: &ResolvedAccount) -> Arc<dyn Provider + Send + Sync> {
+    use crate::providers::{claude::ClaudeProvider, instance::InstanceProvider};
+    Arc::new(InstanceProvider::new(
+        Arc::new(ClaudeProvider::for_profile(&account.spec.profile)),
+        &account.spec.id,
+        "claude",
+        &account.provider_name(),
+    ))
+}
+
+#[cfg(test)]
+fn account_provider(account: &ResolvedAccount) -> Arc<dyn Provider + Send + Sync> {
+    use crate::providers::instance::InstanceProvider;
+    Arc::new(InstanceProvider::new(
+        crate::providers::stub::stub_instance(&account.spec.id),
+        &account.spec.id,
+        "claude",
+        &account.provider_name(),
+    ))
 }
 
 #[cfg(test)]
@@ -675,7 +705,11 @@ impl HUDWindow {
                 | WindowFlags::LAYERED
                 | WindowFlags::TOOLTIP,
         )?;
-        let sidebar = SidebarWidget::new(sidebar_cards.clone(), flyout);
+        let tiles: Vec<(TileSpec, Rc<RefCell<ProviderCardWidget>>)> = sidebar_cards
+            .iter()
+            .filter_map(|(id, card)| Some((TileSpec::builtin(id)?, Rc::clone(card))))
+            .collect();
+        let sidebar = SidebarWidget::new(tiles, flyout);
         StackedWidget::add_widget(&stack, sidebar.widget());
         let active_index = match ui_mode.as_str() {
             "sidebar" => SIDEBAR_PAGE,
@@ -921,6 +955,9 @@ impl HUDWindow {
             quota_changed: None,
             sidebar,
             sidebar_cards: sidebar_cards.into_iter().collect(),
+            accounts: HashMap::new(),
+            accounts_applied: false,
+            apply_pending: false,
             sidebar_hud: Rc::clone(&sidebar_hud),
             hud_filter: None,
             sidebar_layout: ui_mode == "sidebar",
@@ -930,6 +967,7 @@ impl HUDWindow {
             blur_resume_timer,
         };
         hud.connect_sidebar_signals();
+        hud.apply_accounts_with(false);
         // Python `button.screen()`: the sidebar asks for the screen its window is on.
         let host_screen = hud.sidebar.host_screen();
         *host_screen.lock() = Some(hud.window.screen().name());
@@ -1264,8 +1302,11 @@ impl HUDWindow {
     /// The latest data of each provider as it reported it (rows not rearranged), in the saved
     /// provider order: what the tray number is chosen from.
     pub fn quota_data(&self) -> Vec<UsageMetrics> {
-        self.provider_order()
+        let tiles = self.tiles();
+        tiles
+            .visible
             .iter()
+            .chain(tiles.hidden.iter())
             .filter_map(|id| self.raw_metrics.get(id).cloned())
             .collect()
     }
@@ -1458,6 +1499,185 @@ impl HUDWindow {
             cfg.claude_profile = profile_id.to_string();
         });
         self.trigger_refresh();
+    }
+
+    // ================= Extra Claude accounts =================
+
+    /// The tile ids of the saved config: all, visible in order, hidden.
+    fn tiles(&self) -> accounts::Tiles {
+        let cfg = self.config.lock();
+        accounts::tiles_of(&cfg, &accounts::accounts_of(&cfg))
+    }
+
+    /// Menu action: tick (`on`) or untick the extra account of `profile`.
+    pub fn set_account(&mut self, profile: &str, on: bool) {
+        ConfigManager::update_and_save(&self.config, |cfg| {
+            if on {
+                accounts::add_account(cfg, profile);
+            } else if let Some(id) = accounts::accounts_of(cfg)
+                .into_iter()
+                .find(|a| accounts::profile_key(&a.profile) == accounts::profile_key(profile))
+                .map(|a| a.id)
+            {
+                accounts::remove_account(cfg, &id);
+            }
+        });
+        self.request_apply_accounts();
+    }
+
+    /// Menu action: show or hide a sidebar tile (its provider keeps fetching).
+    pub fn set_tile_visible(&mut self, id: &str, show: bool) {
+        ConfigManager::update_and_save(&self.config, |cfg| {
+            accounts::set_tile_visible(cfg, id, show);
+        });
+        self.request_apply_accounts();
+    }
+
+    /// Queues one `apply_accounts` for the end of the current event: a burst of requests runs it
+    /// once, and it reads the config as it is then. The menu action that asked is still running
+    /// (it holds the window), so the apply cannot run inside it.
+    pub fn request_apply_accounts(&mut self) {
+        if self.apply_pending {
+            return;
+        }
+        self.apply_pending = true;
+        with_hud_later(|hud| {
+            hud.apply_pending = false;
+            hud.apply_accounts();
+        });
+    }
+
+    /// Makes the running accounts and the sidebar tiles match the config, live: providers and
+    /// states of new accounts exist before their first fetch, the tiles / cards of gone accounts and
+    /// everything keyed by their id are dropped, and the window is refitted. An unusable value
+    /// keeps the running tiles. Never calls `with_hud*` (the caller holds the window).
+    pub fn apply_accounts(&mut self) {
+        self.apply_accounts_with(true);
+    }
+
+    fn apply_accounts_with(&mut self, refit: bool) {
+        let cfg = self.config.lock().clone();
+        if self.accounts_applied && !accounts::config_is_usable(&cfg) {
+            log::warn!("accounts / sidebar_tiles are not usable; the running tiles stay");
+            return;
+        }
+        let resolved = accounts::resolve_accounts(&cfg);
+        let specs: Vec<accounts::AccountSpec> = resolved.iter().map(|r| r.spec.clone()).collect();
+        let tiles = accounts::tiles_of(&cfg, &specs);
+        let wanted: HashMap<String, ResolvedAccount> = resolved
+            .iter()
+            .map(|r| (r.spec.id.clone(), r.clone()))
+            .collect();
+
+        // gone (or changed: removed and added again) accounts
+        let gone: Vec<String> = self
+            .accounts
+            .iter()
+            .filter(|(id, old)| wanted.get(*id) != Some(*old))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &gone {
+            self.refresh_ctrl.lock().remove_instance(id);
+            self.providers.remove(id);
+            self.raw_metrics.remove(id);
+            self.accounts.remove(id);
+        }
+
+        let tile_specs: Vec<TileSpec> = tiles
+            .all
+            .iter()
+            .filter_map(|id| match wanted.get(id) {
+                Some(r) => Some(TileSpec {
+                    id: id.clone(),
+                    base: "claude".to_owned(),
+                    text: r.tile_text(),
+                    name: r.label.clone(),
+                }),
+                None => TileSpec::builtin(id),
+            })
+            .collect();
+        let dark = self.is_dark;
+        let names: HashMap<String, String> = resolved
+            .iter()
+            .map(|r| (r.spec.id.clone(), r.provider_name()))
+            .collect();
+        let mut make_card = |spec: &TileSpec| {
+            let mut card = ProviderCardWidget::new(&spec.id);
+            card.set_appearance(dark);
+            if let Some(name) = names.get(&spec.id) {
+                card.set_title(name);
+            }
+            Rc::new(RefCell::new(card))
+        };
+        if gone.iter().any(|id| wanted.contains_key(id)) {
+            // a changed account is a new tile: take the old one out first
+            let without: Vec<TileSpec> = tile_specs
+                .iter()
+                .filter(|s| !gone.contains(&s.id))
+                .cloned()
+                .collect();
+            let visible: Vec<String> = tiles
+                .visible
+                .iter()
+                .filter(|id| !gone.contains(id))
+                .cloned()
+                .collect();
+            self.sidebar.set_tiles(&without, &mut make_card, &visible);
+        }
+        self.sidebar
+            .set_tiles(&tile_specs, &mut make_card, &tiles.visible);
+        let cards = self.sidebar.cards();
+        let fresh: Vec<(String, Rc<RefCell<ProviderCardWidget>>)> = cards
+            .iter()
+            .filter(|(id, _)| !self.sidebar_cards.contains_key(id))
+            .cloned()
+            .collect();
+        self.sidebar_cards = cards.into_iter().collect();
+        for (id, card) in &fresh {
+            Self::wire_card(id, card);
+        }
+
+        // new accounts: the provider and its state exist before the first fetch, which is now
+        for r in &resolved {
+            let id = &r.spec.id;
+            if self.accounts.contains_key(id) {
+                continue;
+            }
+            let provider = account_provider(r);
+            self.providers.insert(id.clone(), Arc::clone(&provider));
+            self.refresh_ctrl.lock().add_instance(id, provider);
+            self.accounts.insert(id.clone(), r.clone());
+        }
+        self.accounts_applied = true;
+        if let Some(changed) = &self.quota_changed {
+            changed();
+        }
+        self.refresh_status_dot();
+        if refit {
+            self.refit_sidebar();
+        }
+    }
+
+    /// The window is as big as the visible tiles need, strip and panel alike (`fit_sidebar` only
+    /// follows the panel's content). Skipped while a resize grab is active.
+    fn refit_sidebar(&mut self) {
+        if !self.is_sidebar_mode() || self.sidebar_hud.resize.borrow().is_some() {
+            return;
+        }
+        self.dock_sidebar();
+        Timer::single_shot(0, || {
+            with_hud_retry(|hud| hud.settle_sidebar());
+        });
+    }
+
+    fn wire_card(pid: &str, card: &Rc<RefCell<ProviderCardWidget>>) {
+        let pid = pid.to_owned();
+        card.borrow()
+            .row_order_changed()
+            .connect_local(move |titles: &Vec<String>| {
+                let (pid, titles) = (pid.clone(), titles.clone());
+                with_hud_later(move |hud| hud.set_row_order(&pid, &titles));
+            });
     }
 
     pub fn reset_geometry(&mut self) {
@@ -2111,13 +2331,17 @@ impl HUDWindow {
         }
     }
 
-    /// Python `set_provider_order`.
+    /// Python `set_provider_order`: a drag reorder of the visible tiles (ids, accounts included).
+    /// Writes `sidebar_tiles` and the base-id `provider_order`.
     pub fn set_provider_order(&mut self, order: &[String]) {
-        if crate::ui::sidebar::valid_order(order).is_none() || order == self.provider_order() {
+        let tiles = self.tiles();
+        let Some(order) = crate::ui::sidebar::valid_order(order, &tiles.all) else {
+            return;
+        };
+        if order == tiles.visible {
             return;
         }
-        let order = order.to_vec();
-        ConfigManager::update_and_save(&self.config, |cfg| cfg.provider_order = order.clone());
+        ConfigManager::update_and_save(&self.config, |cfg| accounts::set_tile_order(cfg, &order));
         self.sidebar.set_order(&order);
         // Python: `if ui_mode == "table": self._rebuild_table()`. The table follows the order in
         // every style here, so switching to it later never shows a stale one.
@@ -2231,16 +2455,8 @@ impl HUDWindow {
                 with_hud_later(move |hud| hud.set_provider_order(&order));
             });
         for (pid, card) in &self.sidebar_cards {
-            let pid = pid.clone();
-            card.borrow()
-                .row_order_changed()
-                .connect_local(move |titles: &Vec<String>| {
-                    let (pid, titles) = (pid.clone(), titles.clone());
-                    with_hud_later(move |hud| hud.set_row_order(&pid, &titles));
-                });
+            Self::wire_card(pid, card);
         }
-        let order = self.provider_order();
-        self.sidebar.set_order(&order);
         // QApplication.instance().installEventFilter(self)
         let filter = HudFilter {
             data: ObjectData::with_auto_id(),
@@ -2544,6 +2760,153 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         (hud, fetched)
+    }
+
+    // ---- extra Claude accounts, applied live ----
+
+    /// Ticks `profile` on in the config and applies it; returns the new instance id.
+    fn add_account(hud: &mut HUDWindow, profile: &str) -> String {
+        let mut id = String::new();
+        ConfigManager::update_and_save(&hud.config, |cfg| {
+            id = accounts::add_account(cfg, profile).expect("account added");
+        });
+        hud.apply_accounts();
+        id
+    }
+
+    fn remove_account(hud: &mut HUDWindow, id: &str) {
+        ConfigManager::update_and_save(&hud.config, |cfg| accounts::remove_account(cfg, id));
+        hud.apply_accounts();
+    }
+
+    #[test]
+    fn an_account_is_added_and_removed_live() {
+        let (mut hud, _rx) = hud_with_stubs();
+        assert_eq!(hud.sidebar.visible_tiles(), ["claude", "agy", "codex"]);
+        let id = add_account(&mut hud, "claude-a");
+        assert_eq!(id, "claude@claude-a");
+        assert!(hud.providers.contains_key(&id));
+        assert!(hud.refresh_ctrl.lock().states.contains_key(&id));
+        assert!(hud.sidebar_cards.contains_key(&id));
+        assert_eq!(
+            hud.sidebar.visible_tiles(),
+            ["claude", id.as_str(), "agy", "codex"]
+        );
+        // its data lands in its own card
+        hud.on_data_fetched(&UsageMetrics {
+            provider_id: id.clone(),
+            metric1_val: Some(42.0),
+            ..Default::default()
+        });
+        assert_eq!(
+            hud.sidebar_cards[&id].borrow().current_metrics.metric1_val,
+            Some(42.0)
+        );
+        remove_account(&mut hud, &id);
+        assert!(!hud.providers.contains_key(&id));
+        assert!(!hud.refresh_ctrl.lock().states.contains_key(&id));
+        assert!(!hud.raw_metrics.contains_key(&id));
+        assert!(!hud.sidebar_cards.contains_key(&id));
+        assert_eq!(hud.sidebar.visible_tiles(), ["claude", "agy", "codex"]);
+        // an unusable value keeps what runs
+        let id = add_account(&mut hud, "claude-a");
+        ConfigManager::update_and_save(&hud.config, |cfg| {
+            cfg.extra
+                .insert("accounts".to_owned(), serde_json::json!("junk"));
+        });
+        hud.apply_accounts();
+        assert!(hud.providers.contains_key(&id));
+        assert_eq!(hud.sidebar.visible_tiles().len(), 4);
+    }
+
+    #[test]
+    fn the_window_follows_the_tile_count() {
+        let (mut hud, _rx) = hud_with_stubs();
+        for (panel, horizontal) in [(false, false), (false, true), (true, false), (true, true)] {
+            ConfigManager::update_and_save(&hud.config, |cfg| {
+                cfg.sidebar_orientation =
+                    if horizontal { "horizontal" } else { "vertical" }.to_owned();
+            });
+            hud.sidebar.set_orientation(if horizontal {
+                Orientation::Horizontal
+            } else {
+                Orientation::Vertical
+            });
+            hud.set_sidebar_state(if panel { "panel" } else { "strip" });
+            let size = |hud: &HUDWindow| {
+                let g = hud.window.geometry();
+                (g.width, g.height)
+            };
+            let before = size(&hud);
+            let id = add_account(&mut hud, "claude-a");
+            hud.settle_sidebar();
+            let with = size(&hud);
+            let case = format!("panel {panel} horizontal {horizontal}");
+            assert_eq!(with, hud.sidebar.preferred_size(), "{case}");
+            assert_ne!(with, before, "{case}");
+            remove_account(&mut hud, &id);
+            hud.settle_sidebar();
+            assert_eq!(size(&hud), before, "{case}");
+        }
+    }
+
+    #[test]
+    fn removing_a_tile_with_its_flyout_open_leaves_nothing_behind() {
+        let (mut hud, _rx) = hud_with_stubs();
+        hud.set_sidebar_state("strip");
+        let id = add_account(&mut hud, "claude-a");
+        hud.sidebar.click_tile(&id);
+        assert_eq!(hud.sidebar.active().as_deref(), Some(id.as_str()));
+        remove_account(&mut hud, &id);
+        assert_eq!(hud.sidebar.active(), None);
+        // the panel: three cards and two dividers, five items; no orphan after a removal
+        hud.set_sidebar_state("panel");
+        assert_eq!(hud.sidebar.panel_item_count(), 5);
+        let id = add_account(&mut hud, "claude-a");
+        assert_eq!(hud.sidebar.panel_item_count(), 7);
+        remove_account(&mut hud, &id);
+        assert_eq!(hud.sidebar.panel_item_count(), 5);
+    }
+
+    #[test]
+    fn a_drag_reorder_is_saved_for_the_new_tile_too() {
+        let (mut hud, _rx) = hud_with_stubs();
+        let id = add_account(&mut hud, "claude-a");
+        let order: Vec<String> = [id.as_str(), "claude", "codex", "agy"]
+            .map(str::to_owned)
+            .to_vec();
+        hud.set_provider_order(&order);
+        let cfg = hud.config.lock().clone();
+        assert_eq!(
+            cfg.extra["sidebar_tiles"],
+            serde_json::json!([id, "claude", "codex", "agy"])
+        );
+        assert_eq!(cfg.provider_order, ["claude", "codex", "agy"]);
+        assert_eq!(hud.sidebar.visible_tiles(), order);
+    }
+
+    #[test]
+    fn a_hidden_tile_keeps_fetching_and_the_tray_still_resolves() {
+        let (mut hud, _rx) = hud_with_stubs();
+        hud.set_tile_visible("codex", false);
+        hud.apply_accounts();
+        assert_eq!(hud.sidebar.visible_tiles(), ["claude", "agy"]);
+        assert!(hud.providers.contains_key("codex"));
+        assert!(hud.refresh_ctrl.lock().states.contains_key("codex"));
+        for id in ["claude", "codex"] {
+            hud.on_data_fetched(&UsageMetrics {
+                provider_id: id.to_owned(),
+                metric1_key: format!("{id}:5h"),
+                metric1_val: Some(50.0),
+                ..Default::default()
+            });
+        }
+        let data = hud.quota_data();
+        let ids: Vec<&str> = data.iter().map(|m| m.provider_id.as_str()).collect();
+        assert_eq!(ids, ["claude", "codex"]);
+        let reading =
+            crate::tray_quota::resolve("claude:5h", &data, chrono::Utc::now()).expect("a reading");
+        assert_ne!(reading.state, crate::tray_quota::State::Unavailable);
     }
 
     fn fetches_within(rx: &std::sync::mpsc::Receiver<String>, ms: u64) -> usize {

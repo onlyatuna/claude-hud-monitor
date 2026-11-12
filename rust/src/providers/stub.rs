@@ -59,3 +59,12 @@ pub fn stub_providers_with_receiver() -> (
 pub fn stub_providers() -> HashMap<String, Arc<dyn Provider + Send + Sync>> {
     stub_providers_with_receiver().0
 }
+
+/// A stub for an extra account: the fetch result carries the instance's own id.
+pub fn stub_instance(id: &str) -> Arc<dyn Provider + Send + Sync> {
+    let (tx, _rx) = channel();
+    Arc::new(StubProvider {
+        id: id.to_owned(),
+        fetched: Mutex::new(tx),
+    })
+}

@@ -65,6 +65,21 @@ pub fn display_name(provider_id: &str) -> String {
     }
 }
 
+/// The tray name of the provider behind `m`: a built-in one by its id, an extra account by its tile
+/// text (the label inside the `CLAUDE (label)` header its provider reports, at most 8 chars).
+pub fn display_name_of(m: &UsageMetrics) -> String {
+    if m.provider_id.contains('@') {
+        let label = m
+            .provider_name
+            .strip_prefix("CLAUDE (")
+            .and_then(|rest| rest.strip_suffix(')'));
+        if let Some(label) = label {
+            return crate::accounts::elide(label, crate::accounts::TILE_LABEL_MAX);
+        }
+    }
+    display_name(&m.provider_id)
+}
+
 /// One selectable quota row of a provider's latest (unarranged) data.
 #[derive(Debug, Clone, PartialEq)]
 pub struct QuotaRow {
@@ -184,7 +199,7 @@ pub fn resolve(setting: &str, data: &[UsageMetrics], now: DateTime<Utc>) -> Opti
             State::Ok
         };
         Reading {
-            label: format!("{} {}", display_name(&m.provider_id), row.title),
+            label: format!("{} {}", display_name_of(m), row.title),
             used,
             state,
         }
@@ -220,7 +235,7 @@ pub fn resolve(setting: &str, data: &[UsageMetrics], now: DateTime<Utc>) -> Opti
         // placeholder's keys).
         if is_offline(m) && setting.starts_with(&format!("{}:", m.provider_id)) {
             return Some(Reading {
-                label: display_name(&m.provider_id),
+                label: display_name_of(m),
                 used: None,
                 state: State::Offline,
             });
