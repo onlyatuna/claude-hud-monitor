@@ -902,6 +902,9 @@ impl HUDWindow {
             }
             EventKind::Hide => {
                 hud_state_events.stop_snap_animation();
+                with_hud_later(|hud| {
+                    hud.cancel_snap_animation(true);
+                });
                 schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS)
             }
             // Python `mouseDoubleClickEvent` (left): refresh now
@@ -1848,8 +1851,8 @@ impl QObject for HudFilter {
             }
         }
         // the user takes the bar over: a running glide stops and the window stays where it is
-        if matches!(event.kind, EventKind::MouseButtonPress { .. }) {
-            hud.stop_snap_animation();
+        if matches!(event.kind, EventKind::MouseButtonPress { .. }) && hud.stop_snap_animation() {
+            hud.snap_timer.start();
         }
         if hud.resize.borrow().is_some() {
             let buttons_up = ferrokit_widgets::application::Application::mouse_buttons().is_empty();
