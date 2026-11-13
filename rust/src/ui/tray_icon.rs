@@ -769,6 +769,9 @@ impl HUDTrayIcon {
                 crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.locked = !cfg.locked;
                 });
+                if self.config.lock().locked {
+                    hud.cancel_snap_animation(true); // nothing is left half way
+                }
                 self.update_menu_state();
             }
             ACTION_OPACITY_100 => {

@@ -4,6 +4,7 @@ pub mod brand;
 #[cfg(all(test, windows))]
 mod button_hover_tests;
 pub mod dock_geometry;
+pub mod dock_preview;
 pub mod gauge;
 #[cfg(all(test, windows))]
 mod geometry_persist_tests;

@@ -246,6 +246,119 @@ pub fn offset_along_edge(rect: Rect, work: Rect, edge: &str) -> Option<i32> {
     })
 }
 
+/// What the sidebar does when a drag settles (Python `SnapPlan`): `rect` is `snap_rect_corner`'s
+/// rectangle (the free position when `edge` is None), `offset` the distance along the edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapPlan {
+    pub rect: Rect,
+    pub edge: Option<&'static str>,
+    pub offset: Option<Offset>,
+    pub orientation: &'static str,
+}
+
+/// Python `plan_sidebar_snap`: the snap decision of a finished sidebar drag (corner-aware: near a
+/// corner the bar keeps `current`).
+pub fn plan_sidebar_snap(
+    rect: Rect,
+    work: Rect,
+    threshold: i32,
+    current: &'static str,
+) -> SnapPlan {
+    let (rect, edge, offset) = snap_rect_corner(rect, work, threshold, Some(current));
+    SnapPlan {
+        rect,
+        edge,
+        offset,
+        orientation: orientation_for_edge(edge, current),
+    }
+}
+
+/// Python `DockTarget`: where a dragged sidebar would end up, with the plan that produced it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DockTarget {
+    pub rect: Rect,
+    pub plan: SnapPlan,
+}
+
+/// Python `sidebar_dock_target`: the rectangle the bar takes once `rect` (its current geometry)
+/// settles, or None when it would not dock to an edge. `size_for(orientation)` is the bar's
+/// preferred size in that orientation. Uses the same `plan_sidebar_snap` / `dock_to_edge` steps as
+/// the real docking, so a preview and the result cannot differ.
+pub fn sidebar_dock_target(
+    rect: Rect,
+    work: Rect,
+    threshold: i32,
+    current: &'static str,
+    mut size_for: impl FnMut(&'static str) -> (i32, i32),
+) -> Option<DockTarget> {
+    let plan = plan_sidebar_snap(rect, work, threshold, current);
+    let edge = plan.edge?;
+    let (width, height) = size_for(plan.orientation);
+    let rect = dock_to_edge(work, edge, width, height, plan.offset, DEFAULT_MARGIN)?;
+    Some(DockTarget { rect, plan })
+}
+
+/// Snap animation of the sidebar (shared with the Python HUD: keep the values identical).
+/// Duration of the glide from the released position onto the docked rectangle.
+pub const SNAP_ANIM_MS: u64 = 140;
+/// Frame timer interval (about 60 fps).
+pub const SNAP_ANIM_FRAME_MS: u64 = 16;
+
+/// Python `ease_out_cubic`: `1 - (1 - t)^3` with `t` held to [0, 1].
+pub fn ease_out_cubic(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Python `_round_half_up`: `floor(value + 0.5)`.
+fn round_half_up(value: f64) -> i32 {
+    (value + 0.5).floor() as i32
+}
+
+/// Python `interpolate_rect`: the rectangle `t` (0 = start, 1 = end) of the way from start to end,
+/// eased out; exactly `end` once `t >= 1`.
+pub fn interpolate_rect(start: Rect, end: Rect, t: f64) -> Rect {
+    if t >= 1.0 {
+        return end;
+    }
+    let e = ease_out_cubic(t);
+    let mix = |a: i32, b: i32| round_half_up(a as f64 + (b - a) as f64 * e);
+    (
+        mix(start.0, end.0),
+        mix(start.1, end.1),
+        mix(start.2, end.2),
+        mix(start.3, end.3),
+    )
+}
+
+/// Python `SnapAnimation`: the glide of the window from `start` onto `end` over `duration_ms`,
+/// driven by elapsed time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapAnimation {
+    pub start: Rect,
+    pub end: Rect,
+    pub duration_ms: u64,
+}
+
+impl SnapAnimation {
+    pub fn new(start: Rect, end: Rect) -> Self {
+        Self {
+            start,
+            end,
+            duration_ms: SNAP_ANIM_MS,
+        }
+    }
+
+    /// `(rect, done)` at `elapsed_ms` after the start; the last frame is exactly `end`.
+    pub fn frame(&self, elapsed_ms: f64) -> (Rect, bool) {
+        if elapsed_ms >= self.duration_ms as f64 {
+            return (self.end, true);
+        }
+        let t = elapsed_ms.max(0.0) / self.duration_ms as f64;
+        (interpolate_rect(self.start, self.end, t), false)
+    }
+}
+
 /// Python `clamp_scale`: NaN -> 1.0; clamp to [SCALE_MIN, SCALE_MAX]; round to 0.1.
 pub fn clamp_scale(scale: f64) -> f64 {
     if scale.is_nan() {
@@ -475,6 +588,121 @@ mod tests {
                 assert!(r.1 + r.3 <= wa.1 + wa.3);
             }
         }
+    }
+
+    #[test]
+    fn sidebar_dock_target_matches_the_real_docking_steps() {
+        let size_for = |orientation: &str| {
+            if orientation == "vertical" {
+                (92, 270)
+            } else {
+                (270, 92)
+            }
+        };
+        let t = DEFAULT_SNAP_THRESHOLD;
+
+        // near the left edge: stays vertical, offset along the edge is kept
+        let target = sidebar_dock_target((5, 100, 92, 270), WA, t, "vertical", size_for).unwrap();
+        assert_eq!(target.rect, (0, 100, 92, 270));
+        assert_eq!(
+            (
+                target.plan.edge,
+                target.plan.orientation,
+                target.plan.offset
+            ),
+            (Some("left"), "vertical", Some(Offset::Start(100)))
+        );
+
+        // near the top edge of a vertical bar: turns horizontal, the target has the horizontal size
+        let target = sidebar_dock_target((200, 4, 92, 270), WA, t, "vertical", size_for).unwrap();
+        assert_eq!(target.rect, (200, 0, 270, 92));
+        assert_eq!(target.plan.orientation, "horizontal");
+
+        // corner: the bar keeps its orientation and sticks to the corner
+        let corner = (1920 - 92 - 3, 1040 - 270 - 8, 92, 270);
+        let target = sidebar_dock_target(corner, WA, t, "vertical", size_for).unwrap();
+        assert_eq!(target.rect, (1920 - 92, 1040 - 270, 92, 270));
+        assert_eq!(
+            (target.plan.edge, target.plan.offset),
+            (Some("right"), Some(Offset::End))
+        );
+        let target = sidebar_dock_target(corner, WA, t, "horizontal", size_for).unwrap();
+        assert_eq!(target.rect, (1920 - 270, 1040 - 92, 270, 92));
+        assert_eq!(
+            (target.plan.edge, target.plan.orientation),
+            (Some("bottom"), "horizontal")
+        );
+
+        // outside the threshold nothing docks
+        assert!(sidebar_dock_target((500, 400, 92, 270), WA, t, "vertical", size_for).is_none());
+
+        // the size is only asked for the orientation the bar ends up in
+        let mut asked = Vec::new();
+        sidebar_dock_target((5, 100, 92, 270), WA, t, "vertical", |o| {
+            asked.push(o);
+            size_for(o)
+        });
+        assert_eq!(asked, ["vertical"]);
+
+        // second monitor with a negative origin
+        let left = (-1920, 0, 1920, 1080);
+        let target =
+            sidebar_dock_target((-1915, 300, 92, 270), left, t, "vertical", size_for).unwrap();
+        assert_eq!(target.rect, (-1920, 300, 92, 270));
+    }
+
+    #[test]
+    fn plan_sidebar_snap_is_snap_rect_corner_plus_orientation() {
+        for rect in [
+            (5, 100, 92, 270),
+            (200, 4, 92, 270),
+            (900, 500, 92, 270),
+            (1825, 760, 92, 270),
+        ] {
+            for current in ["vertical", "horizontal"] {
+                let (snapped, edge, offset) =
+                    snap_rect_corner(rect, WA, DEFAULT_SNAP_THRESHOLD, Some(current));
+                let plan = plan_sidebar_snap(rect, WA, DEFAULT_SNAP_THRESHOLD, current);
+                assert_eq!(
+                    (plan.rect, plan.edge, plan.offset, plan.orientation),
+                    (snapped, edge, offset, orientation_for_edge(edge, current))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn snap_animation_easing_and_interpolation() {
+        // the same vectors are pinned in the Python HUD (tests/test_dock_geometry.py)
+        assert_eq!((SNAP_ANIM_MS, SNAP_ANIM_FRAME_MS), (140, 16));
+        let eased: Vec<f64> = [-1.0, 0.0, 0.25, 0.5, 1.0, 2.0]
+            .iter()
+            .map(|t| ease_out_cubic(*t))
+            .collect();
+        assert_eq!(eased, [0.0, 0.0, 0.578125, 0.875, 1.0, 1.0]);
+        let (start, end) = ((0, 0, 100, 200), (100, 50, 300, 100));
+        assert_eq!(interpolate_rect(start, end, 0.0), start);
+        assert_eq!(interpolate_rect(start, end, 0.25), (58, 29, 216, 142));
+        assert_eq!(interpolate_rect(start, end, 0.5), (88, 44, 275, 113));
+        assert_eq!(interpolate_rect(start, end, 1.0), end);
+        assert_eq!(interpolate_rect(start, end, 1.5), end);
+        // negative coordinates (a monitor left of the primary) round the same way
+        assert_eq!(
+            interpolate_rect((-100, 0, 10, 10), (-200, 0, 10, 10), 0.5),
+            (-187, 0, 10, 10)
+        );
+    }
+
+    #[test]
+    fn snap_animation_frames() {
+        let anim = SnapAnimation::new((0, 0, 100, 200), (100, 50, 300, 100));
+        assert_eq!(anim.duration_ms, 140);
+        assert_eq!(anim.frame(-5.0), ((0, 0, 100, 200), false));
+        assert_eq!(anim.frame(0.0), ((0, 0, 100, 200), false));
+        assert_eq!(anim.frame(35.0), ((58, 29, 216, 142), false));
+        assert_eq!(anim.frame(70.0), ((88, 44, 275, 113), false));
+        assert_eq!(anim.frame(140.0), ((100, 50, 300, 100), true));
+        assert_eq!(anim.frame(999.0), ((100, 50, 300, 100), true));
     }
 
     #[test]
