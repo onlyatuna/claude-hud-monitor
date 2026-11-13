@@ -220,7 +220,7 @@ class SidebarTests(unittest.TestCase):
         self.assertFalse(self.sidebar._flyout.isVisible())
         self.assertTrue(all(c.isVisible() for c in self.cards.values()))
     def test_unpinned_leave_and_hover(self):
-        self.sidebar._hover('claude'); self.assertEqual(self.sidebar._hover_timer.interval(),300)
+        self.sidebar._hover('claude'); self.assertEqual(self.sidebar._hover_timer.interval(),200)
         self.sidebar._hover_timer.timeout.emit(); self.assertEqual(self.sidebar._active,'claude')
         with patch('ui.sidebar.QCursor.pos',return_value=QPoint(-1000,-1000)):
             self.sidebar._schedule_close(); self.assertEqual(self.sidebar._leave_timer.interval(),300)
