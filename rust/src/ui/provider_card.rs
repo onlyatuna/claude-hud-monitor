@@ -410,7 +410,13 @@ impl CardCore {
             cells.push((m2_title, self.m2_cell.clone()));
         }
         for row in self.extra_rows.borrow().iter().take(self.extra_count.get()) {
-            cells.push((label_text(&row.title), row.cell.clone()));
+            let t = label_text(&row.title);
+            if !t.is_empty() {
+                cells.push((t, row.cell.clone()));
+            }
+        }
+        if cells.len() <= 1 {
+            return Vec::new();
         }
         cells
             .into_iter()

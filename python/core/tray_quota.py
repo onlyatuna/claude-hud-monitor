@@ -119,7 +119,7 @@ def tooltip_line(reading: Reading, mode: str) -> str:
         return "Tray number: --"
     if reading.used is None:
         return f"{name}: --"
-    n = int(f"{reading.used:.0f}")
+    n = max(0, min(100, int(f"{reading.used:.0f}")))
     value = f"{100 - n}% left" if mode == REMAINING else f"{n}% used"
     return f"{name}: {value}" + (" (stale)" if reading.state in (STALE, OLD) else "")
 

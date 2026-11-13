@@ -1545,18 +1545,18 @@ impl HUDWindow {
     }
 
     pub fn set_claude_profile(&mut self, profile_id: &str) {
+        let (resolved, _) = crate::providers::claude::resolve_active_profile(profile_id);
+        let main_key = accounts::profile_key(&resolved.id);
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.claude_profile = profile_id.to_string();
-            let main_key = accounts::profile_key(profile_id);
             if !main_key.is_empty() && !main_key.eq_ignore_ascii_case("auto") {
-                let mut accts = accounts::accounts_of(cfg);
-                let before_len = accts.len();
-                accts.retain(|a| accounts::profile_key(&a.profile) != main_key);
-                if accts.len() != before_len {
-                    cfg.extra.insert(
-                        accounts::KEY_ACCOUNTS.to_owned(),
-                        serde_json::to_value(&accts).unwrap_or_default(),
-                    );
+                let clashing: Vec<String> = accounts::accounts_of(cfg)
+                    .into_iter()
+                    .filter(|a| accounts::profile_key(&a.profile) == main_key)
+                    .map(|a| a.id)
+                    .collect();
+                for id in clashing {
+                    accounts::remove_account(cfg, &id);
                 }
             }
         });

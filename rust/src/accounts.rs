@@ -25,7 +25,7 @@ const PROFILE_MAX: usize = 128;
 pub const KEY_ACCOUNTS: &str = "accounts";
 pub const KEY_SIDEBAR_TILES: &str = "sidebar_tiles";
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountSpec {
     pub id: String,
     pub profile: String,
