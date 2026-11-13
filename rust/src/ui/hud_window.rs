@@ -938,9 +938,9 @@ impl HUDWindow {
                 persist_rect(&debouncer_events, geom_now.get());
             }
             EventKind::Hide => {
-                hud_state_events.stop_snap_animation();
                 with_hud_later(|hud| {
                     hud.cancel_snap_animation(true);
+                    hud.hide_dock_preview();
                 });
                 schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS)
             }
@@ -1547,7 +1547,20 @@ impl HUDWindow {
     pub fn set_claude_profile(&mut self, profile_id: &str) {
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.claude_profile = profile_id.to_string();
+            let main_key = accounts::profile_key(profile_id);
+            if !main_key.is_empty() && !main_key.eq_ignore_ascii_case("auto") {
+                let mut accts = accounts::accounts_of(cfg);
+                let before_len = accts.len();
+                accts.retain(|a| accounts::profile_key(&a.profile) != main_key);
+                if accts.len() != before_len {
+                    cfg.extra.insert(
+                        accounts::KEY_ACCOUNTS.to_owned(),
+                        serde_json::to_value(&accts).unwrap_or_default(),
+                    );
+                }
+            }
         });
+        self.request_apply_accounts();
         self.trigger_refresh();
     }
 
@@ -1623,10 +1636,7 @@ impl HUDWindow {
         let gone: Vec<String> = self
             .accounts
             .iter()
-            .filter(|(id, old)| match wanted.get(*id) {
-                Some(w) => w.spec.profile != old.spec.profile || w.dir != old.dir,
-                None => true,
-            })
+            .filter(|(id, old)| wanted.get(*id) != Some(*old))
             .map(|(id, _)| id.clone())
             .collect();
         for id in &gone {
