@@ -4,6 +4,7 @@ Compact desktop tokens: 4 px rhythm, 12 px labels, native buttons, a visible
 2 px focus ring and paired AA text colours; hover is supplementary to keyboard
 and click activation. Motion honours the system accessibility preference.
 """
+from dataclasses import dataclass
 import math
 import re
 import sys
@@ -25,6 +26,20 @@ BASE_BUTTON_W, BASE_BUTTON_H = 64, 64
 BASE_PANEL_W = 220
 _NAMES = {'claude':'Claude', 'agy':'AGY', 'codex':'Codex'}
 DEFAULT_ORDER = ('claude', 'agy', 'codex')
+
+
+@dataclass(frozen=True)
+class TileSpec:
+    """One tile/card. `id` is the instance id (`claude`, `claude@claude-a`), `base` the provider whose colour it
+    wears, `label` the full name (tooltip), `text` what fits on the 64 px tile."""
+    id: str
+    base: str
+    label: str
+    text: str
+
+
+def base_spec(base):
+    return TileSpec(base, base, _NAMES[base], _NAMES[base])
 HOLD_MS = 350
 RAMP_STOPS = ((0, 'green'), (50, 'yellow'), (75, 'orange'), (90, 'red'))   # same bands as the status scale
 ALERT_PCT = 90          # a row at or above this used % marks the tile
@@ -74,7 +89,7 @@ class _Indicators(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(t['stale']))
             p.drawEllipse(QRectF(right-10*scale,0*scale,6*scale,6*scale))
-        if button.kind == 'agy':
+        if button.base == 'agy':
             count = len(button.dot_colors)
             for i, color in enumerate(button.dot_colors):
                 p.setPen(QPen(QColor(t['background']), scale))
@@ -83,9 +98,11 @@ class _Indicators(QWidget):
 
 
 class _Button(QPushButton):
-    def __init__(self, kind, owner):
+    def __init__(self, kind, owner, spec=None):
         super().__init__(owner)
         self.kind, self.owner = kind, owner
+        self.spec = spec
+        self.base = spec.base if spec else kind
         self.stale, self.offline = False, False
         self.alert = False
         self.flash = 0.0
@@ -102,8 +119,13 @@ class _Button(QPushButton):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setAccessibleName(_NAMES.get(kind, 'Toggle sidebar'))
+        self.setAccessibleName(spec.label if spec else 'Toggle sidebar')
         self.setToolTip(self.accessibleName())
+
+    def set_spec(self, spec):
+        self.spec, self.base = spec, spec.base
+        self.setAccessibleName(spec.label)
+        self.update()
 
     def event(self, event):
         # The flyout already shows the details; a native tooltip on top of it only flickers.
@@ -120,7 +142,7 @@ class _Button(QPushButton):
             super().keyPressEvent(event)
 
     def _begin_reorder(self):
-        if self._press_pos is None or self._dragged or self.kind not in _NAMES or self.owner.state() != 'strip':
+        if self._press_pos is None or self._dragged or self.spec is None or self.owner.state() != 'strip':
             return
         self._reordering = True
         self.setDown(False)
@@ -131,7 +153,7 @@ class _Button(QPushButton):
         if event.button() == Qt.LeftButton:
             self._press_pos = event.position().toPoint()
             self._dragged = False
-            if self.kind in _NAMES:
+            if self.spec is not None:
                 self._hold.start(HOLD_MS)
         super().mousePressEvent(event)
 
@@ -171,7 +193,7 @@ class _Button(QPushButton):
 
     def enterEvent(self, event):
         self.update()
-        if self.kind in _NAMES:
+        if self.spec is not None:
             self.owner._hover(self.kind)
         super().enterEvent(event)
 
@@ -188,20 +210,20 @@ class _Button(QPushButton):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(t['pressed'] if self.isDown() else t['hover'] if self.underMouse() else t['background']))
         p.drawRoundedRect(QRectF(self.rect()).adjusted(scale,scale,-scale,-scale), t['radius']*scale, t['radius']*scale)
-        if self.flash > 0 and self.kind in _NAMES:
-            glow = QColor(t['providers'][self.kind])
+        if self.flash > 0 and self.spec is not None:
+            glow = QColor(t['providers'][self.base])
             glow.setAlphaF(min(0.45, 0.45 * self.flash))
             p.setPen(Qt.NoPen)
             p.setBrush(glow)
             p.drawRoundedRect(QRectF(self.rect()).adjusted(scale,scale,-scale,-scale), t['radius']*scale, t['radius']*scale)
-        if self.kind in _NAMES:
+        if self.spec is not None:
             # identity stripe: the service colour, never a usage colour
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(t['muted'] if self.offline else t['providers'][self.kind]))
+            p.setBrush(QColor(t['muted'] if self.offline else t['providers'][self.base]))
             p.drawRoundedRect(QRectF(1.5*scale, 7*scale, 2.5*scale, self.height()-14*scale), 1.2*scale, 1.2*scale)
         if self.hasFocus():
             p.setBrush(Qt.NoBrush)
-            color = t['providers'].get(self.kind, t['focus'])
+            color = t['providers'].get(self.base, t['focus'])
             p.setPen(QPen(QColor(color), t['focus_width']*scale))
             p.drawRoundedRect(QRectF(self.rect()).adjusted(2*scale,2*scale,-2*scale,-2*scale), t['radius']*scale, t['radius']*scale)
         font = QFont(t['font'])
@@ -213,9 +235,9 @@ class _Button(QPushButton):
             return
         font.setBold(True)
         p.setFont(font)
-        p.setPen(QColor(t['muted'] if self.offline else t['providers'][self.kind]))
-        title_width = 30 if self.kind == 'agy' else 52
-        p.drawText(QRectF(6*scale, 2*scale, title_width*scale, 16*scale), Qt.AlignLeft | Qt.AlignVCenter, _NAMES[self.kind])
+        p.setPen(QColor(t['muted'] if self.offline else t['providers'][self.base]))
+        title_width = 30 if self.base == 'agy' else 52
+        p.drawText(QRectF(6*scale, 2*scale, title_width*scale, 16*scale), Qt.AlignLeft | Qt.AlignVCenter, self.spec.text)
         theme = THEMES['dark' if self.owner.dark else 'light']
         for index, (label, value, color) in enumerate(self.rows):
             y = (19 + index*21)*scale
@@ -309,7 +331,7 @@ class SidebarWidget(QWidget):
     dragRequested = Signal()
     orderChanged = Signal(list)   # provider ids in their new order (press-hold a tile, then drag)
 
-    def __init__(self, cards: dict, parent=None):
+    def __init__(self, cards: dict, parent=None, specs=None):
         super().__init__(parent)
         self.cards = dict(cards)
         self._state, self._orientation, self._scale = 'strip', 'vertical', 1.0
@@ -320,7 +342,8 @@ class SidebarWidget(QWidget):
         self._pinned_key = None
         self._row_state = {}
         self._wheel_remainder = 0
-        self._order = list(DEFAULT_ORDER)
+        self._order = []       # visible tile ids, in order
+        self._specs = {}
         self._card_styles = {}
         self._hover_timer = QTimer(self)
         self._hover_timer.setSingleShot(True)
@@ -337,11 +360,10 @@ class SidebarWidget(QWidget):
         self._strip_layout.setContentsMargins(0,0,0,0)
         self._strip_layout.setSpacing(0)
         self.buttons = {}
-        for key in DEFAULT_ORDER:
-            button = _Button(key, self)
-            self.buttons[key] = button
-            self._strip_layout.addWidget(button)
-            button.clicked.connect(lambda checked=False, k=key: self._click_provider(k))
+        for spec in (specs if specs is not None else [base_spec(k) for k in DEFAULT_ORDER if k in cards]):
+            self._make_tile(spec)
+            self._order.append(spec.id)
+        self._reflow_strip()
         self._layout.addWidget(self._strip)
         self._panel = QWidget(self)
         self._panel_layout = QBoxLayout(QBoxLayout.TopToBottom, self._panel)
@@ -351,10 +373,7 @@ class SidebarWidget(QWidget):
         self._storage = QWidget(self)
         self._storage.hide()
         for card in self.cards.values():
-            card.setParent(self._storage)
-            card.hide()
-            card.setMinimumWidth(0)
-            card.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            self._adopt_card(card)
         self._flyout = _Flyout(self)
         self._flyout_layout = QVBoxLayout(self._flyout)
         self._flyout_layout.setContentsMargins(8,8,8,8)
@@ -400,6 +419,8 @@ class SidebarWidget(QWidget):
                     widget.setParent(self._storage)
                     widget.hide()
                 else:
+                    widget.hide()
+                    widget.setParent(None)
                     widget.deleteLater()
         self._relayout()
 
@@ -407,23 +428,106 @@ class SidebarWidget(QWidget):
         return list(self._order)
 
     def set_order(self, order):
-        order = [k for k in order if k in DEFAULT_ORDER]
-        if sorted(order) != sorted(DEFAULT_ORDER):
+        seen = []
+        for key in order:
+            if key in self.buttons and key not in seen:
+                seen.append(key)
+        if not seen:
             raise ValueError(order)
-        if order == self._order:
+        if seen == self._order:
             return
-        self._order = order
+        self._order = seen
         self._apply_order()
 
-    def _apply_order(self):
+    def _reflow_strip(self):
+        """Strip layout = the visible tiles in order; the others are hidden, not destroyed."""
         for button in self.buttons.values():
             self._strip_layout.removeWidget(button)
+        for key, button in self.buttons.items():
+            if key not in self._order:
+                button.hide()
         for key in self._order:
             self._strip_layout.addWidget(self.buttons[key])
+            self.buttons[key].show()
         self._strip_layout.activate()
+
+    def _apply_order(self):
+        self._reflow_strip()
         if self._state == 'panel':
             self.set_state('strip')
             self.set_state('panel')
+
+    def _adopt_card(self, card):
+        card.setParent(self._storage)
+        card.hide()
+        card.setMinimumWidth(0)
+        card.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+
+    def _make_tile(self, spec):
+        button = _Button(spec.id, self, spec)
+        self.buttons[spec.id] = button
+        self._specs[spec.id] = spec
+        button.clicked.connect(lambda checked=False, k=spec.id: self._click_provider(k))
+        return button
+
+    def _remove_tile(self, key):
+        """Take a tile and its card out of every layout and release them (never from inside the tile's own signal)."""
+        button = self.buttons.pop(key)
+        self._specs.pop(key, None)
+        button._hold.stop()
+        self._strip_layout.removeWidget(button)
+        button.hide()
+        button.setParent(None)
+        button.deleteLater()
+        card = self.cards.pop(key, None)
+        if card is not None:
+            self._restore_card_style(card)
+            card.hide()
+            card.setParent(None)
+            card.deleteLater()
+        self._metrics.pop(key, None)
+        self._row_state.pop(key, None)
+        if key in self._order:
+            self._order.remove(key)
+
+    def set_tiles(self, specs, cards, visible):
+        """Make the tile set match `specs` (every instance, with its card in `cards`) and show `visible` (ids in order).
+        Tiles that are not visible stay alive (they keep receiving data); tiles that are gone are released."""
+        wanted = {spec.id for spec in specs}
+        # A stable id can point at a different account profile. Replace its whole
+        # presentation so no old quota, hover or pinned flyout survives the swap.
+        gone = [key for key in self.buttons if key not in wanted or self.cards[key] is not cards[key]]
+        if self._active in gone or self._pinned_key in gone:
+            self.close_flyout()
+        if self._hover_id in gone:
+            self._hover_timer.stop()
+            self._hover_id = None
+        was_panel = self._state == 'panel'
+        if was_panel:
+            self.set_state('strip')        # cards back to storage, dividers released
+        for key in gone:
+            self._remove_tile(key)
+        for spec in specs:
+            button = self.buttons.get(spec.id)
+            if button is not None:
+                button.set_spec(spec)
+                continue
+            card = cards[spec.id]
+            self.cards[spec.id] = card
+            self._adopt_card(card)
+            button = self._make_tile(spec)
+            for widget in [button, *button.findChildren(QWidget), card, *card.findChildren(QWidget)]:
+                widget.installEventFilter(self)
+        order = []
+        for key in visible:
+            if key in self.buttons and key not in order:
+                order.append(key)
+        self._order = order
+        self._reflow_strip()
+        if was_panel:
+            self.set_state('panel')
+        self._relayout()
+        self.update_countdown()
 
     def _start_reorder(self, key):
         self.close_flyout()
@@ -442,11 +546,7 @@ class SidebarWidget(QWidget):
         new_order = others[:index] + [key] + others[index:]
         if new_order != self._order:
             self._order = new_order
-            for button in self.buttons.values():
-                self._strip_layout.removeWidget(button)
-            for k in self._order:
-                self._strip_layout.addWidget(self.buttons[k])
-            self._strip_layout.activate()
+            self._reflow_strip()
 
     def _finish_reorder(self):
         self.orderChanged.emit(list(self._order))
@@ -531,8 +631,8 @@ class SidebarWidget(QWidget):
             button.update()
         panel_sheet = get_cards_stylesheet(dark=self.dark)
         self._panel.setStyleSheet(re.sub(r'([\d.]+)px', lambda m: f'{float(m[1])*s:g}px', panel_sheet))
-        for card in self.cards.values():
-            if self._state == 'panel':
+        for key, card in self.cards.items():
+            if self._state == 'panel' and key in self._order:
                 # side by side, cards keep their natural height instead of stretching to the tallest one
                 self._panel_layout.setAlignment(card, Qt.AlignTop if not vertical else Qt.Alignment())
                 self._scale_card_style(card)
@@ -609,7 +709,7 @@ class SidebarWidget(QWidget):
         if button.offline:
             button.display = ['OFF', '--']
         button.dot_colors = ([self._color(row.val, force_scale=True) for row in data.extra_metrics]
-                             if button.kind == 'agy' else [])
+                             if button.base == 'agy' else [])
         button.alert = (not button.offline) and any(
             val is not None and val >= ALERT_PCT for _t, val, _r in self._row_values(data))
         button.indicators.update()
@@ -650,7 +750,7 @@ class SidebarWidget(QWidget):
 
     def _refresh_tooltip(self, key):
         button, data = self.buttons[key], self._metrics[key]
-        lines = [_NAMES[key]]
+        lines = [button.spec.label]
         rows = [(data.metric1_title, data.metric1_val, data.metric1_reset),
                 (data.metric2_title, data.metric2_val, data.metric2_reset)]
         rows += [(row.title, row.val, row.reset) for row in data.extra_metrics]
@@ -678,15 +778,33 @@ class SidebarWidget(QWidget):
         vertical = self._orientation == 'vertical'
         if self._state == 'strip':
             if vertical:
-                return QSize(round(BASE_BUTTON_W*s)+pad, round(22*s)+3*round(BASE_BUTTON_H*s)+pad)
-            return QSize(3*round(BASE_BUTTON_W*s)+round(22*s)+pad,round(BASE_BUTTON_H*s)+pad)
+                return QSize(round(BASE_BUTTON_W*s)+pad, round(22*s)+len(self._order)*round(BASE_BUTTON_H*s)+pad)
+            return QSize(len(self._order)*round(BASE_BUTTON_W*s)+round(22*s)+pad,round(BASE_BUTTON_H*s)+pad)
         self._panel_layout.activate()
         height = self._panel_layout.sizeHint().height()
         if vertical:
             return QSize(round(BASE_PANEL_W*s),round(22*s)+height+pad)
-        count = len(self.cards)
+        count = len(self._order)
         panel_width = count*round(BASE_PANEL_W*s) + max(0,count-1)*(2*round(4*s)+max(1,round(s)))
         return QSize(round(22*s)+panel_width+pad,max(round(22*s),height)+pad)
+
+    def preferred_size_for(self, orientation):
+        """preferred_size() the bar would have in `orientation`, without changing it (the panel's size needs its
+        cards laid out that way, so it is measured by laying them out and restoring the current layout)."""
+        if orientation not in ('vertical', 'horizontal'):
+            raise ValueError(orientation)
+        if orientation == self._orientation:
+            return self.preferred_size()
+        current = self._orientation
+        self._orientation = orientation
+        try:
+            if self._state == 'panel':
+                self._relayout()
+            return self.preferred_size()
+        finally:
+            self._orientation = current
+            if self._state == 'panel':
+                self._relayout()
 
     def _hover(self, key):
         self._leave_timer.stop()

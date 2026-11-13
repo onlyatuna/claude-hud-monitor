@@ -1,6 +1,7 @@
 """Per-provider scheduling. All mutable state belongs to the Qt UI thread."""
 import logging
 import math
+import random
 import threading
 import time
 import queue
@@ -20,16 +21,22 @@ class ProviderState:
     cached: object = None
 
 
+AUTH_ERROR = "auth"   # 401/403, missing or expired credentials: shown as OFF, never as amber STALE
+
+
 class RefreshController(QObject):
     updated = Signal(object)
     busy_changed = Signal(bool)
 
-    def __init__(self, providers, interval=60, parent=None, clock=time.monotonic):
+    def __init__(self, providers, interval=60, parent=None, clock=time.monotonic, jitter=0.0, rand=random.uniform):
         super().__init__(parent)
         self.providers = providers
         self.interval = max(20, interval)
         self.clock = clock
+        self.jitter, self._rand = jitter, rand   # +-fraction applied to every schedule; 0 = exact (tests)
         self.states = {pid: ProviderState() for pid in providers}
+        self._floor = 0          # first generation of an instance added later: above every removed one
+        self._born = {}          # id -> first generation of the current incarnation; older results are dropped
         self.closed = False
         self._results = queue.SimpleQueue()
         self.result_timer = QTimer(self)
@@ -44,11 +51,35 @@ class RefreshController(QObject):
         self.timer.start()
         self.poll()
 
+    def _delay(self, seconds):
+        """`seconds` spread by +-jitter so instances never poll in lockstep; never below the 20 s minimum."""
+        if not self.jitter:
+            return seconds
+        return max(20, seconds * (1 + self._rand(-self.jitter, self.jitter)))
+
     def set_interval(self, seconds):
         self.interval = max(20, seconds)
         for state in self.states.values():
             if not state.failures:
-                state.due = self.clock() + self.interval
+                state.due = self.clock() + self._delay(self.interval)
+
+    def add_provider(self, pid, provider):
+        """Register an instance and fetch it at once. The state exists before the first launch."""
+        self.providers[pid] = provider
+        self.states[pid] = ProviderState(generation=self._floor)
+        self._born[pid] = self._floor
+        if not self.closed:
+            self._launch(pid)
+
+    def remove_provider(self, pid):
+        """Forget an instance; a worker still running for it finishes and its result is dropped."""
+        state = self.states.pop(pid, None)
+        self.providers.pop(pid, None)
+        self._born.pop(pid, None)
+        if state is None:
+            return
+        self._floor = max(self._floor, state.generation + 1)
+        self.busy_changed.emit(any(s.running for s in self.states.values()))
 
     def poll(self):
         if self.closed:
@@ -99,7 +130,9 @@ class RefreshController(QObject):
     def _complete(self, pid, generation, result):
         if self.closed:
             return
-        state = self.states[pid]
+        state = self.states.get(pid)
+        if state is None or generation < self._born.get(pid, 0):
+            return   # a removed instance (or an earlier incarnation of a re-added id): drop the result
         state.running = False
         if generation != state.generation or state.pending:
             self._launch(pid)
@@ -109,17 +142,23 @@ class RefreshController(QObject):
             state.failures += 1
             delay = min(900, self.interval * 2 ** min(state.failures - 1, 4))
             retry_after = result.retry_after
-            if (isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool)
-                    and math.isfinite(retry_after) and retry_after >= 0):
+            valid_retry_after = (isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool)
+                                 and math.isfinite(retry_after) and retry_after >= 0)
+            if valid_retry_after:
+                delay = min(86400, max(delay, retry_after))
+            delay = self._delay(delay)
+            if valid_retry_after:
                 delay = min(86400, max(delay, retry_after))
             logging.getLogger(__name__).warning("provider=%s error=%s retry_seconds=%.1f", pid, result.error_code or "unknown", delay)
             state.due = now + delay
-            if state.cached is not None:
+            if result.error_code == AUTH_ERROR:
+                state.cached = None     # terminal: the old values are no longer this account's truth, show OFF
+            elif state.cached is not None:
                 result = replace(state.cached, error=result.error, error_code=result.error_code,
                                  retry_after=result.retry_after, stale=True)
         else:
             state.failures = 0
-            state.due = now + self.interval
+            state.due = now + self._delay(self.interval)
             result = replace(result, last_success=datetime.now(timezone.utc), stale=False)
             state.cached = result
         self.updated.emit(result)

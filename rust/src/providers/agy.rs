@@ -5,6 +5,7 @@
 // status line hook writes (`agy_statusline`). There is no CLI fallback.
 
 use super::base::{MetricRow, Provider, UsageMetrics, now_str, percent_text, percentage};
+use crate::agy_rows::AGY_ROW_TITLES;
 use crate::agy_statusline::{self, QuotaCache};
 use chrono::{DateTime, Utc};
 use log::{debug, info};
@@ -307,6 +308,7 @@ impl AgyProvider {
                 row.subtext = String::new();
             }
         }
+        push_cache_rows(cache, &mut rows);
 
         if result.metric1_val.is_none()
             && let Some(bucket) = buckets.get("gemini-5h")
@@ -400,6 +402,142 @@ fn empty_rows() -> Vec<MetricRow> {
         MetricRow::new("C/G 7D", None, "--"),
         argon,
     ]
+}
+
+const KNOWN_CACHE_KEYS: [&str; 5] = [
+    "3p-5h",
+    "3p-weekly",
+    "gemini-5h",
+    "gemini-weekly",
+    "gemini-argon-wtu-weekly",
+];
+
+/// The row title of a quota bucket key: `gemini-argon-wtu-weekly` is `ARGON 7D`. Lower-case, split
+/// on `-`, drop a leading `gemini` and every `wtu`; with two or more tokens left a trailing
+/// `weekly`/`week`/`7d` is `7D` and `5h` is `5H`; any other trailing token stays in the name.
+/// A key that leaves fewer than two tokens is its upper-cased self with `-` as spaces.
+fn title_from_key(key: &str) -> Option<String> {
+    let lower = key.trim().to_lowercase();
+    let mut tokens: Vec<&str> = lower.split('-').filter(|t| !t.is_empty()).collect();
+    if tokens.first() == Some(&"gemini") {
+        tokens.remove(0);
+    }
+    tokens.retain(|t| *t != "wtu");
+    if tokens.len() < 2 {
+        let spaced = lower
+            .to_uppercase()
+            .replace('-', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        return (!spaced.is_empty()).then_some(spaced);
+    }
+    let window = match tokens[tokens.len() - 1] {
+        "weekly" | "week" | "7d" => Some("7D"),
+        "5h" => Some("5H"),
+        _ => None,
+    };
+    if window.is_some() {
+        tokens.pop();
+    }
+    let mut title = tokens.join(" ").to_uppercase();
+    if let Some(window) = window {
+        title.push(' ');
+        title.push_str(window);
+    }
+    Some(title)
+}
+
+/// A row for a bucket the HUD has no fixed row for. Its key is `agy:<slug of the title>`; a title
+/// with nothing to slug falls back to `identity` (the bucket's own key), never to a bare `agy:`.
+fn dynamic_row(
+    title: String,
+    identity: &str,
+    used: f64,
+    reset: Option<DateTime<Utc>>,
+) -> MetricRow {
+    let slug = super::claude::slug(&title);
+    let key = if slug.is_empty() {
+        format!("agy:{}", identity.trim())
+    } else {
+        format!("agy:{slug}")
+    };
+    MetricRow {
+        text: percent_text(Some(used)),
+        val: Some(used),
+        reset,
+        subtext: String::new(),
+        key,
+        title,
+    }
+}
+
+/// Whether `row` repeats a fixed row, or the title or key of a row in `rows`.
+fn is_taken(rows: &[MetricRow], row: &MetricRow) -> bool {
+    let upper = row.title.to_uppercase();
+    AGY_ROW_TITLES.contains(&upper.as_str())
+        || rows
+            .iter()
+            .any(|r| r.key == row.key || r.title.to_uppercase() == upper)
+}
+
+/// Rows of the buckets of a summary group the HUD does not know: one per bucket with a valid
+/// fraction, titled by the bucket's display name (else derived from its id). A title that is
+/// already taken is tried once more behind the group's name. Malformed buckets are skipped.
+fn push_group_rows(group_name: &str, group: &Value, rows: &mut Vec<MetricRow>) {
+    let Some(Value::Array(buckets)) = group.get("buckets") else {
+        return;
+    };
+    let group_name = group_name.trim().to_uppercase();
+    for bucket in buckets {
+        if !bucket.is_object() {
+            continue;
+        }
+        let Some(remaining) = remaining_fraction(bucket) else {
+            continue;
+        };
+        let used = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
+        let id = text_of(bucket, &["id", "bucketId"]).unwrap_or_default();
+        let title = bucket
+            .get("displayName")
+            .and_then(Value::as_str)
+            .map(|s| s.trim().to_uppercase())
+            .filter(|s| !s.is_empty())
+            .or_else(|| title_from_key(&id))
+            .unwrap_or_else(|| group_name.clone());
+        if title.is_empty() {
+            continue;
+        }
+        let identity = if id.is_empty() { title.as_str() } else { &id };
+        let mut row = dynamic_row(title.clone(), identity, used, reset_time(bucket));
+        if is_taken(rows, &row) && !group_name.is_empty() {
+            row = dynamic_row(format!("{group_name} {title}"), identity, used, row.reset);
+        }
+        if !is_taken(rows, &row) {
+            rows.push(row);
+        }
+    }
+}
+
+/// Rows of the cache buckets the HUD has no fixed row for, sorted by bucket key. A bucket whose
+/// title or key is already a row is skipped.
+fn push_cache_rows(cache: &QuotaCache, rows: &mut Vec<MetricRow>) {
+    let mut unknown: Vec<_> = cache
+        .buckets
+        .iter()
+        .filter(|(key, _)| !KNOWN_CACHE_KEYS.contains(&key.as_str()))
+        .collect();
+    unknown.sort_by(|a, b| a.0.cmp(b.0));
+    for (key, bucket) in unknown {
+        let Some(title) = title_from_key(key) else {
+            continue;
+        };
+        let used = ((1.0 - bucket.remaining_fraction) * 100.0).clamp(0.0, 100.0);
+        let row = dynamic_row(title, key, used, bucket.reset_time);
+        if !is_taken(rows, &row) {
+            rows.push(row);
+        }
+    }
 }
 
 /// Python `_failure`.
@@ -642,6 +780,9 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
             }
         } else {
             info!("[AgyProvider] unknown quota group: {name}");
+            if !lower.contains("argon") {
+                push_group_rows(&name, group, &mut rows);
+            }
         }
     }
 
@@ -1010,6 +1151,103 @@ mod tests {
         near(r.metric2_val, 25.0);
         assert_eq!(r.metric2_subtext, "");
         assert_eq!(r.metric2_reset, Some(iso("2026-10-23T12:00:00+00:00")));
+    }
+
+    fn titles_and_keys(rows: &[MetricRow]) -> Vec<(&str, &str)> {
+        rows.iter()
+            .map(|r| (r.title.as_str(), r.key.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn an_unknown_cache_bucket_becomes_a_row_after_the_fixed_ones() {
+        let mut cache = full_cache();
+        let reset = Some(Utc::now() + chrono::Duration::days(7));
+        for (key, fraction) in [
+            ("gemini-carbon-wtu-weekly", 0.6),
+            ("!!!", 0.5),
+            ("gemini-flash", 0.5),
+        ] {
+            cache.buckets.insert(
+                key.to_owned(),
+                CacheBucket {
+                    remaining_fraction: fraction,
+                    reset_time: reset,
+                },
+            );
+        }
+        let (p, _) = provider(
+            vec![ok(SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)],
+            Some("token"),
+            Some(cache),
+        );
+        let r = p.fetch_usage();
+        assert_eq!(
+            titles_and_keys(&r.extra_metrics),
+            [
+                ("C/G 5H", "C/G 5H"),
+                ("C/G 7D", "C/G 7D"),
+                ("ARGON 7D", "ARGON 7D"),
+                // sorted by bucket key: "!!!" < "gemini-carbon..." < "gemini-flash"
+                ("!!!", "agy:!!!"),
+                ("CARBON 7D", "agy:carbon-7d"),
+                ("GEMINI FLASH", "agy:gemini-flash"),
+            ]
+        );
+        let carbon = &r.extra_metrics[4];
+        near(carbon.val, 40.0);
+        assert_eq!(carbon.reset, reset);
+        // The fixed rows and the badge did not move.
+        assert_eq!(r.metric1_title, "GEMINI 5H");
+        assert!(r.badge2_text.starts_with("Argon 剩餘"));
+    }
+
+    #[test]
+    fn unknown_summary_group_buckets_are_rows_and_per_model_buckets_are_not() {
+        let summary = r#"{"groups":[
+            {"name":"Claude and GPT models","buckets":[
+                {"bucketId":"3p-weekly","remainingFraction":0.8449}]},
+            {"displayName":"Carbon models","buckets":[
+                {"bucketId":"carbon-weekly","displayName":"Weekly Limit Remaining","remainingFraction":0.25},
+                {"bucketId":"carbon-5h","displayName":"Five Hour Limit Remaining","remainingFraction":null},
+                "junk"]},
+            {"displayName":"Zeta models","buckets":[
+                {"bucketId":"zeta-weekly","displayName":"Weekly Limit Remaining","remainingFraction":0.5},
+                {"bucketId":"zeta-5h","remainingFraction":0.9}]}]}"#;
+        let (p, _) = provider(vec![ok(summary), ok(QUOTA_FIXTURE)], Some("token"), None);
+        let r = p.fetch_usage();
+        assert_eq!(r.error, None);
+        assert_eq!(
+            titles_and_keys(&r.extra_metrics),
+            [
+                ("C/G 5H", "C/G 5H"),
+                ("C/G 7D", "C/G 7D"),
+                ("ARGON 7D", "ARGON 7D"),
+                ("WEEKLY LIMIT REMAINING", "agy:weekly-limit-remaining"),
+                (
+                    "ZETA MODELS WEEKLY LIMIT REMAINING",
+                    "agy:zeta-models-weekly-limit-remaining"
+                ),
+                ("ZETA 5H", "agy:zeta-5h"),
+            ]
+        );
+        near(r.extra_metrics[3].val, 75.0);
+    }
+
+    #[test]
+    fn bucket_titles_come_from_the_key_and_never_fail() {
+        for (key, title) in [
+            ("gemini-carbon-wtu-weekly", "CARBON 7D"),
+            ("gemini-argon-wtu-weekly", "ARGON 7D"),
+            ("carbon-5h", "CARBON 5H"),
+            ("sky-monthly", "SKY MONTHLY"),
+            ("carbon", "CARBON"),
+            ("a_b", "A_B"),
+            ("gemini-wtu", "GEMINI WTU"),
+        ] {
+            assert_eq!(title_from_key(key).as_deref(), Some(title), "{key}");
+        }
+        assert_eq!(title_from_key("  "), None);
     }
 
     #[test]

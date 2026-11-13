@@ -48,7 +48,8 @@ class CodexProvider(BaseProvider):
                 provider_name="OpenAI Codex",
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error="未找到 Codex 授權檔 (~/.codex/auth.json)\n請執行 codex 登入"
+                error="未找到 Codex 授權檔 (~/.codex/auth.json)\n請執行 codex 登入",
+                error_code="auth"
             )
 
         tokens = auth_data.get("tokens") or {}
@@ -60,7 +61,8 @@ class CodexProvider(BaseProvider):
                 provider_name="OpenAI Codex",
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error="未找到 access_token\n請於終端機執行 codex 登入"
+                error="未找到 access_token\n請於終端機執行 codex 登入",
+                error_code="auth"
             )
 
         headers = {
@@ -78,8 +80,8 @@ class CodexProvider(BaseProvider):
                 return self._parse_response(raw_json, now_str)
         except urllib.error.HTTPError as e:
             logger.warning(f"[CodexProvider] HTTP error: {e.code}")
-            code = "auth" if e.code == 401 else ("rate_limit" if e.code == 429 else "http")
-            message = "登入憑證已失效，請使用原 CLI 重新登入" if e.code == 401 else f"配額查詢 HTTP {e.code}"
+            code = "auth" if e.code in (401, 403) else ("rate_limit" if e.code == 429 else "http")
+            message = "登入憑證已失效，請使用原 CLI 重新登入" if code == "auth" else f"配額查詢 HTTP {e.code}"
             return UsageMetrics(provider_name="OpenAI Codex", provider_id=self.provider_id,
                                 last_updated_time=now_str, error=message, error_code=code,
                                 retry_after=retry_delay(e.headers.get("Retry-After")) if e.headers else None)
@@ -95,18 +97,14 @@ class CodexProvider(BaseProvider):
     def _parse_response(self, data: dict, now_str: str) -> UsageMetrics:
         # OpenAI WHAM usage schema
         rl = data.get("rate_limit") or {}
-        primary = rl.get("primary_window") or {}
-        secondary = rl.get("secondary_window") or {}
+        # Windows are identified by their length, so a plan with a single window (e.g. one 30-day window and a
+        # null secondary_window) fills the first row and leaves the second one empty instead of faking it.
+        windows = [w for w in (rl.get("primary_window"), rl.get("secondary_window")) if isinstance(w, dict) and w]
+        windows += [{}] * (2 - len(windows))
+        first, second = windows[0], windows[1]
 
-        # 5-hour rolling usage percent
-        s_used_pct = percentage(primary.get("used_percent"))
-        s_reset_ts = primary.get("reset_at")
-        s_reset_dt = _parse_timestamp(s_reset_ts)
-
-        # Weekly 7-day rolling usage percent
-        w_used_pct = percentage(secondary.get("used_percent"))
-        w_reset_ts = secondary.get("reset_at")
-        w_reset_dt = _parse_timestamp(w_reset_ts)
+        first_pct = percentage(first.get("used_percent"))
+        second_pct = percentage(second.get("used_percent"))
 
         # Quota responses do not establish which model is currently running.
         plan = data.get("plan_type")
@@ -115,18 +113,18 @@ class CodexProvider(BaseProvider):
         return UsageMetrics(
             provider_name="OpenAI Codex",
             provider_id=self.provider_id,
-            metric1_title=self._window_title(primary, "PRIMARY"),
-            metric1_val=s_used_pct,
-            metric1_text=percent_text(s_used_pct),
-            metric1_reset=s_reset_dt,
-            metric2_title=self._window_title(secondary, "SECONDARY"),
-            metric2_val=w_used_pct,
-            metric2_text=percent_text(w_used_pct),
-            metric2_reset=w_reset_dt,
+            metric1_title=self._window_title(first, "PRIMARY"),
+            metric1_val=first_pct,
+            metric1_text=percent_text(first_pct),
+            metric1_reset=_parse_timestamp(first.get("reset_at")),
+            metric2_title=self._window_title(second, "SECONDARY" if second else ""),
+            metric2_val=second_pct,
+            metric2_text=percent_text(second_pct),
+            metric2_reset=_parse_timestamp(second.get("reset_at")),
             badge1_text=plan_badge,
             badge2_text="",
             last_updated_time=now_str,
-            error="未取得有效配額資料" if s_used_pct is None and w_used_pct is None else None
+            error="未取得有效配額資料" if first_pct is None and second_pct is None else None
         )
 
     @staticmethod

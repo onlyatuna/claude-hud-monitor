@@ -86,5 +86,33 @@ class GenericOrderTests(unittest.TestCase):
         self.assertEqual(arrange_by_order(data, ['unknown']).metric1_title, 'SESSION 5H')
 
 
+class DynamicRowTests(unittest.TestCase):
+    @staticmethod
+    def with_carbon():
+        data = agy_metrics()
+        data.extra_metrics.append(MetricRow('CARBON 7D', 40, '40%', None, '', 'agy:carbon-7d'))
+        return data
+
+    def test_dynamic_row_comes_after_the_fixed_ones_by_default(self):
+        result = arrange_agy(self.with_carbon(), None)
+        self.assertEqual([r.title for r in result.extra_metrics], ['GEMINI 5H', 'GEMINI 7D', 'C/G 7D', 'CARBON 7D'])
+        self.assertEqual(result.extra_metrics[-1].key, 'agy:carbon-7d')
+
+    def test_saved_order_keeps_a_dynamic_title_only_while_the_data_has_it(self):
+        saved = ['CARBON 7D', 'GEMINI 7D', 'C/G 7D', 'ARGON 7D', 'C/G 5H', 'GEMINI 5H']
+        self.assertEqual(normalize_order(saved, ['CARBON 7D']), tuple(saved))
+        self.assertEqual(normalize_order(saved), tuple(saved[1:]))
+        moved = arrange_agy(self.with_carbon(), saved)  # a dynamic row can be one of the main pair and keeps its key
+        self.assertEqual((moved.metric1_title, moved.metric1_key), ('CARBON 7D', 'agy:carbon-7d'))
+        self.assertEqual(moved.metric2_title, 'GEMINI 7D')
+
+    def test_tray_selection_of_a_vanished_dynamic_row_is_unavailable(self):
+        from core import tray_quota
+        live = tray_quota.select('agy:carbon-7d', tray_quota.readings({'agy': self.with_carbon()}, ['agy']))
+        self.assertEqual((live.title, live.used, live.state), ('CARBON 7D', 40, tray_quota.OK))
+        gone = tray_quota.select('agy:carbon-7d', tray_quota.readings({'agy': agy_metrics()}, ['agy']))
+        self.assertEqual(gone.state, tray_quota.UNAVAILABLE)
+
+
 if __name__ == '__main__':
     unittest.main()

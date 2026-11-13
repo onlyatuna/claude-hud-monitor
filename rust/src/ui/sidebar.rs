@@ -68,8 +68,8 @@ pub fn tokens(dark: bool) -> Tokens {
             spacing: 4,
             radius: 6,
             focus_width: 2,
-            hover_ms: 300,
-            leave_ms: 600,
+            hover_ms: 200,
+            leave_ms: 300,
             animation_ms: 160,
         }
     } else {
@@ -88,8 +88,8 @@ pub fn tokens(dark: bool) -> Tokens {
             spacing: 4,
             radius: 6,
             focus_width: 2,
-            hover_ms: 300,
-            leave_ms: 600,
+            hover_ms: 200,
+            leave_ms: 300,
             animation_ms: 160,
         }
     }
@@ -119,6 +119,29 @@ pub const SCALE_MAX: f64 = 2.0;
 /// Python `_NAMES.get(kind)`.
 pub fn name_of(kind: &str) -> Option<&'static str> {
     NAMES.iter().find(|(k, _)| *k == kind).map(|(_, n)| *n)
+}
+
+/// One sidebar tile. `id` keys everything (`claude`, `claude@work`, ...); `base` is the built-in
+/// provider that gives the tile its colour and shape (`claude`, `agy`, `codex`); `text` is the
+/// short title painted on the strip tile; `name` is the full name (tooltip, accessible name).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TileSpec {
+    pub id: String,
+    pub base: String,
+    pub text: String,
+    pub name: String,
+}
+
+impl TileSpec {
+    /// A built-in tile (`claude`, `agy`, `codex`) with its fixed name.
+    pub fn builtin(id: &str) -> Option<TileSpec> {
+        name_of(id).map(|name| TileSpec {
+            id: id.to_owned(),
+            base: id.to_owned(),
+            text: name.to_owned(),
+            name: name.to_owned(),
+        })
+    }
 }
 
 /// Python `_row_label`: short row tag. 5H / 7D for single-group providers, a two-letter group
@@ -308,11 +331,11 @@ pub fn refresh_tile(key: &str, data: &UsageMetrics, dark: bool, scheme: Scheme) 
 }
 
 /// Python `_refresh_tooltip`: the text of a tile's tooltip (and accessible description).
-pub fn tooltip_text(key: &str, data: &UsageMetrics, alert: bool) -> String {
-    let mut lines = vec![name_of(key).unwrap_or("").to_owned()];
+pub fn tooltip_text(base: &str, name: &str, data: &UsageMetrics, alert: bool) -> String {
+    let mut lines = vec![name.to_owned()];
     for (title, value, reset) in row_values(data) {
         let text = value.map_or_else(|| "--".to_owned(), |v| format!("{v:.0}%"));
-        let label = if key != "agy" {
+        let label = if base != "agy" {
             row_label(&title)
         } else {
             title.clone()
@@ -491,18 +514,16 @@ pub fn reorder(
     result
 }
 
-/// Python `set_order`: a permutation of the three providers, else `None` (Python raises).
-pub fn valid_order(order: &[String]) -> Option<Vec<String>> {
-    let filtered: Vec<String> = order
-        .iter()
-        .filter(|k| DEFAULT_ORDER.contains(&k.as_str()))
-        .cloned()
-        .collect();
-    let mut a = filtered.clone();
-    let mut b: Vec<String> = DEFAULT_ORDER.iter().map(|s| s.to_string()).collect();
-    a.sort();
-    b.sort();
-    (a == b).then_some(filtered)
+/// Python `set_order`, for a tile list that changes at run time: the entries of `order` that name a
+/// known tile, each once, in order; `None` when nothing is left (Python raises).
+pub fn valid_order(order: &[String], known: &[String]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for key in order {
+        if known.contains(key) && !out.contains(key) {
+            out.push(key.clone());
+        }
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Python `eventFilter` wheel handling: accumulates `delta` (1/8 degree units, 120 = one notch)
@@ -633,6 +654,10 @@ fn px(value: f64, minimum: i32) -> f32 {
 /// What `_Button` keeps in attributes, shared with its `_Indicators` child and with the owner.
 pub struct ButtonData {
     pub kind: String,
+    pub base: String,
+    /// The short title on the strip tile and the full name; both change with the account label.
+    pub text: RefCell<String>,
+    pub name: RefCell<String>,
     pub tile: RefCell<TileState>,
     pub flash: Cell<f64>,
     pub show_labels: Cell<bool>,
@@ -648,7 +673,7 @@ pub struct ButtonData {
 
 impl ButtonData {
     fn is_provider(&self) -> bool {
-        name_of(&self.kind).is_some()
+        self.kind != "toggle"
     }
 
     fn widget(&self) -> Option<WidgetRef> {
@@ -863,11 +888,18 @@ pub struct SidebarButton {
 
 impl SidebarButton {
     /// Builds the button and its indicators child; returns the widget and the shared data.
-    pub fn create(kind: &str, owner: &Rc<SidebarInner>) -> (WidgetRef, Rc<ButtonData>, Signal<()>) {
+    pub fn create(
+        spec: Option<&TileSpec>,
+        owner: &Rc<SidebarInner>,
+    ) -> (WidgetRef, Rc<ButtonData>, Signal<()>) {
         let hold = Timer::new();
         hold.set_single_shot(true);
+        let kind = spec.map_or("toggle", |s| s.id.as_str());
         let data = Rc::new(ButtonData {
             kind: kind.to_owned(),
+            base: spec.map_or_else(String::new, |s| s.base.clone()),
+            text: RefCell::new(spec.map_or_else(String::new, |s| s.text.clone())),
+            name: RefCell::new(spec.map_or_else(String::new, |s| s.name.clone())),
             tile: RefCell::new(initial_tile()),
             flash: Cell::new(0.0),
             show_labels: Cell::new(owner.scale.get() >= 0.8),
@@ -907,12 +939,12 @@ impl SidebarButton {
             let w = widget.borrow();
             w.set_cursor(CursorShape::PointingHand);
             // Python `setAccessibleName(_NAMES.get(kind, 'Toggle sidebar'))`, `setToolTip(name)`
-            let name = name_of(kind).unwrap_or("Toggle sidebar");
+            let name = spec.map_or("Toggle sidebar", |s| s.name.as_str());
             w.set_accessible_name(name);
         }
         widget
             .borrow_mut()
-            .set_tool_tip(name_of(kind).unwrap_or("Toggle sidebar"));
+            .set_tool_tip(spec.map_or("Toggle sidebar", |s| s.name.as_str()));
         (widget, data, clicked)
     }
 
@@ -1300,7 +1332,7 @@ impl Widget for SidebarButton {
             p,
             RectF::new(6.0 * s, 2.0 * s, title_width * s, 16.0 * s),
             Align::Left,
-            name_of(&self.data.kind).unwrap_or(""),
+            &self.data.text.borrow(),
             &font,
             name_color,
         );
@@ -1385,8 +1417,8 @@ pub struct SidebarInner {
     strip: WidgetRef,
     panel: WidgetRef,
     toggle: std::cell::OnceCell<WidgetRef>,
-    buttons: std::cell::OnceCell<Vec<(String, WidgetRef, Rc<ButtonData>)>>,
-    cards: Vec<(String, Rc<RefCell<ProviderCardWidget>>)>,
+    buttons: RefCell<Vec<(String, WidgetRef, Rc<ButtonData>)>>,
+    cards: RefCell<Vec<(String, Rc<RefCell<ProviderCardWidget>>)>>,
     dividers: RefCell<Vec<WidgetRef>>,
     flyout: Rc<RefCell<Window>>,
     flyout_root: WidgetRef,
@@ -1510,10 +1542,31 @@ pub fn format_g(value: f64) -> String {
     }
 }
 
+/// Routes a tile's click into the sidebar. The slot only holds a `Weak`, so a removed tile (its
+/// signal and the slot go with the widget) leaves nothing behind.
+fn connect_click(inner: &Rc<SidebarInner>, key: String, clicked: Signal<()>) {
+    let weak = Rc::downgrade(inner);
+    clicked.connect_local(move |()| {
+        if let Some(inner) = weak.upgrade() {
+            inner.click_provider(&key);
+        }
+    });
+}
+
+/// A card stays hidden until the panel or the flyout shows it.
+fn prepare_card(card: &Rc<RefCell<ProviderCardWidget>>) {
+    let widget = card.borrow().widget();
+    widget.borrow().set_visible(false);
+    widget.borrow().set_minimum_size(Size::new(0, 0));
+    widget
+        .borrow()
+        .set_size_policy(QSizePolicy::new(Policy::Ignored, Policy::Preferred));
+}
+
 impl SidebarWidget {
     /// Python `SidebarWidget.__init__(cards)`; `flyout` is the tool window `_Flyout` that is
     /// parented to the HUD window.
-    pub fn new(cards: Vec<(String, Rc<RefCell<ProviderCardWidget>>)>, flyout: Window) -> Self {
+    pub fn new(tiles: Vec<(TileSpec, Rc<RefCell<ProviderCardWidget>>)>, flyout: Window) -> Self {
         let container = make_widget(EmptyWidget::new());
         container.borrow_mut().set_object_name("Sidebar");
         let mut layout = BoxLayout::new(Direction::TopToBottom);
@@ -1534,8 +1587,13 @@ impl SidebarWidget {
                 strip: Rc::clone(&strip),
                 panel: Rc::clone(&panel),
                 toggle: std::cell::OnceCell::new(),
-                buttons: std::cell::OnceCell::new(),
-                cards: cards.clone(),
+                buttons: RefCell::new(Vec::new()),
+                cards: RefCell::new(
+                    tiles
+                        .iter()
+                        .map(|(s, c)| (s.id.clone(), Rc::clone(c)))
+                        .collect(),
+                ),
                 dividers: RefCell::new(Vec::new()),
                 flyout: Rc::new(RefCell::new(flyout)),
                 flyout_root: Rc::clone(&flyout_root),
@@ -1553,7 +1611,7 @@ impl SidebarWidget {
                 hover_id: RefCell::new(None),
                 row_state: RefCell::new(Default::default()),
                 wheel_remainder: Cell::new(0),
-                order: RefCell::new(DEFAULT_ORDER.iter().map(|s| s.to_string()).collect()),
+                order: RefCell::new(tiles.iter().map(|(s, _)| s.id.clone()).collect()),
                 hover_timer: Timer::new(),
                 leave_timer: Timer::new(),
                 animation: RefCell::new(PropertyAnimation::new("windowOpacity")),
@@ -1570,21 +1628,15 @@ impl SidebarWidget {
         // The buttons need `owner`, so they are made once the Rc exists (interior mutability for
         // the two fields that hold them).
         let mut built: Vec<(String, WidgetRef, Rc<ButtonData>)> = Vec::new();
-        let (toggle_widget, toggle_data, toggle_clicked) = SidebarButton::create("toggle", &inner);
-        built.push(("toggle".to_owned(), Rc::clone(&toggle_widget), toggle_data));
+        let (toggle_widget, _toggle_data, toggle_clicked) = SidebarButton::create(None, &inner);
         let mut provider_clicks: Vec<(String, Signal<()>)> = Vec::new();
-        for key in DEFAULT_ORDER {
-            let (widget, data, clicked) = SidebarButton::create(key, &inner);
-            built.push((key.to_owned(), widget, data));
-            provider_clicks.push((key.to_owned(), clicked));
+        for (spec, _) in &tiles {
+            let (widget, data, clicked) = SidebarButton::create(Some(spec), &inner);
+            built.push((spec.id.clone(), widget, data));
+            provider_clicks.push((spec.id.clone(), clicked));
         }
         let _ = inner.toggle.set(toggle_widget);
-        let _ = inner.buttons.set(
-            built
-                .into_iter()
-                .filter(|(k, _, _)| k != "toggle")
-                .collect(),
-        );
+        *inner.buttons.borrow_mut() = built;
         let this = SidebarWidget { inner };
         this.wire(toggle_clicked, provider_clicks);
         this
@@ -1607,12 +1659,7 @@ impl SidebarWidget {
             });
         }
         for (key, clicked) in provider_clicks {
-            let weak = Rc::downgrade(inner);
-            clicked.connect_local(move |()| {
-                if let Some(inner) = weak.upgrade() {
-                    inner.click_provider(&key);
-                }
-            });
+            connect_click(inner, key, clicked);
         }
         // layout: toggle, strip, panel; the provider tiles in the strip
         let container = Rc::clone(&inner.container);
@@ -1620,17 +1667,12 @@ impl SidebarWidget {
         layout_add(&container, &inner.strip);
         layout_add(&container, &inner.panel);
         for (_, widget, _) in inner.buttons() {
-            layout_add(&inner.strip, widget);
+            layout_add(&inner.strip, &widget);
         }
         ferrokit_widgets::widget::set_widget_visible(&inner.panel, false);
         // cards: hidden until the panel or the flyout shows them
-        for (_, card) in &inner.cards {
-            let widget = card.borrow().widget();
-            widget.borrow().set_visible(false);
-            widget.borrow().set_minimum_size(Size::new(0, 0));
-            widget
-                .borrow()
-                .set_size_policy(QSizePolicy::new(Policy::Ignored, Policy::Preferred));
+        for (_, card) in inner.cards.borrow().iter() {
+            prepare_card(card);
         }
         // timers
         let weak = Rc::downgrade(inner);
@@ -1764,15 +1806,60 @@ impl SidebarWidget {
         self.inner.set_state(state);
     }
 
-    /// Python `set_order`: `None` when `order` is not a permutation of the providers (Python raises).
+    /// Python `set_order`: the visible tiles in order (a tile that is not listed is hidden, not
+    /// removed); `None` when none of `order` names a tile (Python raises).
     pub fn set_order(&self, order: &[String]) -> Option<()> {
-        let order = valid_order(order)?;
+        let known: Vec<String> = self
+            .inner
+            .buttons()
+            .into_iter()
+            .map(|(k, _, _)| k)
+            .collect();
+        let order = valid_order(order, &known)?;
         if order == *self.inner.order.borrow() {
             return Some(());
         }
         *self.inner.order.borrow_mut() = order;
         self.inner.apply_order();
         Some(())
+    }
+
+    /// Makes the sidebar hold exactly `specs` (cards of new tiles come from `make_card`; tiles not
+    /// in `specs` are removed) with `visible` shown in that order. Call it from a menu action, never
+    /// from a signal slot of a tile that may be removed.
+    pub fn set_tiles(
+        &self,
+        specs: &[TileSpec],
+        make_card: &mut dyn FnMut(&TileSpec) -> Rc<RefCell<ProviderCardWidget>>,
+        visible: &[String],
+    ) {
+        self.inner.set_tiles(specs, make_card, visible);
+    }
+
+    /// The cards, one per tile (visible or not).
+    pub fn cards(&self) -> Vec<(String, Rc<RefCell<ProviderCardWidget>>)> {
+        self.inner.cards.borrow().clone()
+    }
+
+    /// The tile ids, in strip order, that are visible.
+    pub fn visible_tiles(&self) -> Vec<String> {
+        self.inner.order.borrow().clone()
+    }
+
+    /// A click on a tile (opens and pins its flyout).
+    #[cfg(test)]
+    pub fn click_tile(&self, key: &str) {
+        self.inner.click_provider(key);
+    }
+
+    /// Cards and dividers the panel layout holds.
+    #[cfg(test)]
+    pub fn panel_item_count(&self) -> usize {
+        self.inner
+            .panel
+            .borrow()
+            .with_box_layout(|l| l.count())
+            .unwrap_or(0)
     }
 
     pub fn set_orientation(&self, orientation: Orientation) {
@@ -1836,6 +1923,11 @@ impl SidebarWidget {
         self.inner.preferred_size()
     }
 
+    /// Python `preferred_size_for(orientation)`.
+    pub fn preferred_size_for(&self, orientation: Orientation) -> (i32, i32) {
+        self.inner.preferred_size_for(orientation)
+    }
+
     pub fn close_flyout(&self) {
         self.inner.close_flyout();
     }
@@ -1851,8 +1943,8 @@ impl SidebarInner {
         tokens(self.dark.get())
     }
 
-    fn buttons(&self) -> &[(String, WidgetRef, Rc<ButtonData>)] {
-        self.buttons.get().map_or(&[], |b| b.as_slice())
+    fn buttons(&self) -> Vec<(String, WidgetRef, Rc<ButtonData>)> {
+        self.buttons.borrow().clone()
     }
 
     fn toggle(&self) -> &WidgetRef {
@@ -1861,12 +1953,20 @@ impl SidebarInner {
             .expect("toggle is set in SidebarWidget::new")
     }
 
-    fn button(&self, key: &str) -> Option<&(String, WidgetRef, Rc<ButtonData>)> {
-        find_button(self.buttons(), key)
+    fn button(&self, key: &str) -> Option<(String, WidgetRef, Rc<ButtonData>)> {
+        self.buttons
+            .borrow()
+            .iter()
+            .find(|(k, _, _)| k == key)
+            .cloned()
     }
 
-    fn card(&self, key: &str) -> Option<&Rc<RefCell<ProviderCardWidget>>> {
-        self.cards.iter().find(|(k, _)| k == key).map(|(_, c)| c)
+    fn card(&self, key: &str) -> Option<Rc<RefCell<ProviderCardWidget>>> {
+        self.cards
+            .borrow()
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, c)| Rc::clone(c))
     }
 
     fn card_widget(&self, key: &str) -> Option<WidgetRef> {
@@ -1909,11 +2009,9 @@ impl SidebarInner {
         ferrokit_widgets::widget::set_widget_visible(&self.panel, state == State::Panel);
         if state == State::Panel {
             let order = self.order.borrow().clone();
-            let cards: Vec<&Rc<RefCell<ProviderCardWidget>>> = order
-                .iter()
-                .filter_map(|k| self.cards.iter().find(|(c, _)| c == k).map(|(_, c)| c))
-                .collect();
-            for (index, card) in cards.into_iter().enumerate() {
+            let cards: Vec<Rc<RefCell<ProviderCardWidget>>> =
+                order.iter().filter_map(|k| self.card(k)).collect();
+            for (index, card) in cards.iter().enumerate() {
                 if index > 0 {
                     let mut divider = Frame::new();
                     divider.set_object_name("SidebarDivider");
@@ -1936,19 +2034,18 @@ impl SidebarInner {
                     }
                 });
                 let Some(Some(widget)) = taken else { break };
-                if self
+                let card = self
                     .cards
+                    .borrow()
                     .iter()
-                    .any(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget))
-                {
+                    .find(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget))
+                    .map(|(_, c)| Rc::clone(c));
+                if let Some(card) = card {
                     // `_restore_card_style`
-                    if let Some((_, card)) = self
-                        .cards
-                        .iter()
-                        .find(|(_, c)| Rc::ptr_eq(&c.borrow().widget(), &widget))
-                    {
-                        card.borrow_mut().set_font_scale(1.0);
-                    }
+                    card.borrow_mut().set_font_scale(1.0);
+                    ferrokit_widgets::widget::set_widget_visible(&widget, false);
+                } else {
+                    // a divider
                     ferrokit_widgets::widget::set_widget_visible(&widget, false);
                 }
             }
@@ -1957,24 +2054,101 @@ impl SidebarInner {
         self.relayout();
     }
 
-    fn apply_order(self: &Rc<Self>) {
+    /// `set_tiles` on the inner state: shows exactly the tiles in `specs` (new ones get a card from
+    /// `make_card`, gone ones are taken out and dropped) and lays the visible ones (`visible`, a
+    /// subset of `specs`, in order) out. The flyout is closed first. Never called from a tile's own
+    /// signal slot (the caller is a menu action).
+    fn set_tiles(
+        self: &Rc<Self>,
+        specs: &[TileSpec],
+        make_card: &mut dyn FnMut(&TileSpec) -> Rc<RefCell<ProviderCardWidget>>,
+        visible: &[String],
+    ) {
+        self.close_flyout();
         self.reset_buttons();
+        let was_panel = self.state.get() == State::Panel;
+        if was_panel {
+            self.set_state_forced(State::Strip);
+        }
+        let wanted: Vec<String> = specs.iter().map(|s| s.id.clone()).collect();
+        // gone tiles
+        let gone: Vec<String> = self
+            .buttons()
+            .iter()
+            .filter(|(k, _, _)| !wanted.contains(k))
+            .map(|(k, _, _)| k.clone())
+            .collect();
+        for key in gone {
+            if let Some((_, widget, _)) = self.button(&key) {
+                layout_remove(&self.strip, &widget);
+                ferrokit_widgets::widget::set_widget_visible(&widget, false);
+            }
+            self.buttons.borrow_mut().retain(|(k, _, _)| *k != key);
+            self.cards.borrow_mut().retain(|(k, _)| *k != key);
+            self.metrics.borrow_mut().remove(&key);
+            self.row_state.borrow_mut().remove(&key);
+            if self.hover_id.borrow().as_deref() == Some(key.as_str()) {
+                *self.hover_id.borrow_mut() = None;
+            }
+        }
+        // new tiles; existing ones keep their widgets but may be renamed
+        for spec in specs {
+            if let Some((_, _, data)) = self.button(&spec.id) {
+                *data.text.borrow_mut() = spec.text.clone();
+                *data.name.borrow_mut() = spec.name.clone();
+                continue;
+            }
+            let card = make_card(spec);
+            prepare_card(&card);
+            let (widget, data, clicked) = SidebarButton::create(Some(spec), self);
+            connect_click(self, spec.id.clone(), clicked);
+            self.buttons
+                .borrow_mut()
+                .push((spec.id.clone(), widget, data));
+            self.cards.borrow_mut().push((spec.id.clone(), card));
+        }
+        let order = valid_order(visible, &wanted).unwrap_or_else(|| wanted.clone());
+        *self.order.borrow_mut() = order;
+        self.layout_strip();
+        for key in &wanted {
+            self.refresh_tile(key);
+            self.refresh_tooltip(key);
+        }
+        if was_panel {
+            self.set_state_forced(State::Panel);
+        } else {
+            self.relayout();
+        }
+    }
+
+    /// The strip holds exactly the visible tiles, in `order`; the others are hidden.
+    fn layout_strip(&self) {
         let order = self.order.borrow().clone();
         for (_, widget, _) in self.buttons() {
-            layout_remove(&self.strip, widget);
+            layout_remove(&self.strip, &widget);
+        }
+        for (key, widget, _) in self.buttons() {
+            if !order.contains(&key) {
+                ferrokit_widgets::widget::set_widget_visible(&widget, false);
+            }
         }
         for key in &order {
             if let Some((_, widget, _)) = self.button(key) {
-                layout_add(&self.strip, widget);
+                layout_add(&self.strip, &widget);
+                ferrokit_widgets::widget::set_widget_visible(&widget, true);
             }
         }
         self.strip.borrow().with_box_layout(|l| l.update_layout());
+    }
+
+    fn apply_order(self: &Rc<Self>) {
+        self.reset_buttons();
+        self.layout_strip();
         if self.state.get() == State::Panel {
             self.set_state_forced(State::Strip);
             self.set_state_forced(State::Panel);
         }
     }
-
     /// `ButtonData::reset_interaction` for every tile.
     fn reset_buttons(&self) {
         for (_, _, data) in self.buttons() {
@@ -2014,14 +2188,7 @@ impl SidebarInner {
         let new_order = reorder(&order, key, coordinate, &centers);
         if new_order != order {
             *self.order.borrow_mut() = new_order.clone();
-            for (_, widget, _) in self.buttons() {
-                layout_remove(&self.strip, widget);
-            }
-            for k in &new_order {
-                if let Some((_, widget, _)) = self.button(k) {
-                    layout_add(&self.strip, widget);
-                }
-            }
+            self.layout_strip();
             self.strip.borrow().with_box_layout(|l| l.update_layout());
         }
     }
@@ -2092,7 +2259,8 @@ impl SidebarInner {
             .borrow()
             .set_style_sheet(&scale_px_in_qss(panel_sheet, s));
         let panel_vertical_width = scaled(BASE_PANEL_W, s) - 2 * padding;
-        for (_, card) in &self.cards {
+        let cards = self.cards.borrow().clone();
+        for (_, card) in &cards {
             let widget = card.borrow().widget();
             if self.state.get() == State::Panel {
                 // side by side, cards keep their natural height instead of stretching to the tallest one
@@ -2186,7 +2354,7 @@ impl SidebarInner {
         let current = row_state(data);
         let offline = is_offline(data);
         if !offline && window_reset(&previous, &current) {
-            self.flash(button);
+            self.flash(&button);
         }
         self.row_state
             .borrow_mut()
@@ -2222,7 +2390,7 @@ impl SidebarInner {
             return;
         };
         let alert = data.tile.borrow().alert;
-        let text = tooltip_text(key, &metrics, alert);
+        let text = tooltip_text(&data.base, &data.name.borrow(), &metrics, alert);
         if let Ok(mut w) = widget.try_borrow_mut() {
             w.set_tool_tip(&text);
             w.set_accessible_description(&text);
@@ -2266,7 +2434,7 @@ impl SidebarInner {
         let orientation = self.orientation.get();
         let spacing = self.tokens().spacing;
         if self.state.get() == State::Strip {
-            return strip_preferred_size(s, orientation, spacing, 3);
+            return strip_preferred_size(s, orientation, spacing, self.order.borrow().len() as i32);
         }
         let height = self
             .panel
@@ -2276,7 +2444,34 @@ impl SidebarInner {
                 l.size_hint().height
             })
             .unwrap_or(0);
-        panel_preferred_size(s, orientation, spacing, self.cards.len() as i32, height)
+        panel_preferred_size(
+            s,
+            orientation,
+            spacing,
+            self.order.borrow().len() as i32,
+            height,
+        )
+    }
+
+    /// Python `preferred_size_for`: the size the bar would have in `orientation`, without changing
+    /// it. The panel's size needs its cards laid out that way, so it is measured by laying them out
+    /// and restoring the current layout.
+    fn preferred_size_for(self: &Rc<Self>, orientation: Orientation) -> (i32, i32) {
+        let current = self.orientation.get();
+        if orientation == current {
+            return self.preferred_size();
+        }
+        self.orientation.set(orientation);
+        let panel = self.state.get() == State::Panel;
+        if panel {
+            self.relayout();
+        }
+        let size = self.preferred_size();
+        self.orientation.set(current);
+        if panel {
+            self.relayout();
+        }
+        size
     }
 
     /// Python `_hover`.
@@ -2360,7 +2555,7 @@ impl SidebarInner {
         self.close_flyout();
         self.pinned.set(pinned);
         *self.pinned_key.borrow_mut() = pinned_key;
-        let (Some(card), Some(tile)) = (self.card(key).cloned(), self.button_rect(key)) else {
+        let (Some(card), Some(tile)) = (self.card(key), self.button_rect(key)) else {
             return;
         };
         *self.active.borrow_mut() = Some(key.to_owned());
@@ -2574,7 +2769,7 @@ mod tests {
                 tokens(true).leave_ms,
                 tokens(true).animation_ms
             ),
-            (300, 600, 160)
+            (200, 300, 160)
         );
     }
 
@@ -2640,6 +2835,7 @@ mod tests {
         assert_eq!(stale.display, ["0%", "--"]);
         let tip = tooltip_text(
             "claude",
+            "Claude",
             &UsageMetrics {
                 stale: true,
                 error: Some("timeout".into()),
@@ -2663,7 +2859,7 @@ mod tests {
         let tile = refresh_tile("agy", &data, true, Scheme::Scale);
         let green = Color::from(get_theme(true).scale_green);
         assert_eq!(tile.dot_colors, vec![green, green]);
-        assert!(tooltip_text("agy", &data, false).contains("C/G 7D 已用 15%"));
+        assert!(tooltip_text("agy", "AGY", &data, false).contains("C/G 7D 已用 15%"));
         // the duo scheme never changes the dots
         let light = refresh_tile("agy", &data, false, Scheme::Duo);
         assert_eq!(
@@ -2733,7 +2929,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let tip = tooltip_text("agy", &data, false);
+        let tip = tooltip_text("agy", "AGY", &data, false);
         for text in ["已用", "重設於 --", "C/G 7D", "ARGON 7D"] {
             assert!(tip.contains(text), "{text}");
         }
@@ -2842,7 +3038,7 @@ mod tests {
         assert!(!refresh_tile("claude", &metrics(89.0, None), true, Scheme::Scale).alert);
         let tile = refresh_tile("claude", &metrics(90.0, None), true, Scheme::Scale);
         assert!(tile.alert);
-        assert!(tooltip_text("claude", &metrics(90.0, None), tile.alert).contains("90%"));
+        assert!(tooltip_text("claude", "Claude", &metrics(90.0, None), tile.alert).contains("90%"));
         assert!(
             !refresh_tile(
                 "claude",
@@ -2969,14 +3165,14 @@ mod tests {
     }
 
     #[test]
-    fn order_rejects_bad_values() {
+    fn order_keeps_only_known_tiles_once() {
         let v = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let known = v(&["claude", "claude@a", "agy", "codex"]);
         assert_eq!(
-            valid_order(&v(&["codex", "claude", "agy"])),
-            Some(v(&["codex", "claude", "agy"]))
+            valid_order(&v(&["codex", "claude@a", "x", "codex"]), &known),
+            Some(v(&["codex", "claude@a"]))
         );
-        assert_eq!(valid_order(&v(&["claude", "agy"])), None);
-        assert_eq!(valid_order(&v(&["claude", "agy", "agy"])), None);
+        assert_eq!(valid_order(&v(&["nope"]), &known), None);
     }
 
     #[test]
@@ -2986,6 +3182,53 @@ mod tests {
         assert_eq!(wheel_steps(0, 60), (vec![], 60));
         assert_eq!(wheel_steps(60, 60), (vec![1], 0));
         assert_eq!(wheel_steps(-100, -50), (vec![-1], -30));
+    }
+}
+
+/// A cursor that crosses a tile faster than `hover_ms` must not open the flyout (Python
+/// `_Button.enterEvent` starts the hover timer, `leaveEvent` stops it).
+#[cfg(test)]
+mod hover_delay_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::refresh_controller::RefreshController;
+    use crate::ui::hud_window::HUDWindow;
+    use ferrokit_core::event_loop::EventLoop;
+    use std::time::Duration;
+
+    fn pump(el: &mut EventLoop, ms: u64) {
+        let end = Instant::now() + Duration::from_millis(ms);
+        while Instant::now() < end {
+            el.process_events(false);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn passing_over_a_tile_faster_than_the_hover_delay_never_opens_the_flyout() {
+        let mut el = EventLoop::new();
+        let cfg = Arc::new(parking_lot::Mutex::new(Config::default()));
+        let ctrl = Arc::new(parking_lot::Mutex::new(RefreshController::new(60)));
+        let hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let sidebar = hud.sidebar.clone();
+        sidebar.set_state(State::Strip);
+        let tile = Rc::clone(&sidebar.inner().button("claude").expect("claude tile").1);
+        let wait = tokens(true).hover_ms + 300;
+
+        tile.borrow_mut().enter_event(Point::new(5, 5));
+        // the enter handler defers the hover call until the dispatch is over
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        pump(&mut el, 20);
+        tile.borrow_mut().leave_event(); // gone before hover_ms is up
+        pump(&mut el, wait);
+        assert_eq!(sidebar.active(), None, "a pass-over opened the flyout");
+
+        // control: staying on the tile for hover_ms does open it
+        tile.borrow_mut().enter_event(Point::new(5, 5));
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        pump(&mut el, wait);
+        assert_eq!(sidebar.active().as_deref(), Some("claude"));
     }
 }
 

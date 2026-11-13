@@ -12,6 +12,81 @@ import urllib.error
 from core.providers.base import BaseProvider, UsageMetrics, MetricRow, percentage, percent_text, safe_parse
 from core.logger import logger
 from core.agy_statusline import read_quota_cache
+from core.providers.claude_provider import slugify
+
+# Cache keys with a fixed row (or a row's data) of their own; every other cache key becomes a row by itself.
+KNOWN_CACHE_KEYS = frozenset({"3p-5h", "3p-weekly", "gemini-5h", "gemini-weekly", "gemini-argon-wtu-weekly"})
+_WINDOW_TAGS = {"weekly": "7D", "week": "7D", "7d": "7D", "5h": "5H"}
+_KNOWN_GROUP_WORDS = ("gemini", "claude", "gpt", "argon")
+
+
+def title_from_key(key: str) -> str:
+    """Row title for a quota key / bucket id: `gemini-argon-wtu-weekly` -> `ARGON 7D`. A leading `gemini`, every
+    `wtu` and a trailing window word (weekly/week/7d -> 7D, 5h -> 5H) are dropped from the name; with fewer than
+    two tokens left the title is the whole key upper-cased with `-` as a space."""
+    tokens = [t for t in key.strip().lower().split("-") if t]
+    if tokens[:1] == ["gemini"]:
+        tokens = tokens[1:]
+    tokens = [t for t in tokens if t != "wtu"]
+    if len(tokens) < 2:
+        return " ".join(key.upper().replace("-", " ").split())
+    window = _WINDOW_TAGS.get(tokens[-1])
+    return " ".join(tokens[:-1] if window else tokens).upper() + (f" {window}" if window else "")
+
+
+def _add_dynamic_row(rows: list, titles: list, used: float, reset):
+    """Append a row for the first of `titles` that no existing row has; the key is `agy:` + slug(title), so it
+    survives a restart but never depends on the row's position. Nothing is added when every title is taken."""
+    from core.agy_rows import AGY_ROW_TITLES  # deferred: core.agy_rows imports this package
+    taken_titles = set(AGY_ROW_TITLES) | {(row.title or "").upper() for row in rows}
+    taken_keys = {row.key.lower() for row in rows}
+    for title in titles:
+        key = "agy:" + (slugify(title) or title)
+        if title and title.upper() not in taken_titles and key.lower() not in taken_keys:
+            rows.append(MetricRow(title, used, percent_text(used), reset, "", key))
+            return
+
+
+def _used_percent(remaining_fraction: float) -> float:
+    return max(0.0, min(100.0, (1 - remaining_fraction) * 100))
+
+
+def _cache_rows(buckets: dict, rows: list) -> list:
+    """Rows for the status-line cache buckets this app has no fixed row for, sorted by key. `rows` are the rows
+    already present (a title or key that exists there is not added again)."""
+    found = list(rows)
+    for key in sorted(k for k in buckets if k not in KNOWN_CACHE_KEYS):
+        bucket = buckets[key]
+        remaining = percentage(bucket.get("remaining_fraction"), 1.0)
+        title = title_from_key(key)
+        if remaining is not None:
+            _add_dynamic_row(found, [title], _used_percent(remaining), bucket.get("reset_time"))
+    return found[len(rows):]
+
+
+def _add_group_rows(rows: list, group_name: str, buckets):
+    """One row per well-formed bucket of a quota group this app does not know. The title is the bucket's display
+    name (else derived from its id, else the group name); a title that is taken is tried again with the group
+    name in front. Malformed buckets are skipped."""
+    if not isinstance(buckets, list):
+        return
+    group = group_name.strip().upper()
+    for b in buckets:
+        if not isinstance(b, dict):
+            continue
+        remaining = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
+        if remaining is None:
+            continue
+        display, bucket_id = b.get("displayName"), b.get("id") or b.get("bucketId")
+        title = (display.strip().upper() if isinstance(display, str) and display.strip()
+                 else title_from_key(bucket_id) if isinstance(bucket_id, str) and bucket_id.strip() else group)
+        reset = b.get("reset_time") or b.get("resetTime")
+        try:
+            reset = datetime.fromisoformat(reset.replace("Z", "+00:00")) if reset else None
+        except (ValueError, TypeError, AttributeError):
+            reset = None
+        _add_dynamic_row(rows, [title, f"{group} {title}".strip()], _used_percent(remaining), reset)
+
 
 class AgyProvider(BaseProvider):
     provider_id = "agy"
@@ -187,6 +262,7 @@ class AgyProvider(BaseProvider):
                 row.text = percent_text(row.val)
                 row.reset = bucket["reset_time"]
                 row.subtext = ""
+        rows = rows + _cache_rows(buckets, rows)
         result.extra_metrics = rows
         if result.metric1_val is None and "gemini-5h" in buckets:
             bucket = buckets["gemini-5h"]
@@ -361,6 +437,8 @@ class AgyProvider(BaseProvider):
                         third_party_rem_pct = 100 - row.val
             else:
                 logger.info(f"[AgyProvider] unknown quota group: {name}")
+                if not any(word in g_name for word in _KNOWN_GROUP_WORDS):  # an Argon group's data comes from the cache
+                    _add_group_rows(rows, name, g.get("buckets"))
 
         m1_text = percent_text(m1_used_pct)
         m2_text = percent_text(m2_used_pct)

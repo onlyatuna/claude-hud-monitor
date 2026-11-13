@@ -66,6 +66,8 @@ class SanitizeTests(unittest.TestCase):
         self.assertEqual(fixed(sidebar_idle_level=0.99)[0]['sidebar_idle_level'], 0.95)
         self.assertEqual(fixed(sidebar_idle_delay_ms='slow')[0]['sidebar_idle_delay_ms'], 900)
         self.assertEqual(fixed(sidebar_idle_delay_ms=5)[0]['sidebar_idle_delay_ms'], 200)
+        for bad in (None, 5, '', '  ', ['claude:5h']):
+            self.assertEqual(fixed(tray_quota=bad)[0]['tray_quota'], 'off', repr(bad))
 
     def test_booleans_accept_real_booleans_and_the_words_true_and_false(self):
         for key in ('always_on_top', 'click_through', 'locked', 'autostart', 'hotkey_enabled', 'sidebar_idle_fade',
@@ -101,7 +103,7 @@ class SanitizeTests(unittest.TestCase):
     def test_choices_fall_back_to_the_default(self):
         cases = {'sidebar_state': ('strip', 'panel'), 'sidebar_edge': ('left', 'right', 'top', 'bottom', 'none'),
                  'sidebar_orientation': ('horizontal', 'vertical'), 'color_scheme': ('scale', 'duo'),
-                 'appearance': ('auto', 'light', 'dark')}
+                 'appearance': ('auto', 'light', 'dark'), 'tray_quota_mode': ('used', 'remaining')}
         for key, allowed in cases.items():
             with self.subTest(key=key):
                 for value in allowed:

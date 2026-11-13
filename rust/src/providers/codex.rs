@@ -108,7 +108,7 @@ impl Provider for CodexProvider {
                 "codex",
                 "OpenAI Codex",
                 "未找到 Codex 授權檔 (~/.codex/auth.json)\n請執行 codex 登入",
-                "",
+                "auth",
             );
         };
 
@@ -117,7 +117,7 @@ impl Provider for CodexProvider {
                 "codex",
                 "OpenAI Codex",
                 "未找到 access_token\n請於終端機執行 codex 登入",
-                "",
+                "auth",
             );
         };
         let access_token = match tokens
@@ -131,7 +131,7 @@ impl Provider for CodexProvider {
                     "codex",
                     "OpenAI Codex",
                     "未找到 access_token\n請於終端機執行 codex 登入",
-                    "",
+                    "auth",
                 );
             }
         };
@@ -155,7 +155,7 @@ impl Provider for CodexProvider {
         match req.call().or_any_status() {
             Ok(resp) => {
                 let status = resp.status();
-                if status == 401 {
+                if status == 401 || status == 403 {
                     let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "codex".to_owned(),
@@ -228,14 +228,27 @@ fn parse_codex_response(data: Value, now_str: &str) -> UsageMetrics {
         return format_error("codex", "OpenAI Codex", now_str);
     };
 
-    let s_used_pct = percentage(primary.get("used_percent").and_then(|v| v.as_f64()), 100.0);
-    let s_reset_dt = parse_timestamp(primary.get("reset_at"));
-
-    let w_used_pct = percentage(
-        secondary.get("used_percent").and_then(|v| v.as_f64()),
-        100.0,
-    );
-    let w_reset_dt = parse_timestamp(secondary.get("reset_at"));
+    // Only the windows the plan has: a free plan reports one (`secondary_window` null). They fill
+    // metric1 then metric2 in order; a free slot stays empty (no title, no value, no key).
+    let windows: Vec<(&Value, &str)> = [(&primary, "PRIMARY"), (&secondary, "SECONDARY")]
+        .into_iter()
+        .filter(|(w, _)| w.is_object())
+        .collect();
+    let slot = |i: usize| match windows.get(i) {
+        Some((w, fallback)) => (
+            window_title(w, fallback),
+            percentage(w.get("used_percent").and_then(|v| v.as_f64()), 100.0),
+            parse_timestamp(w.get("reset_at")),
+        ),
+        None if windows.is_empty() => (
+            if i == 0 { "PRIMARY" } else { "SECONDARY" }.to_owned(),
+            None,
+            None,
+        ),
+        None => (String::new(), None, None),
+    };
+    let (m1_title, s_used_pct, s_reset_dt) = slot(0);
+    let (m2_title, w_used_pct, w_reset_dt) = slot(1);
 
     let plan = data.get("plan_type").and_then(|v| v.as_str()).unwrap_or("");
     let plan_badge = if !plan.is_empty() {
@@ -247,11 +260,11 @@ fn parse_codex_response(data: Value, now_str: &str) -> UsageMetrics {
     UsageMetrics {
         provider_id: "codex".to_owned(),
         provider_name: "OpenAI Codex".to_owned(),
-        metric1_title: window_title(&primary, "PRIMARY"),
+        metric1_title: m1_title,
         metric1_val: s_used_pct,
         metric1_text: percent_text(s_used_pct),
         metric1_reset: s_reset_dt,
-        metric2_title: window_title(&secondary, "SECONDARY"),
+        metric2_title: m2_title,
         metric2_val: w_used_pct,
         metric2_text: percent_text(w_used_pct),
         metric2_reset: w_reset_dt,
@@ -313,6 +326,83 @@ mod parity_tests {
             assert_eq!(m.error.as_deref(), Some("配額資料格式不相容"));
             assert_eq!(m.error_code, "schema");
         }
+    }
+
+    /// The owner's free-plan response: one 30-day window, `secondary_window` null.
+    #[test]
+    fn test_single_window_plan_shows_one_row() {
+        let free = serde_json::json!({
+            "plan_type": "free",
+            "rate_limit": {
+                "allowed": true,
+                "primary_window": {
+                    "used_percent": 16,
+                    "limit_window_seconds": 2592000,
+                    "reset_after_seconds": 793030,
+                    "reset_at": 1795248533
+                },
+                "secondary_window": null
+            }
+        });
+        let m = parse_codex_response(free, "10:00:00");
+        assert!(m.error.is_none());
+        assert_eq!(
+            (
+                m.metric1_title.as_str(),
+                m.metric1_val,
+                m.metric1_text.as_str()
+            ),
+            ("WINDOW 30D", Some(16.0), "16%")
+        );
+        assert_eq!(m.metric1_reset.map(|d| d.timestamp()), Some(1795248533));
+        // The second row is empty, not a fake 0 %, and the tray lists only the real row.
+        assert_eq!(
+            (
+                m.metric2_title.as_str(),
+                m.metric2_val,
+                m.metric2_text.as_str()
+            ),
+            ("", None, "--")
+        );
+        let keys: Vec<String> = crate::tray_quota::rows(&m)
+            .into_iter()
+            .map(|r| r.key)
+            .collect();
+        assert_eq!(keys, ["codex:WINDOW 30D"]);
+    }
+
+    #[test]
+    fn test_two_windows_keep_their_rows_and_unknown_lengths_get_a_label() {
+        let two = serde_json::json!({"rate_limit": {
+            "primary_window": {"used_percent": 3, "limit_window_seconds": 18000},
+            "secondary_window": {"used_percent": 9, "limit_window_seconds": 604800}
+        }});
+        let m = parse_codex_response(two, "10:00:00");
+        assert_eq!(
+            (m.metric1_title.as_str(), m.metric1_val),
+            ("WINDOW 5H", Some(3.0))
+        );
+        assert_eq!(
+            (m.metric2_title.as_str(), m.metric2_val),
+            ("WINDOW 7D", Some(9.0))
+        );
+
+        let odd = serde_json::json!({"rate_limit": {
+            "primary_window": {"used_percent": 3, "limit_window_seconds": 172800}
+        }});
+        assert_eq!(
+            parse_codex_response(odd, "10:00:00").metric1_title,
+            "WINDOW 2D"
+        );
+    }
+
+    #[test]
+    fn test_no_window_at_all_is_still_an_error() {
+        let none =
+            serde_json::json!({"rate_limit": {"primary_window": null, "secondary_window": null}});
+        let m = parse_codex_response(none, "10:00:00");
+        assert_eq!(m.error.as_deref(), Some("未取得有效配額資料"));
+        assert_eq!(m.error_code, "schema");
     }
 }
 

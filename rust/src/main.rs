@@ -2,6 +2,7 @@
 #![allow(clippy::upper_case_acronyms)]
 #![allow(clippy::field_reassign_with_default)]
 
+mod accounts;
 mod agy_rows;
 mod agy_statusline;
 mod autostart;
@@ -13,6 +14,7 @@ pub mod pace;
 mod panic_guard;
 mod providers;
 mod refresh_controller;
+mod tray_quota;
 mod ui;
 
 use std::cell::RefCell;
@@ -39,6 +41,25 @@ pub static WAKE_REQUESTED: AtomicBool = AtomicBool::new(false);
 thread_local! {
     static MAIN_HUD: RefCell<Option<Rc<RefCell<HUDWindow>>>> = const { RefCell::new(None) };
     static MAIN_TRAY: RefCell<Option<Rc<RefCell<HUDTrayIcon>>>> = const { RefCell::new(None) };
+}
+
+/// Redraws the tray number from the HUD's latest data. A busy HUD or tray (a menu is open) is
+/// skipped: the next publish refreshes again.
+fn refresh_tray_quota() {
+    let Some(data) = MAIN_HUD.with(|cell| {
+        let hud = cell.borrow();
+        let hud = hud.as_ref()?.try_borrow().ok()?;
+        Some(hud.quota_data())
+    }) else {
+        return;
+    };
+    MAIN_TRAY.with(|cell| {
+        if let Some(tray) = cell.borrow().as_ref()
+            && let Ok(mut tray) = tray.try_borrow_mut()
+        {
+            tray.refresh_quota(&data);
+        }
+    });
 }
 
 /// The click-through hotkey: `HUDTrayIcon::toggle_click_through` on the HUD. A nested event loop
@@ -243,84 +264,21 @@ fn main() -> std::process::ExitCode {
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
         let _app = Application::new(std::env::args().collect());
 
-        let mut hud = HUDWindow::new(Arc::clone(&config), refresh_ctrl)
-            .expect("Failed to initialize HUDWindow");
+        // Fixed-data providers only: the snapshot must never read credentials or use the network,
+        // and `with_providers` launches one fetch per provider.
+        let mut hud = HUDWindow::with_providers(
+            Arc::clone(&config),
+            refresh_ctrl,
+            providers::snapshot::snapshot_providers(),
+        )
+        .expect("Failed to initialize HUDWindow");
 
-        // Realistic Mock metrics for Claude
-        let claude_metrics = crate::providers::base::UsageMetrics {
-            provider_id: "claude".to_string(),
-            provider_name: "Claude".to_string(),
-            metric1_title: "SESSION 5H".to_string(),
-            metric1_val: Some(42.5),
-            metric1_text: "43%".to_string(),
-            metric1_reset: Some(
-                chrono::Utc::now() + chrono::Duration::hours(2) + chrono::Duration::minutes(15),
-            ),
-            metric2_title: "WEEKLY 7D".to_string(),
-            metric2_val: Some(68.0),
-            metric2_text: "68%".to_string(),
-            metric2_reset: Some(chrono::Utc::now() + chrono::Duration::days(3)),
-            badge1_text: "1.2x pace".to_string(),
-            badge2_text: "Pro Tier".to_string(),
-            last_updated_time: "21:50:00".to_string(),
-            error: None,
-            error_code: String::new(),
-            retry_after: None,
-            stale: false,
-            last_success: Some(chrono::Utc::now()),
-            ..Default::default()
-        };
-        hud.on_data_fetched(&claude_metrics);
-
-        // Realistic Mock metrics for Antigravity
-        let agy_metrics = crate::providers::base::UsageMetrics {
-            provider_id: "agy".to_string(),
-            provider_name: "Antigravity".to_string(),
-            metric1_title: "DAILY QUOTA".to_string(),
-            metric1_val: Some(18.0),
-            metric1_text: "18%".to_string(),
-            metric1_reset: Some(
-                chrono::Utc::now() + chrono::Duration::hours(18) + chrono::Duration::minutes(40),
-            ),
-            metric2_title: "BURST LIMIT".to_string(),
-            metric2_val: Some(5.0),
-            metric2_text: "5%".to_string(),
-            metric2_reset: None,
-            badge1_text: "0.4x pace".to_string(),
-            badge2_text: "Enterprise".to_string(),
-            last_updated_time: "21:50:02".to_string(),
-            error: None,
-            error_code: String::new(),
-            retry_after: None,
-            stale: false,
-            last_success: Some(chrono::Utc::now()),
-            ..Default::default()
-        };
-        hud.on_data_fetched(&agy_metrics);
-
-        // Realistic Mock metrics for Codex
-        let codex_metrics = crate::providers::base::UsageMetrics {
-            provider_id: "codex".to_string(),
-            provider_name: "OpenAI Codex".to_string(),
-            metric1_title: "SESSION 5H".to_string(),
-            metric1_val: Some(85.0),
-            metric1_text: "85%".to_string(),
-            metric1_reset: Some(chrono::Utc::now() + chrono::Duration::minutes(45)),
-            metric2_title: "MONTHLY".to_string(),
-            metric2_val: Some(92.0),
-            metric2_text: "92%".to_string(),
-            metric2_reset: Some(chrono::Utc::now() + chrono::Duration::days(12)),
-            badge1_text: "1.8x pace".to_string(),
-            badge2_text: "Plus Tier".to_string(),
-            last_updated_time: "21:49:58".to_string(),
-            error: None,
-            error_code: String::new(),
-            retry_after: None,
-            stale: false,
-            last_success: Some(chrono::Utc::now()),
-            ..Default::default()
-        };
-        hud.on_data_fetched(&codex_metrics);
+        let now = chrono::Utc::now();
+        for id in providers::PROVIDER_IDS {
+            let metrics =
+                providers::snapshot::snapshot_metrics(id, now).expect("snapshot fixture missing");
+            hud.on_data_fetched(&metrics);
+        }
 
         let out_dir = std::path::Path::new("target/snapshots");
         let _ = std::fs::create_dir_all(out_dir);
@@ -442,7 +400,9 @@ fn main() -> std::process::ExitCode {
         cfg.refresh_interval_sec
     };
 
-    let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(interval)));
+    let refresh_ctrl = Arc::new(Mutex::new(
+        RefreshController::new(interval).with_jitter(0.25),
+    ));
 
     let mut _app = Application::new(std::env::args().collect());
     configure_application_policy();
@@ -485,6 +445,21 @@ fn main() -> std::process::ExitCode {
         *cell.borrow_mut() = Some(Rc::clone(&tray));
     });
 
+    // The tray number follows the HUD's data: the window tells `main` (it has no tray reference),
+    // which refreshes the tray once per event-loop turn however many providers published.
+    hud.borrow_mut().set_quota_changed(|| {
+        static PENDING: AtomicBool = AtomicBool::new(false);
+        if PENDING.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        Timer::single_shot(0, || {
+            PENDING.store(false, Ordering::Release);
+            refresh_tray_quota();
+        });
+    });
+    // Draw the stored choice at start-up, before the first data arrives.
+    refresh_tray_quota();
+
     // Connect tray activations
     tray.borrow()
         .tray
@@ -510,9 +485,21 @@ fn main() -> std::process::ExitCode {
         }) else {
             return;
         };
-        let menu = std::rc::Rc::new(std::cell::RefCell::new(ui::tray_icon::build_hud_menu(
-            &cfg, &root, tray,
-        )));
+        let data = MAIN_HUD
+            .with(|h_cell| {
+                h_cell
+                    .borrow()
+                    .as_ref()
+                    .map(|hud| hud.borrow().quota_data())
+            })
+            .unwrap_or_default();
+        let quota_keys = ui::tray_icon::quota_keys(&data);
+        let menu = if tray {
+            ui::tray_icon::build_tray_menu(&cfg, &root, &data)
+        } else {
+            ui::tray_icon::build_context_menu(&cfg, &root, &data)
+        };
+        let menu = std::rc::Rc::new(std::cell::RefCell::new(menu));
         if let Some(action) = ferrokit_widgets::menu::Menu::exec_popup(&menu, global_pos)
             && let Some(id) = action.borrow().data().to_u64()
         {
@@ -523,6 +510,9 @@ fn main() -> std::process::ExitCode {
                         if let Some(hud) = h_cell.borrow().as_ref() {
                             let mut tray_ref = tray.borrow_mut();
                             let mut hud_ref = hud.borrow_mut();
+                            if tray_ref.apply_quota_action(action_id, &quota_keys, &data) {
+                                return;
+                            }
                             if tray_ref.handle_action(action_id, &mut hud_ref) {
                                 hud_ref.persist_geometry();
                                 hud_ref.window.hide();

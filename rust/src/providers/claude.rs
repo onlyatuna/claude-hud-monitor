@@ -5,17 +5,18 @@
 // Mirrors Python core/providers/claude_provider.py
 
 use super::base::{
-    Provider, UsageMetrics, format_error, now_str, object_field, percent_text, percentage,
-    retry_delay,
+    MetricRow, Provider, UsageMetrics, format_error, now_str, object_field, percent_text,
+    percentage, retry_delay,
 };
 use crate::config::Config;
 use chrono::{DateTime, Utc};
-use log::error;
+use log::{error, info};
 use parking_lot::Mutex;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use ureq::OrAnyStatus;
 
@@ -289,8 +290,12 @@ fn token_from_keychain() -> Option<String> {
     extract_token(&json)
 }
 
+/// A credentials file larger than this is not read (a real one is a few hundred bytes).
+const MAX_CREDENTIALS_BYTES: u64 = 64 * 1024;
+
 fn get_access_token(credentials_path: &Path) -> Option<String> {
     if credentials_path.exists()
+        && fs::metadata(credentials_path).is_ok_and(|m| m.len() <= MAX_CREDENTIALS_BYTES)
         && let Ok(text) = fs::read_to_string(credentials_path)
         && let Ok(json) = serde_json::from_str::<Value>(&text)
         && let Some(token) = extract_token(&json)
@@ -311,6 +316,8 @@ fn get_access_token(credentials_path: &Path) -> Option<String> {
 pub struct ClaudeProvider {
     client: ureq::Agent,
     config: Option<Arc<Mutex<Config>>>,
+    /// An extra account: always this profile, whatever `claude_profile` says.
+    pinned_profile: Option<String>,
 }
 
 impl ClaudeProvider {
@@ -322,7 +329,19 @@ impl ClaudeProvider {
     pub fn with_config(config: Option<Arc<Mutex<Config>>>) -> Self {
         let timeout = Duration::from_secs(10);
         let client = ureq::AgentBuilder::new().timeout(timeout).build();
-        Self { client, config }
+        Self {
+            client,
+            config,
+            pinned_profile: None,
+        }
+    }
+
+    #[cfg_attr(test, allow(dead_code))]
+    /// The provider of an extra account: reads `profile`'s credentials and nothing else.
+    pub fn for_profile(profile: &str) -> Self {
+        let mut provider = Self::with_config(None);
+        provider.pinned_profile = Some(profile.to_owned());
+        provider
     }
 }
 
@@ -336,11 +355,12 @@ impl Provider for ClaudeProvider {
 
     fn fetch_usage(&self) -> UsageMetrics {
         let now = now_str();
-        let preference = self
-            .config
-            .as_ref()
-            .map(|c| c.lock().claude_profile.clone())
-            .unwrap_or_else(|| "auto".to_string());
+        let preference = self.pinned_profile.clone().unwrap_or_else(|| {
+            self.config
+                .as_ref()
+                .map(|c| c.lock().claude_profile.clone())
+                .unwrap_or_else(|| "auto".to_string())
+        });
 
         let (active_profile, is_auto) = resolve_active_profile(&preference);
         let display_title = if is_auto {
@@ -364,7 +384,7 @@ impl Provider for ClaudeProvider {
                     active_profile.short_name, active_profile.short_name
                 )
             };
-            return UsageMetrics::error_result("claude", &display_title, &error_msg, "");
+            return UsageMetrics::error_result("claude", &display_title, &error_msg, "auth");
         };
 
         let result = self
@@ -380,7 +400,7 @@ impl Provider for ClaudeProvider {
         match result {
             Ok(resp) => {
                 let status = resp.status();
-                if status == 401 {
+                if status == 401 || status == 403 {
                     let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "claude".to_owned(),
@@ -482,11 +502,25 @@ fn parse_claude_response(data: Value, now_str: &str) -> UsageMetrics {
         }
     }
 
-    let five_h_dt = parse_iso_datetime(five_hour.get("resets_at").and_then(|v| v.as_str()));
-    let seven_d_dt = parse_iso_datetime(seven_day.get("resets_at").and_then(|v| v.as_str()));
+    let limits = parse_limits(&data);
 
-    let s_val = percentage(five_hour.get("utilization").and_then(|v| v.as_f64()), 100.0);
-    let w_val = percentage(seven_day.get("utilization").and_then(|v| v.as_f64()), 100.0);
+    // A missing (absent / null / empty object) top-level window falls back to the matching
+    // `limits[]` entry; a present one always wins.
+    let missing = |w: &Value| w.is_null() || w.as_object().is_some_and(|o| o.is_empty());
+    let (five_h_dt, s_val) = match (missing(&five_hour), &limits.session) {
+        (true, Some(w)) => (w.reset, Some(w.val)),
+        _ => (
+            parse_iso_datetime(five_hour.get("resets_at").and_then(|v| v.as_str())),
+            percentage(five_hour.get("utilization").and_then(|v| v.as_f64()), 100.0),
+        ),
+    };
+    let (seven_d_dt, w_val) = match (missing(&seven_day), &limits.weekly_all) {
+        (true, Some(w)) => (w.reset, Some(w.val)),
+        _ => (
+            parse_iso_datetime(seven_day.get("resets_at").and_then(|v| v.as_str())),
+            percentage(seven_day.get("utilization").and_then(|v| v.as_f64()), 100.0),
+        ),
+    };
 
     UsageMetrics {
         provider_id: "claude".to_owned(),
@@ -495,10 +529,12 @@ fn parse_claude_response(data: Value, now_str: &str) -> UsageMetrics {
         metric1_val: s_val,
         metric1_text: percent_text(s_val),
         metric1_reset: five_h_dt,
+        metric1_key: "claude:5h".to_owned(),
         metric2_title: "WEEKLY 7D".to_owned(),
         metric2_val: w_val,
         metric2_text: percent_text(w_val),
         metric2_reset: seven_d_dt,
+        metric2_key: "claude:7d".to_owned(),
         badge1_text: format!("Code: {}", percent_text(code_pct)),
         badge2_text: format!("Chat: {}", percent_text(chat_pct)),
         last_updated_time: now_str.to_owned(),
@@ -512,8 +548,158 @@ fn parse_claude_response(data: Value, now_str: &str) -> UsageMetrics {
         } else {
             String::new()
         },
+        extra_metrics: limits.extras,
         ..Default::default()
     }
+}
+
+/// A main-pair window taken from a `limits[]` entry (fallback only).
+struct LimitWindow {
+    val: f64,
+    reset: Option<DateTime<Utc>>,
+}
+
+#[derive(Default)]
+struct Limits {
+    session: Option<LimitWindow>,
+    weekly_all: Option<LimitWindow>,
+    extras: Vec<MetricRow>,
+}
+
+/// Kinds and groups the parser understands; anything else is still rendered (when it has a valid
+/// percent) but logged once per process.
+const KNOWN_KINDS: [&str; 3] = ["session", "weekly_all", "weekly_scoped"];
+const KNOWN_GROUPS: [&str; 2] = ["session", "weekly"];
+
+/// True the first time `what` is seen in this process (so it is logged once, never persisted).
+fn first_sighting(what: &str) -> bool {
+    static SEEN: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+    SEEN.lock().insert(what.to_owned())
+}
+
+fn note_unknown(label: &str, value: &str) {
+    let value: String = value.chars().take(40).collect();
+    if first_sighting(&format!("{label}={value}")) {
+        info!("[ClaudeProvider] unknown limits[] {label}: {value:?}");
+    }
+}
+
+/// Lower-case slug: every run of non-alphanumeric characters becomes one '-', edges trimmed.
+pub(super) fn slug(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.trim().chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+fn non_empty_str(v: Option<&Value>) -> Option<&str> {
+    v.and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// Read the optional top-level `limits[]` array. Anything that is not a list is ignored; entries
+/// that are not objects, have no finite 0..=100 `percent` or repeat an earlier row are skipped.
+/// `is_active` is deliberately not consulted: it only marks the currently binding limit.
+fn parse_limits(data: &Value) -> Limits {
+    let mut out = Limits::default();
+    let Some(Value::Array(entries)) = data.get("limits") else {
+        return out;
+    };
+    for entry in entries {
+        if !entry.is_object() {
+            continue;
+        }
+        let kind = non_empty_str(entry.get("kind")).map(str::to_lowercase);
+        let Some(kind) = kind.as_deref() else {
+            continue;
+        };
+        let group = non_empty_str(entry.get("group")).map_or_else(String::new, str::to_lowercase);
+        let group = group.as_str();
+        if !KNOWN_KINDS.contains(&kind) {
+            note_unknown("kind", kind);
+        }
+        if !group.is_empty() && !KNOWN_GROUPS.contains(&group) {
+            note_unknown("group", group);
+        }
+        let Some(val) = percentage(entry.get("percent").and_then(Value::as_f64), 100.0) else {
+            continue;
+        };
+        let reset = parse_iso_datetime(entry.get("resets_at").and_then(Value::as_str));
+        match kind {
+            // These two duplicate five_hour / seven_day; kept only as a main-pair fallback.
+            "session" => {
+                out.session.get_or_insert(LimitWindow { val, reset });
+            }
+            "weekly_all" => {
+                out.weekly_all.get_or_insert(LimitWindow { val, reset });
+            }
+            _ => {
+                let mut row = scoped_row(entry, kind, group, val, reset);
+                if out.extras.iter().all(|r| r.key != row.key) {
+                    row.subtext = String::new();
+                    out.extras.push(row);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A usable scope name: non-empty after trimming and with a non-empty slug.
+fn scope_name(v: Option<&Value>) -> Option<(&str, String)> {
+    let name = non_empty_str(v)?;
+    let s = slug(name);
+    (!s.is_empty()).then_some((name, s))
+}
+
+/// Row for a scoped limit: title `<NAME> <WINDOW>` (`FABLE 7D`), key
+/// `claude:<kind>[:<slug(model or surface)>[:<slug(surface)>]]`. NAME is the scope's model display
+/// name, else its surface, else the kind.
+fn scoped_row(
+    entry: &Value,
+    kind: &str,
+    group: &str,
+    val: f64,
+    reset: Option<DateTime<Utc>>,
+) -> MetricRow {
+    let scope = entry.get("scope").filter(|s| s.is_object());
+    let model = scope
+        .and_then(|s| s.get("model"))
+        .filter(|m| m.is_object())
+        .and_then(|m| scope_name(m.get("display_name")));
+    let surface = scope_name(scope.and_then(|s| s.get("surface")));
+    let mut title = match (&model, &surface) {
+        (Some((n, _)), _) | (None, Some((n, _))) => n.to_uppercase(),
+        (None, None) => kind.to_uppercase(),
+    };
+    match group {
+        "weekly" => title.push_str(" 7D"),
+        "session" => title.push_str(" 5H"),
+        _ => {}
+    }
+    let mut key = format!("claude:{kind}");
+    let parts = match (&model, &surface) {
+        (Some((_, m)), Some((_, s))) => [Some(m), Some(s)],
+        (Some((_, m)), None) | (None, Some((_, m))) => [Some(m), None],
+        (None, None) => [None, None],
+    };
+    for part in parts.into_iter().flatten() {
+        key.push(':');
+        key.push_str(part);
+    }
+    let mut row = MetricRow::new(&title, Some(val), &percent_text(Some(val)));
+    row.reset = reset;
+    row.key = key;
+    row
 }
 
 fn parse_iso_datetime(s: Option<&str>) -> Option<DateTime<Utc>> {
@@ -615,6 +801,197 @@ mod tests {
         let empty_json = serde_json::json!({});
         assert_eq!(extract_token(&empty_json), None);
     }
+
+    fn limits_payload() -> Value {
+        serde_json::json!({
+            "five_hour": {"utilization": 28.5, "resets_at": "2030-01-01T05:00:00Z"},
+            "seven_day": {"utilization": 64.0, "resets_at": "2030-01-07T00:00:00Z"},
+            "seven_day_sonnet": null,
+            "seven_day_opus": null,
+            "seven_day_omelette": null,
+            "iguana_necktie": null,
+            "limits": [
+                {"kind": "session", "group": "session", "percent": 28, "severity": "normal",
+                 "resets_at": "2030-01-01T05:00:00Z", "scope": null, "is_active": false},
+                {"kind": "weekly_all", "group": "weekly", "percent": 64, "severity": "normal",
+                 "resets_at": "2030-01-07T00:00:00Z", "scope": null, "is_active": false},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 84, "severity": "warning",
+                 "resets_at": "2030-01-06T00:00:00Z",
+                 "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null},
+                 "is_active": true},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 0, "severity": "normal",
+                 "resets_at": null,
+                 "scope": {"model": {"id": "m-1", "display_name": "Quiet Model"}, "surface": null},
+                 "is_active": false},
+                "not an object",
+                {"kind": "weekly_scoped", "group": "weekly", "percent": "lots",
+                 "scope": {"model": {"display_name": "Broken"}}},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 150,
+                 "scope": {"model": {"display_name": "Too High"}}},
+                {"kind": "brand_new_kind", "group": "brand_new_group", "percent": 12,
+                 "scope": {"model": {"display_name": "Mystery"}}},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 99,
+                 "scope": {"model": {"display_name": "FABLE"}}}
+            ]
+        })
+    }
+
+    #[test]
+    fn scoped_limits_become_extra_rows_and_the_main_pair_is_unchanged() {
+        let m = parse_claude_response(limits_payload(), "10:00:00");
+        assert!(m.error.is_none());
+        assert_eq!(m.metric1_val, Some(28.5));
+        assert_eq!(m.metric2_val, Some(64.0));
+        assert_eq!(m.metric1_key, "claude:5h");
+        assert_eq!(m.metric2_key, "claude:7d");
+
+        let titles: Vec<&str> = m.extra_metrics.iter().map(|r| r.title.as_str()).collect();
+        assert_eq!(titles, ["FABLE 7D", "QUIET MODEL 7D", "MYSTERY"]);
+
+        let fable = &m.extra_metrics[0];
+        assert_eq!(fable.key, "claude:weekly_scoped:fable");
+        assert_eq!(fable.val, Some(84.0));
+        assert_eq!(fable.text, "84%");
+        assert!(fable.reset.is_some());
+
+        // A quiet entry (0 %, no reset, not active) is still rendered; `is_active` is not a filter.
+        let quiet = &m.extra_metrics[1];
+        assert_eq!(quiet.key, "claude:weekly_scoped:quiet-model");
+        assert_eq!(quiet.val, Some(0.0));
+        assert_eq!(quiet.text, "0%");
+        assert_eq!(quiet.reset, None);
+
+        // Unknown kind/group with a valid percent is kept without panicking.
+        assert_eq!(m.extra_metrics[2].key, "claude:brand_new_kind:mystery");
+    }
+
+    #[test]
+    fn duplicate_scoped_entries_keep_the_first() {
+        let m = parse_claude_response(limits_payload(), "10:00:00");
+        let fables: Vec<_> = m
+            .extra_metrics
+            .iter()
+            .filter(|r| r.key == "claude:weekly_scoped:fable")
+            .collect();
+        assert_eq!(fables.len(), 1);
+        assert_eq!(fables[0].val, Some(84.0));
+    }
+
+    #[test]
+    fn missing_top_level_windows_fall_back_to_limits() {
+        let mut data = limits_payload();
+        let obj = data.as_object_mut().unwrap();
+        obj.remove("five_hour");
+        obj.insert("seven_day".to_owned(), Value::Null);
+        let m = parse_claude_response(data, "10:00:00");
+        assert!(m.error.is_none());
+        assert_eq!(m.metric1_val, Some(28.0));
+        assert_eq!(
+            m.metric1_reset,
+            parse_iso_datetime(Some("2030-01-01T05:00:00Z"))
+        );
+        assert_eq!(m.metric2_val, Some(64.0));
+        assert_eq!(
+            m.metric2_reset,
+            parse_iso_datetime(Some("2030-01-07T00:00:00Z"))
+        );
+        // session / weekly_all never become extra rows.
+        assert_eq!(m.extra_metrics.len(), 3);
+    }
+
+    #[test]
+    fn present_top_level_windows_win_over_limits() {
+        let mut data = limits_payload();
+        data["five_hour"]["utilization"] = serde_json::json!(40.0);
+        let m = parse_claude_response(data, "10:00:00");
+        assert_eq!(m.metric1_val, Some(40.0));
+    }
+
+    #[test]
+    fn wrong_typed_limits_never_break_the_main_pair() {
+        for bad in [
+            serde_json::json!("x"),
+            serde_json::json!({"a": 1}),
+            serde_json::json!(7),
+            Value::Null,
+            serde_json::json!([1, null, "x", [], {"percent": null}]),
+        ] {
+            let mut data = limits_payload();
+            data["limits"] = bad;
+            let m = parse_claude_response(data, "10:00:00");
+            assert!(m.error.is_none());
+            assert_eq!(m.metric1_val, Some(28.5));
+            assert_eq!(m.metric2_val, Some(64.0));
+            assert!(m.extra_metrics.is_empty());
+        }
+    }
+
+    #[test]
+    fn surface_and_kind_fallback_titles_and_slugs() {
+        let data = serde_json::json!({
+            "five_hour": {"utilization": 1.0},
+            "seven_day": {"utilization": 2.0},
+            "limits": [
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+                 "scope": {"model": null, "surface": "Claude Design"}},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 11, "scope": null},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 12,
+                 "scope": {"model": {"display_name": "  Opus 4.1 (Beta)! "}}}
+            ]
+        });
+        let m = parse_claude_response(data, "10:00:00");
+        let rows: Vec<(&str, &str)> = m
+            .extra_metrics
+            .iter()
+            .map(|r| (r.title.as_str(), r.key.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("CLAUDE DESIGN 7D", "claude:weekly_scoped:claude-design"),
+                ("WEEKLY_SCOPED 7D", "claude:weekly_scoped"),
+                ("OPUS 4.1 (BETA)! 7D", "claude:weekly_scoped:opus-4-1-beta"),
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_kinds_are_logged_once_per_process() {
+        assert!(first_sighting("kind=test-only-kind"));
+        assert!(!first_sighting("kind=test-only-kind"));
+    }
+
+    #[test]
+    fn model_and_surface_both_in_the_key_and_empty_kind_skipped() {
+        let data = serde_json::json!({
+            "five_hour": {},
+            "seven_day": {"utilization": 2.0},
+            "limits": [
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 10,
+                 "scope": {"model": {"display_name": "Fable"}, "surface": "Daily Routines"}},
+                {"kind": "weekly_scoped", "group": "weekly", "percent": 11,
+                 "scope": {"model": {"display_name": "Fable"}, "surface": "Other"}},
+                {"kind": "", "group": "weekly", "percent": 12},
+                {"kind": "Session", "group": "session", "percent": 33, "resets_at": null}
+            ]
+        });
+        let m = parse_claude_response(data, "10:00:00");
+        let rows: Vec<(&str, &str)> = m
+            .extra_metrics
+            .iter()
+            .map(|r| (r.title.as_str(), r.key.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("FABLE 7D", "claude:weekly_scoped:fable:daily-routines"),
+                ("FABLE 7D", "claude:weekly_scoped:fable:other"),
+            ]
+        );
+        // An empty top-level `five_hour` object counts as missing: the session entry fills it.
+        assert_eq!(m.metric1_val, Some(33.0));
+    }
+
     /// Manual integration test against the live Claude usage endpoint; parsing is covered offline
     /// by `test_parse_claude_response`. Usage numbers depend on the account, so only success is
     /// asserted. Run with `cargo test test_live_fetch_usage -- --ignored`.

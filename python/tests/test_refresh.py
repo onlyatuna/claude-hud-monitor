@@ -87,6 +87,20 @@ class RefreshTests(unittest.TestCase):
             self.assertEqual(self.controller.states['test'].due, expected_due)
             self.controller.states['test'].failures = 0
 
+    def test_retry_after_remains_a_floor_after_negative_jitter(self):
+        self.controller.jitter = 0.25
+        self.controller._rand = lambda low, high: low
+        self.controller._complete('test', 0, UsageMetrics(
+            provider_id='test', error='limited', retry_after=120))
+        self.assertEqual(self.controller.states['test'].due, 120)
+
+    def test_retry_after_cap_applies_after_positive_jitter(self):
+        self.controller.jitter = 0.25
+        self.controller._rand = lambda low, high: high
+        self.controller._complete('test', 0, UsageMetrics(
+            provider_id='test', error='limited', retry_after=10 ** 20))
+        self.assertEqual(self.controller.states['test'].due, 86400)
+
     def test_one_slow_provider_does_not_block_another(self):
         other = Provider()
         controller = RefreshController({'slow': self.provider, 'fast': other})
@@ -101,3 +115,26 @@ class RefreshTests(unittest.TestCase):
         finally:
             self.provider.release.set()
             controller.stop()
+
+    def test_auth_failure_after_success_is_offline_but_transient_failures_stay_stale(self):
+        def run(error_code):
+            controller = RefreshController({'test': Provider()}, clock=lambda: 0)
+            seen = []
+            controller.updated.connect(seen.append)
+            try:
+                state = controller.states['test']
+                controller._complete('test', state.generation, UsageMetrics(provider_id='test', metric1_val=40))
+                controller._complete('test', state.generation,
+                                     UsageMetrics(provider_id='test', error='x', error_code=error_code))
+                return seen[-1], controller.states['test']
+            finally:
+                controller.stop()
+        for code in ('network', 'rate_limit', 'http'):
+            shown, _state = run(code)
+            self.assertTrue(shown.stale, code)
+            self.assertEqual(shown.metric1_val, 40)
+        shown, state = run('auth')
+        self.assertFalse(shown.stale)
+        self.assertIsNone(shown.metric1_val)
+        self.assertEqual(shown.error_code, 'auth')
+        self.assertIsNone(state.cached)

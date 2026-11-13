@@ -18,7 +18,7 @@ Steps (the Rust test in `rust/src/ui/usage_table_relayout_tests.rs` runs the sam
   stale         agy error and stale ("⏱ STALE" badge)
   recovered     claude back to data, agy back to data
 
-Run (Windows; PySide6 6.11.2): DPR 1.25 -> QT_SCREEN_SCALE_FACTORS=1.25; DPR 1.0 -> QT_ENABLE_HIGHDPI_SCALING=0
+Run (Windows; PySide6 6.12.0): DPR 1.25 -> QT_SCREEN_SCALE_FACTORS=1.25; DPR 1.0 -> QT_ENABLE_HIGHDPI_SCALING=0
   python usage_table_relayout.py
 """
 

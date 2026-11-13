@@ -14,6 +14,9 @@ use ferrokit_widgets::menu::{Menu, MenuRef};
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;
+use crate::config::ConfigManager;
+use crate::providers::base::UsageMetrics;
+use crate::tray_quota;
 
 // Menu Action IDs
 pub const ACTION_TOGGLE_VISIBILITY: u32 = 1;
@@ -68,6 +71,19 @@ pub const ACTION_IDLE_DELAY_BASE: u32 = 100_000; // + milliseconds
 pub const ACTION_AGY_ORDER_RESET: u32 = 150;
 pub const ACTION_AGY_STATUSLINE_INSTALL: u32 = 160;
 pub const ACTION_AGY_STATUSLINE_UNINSTALL: u32 = 161;
+
+// Tray number submenu (tray menu only): 5000 off, 5001 auto, 5002 used, 5003 remaining, and
+// 5100 + n for the n-th quota row of `quota_keys`.
+pub const ACTION_TRAY_QUOTA_OFF: u32 = 5000;
+pub const ACTION_TRAY_QUOTA_AUTO: u32 = 5001;
+pub const ACTION_TRAY_MODE_USED: u32 = 5002;
+pub const ACTION_TRAY_MODE_REMAINING: u32 = 5003;
+pub const ACTION_TRAY_QUOTA_ROW_BASE: u32 = 5100;
+
+// Right-click menu: 同時顯示 (an extra Claude account per profile, 6000 + n) and 側邊欄項目
+// (show / hide a tile, 6100 + n). The ids index the lists of the last built menu.
+pub const ACTION_ACCOUNT_BASE: u32 = 6000;
+pub const ACTION_TILE_BASE: u32 = 6100;
 
 pub const SIDEBAR_SCALES: [u32; 6] = [60, 80, 100, 125, 150, 200];
 pub const IDLE_LEVELS: [u32; 4] = [80, 60, 40, 25];
@@ -215,12 +231,49 @@ pub fn build_hud_menu(
     root: &ferrokit_widgets::widget::WidgetRef,
     tray: bool,
 ) -> Menu {
+    build_menu(cfg, root, tray.then_some(&[][..]), &[])
+}
+
+/// The tray icon's menu: `build_hud_menu` for the tray plus the tray number submenu, whose rows
+/// come from `data` (the providers' latest data, see `HUDWindow::quota_data`).
+pub fn build_tray_menu(
+    cfg: &Config,
+    root: &ferrokit_widgets::widget::WidgetRef,
+    data: &[UsageMetrics],
+) -> Menu {
+    build_menu(cfg, root, Some(data), &agy_dynamic_titles(data))
+}
+
+/// The HUD right-click menu with the live agy rows in its row order list (see `build_hud_menu`).
+pub fn build_context_menu(
+    cfg: &Config,
+    root: &ferrokit_widgets::widget::WidgetRef,
+    data: &[UsageMetrics],
+) -> Menu {
+    build_menu(cfg, root, None, &agy_dynamic_titles(data))
+}
+
+/// The dynamic row titles of agy's latest data (see `agy_rows::dynamic_titles`).
+fn agy_dynamic_titles(data: &[UsageMetrics]) -> Vec<String> {
+    data.iter()
+        .find(|m| m.provider_id == "agy")
+        .map(crate::agy_rows::dynamic_titles)
+        .unwrap_or_default()
+}
+
+/// `tray_data` is `Some` for the tray menu.
+fn build_menu(
+    cfg: &Config,
+    root: &ferrokit_widgets::widget::WidgetRef,
+    tray_data: Option<&[UsageMetrics]>,
+    agy_dynamic: &[String],
+) -> Menu {
     let mut menu = Menu::new("");
     menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
     menu.set_style(hud_menu_style(cfg));
     ferrokit_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
 
-    if tray {
+    if tray_data.is_some() {
         add_item(
             &mut menu,
             ACTION_TOGGLE_VISIBILITY,
@@ -233,15 +286,93 @@ pub fn build_hud_menu(
         "立即重新整理所有 AI (Refresh All)",
     );
     menu.add_separator();
-    build_interface(&mut menu, cfg);
+    build_interface(&mut menu, cfg, agy_dynamic);
+    if tray_data.is_none() {
+        build_accounts(&mut menu, cfg);
+    }
     build_appearance(&mut menu, cfg);
     build_behaviour(&mut menu, cfg);
-    if !tray {
-        build_more(&mut menu, cfg);
+    match tray_data {
+        Some(data) => build_tray_quota(&mut menu, cfg, data),
+        None => build_more(&mut menu, cfg),
     }
     menu.add_separator();
     add_item(&mut menu, ACTION_EXIT, "結束程式 (Exit)");
     menu
+}
+
+/// The qualified key of every choosable quota row in the tray number submenu, in menu order: row
+/// `n` has the action id `ACTION_TRAY_QUOTA_ROW_BASE + n`. A provider that is offline has none.
+pub fn quota_keys(data: &[UsageMetrics]) -> Vec<String> {
+    data.iter()
+        .filter(|m| !tray_quota::is_offline(m))
+        .flat_map(tray_quota::rows)
+        .map(|row| row.key)
+        .collect()
+}
+
+/// The tray number submenu: off, auto, then every row of every provider (labelled with its live
+/// title and used percent), then the used / remaining switch. A stored key that is not in the data
+/// (a model scope that went away) stays, shown checked and disabled; the setting is not touched.
+fn build_tray_quota(menu: &mut Menu, cfg: &Config, data: &[UsageMetrics]) {
+    add_submenu(menu, "系統匣數字 (Tray number)", cfg, |sub| {
+        let setting = cfg.tray_quota.as_str();
+        add_check(
+            sub,
+            ACTION_TRAY_QUOTA_OFF,
+            "關閉 (Off)",
+            setting == tray_quota::QUOTA_OFF,
+        );
+        add_check(
+            sub,
+            ACTION_TRAY_QUOTA_AUTO,
+            "自動：最緊的額度 (Auto)",
+            setting == tray_quota::QUOTA_AUTO,
+        );
+        let gone_selection = tray_quota::resolve(setting, data, chrono::Utc::now())
+            .is_some_and(|r| r.state == tray_quota::State::Unavailable);
+        if gone_selection {
+            let gone = Action::new_ref(format!("{setting}  unavailable"));
+            {
+                let mut a = gone.borrow_mut();
+                a.set_checkable(true);
+                a.set_checked(true);
+                a.set_enabled(false);
+            }
+            sub.add_action(gone);
+        }
+        let mut index = 0;
+        for m in data {
+            sub.add_separator();
+            add_disabled(sub, &tray_quota::display_name_of(m));
+            if tray_quota::is_offline(m) {
+                add_disabled(sub, "offline");
+                continue;
+            }
+            for row in tray_quota::rows(m) {
+                add_check(
+                    sub,
+                    ACTION_TRAY_QUOTA_ROW_BASE + index,
+                    &tray_quota::menu_label(&row),
+                    setting == row.key,
+                );
+                index += 1;
+            }
+        }
+        sub.add_separator();
+        add_check(
+            sub,
+            ACTION_TRAY_MODE_USED,
+            "顯示已用 (Show used)",
+            cfg.tray_quota_mode == tray_quota::MODE_USED,
+        );
+        add_check(
+            sub,
+            ACTION_TRAY_MODE_REMAINING,
+            "顯示剩餘 (Show remaining)",
+            cfg.tray_quota_mode == tray_quota::MODE_REMAINING,
+        );
+    });
 }
 
 /// A submenu styled like its parent (dark or light appearance).
@@ -285,8 +416,21 @@ fn add_disabled(menu: &mut Menu, text: &str) {
     menu.add_action(act);
 }
 
+/// A checkable action that can be disabled.
+fn add_check_enabled(menu: &mut Menu, id: u32, text: &str, checked: bool, enabled: bool) {
+    let act = Action::new_ref(text);
+    {
+        let mut a = act.borrow_mut();
+        a.set_checkable(true);
+        a.set_checked(checked);
+        a.set_enabled(enabled);
+        a.set_data(Variant::uint(id as u64));
+    }
+    menu.add_action(act);
+}
+
 /// Python `hud_menu._build_interface`: the style, and in the sidebar style its form and size.
-fn build_interface(menu: &mut Menu, cfg: &Config) {
+fn build_interface(menu: &mut Menu, cfg: &Config, agy_dynamic: &[String]) {
     add_submenu(menu, "介面 (Interface)", cfg, |sub| {
         for (value, id, label) in UI_MODE_CHOICES {
             add_check(sub, id, label, cfg.ui_mode == value);
@@ -308,16 +452,61 @@ fn build_interface(menu: &mut Menu, cfg: &Config) {
                     );
                 }
             });
+            build_sidebar_tiles(sub, cfg);
         }
         sub.add_separator();
-        build_agy_rows(sub, cfg);
+        build_agy_rows(sub, cfg, agy_dynamic);
+    });
+}
+
+/// `介面 > 側邊欄項目 (Sidebar tiles)`: one check per tile, ticked = visible (hiding a tile does
+/// not stop its fetching). The only visible tile cannot be hidden.
+fn build_sidebar_tiles(menu: &mut Menu, cfg: &Config) {
+    use crate::accounts;
+    let resolved = accounts::resolve_accounts(cfg);
+    let tiles = accounts::tiles_of(
+        cfg,
+        &resolved.iter().map(|r| r.spec.clone()).collect::<Vec<_>>(),
+    );
+    MENU_TILES.with(|list| {
+        *list.borrow_mut() = tiles
+            .all
+            .iter()
+            .map(|id| (id.clone(), tiles.visible.contains(id)))
+            .collect();
+    });
+    add_submenu(menu, "側邊欄項目 (Sidebar tiles)", cfg, |sub| {
+        for (i, id) in tiles.all.iter().enumerate() {
+            let label = match id.as_str() {
+                "claude" => "Claude".to_owned(),
+                "agy" => "AGY".to_owned(),
+                "codex" => "Codex".to_owned(),
+                other => resolved.iter().find(|r| r.spec.id == other).map_or_else(
+                    || other.to_owned(),
+                    |r| accounts::elide(&r.label, accounts::MENU_LABEL_MAX),
+                ),
+            };
+            let visible = tiles.visible.contains(id);
+            add_check_enabled(
+                sub,
+                ACTION_TILE_BASE + i as u32,
+                &label,
+                visible,
+                !(visible && tiles.visible.len() == 1),
+            );
+        }
+        sub.add_separator();
+        add_disabled(
+            sub,
+            "細條模式下長按磚塊拖曳可調整順序 (Hold and drag a tile in the strip to reorder)",
+        );
     });
 }
 
 /// Python `hud_menu._build_agy_rows`: shows the current agy row order; the order itself is changed by
 /// dragging rows in the detail page.
-fn build_agy_rows(menu: &mut Menu, cfg: &Config) {
-    let order = crate::agy_rows::normalize_order(&cfg.agy_order);
+fn build_agy_rows(menu: &mut Menu, cfg: &Config, dynamic: &[String]) {
+    let order = crate::agy_rows::normalize_order_with(&cfg.agy_order, dynamic);
     add_submenu(menu, "AGY 項目順序 (Row order)", cfg, |sub| {
         add_disabled(sub, "在詳細頁面拖拉標題可調整，前兩條為主要顯示");
         sub.add_separator();
@@ -464,9 +653,57 @@ thread_local! {
     static MENU_PROFILE_IDS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Python `hud_menu._build_claude_accounts`.
-fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
-    add_submenu(menu, "Claude 帳號 (Claude Account)", cfg, |sub| {
+thread_local! {
+    /// `(profile id, ticked)` of the last built 同時顯示 submenu, indexed by the action offset.
+    static MENU_ACCOUNTS: std::cell::RefCell<Vec<(String, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// `(tile id, visible)` of the last built 側邊欄項目 submenu.
+    static MENU_TILES: std::cell::RefCell<Vec<(String, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `帳號 > Claude 同時顯示 (Also show)`: one extra Claude account per other profile.
+fn build_also_show(menu: &mut Menu, cfg: &Config) {
+    let current = cfg.claude_profile.as_str();
+    let main_is_auto = current.is_empty() || current.eq_ignore_ascii_case("auto");
+    use crate::accounts;
+    add_submenu(menu, "Claude 同時顯示 (Also show)", cfg, |sub| {
+        if main_is_auto {
+            add_disabled(
+                sub,
+                "主分頁為「自動」，可能與下列帳號重複，建議先在上方固定帳號 (Main tile is on Auto: pin an account above first)",
+            );
+            sub.add_separator();
+        }
+        let entries = accounts::menu_entries(cfg);
+        let at_cap = accounts::accounts_of(cfg).len() >= accounts::MAX_ACCOUNTS;
+        MENU_ACCOUNTS.with(|list| {
+            *list.borrow_mut() = entries
+                .iter()
+                .take(40)
+                .map(|(profile, _, ticked, _)| (profile.clone(), *ticked))
+                .collect();
+        });
+        if entries.is_empty() {
+            add_disabled(sub, "沒有其他帳號 (No other profile found)");
+            return;
+        }
+        for (i, (_, label, ticked, _)) in entries.iter().take(40).enumerate() {
+            add_check_enabled(
+                sub,
+                ACTION_ACCOUNT_BASE + i as u32,
+                label,
+                *ticked,
+                *ticked || !at_cap,
+            );
+        }
+        if at_cap {
+            add_disabled(sub, "最多 6 個帳號 (Max 6 accounts)");
+        }
+    });
+}
+
+/// Python `hud_menu._build_claude_main_account`.
+fn build_claude_main_profile(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "Claude 主帳號 (Main Account)", cfg, |sub| {
         let current = cfg.claude_profile.as_str();
         let is_auto = current.is_empty() || current.eq_ignore_ascii_case("auto");
         let (active, _) = crate::providers::claude::resolve_active_profile(current);
@@ -539,16 +776,23 @@ fn build_agy_statusline(
     });
 }
 
-/// Python `hud_menu._build_more`.
-fn build_more(menu: &mut Menu, cfg: &Config) {
-    add_submenu(menu, "更多 (More)", cfg, |sub| {
-        build_claude_accounts(sub, cfg);
+/// Python `hud_menu._build_accounts`.
+fn build_accounts(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "帳號 (Accounts)", cfg, |sub| {
+        build_claude_main_profile(sub, cfg);
+        build_also_show(sub, cfg);
+        sub.add_separator();
         let status = crate::agy_statusline::statusline_status(None, None);
         let written = (status == crate::agy_statusline::Status::Installed)
             .then(|| crate::agy_statusline::cache_written_at(None))
             .flatten();
         build_agy_statusline(sub, cfg, status, written);
-        sub.add_separator();
+    });
+}
+
+/// Python `hud_menu._build_more`.
+fn build_more(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "更多 (More)", cfg, |sub| {
         add_item(sub, ACTION_OPEN_LOGS, "開啟記錄檔目錄 (Open Logs)");
         add_item(sub, ACTION_RESET_GEOMETRY, "重設預設尺寸與位置");
         add_item(sub, ACTION_HIDE_HUD, "隱藏 HUD (Alt+C 重新喚出)");
@@ -620,20 +864,104 @@ pub(crate) fn run_agy_statusline_action(
     outcome
 }
 
+/// The tooltip every state starts with; a tray number puts its line above these.
+const TOOLTIP_BASE: &str = "AI HUD Monitor (3-in-1)\n• Alt+C: 顯隱\n• Alt+Shift+C: 穿透模式";
+
 pub struct HUDTrayIcon {
     pub tray: Box<TrayIcon>,
     pub config: Arc<Mutex<Config>>,
+    /// The app icon, what `tray_quota = "off"` shows.
+    static_icon: ferrokit_gui::image::Icon,
+    /// What the tray icon shows now (`None`: the static icon), to send only changes.
+    shown_spec: Option<tray_quota::IconSpec>,
+    shown_tooltip: String,
+}
+
+/// Stores the choice behind a tray number action id in the config (`keys` as in
+/// `HUDTrayIcon::apply_quota_action`); `false` when `action_id` is not a tray number action.
+pub(crate) fn run_quota_action(config: &Mutex<Config>, action_id: u32, keys: &[String]) -> bool {
+    let mut quota = None;
+    let mut mode = None;
+    match action_id {
+        ACTION_TRAY_QUOTA_OFF => quota = Some(tray_quota::QUOTA_OFF),
+        ACTION_TRAY_QUOTA_AUTO => quota = Some(tray_quota::QUOTA_AUTO),
+        ACTION_TRAY_MODE_USED => mode = Some(tray_quota::MODE_USED),
+        ACTION_TRAY_MODE_REMAINING => mode = Some(tray_quota::MODE_REMAINING),
+        id => match id
+            .checked_sub(ACTION_TRAY_QUOTA_ROW_BASE)
+            .and_then(|n| keys.get(n as usize))
+        {
+            Some(key) => quota = Some(key.as_str()),
+            None => return false,
+        },
+    }
+    ConfigManager::update_and_save(config, |cfg| {
+        if let Some(q) = quota {
+            cfg.tray_quota = q.to_owned();
+        }
+        if let Some(m) = mode {
+            cfg.tray_quota_mode = m.to_owned();
+        }
+    });
+    true
 }
 
 impl HUDTrayIcon {
     pub fn new(config: Arc<Mutex<Config>>) -> Self {
-        let pixmap = create_default_tray_pixmap();
-        let icon = ferrokit_gui::image::Icon::from_pixmap(&pixmap);
-        let mut tray = TrayIcon::from_icon("AI HUD Monitor (3-in-1)", &icon)
-            .expect("failed to create TrayIcon");
-        let _ = tray.set_tooltip("AI HUD Monitor (3-in-1)\n• Alt+C: 顯隱\n• Alt+Shift+C: 穿透模式");
+        let static_icon = ferrokit_gui::image::Icon::from_pixmap(&create_default_tray_pixmap());
+        let mut tray =
+            TrayIcon::from_icon(TOOLTIP_BASE, &static_icon).expect("failed to create TrayIcon");
+        let _ = tray.set_tooltip(TOOLTIP_BASE);
 
-        Self { tray, config }
+        Self {
+            tray,
+            config,
+            static_icon,
+            shown_spec: None,
+            shown_tooltip: TOOLTIP_BASE.to_owned(),
+        }
+    }
+
+    /// Applies a tray number menu action (`keys` are the `quota_keys` of the menu that was shown,
+    /// `data` the current quota data); `false` when `action_id` is not one of them.
+    pub fn apply_quota_action(
+        &mut self,
+        action_id: u32,
+        keys: &[String],
+        data: &[UsageMetrics],
+    ) -> bool {
+        let handled = run_quota_action(&self.config, action_id, keys);
+        if handled {
+            self.refresh_quota(data);
+        }
+        handled
+    }
+
+    /// Draws the chosen quota's number on the icon and puts its line on top of the tooltip. Only
+    /// what changed is sent to the shell. `off` is the static app icon.
+    pub fn refresh_quota(&mut self, data: &[UsageMetrics]) {
+        let (setting, mode) = {
+            let cfg = self.config.lock();
+            (cfg.tray_quota.clone(), cfg.tray_quota_mode.clone())
+        };
+        let reading = tray_quota::resolve(&setting, data, chrono::Utc::now());
+        let spec = reading.as_ref().map(|r| r.icon_spec(&mode));
+        if spec != self.shown_spec {
+            let icon = match &spec {
+                Some(spec) => super::tray_number_icon::build_icon(spec),
+                None => self.static_icon.clone(),
+            };
+            let _ = self.tray.set_icon_from(&icon);
+            self.shown_spec = spec;
+        }
+        let tooltip = match &reading {
+            Some(r) => format!("{}\n{TOOLTIP_BASE}", r.tooltip_line(&mode)),
+            None => TOOLTIP_BASE.to_owned(),
+        };
+        if tooltip != self.shown_tooltip {
+            let _ = self.tray.set_tooltip(tooltip.as_str());
+            self.shown_tooltip = tooltip;
+        }
     }
 
     pub fn show(&mut self) {
@@ -769,6 +1097,9 @@ impl HUDTrayIcon {
                 crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
                     cfg.locked = !cfg.locked;
                 });
+                if self.config.lock().locked {
+                    hud.cancel_snap_animation(true); // nothing is left half way
+                }
                 self.update_menu_state();
             }
             ACTION_OPACITY_100 => {
@@ -832,6 +1163,22 @@ impl HUDTrayIcon {
                 let id = MENU_PROFILE_IDS.with(|ids| ids.borrow().get(idx).cloned());
                 if let Some(id) = id {
                     hud.set_claude_profile(&id);
+                    self.update_menu_state();
+                }
+            }
+            id if (ACTION_ACCOUNT_BASE..ACTION_ACCOUNT_BASE + 40).contains(&id) => {
+                let entry = MENU_ACCOUNTS
+                    .with(|l| l.borrow().get((id - ACTION_ACCOUNT_BASE) as usize).cloned());
+                if let Some((profile, ticked)) = entry {
+                    hud.set_account(&profile, !ticked);
+                    self.update_menu_state();
+                }
+            }
+            id if (ACTION_TILE_BASE..ACTION_TILE_BASE + 20).contains(&id) => {
+                let entry =
+                    MENU_TILES.with(|l| l.borrow().get((id - ACTION_TILE_BASE) as usize).cloned());
+                if let Some((tile, visible)) = entry {
+                    hud.set_tile_visible(&tile, !visible);
                     self.update_menu_state();
                 }
             }
@@ -1130,6 +1477,7 @@ mod menu_parity_tests {
                     "立即重新整理所有 AI (Refresh All)",
                     "---",
                     "介面 (Interface)",
+                    "帳號 (Accounts)",
                     "外觀 (Appearance)",
                     "行為 (Behaviour)",
                     "更多 (More)",
@@ -1154,6 +1502,7 @@ mod menu_parity_tests {
                     "介面 (Interface)",
                     "外觀 (Appearance)",
                     "行為 (Behaviour)",
+                    "系統匣數字 (Tray number)",
                     "---",
                     "結束程式 (Exit)",
                 ]),
@@ -1196,6 +1545,7 @@ mod menu_parity_tests {
                 "固定窄欄 (Panel)",
                 "---",
                 "大小 (Ctrl＋滾輪)",
+                "側邊欄項目 (Sidebar tiles)",
                 "---",
                 "AGY 項目順序 (Row order)",
             ])
@@ -1254,11 +1604,17 @@ mod menu_parity_tests {
             ])
         );
         assert_eq!(
+            sub_labels(&menu, &["帳號 (Accounts)"]),
+            strings(&[
+                "Claude 主帳號 (Main Account)",
+                "Claude 同時顯示 (Also show)",
+                "---",
+                "AGY 週額度掛鉤 (statusLine)",
+            ])
+        );
+        assert_eq!(
             sub_labels(&menu, &["更多 (More)"]),
             strings(&[
-                "Claude 帳號 (Claude Account)",
-                "AGY 週額度掛鉤 (statusLine)",
-                "---",
                 "開啟記錄檔目錄 (Open Logs)",
                 "重設預設尺寸與位置",
                 "隱藏 HUD (Alt+C 重新喚出)",
@@ -1458,6 +1814,20 @@ mod menu_parity_tests {
     }
 
     #[test]
+    fn the_row_order_list_names_a_live_dynamic_agy_row() {
+        let mut carbon = crate::providers::base::MetricRow::new("CARBON 7D", Some(40.0), "40%");
+        carbon.key = "agy:carbon-7d".into();
+        let data = [UsageMetrics {
+            provider_id: "agy".into(),
+            extra_metrics: vec![carbon],
+            ..Default::default()
+        }];
+        let menu = build_context_menu(&config("sidebar"), &test_hud_root(), &data);
+        let rows = sub_labels(&menu, &["介面 (Interface)", "AGY 項目順序 (Row order)"]);
+        assert!(rows.contains(&"6. CARBON 7D".to_string()), "{rows:?}");
+    }
+
+    #[test]
     fn agy_statusline_submenu_offers_enable_update_or_disable_by_state() {
         use crate::agy_statusline::Status;
         use chrono::TimeZone;
@@ -1527,5 +1897,119 @@ mod menu_parity_tests {
         let inst_with_data = build(Status::Installed, Some(ts));
         let rows = labels(&inst_with_data.borrow());
         assert!(rows[1].starts_with("資料最後更新："), "{}", rows[1]);
+    }
+}
+
+/// The tray number submenu of the tray menu.
+#[cfg(test)]
+mod tray_number_menu_tests {
+    use super::*;
+    use crate::providers::base::MetricRow;
+
+    const SUBMENU: &str = "系統匣數字 (Tray number)";
+
+    fn data() -> Vec<UsageMetrics> {
+        let claude = UsageMetrics {
+            provider_id: "claude".into(),
+            provider_name: "Claude".into(),
+            metric1_title: "SESSION 5H".into(),
+            metric2_title: "WEEKLY 7D".into(),
+            metric1_key: "claude:5h".into(),
+            metric2_key: "claude:7d".into(),
+            metric1_val: Some(12.0),
+            metric2_val: Some(40.0),
+            extra_metrics: vec![MetricRow {
+                key: "claude:weekly_scoped:fable".into(),
+                ..MetricRow::new("FABLE 7D", Some(84.0), "84%")
+            }],
+            ..Default::default()
+        };
+        let codex = UsageMetrics {
+            provider_id: "codex".into(),
+            provider_name: "Codex".into(),
+            metric1_title: "WINDOW 5H".into(),
+            metric1_val: Some(5.0),
+            ..Default::default()
+        };
+        vec![claude, codex]
+    }
+
+    /// (label, checked, enabled, action id) of the submenu's entries.
+    fn entries(cfg: &Config) -> Vec<(String, bool, bool, Option<u64>)> {
+        let menu = build_tray_menu(cfg, &test_hud_root(), &data());
+        let sub = menu
+            .actions()
+            .iter()
+            .find(|a| a.borrow().text() == SUBMENU)
+            .and_then(|a| a.borrow().menu())
+            .expect("the tray menu has the tray number submenu");
+        let actions = sub.borrow().actions();
+        actions
+            .iter()
+            .filter(|a| !a.borrow().is_separator())
+            .map(|a| {
+                let a = a.borrow();
+                (
+                    a.text().to_string(),
+                    a.is_checked(),
+                    a.is_enabled(),
+                    a.data().to_u64(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn checks_follow_the_config_and_a_vanished_row_is_kept_as_unavailable() {
+        let cfg = Config {
+            tray_quota: "claude:weekly_scoped:fable".into(),
+            tray_quota_mode: "remaining".into(),
+            ..Config::default()
+        };
+        let rows = entries(&cfg);
+        let checked: Vec<&str> = rows.iter().filter(|e| e.1).map(|e| e.0.as_str()).collect();
+        assert_eq!(checked, ["FABLE 7D  84%", "顯示剩餘 (Show remaining)"]);
+
+        let cfg = Config {
+            tray_quota: "claude:weekly_scoped:gone".into(),
+            ..Config::default()
+        };
+        let rows = entries(&cfg);
+        let gone = rows
+            .iter()
+            .find(|e| e.0 == "claude:weekly_scoped:gone  unavailable")
+            .expect("the selection stays in the menu");
+        assert!(gone.1 && !gone.2);
+        // Only the mode is checked besides it: no row took over the selection.
+        assert_eq!(rows.iter().filter(|e| e.1).count(), 2);
+        let emoji = |c: char| matches!(c as u32, 0x2600..=0x27bf | 0x1f000..=0x1faff);
+        assert!(!rows.iter().any(|e| e.0.chars().any(emoji)));
+    }
+
+    #[test]
+    fn choosing_an_entry_stores_the_key_and_the_mode() {
+        let rows = entries(&Config::default());
+        let id_of = |label: &str| {
+            rows.iter()
+                .find(|e| e.0 == label)
+                .and_then(|e| e.3)
+                .unwrap_or_else(|| panic!("{label} has an action id")) as u32
+        };
+        let keys = quota_keys(&data());
+        let config = Mutex::new(Config::default());
+        assert!(run_quota_action(&config, id_of("FABLE 7D  84%"), &keys));
+        assert_eq!(config.lock().tray_quota, "claude:weekly_scoped:fable");
+        assert!(run_quota_action(&config, id_of("WINDOW 5H  5%"), &keys));
+        assert_eq!(config.lock().tray_quota, "codex:WINDOW 5H");
+        assert!(run_quota_action(
+            &config,
+            id_of("顯示剩餘 (Show remaining)"),
+            &keys
+        ));
+        assert_eq!(config.lock().tray_quota_mode, "remaining");
+        assert!(run_quota_action(&config, id_of("關閉 (Off)"), &keys));
+        assert_eq!(config.lock().tray_quota, "off");
+        // Not a tray number action.
+        assert!(!run_quota_action(&config, ACTION_REFRESH_ALL, &keys));
     }
 }

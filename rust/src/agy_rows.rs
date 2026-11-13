@@ -12,12 +12,27 @@ fn to_strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| s.to_string()).collect()
 }
 
-/// Distinct known row titles (uppercased) in first-seen order.
-fn known_titles(value: &[String]) -> Vec<String> {
+/// Distinct known row titles (uppercased) in first-seen order: the five fixed rows and `dynamic`
+/// (uppercased titles of rows the data carries beyond them).
+fn known_titles(value: &[String], dynamic: &[String]) -> Vec<String> {
     let mut titles: Vec<String> = Vec::new();
     for item in value {
         let title = item.to_uppercase();
-        if AGY_ROW_TITLES.contains(&title.as_str()) && !titles.contains(&title) {
+        let known = AGY_ROW_TITLES.contains(&title.as_str()) || dynamic.contains(&title);
+        if known && !titles.contains(&title) {
+            titles.push(title);
+        }
+    }
+    titles
+}
+
+/// Titles (uppercased, distinct, in row order) of the extra rows that are none of the five fixed
+/// ones: the rows the provider made from a bucket it has no fixed row for.
+pub fn dynamic_titles(metrics: &UsageMetrics) -> Vec<String> {
+    let mut titles: Vec<String> = Vec::new();
+    for row in &metrics.extra_metrics {
+        let title = row.title.to_uppercase();
+        if !AGY_ROW_TITLES.contains(&title.as_str()) && !titles.contains(&title) {
             titles.push(title);
         }
     }
@@ -26,7 +41,7 @@ fn known_titles(value: &[String]) -> Vec<String> {
 
 /// Python `normalize_primary`: two distinct known row titles, else the default.
 pub fn normalize_primary(value: &[String]) -> [String; 2] {
-    let mut titles = known_titles(value);
+    let mut titles = known_titles(value, &[]);
     if titles.len() == 2 {
         let second = titles.pop().unwrap();
         let first = titles.pop().unwrap();
@@ -40,19 +55,36 @@ pub fn normalize_primary(value: &[String]) -> [String; 2] {
 
 /// Python `normalize_order`: a full ordering of the five rows; a legacy pair keeps its rows first.
 pub fn normalize_order(value: &[String]) -> Vec<String> {
-    let mut titles = known_titles(value);
-    if titles.len() == 5 {
-        return titles;
-    }
-    if titles.len() == 2 {
-        for t in AGY_ROW_TITLES {
-            if !titles.iter().any(|x| x == t) {
-                titles.push(t.to_string());
+    normalize_order_with(value, &[])
+}
+
+/// `normalize_order` for data that also carries the `dynamic` rows (see `dynamic_titles`): they
+/// are known titles, kept where the saved order puts them, and a dynamic row the order does not
+/// name yet goes last. A saved title that is neither fixed nor live is dropped. Without dynamic
+/// rows this is `normalize_order`.
+pub fn normalize_order_with(value: &[String], dynamic: &[String]) -> Vec<String> {
+    let mut titles = known_titles(value, dynamic);
+    let fixed = titles
+        .iter()
+        .filter(|t| AGY_ROW_TITLES.contains(&t.as_str()))
+        .count();
+    if fixed != AGY_ROW_TITLES.len() {
+        if titles.len() == 2 {
+            for t in AGY_ROW_TITLES {
+                if !titles.iter().any(|x| x == t) {
+                    titles.push(t.to_string());
+                }
             }
+        } else {
+            titles = to_strings(&DEFAULT_ORDER);
         }
-        return titles;
     }
-    to_strings(&DEFAULT_ORDER)
+    for title in dynamic {
+        if !titles.contains(title) {
+            titles.push(title.clone());
+        }
+    }
+    titles
 }
 
 /// Python `move_row`: move one row to a 0-based position among the rows without it
@@ -82,6 +114,11 @@ pub fn toggle_primary(current: &[String], title: &str) -> [String; 2] {
     [second, title]
 }
 
+/// A main-pair key; empty means the title.
+fn row_key(key: &str, title: &str) -> String {
+    if key.is_empty() { title } else { key }.to_owned()
+}
+
 fn main_rows(m: &UsageMetrics) -> [MetricRow; 2] {
     [
         MetricRow {
@@ -90,6 +127,7 @@ fn main_rows(m: &UsageMetrics) -> [MetricRow; 2] {
             text: m.metric1_text.clone(),
             reset: m.metric1_reset,
             subtext: m.metric1_subtext.clone(),
+            key: row_key(&m.metric1_key, &m.metric1_title),
         },
         MetricRow {
             title: m.metric2_title.clone(),
@@ -97,6 +135,7 @@ fn main_rows(m: &UsageMetrics) -> [MetricRow; 2] {
             text: m.metric2_text.clone(),
             reset: m.metric2_reset,
             subtext: m.metric2_subtext.clone(),
+            key: row_key(&m.metric2_key, &m.metric2_title),
         },
     ]
 }
@@ -112,11 +151,13 @@ fn with_rows(m: &UsageMetrics, mut rows: Vec<MetricRow>) -> UsageMetrics {
     out.metric1_text = a.text;
     out.metric1_reset = a.reset;
     out.metric1_subtext = a.subtext;
+    out.metric1_key = a.key;
     out.metric2_title = b.title;
     out.metric2_val = b.val;
     out.metric2_text = b.text;
     out.metric2_reset = b.reset;
     out.metric2_subtext = b.subtext;
+    out.metric2_key = b.key;
     out.extra_metrics = extras;
     out
 }
@@ -148,7 +189,7 @@ pub fn arrange_agy(metrics: &UsageMetrics, primary: &[String]) -> UsageMetrics {
     {
         return metrics.clone();
     }
-    let order = normalize_order(primary);
+    let order = normalize_order_with(primary, &dynamic_titles(metrics));
     let ordered: Vec<MetricRow> = order.iter().filter_map(|t| find(t)).collect();
     with_rows(metrics, ordered)
 }
@@ -400,5 +441,52 @@ mod tests {
             arrange_by_order(&data, &s(&["unknown"])).metric1_title,
             "SESSION 5H"
         );
+    }
+
+    fn with_carbon() -> UsageMetrics {
+        let mut m = agy_metrics();
+        let mut carbon = MetricRow::new("CARBON 7D", Some(40.0), "40%");
+        carbon.key = "agy:carbon-7d".into();
+        m.extra_metrics.push(carbon);
+        m
+    }
+
+    #[test]
+    fn a_saved_order_keeps_a_live_dynamic_row_and_drops_a_gone_one() {
+        let dynamic = dynamic_titles(&with_carbon());
+        assert_eq!(dynamic, ["CARBON 7D"]);
+        let saved = s(&[
+            "carbon 7d",
+            "C/G 5H",
+            "ARGON 7D",
+            "GEMINI 5H",
+            "GEMINI 7D",
+            "C/G 7D",
+        ]);
+        assert_eq!(normalize_order_with(&saved, &dynamic)[0], "CARBON 7D");
+        // Not live (or no dynamic rows at all): dropped, and fixed-only configs are as before.
+        assert_eq!(normalize_order_with(&saved, &[]), DEFAULT_ORDER);
+        assert_eq!(normalize_order(&s(&DEFAULT_ORDER)), DEFAULT_ORDER);
+        // A dynamic row the order has not met yet goes last.
+        let last = normalize_order_with(&s(&DEFAULT_ORDER), &dynamic);
+        assert_eq!(last.last().map(String::as_str), Some("CARBON 7D"));
+        assert_eq!(last.len(), 6);
+    }
+
+    #[test]
+    fn arranging_never_drops_a_dynamic_row() {
+        let result = arrange_agy(&with_carbon(), &[]);
+        assert_eq!(result.metric1_title, "C/G 5H");
+        let titles: Vec<&str> = result
+            .extra_metrics
+            .iter()
+            .map(|r| r.title.as_str())
+            .collect();
+        assert_eq!(titles, ["GEMINI 5H", "GEMINI 7D", "C/G 7D", "CARBON 7D"]);
+        let first = arrange_agy(&with_carbon(), &s(&["CARBON 7D", "C/G 5H"]));
+        assert_eq!(first.metric1_title, "CARBON 7D");
+        assert_eq!(first.metric1_key, "agy:carbon-7d");
+        assert_eq!(first.metric2_title, "C/G 5H");
+        assert_eq!(first.extra_metrics.len(), 4);
     }
 }

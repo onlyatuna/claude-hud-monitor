@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::Local;
 use ferrokit_core::QObject;
@@ -29,17 +29,20 @@ use ferrokit_widgets::{
 use parking_lot::Mutex;
 
 use super::dock_geometry::{
-    DEFAULT_MARGIN, EDGES, Offset, Rect as GeoRect, dock_to_edge, orientation_for_edge,
-    pick_work_area, snap_rect, snap_rect_corner, step_scale,
+    DEFAULT_MARGIN, EDGES, Offset, Rect as GeoRect, SNAP_ANIM_FRAME_MS, SnapAnimation,
+    dock_to_edge, orientation_for_edge, pick_work_area, plan_sidebar_snap, sidebar_dock_target,
+    snap_rect, step_scale,
 };
+use super::dock_preview::DockPreview;
 use super::provider_card::ProviderCardWidget;
 use super::round_mask::rounded_rects;
-use super::sidebar::{DEFAULT_ORDER, Orientation, Scheme, SidebarWidget, State};
+use super::sidebar::{DEFAULT_ORDER, Orientation, Scheme, SidebarWidget, State, TileSpec};
 use super::styles::{Theme, get_theme};
 use super::table_layout::{
     COMPACT_MARGIN, DEF_COMPACT_H, DEF_COMPACT_W, compact_min_size, table_state,
 };
 use super::usage_table::{PROVIDER_ORDER, TableViews, UsageTable};
+use crate::accounts::{self, ResolvedAccount};
 use crate::config::{
     Config, ConfigManager, DEFAULT_TABLE_HEIGHT, DEFAULT_TABLE_WIDTH, MIN_TABLE_HEIGHT,
     MIN_TABLE_WIDTH, ResizeDebouncer,
@@ -470,14 +473,29 @@ pub struct HUDWindow {
     set_backdrop: BackdropFn,
     /// What each provider last reported, before any row order is applied (Python `_raw_metrics`).
     raw_metrics: HashMap<String, UsageMetrics>,
+    /// Called whenever a provider's data is published; `main` points it at the tray icon, which
+    /// the window does not know about.
+    quota_changed: Option<Rc<dyn Fn()>>,
     /// Python `self.sidebar`: the docked strip / panel (a page of `stack`).
     pub sidebar: SidebarWidget,
     /// Python `self.sidebar_cards`: the provider cards of the sidebar's panel and flyout.
     pub sidebar_cards: HashMap<String, Rc<RefCell<ProviderCardWidget>>>,
+    /// The extra Claude accounts that are running (instance id -> account), see `apply_accounts`.
+    accounts: HashMap<String, ResolvedAccount>,
+    /// A first apply has run: an unusable `accounts` / `sidebar_tiles` value no longer resets tiles.
+    accounts_applied: bool,
+    /// An apply is queued (`request_apply_accounts`): a burst of menu clicks runs it once.
+    apply_pending: bool,
     /// The sidebar style's window state (`_docking`, `_resize`, `_snap_timer`, `_fade_timer`).
     sidebar_hud: Rc<SidebarHud>,
     /// Python `QApplication.instance().installEventFilter(self)`.
     hud_filter: Option<OwnedObject<HudFilter>>,
+    /// Python `_dock_preview`: the outline of where the dragged bar will settle, created by the
+    /// first drag near an edge (`dock_preview_failed`: the window could not be made; logged once).
+    dock_preview: Option<DockPreview>,
+    dock_preview_failed: bool,
+    /// Python `_preview_sizes`: the bar's size per orientation, measured once per drag.
+    preview_sizes: HashMap<&'static str, (i32, i32)>,
     /// The root layout is the sidebar's (no header, no margins) rather than the cards / table one.
     sidebar_layout: bool,
     chrome: TableChrome,
@@ -511,6 +529,29 @@ fn default_providers(
             Arc::new(CodexProvider::new()) as Arc<dyn Provider + Send + Sync>,
         ),
     ])
+}
+
+/// The provider of an extra account.
+#[cfg(not(test))]
+fn account_provider(account: &ResolvedAccount) -> Arc<dyn Provider + Send + Sync> {
+    use crate::providers::{claude::ClaudeProvider, instance::InstanceProvider};
+    Arc::new(InstanceProvider::new(
+        Arc::new(ClaudeProvider::for_profile(&account.spec.profile)),
+        &account.spec.id,
+        "claude",
+        &account.provider_name(),
+    ))
+}
+
+#[cfg(test)]
+fn account_provider(account: &ResolvedAccount) -> Arc<dyn Provider + Send + Sync> {
+    use crate::providers::instance::InstanceProvider;
+    Arc::new(InstanceProvider::new(
+        crate::providers::stub::stub_instance(&account.spec.id),
+        &account.spec.id,
+        "claude",
+        &account.provider_name(),
+    ))
 }
 
 #[cfg(test)]
@@ -672,7 +713,11 @@ impl HUDWindow {
                 | WindowFlags::LAYERED
                 | WindowFlags::TOOLTIP,
         )?;
-        let sidebar = SidebarWidget::new(sidebar_cards.clone(), flyout);
+        let tiles: Vec<(TileSpec, Rc<RefCell<ProviderCardWidget>>)> = sidebar_cards
+            .iter()
+            .filter_map(|(id, card)| Some((TileSpec::builtin(id)?, Rc::clone(card))))
+            .collect();
+        let sidebar = SidebarWidget::new(tiles, flyout);
         StackedWidget::add_widget(&stack, sidebar.widget());
         let active_index = match ui_mode.as_str() {
             "sidebar" => SIDEBAR_PAGE,
@@ -795,12 +840,22 @@ impl HUDWindow {
         fade_timer.timeout.connect_local(|()| {
             with_hud_retry(|hud| hud.apply_opacity());
         });
+        // Python `_snap_frame_timer`: one frame of the glide onto the docked rectangle; a frame that
+        // finds the HUD busy is skipped (the next one carries on from the clock).
+        let snap_frame_timer = Timer::new();
+        snap_frame_timer.set_interval(SNAP_ANIM_FRAME_MS);
+        snap_frame_timer.timeout.connect_local(|()| {
+            with_hud(|hud| hud.snap_animation_step());
+        });
         let sidebar_hud = Rc::new(SidebarHud {
             docking: Cell::new(false),
             resize: RefCell::new(None),
             grip_cursor: Cell::new(false),
             snap_timer,
             fade_timer,
+            snap_anim: RefCell::new(None),
+            snap_clock: Cell::new(None),
+            snap_frame_timer,
             geom: Rc::clone(&geom_now),
             root: root.clone(),
             root_id: root.borrow().id(),
@@ -861,7 +916,14 @@ impl HUDWindow {
                     // Python `moveEvent`: a move that is not the docking itself settles in
                     // `_finish_sidebar_move`; the position is saved there, not here
                     if !hud_state_events.docking.get() {
+                        hud_state_events.stop_snap_animation(); // not the glide's own move: the user took the bar over
                         hud_state_events.snap_timer.start();
+                        // Python `moveEvent`: the dock preview follows the drag. It runs now, not
+                        // through `with_hud_later`: the system's move loop dispatches no widget
+                        // event, so a queued update would wait until the pointer stops. A move that
+                        // finds the HUD busy skips its update; the next move, or the snap timer
+                        // (`finish_sidebar_move`), carries on.
+                        with_hud(|hud| hud.run_dock_preview_update());
                     }
                     return;
                 }
@@ -875,7 +937,10 @@ impl HUDWindow {
             EventKind::MouseButtonRelease { .. } | EventKind::Close => {
                 persist_rect(&debouncer_events, geom_now.get());
             }
-            EventKind::Hide => schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS),
+            EventKind::Hide => {
+                hud_state_events.stop_snap_animation();
+                schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS)
+            }
             // Python `mouseDoubleClickEvent` (left): refresh now
             EventKind::MouseButtonDblClick { button: 1, .. } => {
                 event.accept();
@@ -915,10 +980,17 @@ impl HUDWindow {
             vibrant,
             set_backdrop,
             raw_metrics: HashMap::new(),
+            quota_changed: None,
             sidebar,
             sidebar_cards: sidebar_cards.into_iter().collect(),
+            accounts: HashMap::new(),
+            accounts_applied: false,
+            apply_pending: false,
             sidebar_hud: Rc::clone(&sidebar_hud),
             hud_filter: None,
+            dock_preview: None,
+            dock_preview_failed: false,
+            preview_sizes: HashMap::new(),
             sidebar_layout: ui_mode == "sidebar",
             chrome,
             mask_key,
@@ -926,6 +998,7 @@ impl HUDWindow {
             blur_resume_timer,
         };
         hud.connect_sidebar_signals();
+        hud.apply_accounts_with(false);
         // Python `button.screen()`: the sidebar asks for the screen its window is on.
         let host_screen = hud.sidebar.host_screen();
         *host_screen.lock() = Some(hud.window.screen().name());
@@ -1024,9 +1097,11 @@ impl HUDWindow {
     }
 
     pub fn hide(&mut self) {
+        self.cancel_snap_animation(true); // a hide (hotkey, tray) leaves the bar on its docked place
         self.debouncer.flush();
         self.persist_geometry();
         self.window.hide();
+        self.hide_dock_preview();
         self.sidebar.close_flyout();
     }
 
@@ -1144,6 +1219,8 @@ impl HUDWindow {
     }
 
     fn apply_ui_mode_internal(&mut self, mode: &str) {
+        self.cancel_snap_animation(false);
+        self.hide_dock_preview();
         // Python `_apply_theme`: the mode picks which style sheet the labels cascade from.
         // `HUDWindow.setStyleSheet` is the window's own sheet; `Window::set_style_sheet` is scoped
         // to it now (RC-10) and a stale window sheet would win over the application's.
@@ -1195,7 +1272,7 @@ impl HUDWindow {
             Some(super::placement::Screens::of_window(&self.window)),
             screens.primary,
         );
-        self.window.set_geometry(Rect::new(nx, ny, w, h));
+        self.set_window_geometry(Rect::new(nx, ny, w, h));
         self.chrome.relayout();
         self.republish_all();
         self.apply_opacity();
@@ -1252,8 +1329,28 @@ impl HUDWindow {
         }
     }
 
+    /// Connects the tray icon's refresh (see `quota_changed`).
+    pub fn set_quota_changed(&mut self, changed: impl Fn() + 'static) {
+        self.quota_changed = Some(Rc::new(changed));
+    }
+
+    /// The latest data of each provider as it reported it (rows not rearranged), in the saved
+    /// provider order: what the tray number is chosen from.
+    pub fn quota_data(&self) -> Vec<UsageMetrics> {
+        let tiles = self.tiles();
+        tiles
+            .visible
+            .iter()
+            .chain(tiles.hidden.iter())
+            .filter_map(|id| self.raw_metrics.get(id).cloned())
+            .collect()
+    }
+
     /// Python `_publish`.
     fn publish(&mut self, data: &UsageMetrics) {
+        if let Some(changed) = &self.quota_changed {
+            changed();
+        }
         if let Some(card) = self.sidebar_cards.get(&data.provider_id) {
             card.borrow_mut().update_metrics(data);
         }
@@ -1283,14 +1380,26 @@ impl HUDWindow {
         self.config.lock().provider_order_setting()
     }
 
-    /// Python `agy_order`: the five agy rows, the first two being the main pair.
+    /// Python `agy_order`: the five agy rows and the dynamic ones the data carries, the first two
+    /// being the main pair.
     pub fn agy_order(&self) -> Vec<String> {
-        crate::agy_rows::normalize_order(&self.config.lock().agy_order)
+        crate::agy_rows::normalize_order_with(
+            &self.config.lock().agy_order,
+            &self.agy_dynamic_titles(),
+        )
+    }
+
+    /// The titles of agy's dynamic rows in its latest data.
+    fn agy_dynamic_titles(&self) -> Vec<String> {
+        self.raw_metrics
+            .get("agy")
+            .map(crate::agy_rows::dynamic_titles)
+            .unwrap_or_default()
     }
 
     /// Python `set_agy_order`.
     pub fn set_agy_order(&mut self, titles: &[String]) {
-        let order = crate::agy_rows::normalize_order(titles);
+        let order = crate::agy_rows::normalize_order_with(titles, &self.agy_dynamic_titles());
         if order == self.agy_order() {
             return;
         }
@@ -1439,6 +1548,189 @@ impl HUDWindow {
         self.trigger_refresh();
     }
 
+    // ================= Extra Claude accounts =================
+
+    /// The tile ids of the saved config: all, visible in order, hidden.
+    fn tiles(&self) -> accounts::Tiles {
+        let cfg = self.config.lock();
+        accounts::tiles_of(&cfg, &accounts::accounts_of(&cfg))
+    }
+
+    /// Menu action: tick (`on`) or untick the extra account of `profile`.
+    pub fn set_account(&mut self, profile: &str, on: bool) {
+        ConfigManager::update_and_save(&self.config, |cfg| {
+            if on {
+                accounts::add_account(cfg, profile);
+            } else if let Some(id) = accounts::accounts_of(cfg)
+                .into_iter()
+                .find(|a| accounts::profile_key(&a.profile) == accounts::profile_key(profile))
+                .map(|a| a.id)
+            {
+                accounts::remove_account(cfg, &id);
+            }
+        });
+        self.request_apply_accounts();
+    }
+
+    /// Menu action: show or hide a sidebar tile (its provider keeps fetching).
+    pub fn set_tile_visible(&mut self, id: &str, show: bool) {
+        ConfigManager::update_and_save(&self.config, |cfg| {
+            accounts::set_tile_visible(cfg, id, show);
+        });
+        self.request_apply_accounts();
+    }
+
+    /// Queues one `apply_accounts` for the end of the current event: a burst of requests runs it
+    /// once, and it reads the config as it is then. The menu action that asked is still running
+    /// (it holds the window), so the apply cannot run inside it.
+    pub fn request_apply_accounts(&mut self) {
+        if self.apply_pending {
+            return;
+        }
+        self.apply_pending = true;
+        with_hud_later(|hud| {
+            hud.apply_pending = false;
+            hud.apply_accounts();
+        });
+    }
+
+    /// Makes the running accounts and the sidebar tiles match the config, live: providers and
+    /// states of new accounts exist before their first fetch, the tiles / cards of gone accounts and
+    /// everything keyed by their id are dropped, and the window is refitted. An unusable value
+    /// keeps the running tiles. Never calls `with_hud*` (the caller holds the window).
+    pub fn apply_accounts(&mut self) {
+        self.apply_accounts_with(true);
+    }
+
+    fn apply_accounts_with(&mut self, refit: bool) {
+        let cfg = self.config.lock().clone();
+        if self.accounts_applied && !accounts::config_is_usable(&cfg) {
+            log::warn!("accounts / sidebar_tiles are not usable; the running tiles stay");
+            return;
+        }
+        let resolved = accounts::resolve_accounts(&cfg);
+        let specs: Vec<accounts::AccountSpec> = resolved.iter().map(|r| r.spec.clone()).collect();
+        let tiles = accounts::tiles_of(&cfg, &specs);
+        let wanted: HashMap<String, ResolvedAccount> = resolved
+            .iter()
+            .map(|r| (r.spec.id.clone(), r.clone()))
+            .collect();
+
+        // gone (or changed: removed and added again) accounts
+        let gone: Vec<String> = self
+            .accounts
+            .iter()
+            .filter(|(id, old)| wanted.get(*id) != Some(*old))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &gone {
+            self.refresh_ctrl.lock().remove_instance(id);
+            self.providers.remove(id);
+            self.raw_metrics.remove(id);
+            self.accounts.remove(id);
+        }
+
+        let tile_specs: Vec<TileSpec> = tiles
+            .all
+            .iter()
+            .filter_map(|id| match wanted.get(id) {
+                Some(r) => Some(TileSpec {
+                    id: id.clone(),
+                    base: "claude".to_owned(),
+                    text: r.tile_text(),
+                    name: r.label.clone(),
+                }),
+                None => TileSpec::builtin(id),
+            })
+            .collect();
+        let dark = self.is_dark;
+        let names: HashMap<String, String> = resolved
+            .iter()
+            .map(|r| (r.spec.id.clone(), r.provider_name()))
+            .collect();
+        let mut make_card = |spec: &TileSpec| {
+            let mut card = ProviderCardWidget::new(&spec.id);
+            card.set_appearance(dark);
+            if let Some(name) = names.get(&spec.id) {
+                card.set_title(name);
+            }
+            Rc::new(RefCell::new(card))
+        };
+        if gone.iter().any(|id| wanted.contains_key(id)) {
+            // a changed account is a new tile: take the old one out first
+            let without: Vec<TileSpec> = tile_specs
+                .iter()
+                .filter(|s| !gone.contains(&s.id))
+                .cloned()
+                .collect();
+            let visible: Vec<String> = tiles
+                .visible
+                .iter()
+                .filter(|id| !gone.contains(id))
+                .cloned()
+                .collect();
+            self.sidebar.set_tiles(&without, &mut make_card, &visible);
+        }
+        self.sidebar
+            .set_tiles(&tile_specs, &mut make_card, &tiles.visible);
+        let cards = self.sidebar.cards();
+        let fresh: Vec<(String, Rc<RefCell<ProviderCardWidget>>)> = cards
+            .iter()
+            .filter(|(id, card)| {
+                self.sidebar_cards
+                    .get(id)
+                    .is_none_or(|old| !Rc::ptr_eq(old, card))
+            })
+            .cloned()
+            .collect();
+        self.sidebar_cards = cards.into_iter().collect();
+        for (id, card) in &fresh {
+            Self::wire_card(id, card);
+        }
+
+        // new accounts: the provider and its state exist before the first fetch, which is now
+        for r in &resolved {
+            let id = &r.spec.id;
+            if self.accounts.contains_key(id) {
+                continue;
+            }
+            let provider = account_provider(r);
+            self.providers.insert(id.clone(), Arc::clone(&provider));
+            self.refresh_ctrl.lock().add_instance(id, provider);
+            self.accounts.insert(id.clone(), r.clone());
+        }
+        self.accounts_applied = true;
+        if let Some(changed) = &self.quota_changed {
+            changed();
+        }
+        self.refresh_status_dot();
+        if refit {
+            self.refit_sidebar();
+        }
+    }
+
+    /// The window is as big as the visible tiles need, strip and panel alike (`fit_sidebar` only
+    /// follows the panel's content). Skipped while a resize grab is active.
+    fn refit_sidebar(&mut self) {
+        if !self.is_sidebar_mode() || self.sidebar_hud.resize.borrow().is_some() {
+            return;
+        }
+        self.dock_sidebar();
+        Timer::single_shot(0, || {
+            with_hud_retry(|hud| hud.settle_sidebar());
+        });
+    }
+
+    fn wire_card(pid: &str, card: &Rc<RefCell<ProviderCardWidget>>) {
+        let pid = pid.to_owned();
+        card.borrow()
+            .row_order_changed()
+            .connect_local(move |titles: &Vec<String>| {
+                let (pid, titles) = (pid.clone(), titles.clone());
+                with_hud_later(move |hud| hud.set_row_order(&pid, &titles));
+            });
+    }
+
     pub fn reset_geometry(&mut self) {
         if self.is_sidebar_mode() {
             // Python `_reset_geometry` in the sidebar style
@@ -1472,8 +1764,19 @@ impl HUDWindow {
         let screen = ferrokit_platform::platform().primary_screen();
         let (nx, ny) = super::placement::reset_position(w, screen.available_geometry());
 
-        self.window.set_geometry(Rect::new(nx, ny, w, h));
+        self.set_window_geometry(Rect::new(nx, ny, w, h));
         self.persist_geometry();
+    }
+
+    /// `QWidget::setGeometry` for the HUD's own placements (the dock, the edge drag, the style
+    /// switch, the reset). Qt sends the window a `QMoveEvent` from inside `setGeometry`
+    /// (`QWidgetPrivate::setGeometry_sys`, qwidget.cpp:7348-7351 in Qt 6.12.0), which is how Python's
+    /// `moveEvent` and `self.geometry()` follow it. `Window::set_geometry` sends no `Move`, so the
+    /// copy of the geometry that the grips and the saved position read (`SidebarHud::geom`) is
+    /// refreshed here; a native move, the system's drag loop, still reports itself.
+    fn set_window_geometry(&mut self, rect: Rect) {
+        self.window.set_geometry(rect);
+        self.sidebar_hud.geom.set(self.window.geometry());
     }
 }
 
@@ -1513,10 +1816,31 @@ pub struct SidebarHud {
     snap_timer: Timer,
     /// Python `_fade_timer`.
     fade_timer: Timer,
+    /// Python `_snap_anim`: the glide onto the docked rectangle, while there is one.
+    snap_anim: RefCell<Option<SnapAnimation>>,
+    /// When the glide started (Python `_snap_clock`).
+    snap_clock: Cell<Option<Instant>>,
+    /// Python `_snap_frame_timer`.
+    snap_frame_timer: Timer,
     /// The window geometry as the window's events report it.
     geom: Rc<Cell<Rect>>,
     root: WidgetRef,
     root_id: ObjectId,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam: the pointer position the grips read instead of the real cursor.
+    static POINTER_OVERRIDE: Cell<Option<Point>> = const { Cell::new(None) };
+}
+
+/// The pointer position the grips read (`Cursor::pos()`).
+fn pointer_pos() -> Point {
+    #[cfg(test)]
+    if let Some(p) = POINTER_OVERRIDE.with(|c| c.get()) {
+        return p;
+    }
+    Cursor::pos()
 }
 
 /// Python `HUDWindow._resize_zone`: `"l"`, `"r"`, `"t"`, `"b"` or a corner (`"lt"`, `"rt"`, ...) when
@@ -1558,8 +1882,32 @@ fn qt_center(g: Rect) -> Point {
     Point::new((2 * g.x + g.width - 1) / 2, (2 * g.y + g.height - 1) / 2)
 }
 
+/// The ratio of the grabbed edge(s) that sets the scale. A drag that grows (or shrinks) every
+/// grabbed edge follows the edge that moved the furthest from 1. When one edge of a corner grows and
+/// the other shrinks, the changes add up: taking the one furthest from 1 instead made the scale jump
+/// between growing and shrinking where the two are equal, 20 % of the size within 2 px of pointer
+/// movement for a 72 x 222 bar.
+fn grip_ratio(ratios: &[f64]) -> f64 {
+    let Some(&first) = ratios.first() else {
+        return 1.0;
+    };
+    if ratios.iter().all(|r| *r >= 1.0) {
+        ratios.iter().copied().fold(first, f64::max)
+    } else if ratios.iter().all(|r| *r <= 1.0) {
+        ratios.iter().copied().fold(first, f64::min)
+    } else {
+        ratios[1..].iter().fold(first, |total, r| total + (r - 1.0))
+    }
+}
+
+/// Python `round(value, 2)`: the decimal rounding of the exact binary value, ties to even
+/// (`round(1.625, 2)` is 1.62), which `(value * 100.0).round() / 100.0` is not.
+fn round_two_decimals(value: f64) -> f64 {
+    format!("{value:.2}").parse().unwrap_or(value)
+}
+
 /// Python `_resize_to`'s scale: the start scale times the ratio the drag changed the grabbed
-/// edge(s) by (the one furthest from 1), rounded to 2 decimals and held to 0.6 - 2.0.
+/// edge(s) by (`grip_ratio`), rounded to 2 decimals and held to 0.6 - 2.0.
 pub fn resize_scale(zone: &str, g: Rect, start_scale: f64, dx: i32, dy: i32) -> f64 {
     let (gw, gh) = (g.width as f64, g.height as f64);
     let mut ratios = Vec::new();
@@ -1575,14 +1923,7 @@ pub fn resize_scale(zone: &str, g: Rect, start_scale: f64, dx: i32, dy: i32) -> 
     if zone.contains('t') {
         ratios.push((gh - dy as f64) / gh);
     }
-    let ratio = ratios
-        .into_iter()
-        .fold(None::<f64>, |best, v| match best {
-            Some(b) if (b - 1.0).abs() >= (v - 1.0).abs() => Some(b),
-            _ => Some(v),
-        })
-        .unwrap_or(1.0);
-    ((start_scale * ratio * 100.0).round() / 100.0).clamp(0.6, 2.0)
+    round_two_decimals(start_scale * grip_ratio(&ratios)).clamp(0.6, 2.0)
 }
 
 /// Python `_resize_to`'s new window origin: the fixed edge stays where it was.
@@ -1685,6 +2026,14 @@ fn is_filtered_kind(kind: &EventKind) -> bool {
 }
 
 impl SidebarHud {
+    /// Python `_cancel_snap_animation` without the settling: stops the glide's frame timer and
+    /// forgets it, so the window stays where it is. Returns whether a glide was running.
+    fn stop_snap_animation(&self) -> bool {
+        self.snap_frame_timer.stop();
+        self.snap_clock.set(None);
+        self.snap_anim.borrow_mut().take().is_some()
+    }
+
     /// Python `_set_grip_cursor`.
     fn set_grip_cursor(&self, zone: Option<&str>) {
         use ferrokit_widgets::application::Application;
@@ -1755,6 +2104,10 @@ impl QObject for HudFilter {
                 _ => {}
             }
         }
+        // the user takes the bar over: a running glide stops and the window stays where it is
+        if matches!(event.kind, EventKind::MouseButtonPress { .. }) {
+            hud.stop_snap_animation();
+        }
         if hud.resize.borrow().is_some() {
             let buttons_up = ferrokit_widgets::application::Application::mouse_buttons().is_empty();
             return match &event.kind {
@@ -1764,7 +2117,7 @@ impl QObject for HudFilter {
                     true
                 }
                 EventKind::MouseMove { .. } => {
-                    let pos = Cursor::pos();
+                    let pos = pointer_pos();
                     with_hud_later(move |hud| hud.resize_to(pos));
                     true
                 }
@@ -1772,8 +2125,13 @@ impl QObject for HudFilter {
                     with_hud_later(|hud| hud.end_resize());
                     true
                 }
-                // the window lost the keyboard focus or the pointer mid-drag
-                EventKind::FocusOut { .. } | EventKind::Leave if watched == hud.root_id => {
+                // the window lost the keyboard focus mid-drag. A leave is not that: the window system
+                // reports the pointer outside the window (the dragged window lags the pointer) while the
+                // mouse is captured, but Qt delivers no leave while a window holds the capture
+                // (`QWindowsPointerHandler::handleEnterLeave`, qwindowspointerhandler.cpp:368 in Qt
+                // 6.12.0) and Python's drag goes on; ending the drag there left the scale unsaved and
+                // the next drag started from the old one
+                EventKind::FocusOut { .. } if watched == hud.root_id => {
                     with_hud_later(|hud| hud.cancel_resize());
                     false
                 }
@@ -1790,7 +2148,7 @@ impl QObject for HudFilter {
             }
             EventKind::MouseMove { .. } | EventKind::MouseButtonPress { .. } => {
                 // Python: `isinstance(obj, QWidget) and (obj is self or self.isAncestorOf(obj))`
-                let pos = Cursor::pos();
+                let pos = pointer_pos();
                 let zone =
                     resize_zone(hud.geom.get(), pos).filter(|_| tree_contains(&hud.root, watched));
                 match &event.kind {
@@ -1887,69 +2245,132 @@ impl HUDWindow {
         pick_work_area((c.x, c.y), &areas)
     }
 
+    /// Python `_dock_rect`: the rectangle the bar takes on its saved edge (or saved free position)
+    /// of the current screen.
+    fn dock_rect(&self) -> Option<(i32, i32, i32, i32)> {
+        let work = self.sidebar_work_area()?;
+        let (w, h) = self.sidebar.preferred_size();
+        let cfg = self.config.lock();
+        match self.sidebar_edge_of(&cfg) {
+            Some(edge) => {
+                let offset = cfg.sidebar_offset.map(|o| match o {
+                    crate::config::SidebarOffset::At(n) => Offset::Start(n),
+                    crate::config::SidebarOffset::End => Offset::End,
+                });
+                dock_to_edge(work, edge, w, h, offset, DEFAULT_MARGIN)
+            }
+            None => {
+                let (x, y) = match (cfg.sidebar_x, cfg.sidebar_y) {
+                    (Some(x), Some(y)) => (x, y),
+                    _ => (work.0 + work.2, work.1 + work.3),
+                };
+                Some(snap_rect((x, y, w, h), work, -1_000_000).0)
+            }
+        }
+    }
+
+    /// Python `_place`: gives the window exactly `rect`; the move is the docking's own, so it does
+    /// not restart the snap timer.
+    fn place(&mut self, (x, y, w, h): (i32, i32, i32, i32)) {
+        self.sidebar_hud.docking.set(true);
+        self.window.set_fixed_size(w, h);
+        self.set_window_geometry(Rect::new(x, y, w, h));
+        self.sidebar_hud.docking.set(false);
+    }
+
     /// Python `_dock_sidebar`: places the bar on its saved edge (or saved free position) of the
     /// current screen.
     fn dock_sidebar(&mut self) {
-        let Some(work) = self.sidebar_work_area() else {
+        self.cancel_snap_animation(false);
+        if let Some(rect) = self.dock_rect() {
+            self.place(rect);
+        }
+    }
+
+    /// Python `_dock_sidebar_animated`: `dock_sidebar`, gliding from where the window is to the
+    /// docked rectangle (`SNAP_ANIM_MS`, ease-out). Docks at once when there is nothing to glide:
+    /// same rectangle, hidden window, reduced motion.
+    fn dock_sidebar_animated(&mut self) {
+        let rect = self.dock_rect();
+        let g = self.window.geometry();
+        let start = (g.x, g.y, g.width, g.height);
+        let Some(rect) = rect.filter(|rect| {
+            *rect != start && self.window.is_visible() && super::sidebar::animations_enabled()
+        }) else {
+            self.dock_sidebar();
             return;
         };
-        let (w, h) = self.sidebar.preferred_size();
-        let rect = {
-            let cfg = self.config.lock();
-            match self.sidebar_edge_of(&cfg) {
-                Some(edge) => {
-                    let offset = cfg.sidebar_offset.map(|o| match o {
-                        crate::config::SidebarOffset::At(n) => Offset::Start(n),
-                        crate::config::SidebarOffset::End => Offset::End,
-                    });
-                    dock_to_edge(work, edge, w, h, offset, DEFAULT_MARGIN)
-                }
-                None => {
-                    let (x, y) = match (cfg.sidebar_x, cfg.sidebar_y) {
-                        (Some(x), Some(y)) => (x, y),
-                        _ => (work.0 + work.2, work.1 + work.3),
-                    };
-                    Some(snap_rect((x, y, w, h), work, -1_000_000).0)
-                }
-            }
+        self.cancel_snap_animation(false);
+        *self.sidebar_hud.snap_anim.borrow_mut() = Some(SnapAnimation::new(start, rect));
+        self.sidebar_hud.snap_clock.set(Some(Instant::now()));
+        self.sidebar_hud.snap_frame_timer.start();
+    }
+
+    /// One frame of the glide (the frame timer's slot).
+    fn snap_animation_step(&mut self) {
+        let elapsed = self
+            .sidebar_hud
+            .snap_clock
+            .get()
+            .map_or(0.0, |t| t.elapsed().as_secs_f64() * 1000.0);
+        self.snap_animation_step_at(elapsed);
+    }
+
+    /// The frame of the glide `elapsed_ms` after its start.
+    fn snap_animation_step_at(&mut self, elapsed_ms: f64) {
+        let Some(anim) = *self.sidebar_hud.snap_anim.borrow() else {
+            self.sidebar_hud.snap_frame_timer.stop();
+            return;
         };
-        let Some((x, y, w, h)) = rect else { return };
-        self.sidebar_hud.docking.set(true);
-        self.window.set_fixed_size(w, h);
-        self.window.set_geometry(Rect::new(x, y, w, h));
-        self.sidebar_hud.docking.set(false);
+        let (rect, done) = anim.frame(elapsed_ms);
+        if done {
+            self.dock_sidebar(); // the last frame is the plain docking: identical result with or without glide
+        } else {
+            self.place(rect);
+        }
+    }
+
+    /// Python `_cancel_snap_animation`: stops a running snap animation. The window stays where it
+    /// is, unless `settle`: then it takes its docked rectangle at once (for a lock, a hide:
+    /// nothing is left half way). Returns whether one was running.
+    pub fn cancel_snap_animation(&mut self, settle: bool) -> bool {
+        let was_running = self.sidebar_hud.stop_snap_animation();
+        if was_running && settle {
+            self.dock_sidebar();
+        }
+        was_running
     }
 
     /// Python `_finish_sidebar_move`: after a drag, snap to the nearest screen edge (or stay free)
     /// and remember the position.
     pub fn finish_sidebar_move(&mut self) {
         if !self.is_sidebar_mode() || self.sidebar_hud.docking.get() {
+            self.hide_dock_preview();
             return;
         }
         if !ferrokit_widgets::application::Application::mouse_buttons().is_empty() {
             self.sidebar_hud.snap_timer.start();
+            self.update_dock_preview(true); // still dragging: follow a screen or layout change
             return;
+        }
+        self.hide_dock_preview();
+        if self.sidebar_hud.snap_anim.borrow().is_some() {
+            return; // already gliding onto its place
         }
         let Some(work) = self.sidebar_work_area() else {
             return;
         };
         let g = self.window.geometry();
-        let current = {
-            let cfg = self.config.lock();
-            if cfg.sidebar_orientation == "horizontal" {
-                "horizontal"
-            } else {
-                "vertical"
-            }
-        };
+        let current = self.current_sidebar_orientation();
         // near a corner the bar keeps its orientation and sticks to the corner instead of turning sideways
-        let (rect, edge, offset) = snap_rect_corner(
+        let plan = plan_sidebar_snap(
             (g.x, g.y, g.width, g.height),
             work,
             SIDEBAR_SNAP_PX,
-            Some(current),
+            current,
         );
-        let orientation = orientation_for_edge(edge, current);
+        let (rect, edge, offset, orientation) =
+            (plan.rect, plan.edge, plan.offset, plan.orientation);
         ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.sidebar_edge = edge.unwrap_or("none").to_owned();
             cfg.sidebar_orientation = orientation.to_owned();
@@ -1966,7 +2387,97 @@ impl HUDWindow {
         self.sidebar
             .set_orientation(Orientation::parse(orientation).unwrap_or(Orientation::Vertical));
         self.sidebar.set_dock_edge(edge);
-        self.dock_sidebar();
+        self.dock_sidebar_animated();
+    }
+
+    /// The saved orientation (`config.get("sidebar_orientation", "vertical")`).
+    fn current_sidebar_orientation(&self) -> &'static str {
+        if self.config.lock().sidebar_orientation == "horizontal" {
+            "horizontal"
+        } else {
+            "vertical"
+        }
+    }
+
+    // ---- dock preview: the outline of where the dragged bar will settle ----
+
+    /// Python `_dock_preview_rect`: the rectangle `finish_sidebar_move` would dock the window to
+    /// right now, or None when there is nothing to preview: not a drag of the sidebar, locked, not
+    /// near an edge, or the window already sits there. `dragging`: a mouse button is held.
+    fn dock_preview_rect(&mut self, dragging: bool) -> Option<Rect> {
+        if !dragging
+            || !self.is_sidebar_mode()
+            || self.sidebar_hud.docking.get()
+            || self.sidebar_hud.resize.borrow().is_some()
+            || self.config.lock().locked
+        {
+            return None;
+        }
+        let work = self.sidebar_work_area()?;
+        let g = self.window.geometry();
+        let current = self.current_sidebar_orientation();
+        let target = {
+            let (sidebar, sizes) = (&self.sidebar, &mut self.preview_sizes);
+            sidebar_dock_target(
+                (g.x, g.y, g.width, g.height),
+                work,
+                SIDEBAR_SNAP_PX,
+                current,
+                |orientation| {
+                    *sizes.entry(orientation).or_insert_with(|| {
+                        sidebar.preferred_size_for(
+                            Orientation::parse(orientation).unwrap_or(Orientation::Vertical),
+                        )
+                    })
+                },
+            )?
+        };
+        let (x, y, w, h) = target.rect;
+        (target.rect != (g.x, g.y, g.width, g.height)).then(|| Rect::new(x, y, w, h))
+    }
+
+    /// `update_dock_preview` for the current mouse state: a move of the window while a button is held.
+    fn run_dock_preview_update(&mut self) {
+        self.update_dock_preview(
+            !ferrokit_widgets::application::Application::mouse_buttons().is_empty(),
+        );
+    }
+
+    /// Python `_update_dock_preview`.
+    pub(crate) fn update_dock_preview(&mut self, dragging: bool) {
+        let Some(rect) = self.dock_preview_rect(dragging) else {
+            if let Some(preview) = self.dock_preview.as_mut() {
+                preview.hide();
+            }
+            return;
+        };
+        if self.dock_preview.is_none() && !self.dock_preview_failed {
+            match DockPreview::new() {
+                Ok(preview) => self.dock_preview = Some(preview),
+                Err(error) => {
+                    self.dock_preview_failed = true;
+                    log::warn!("[HUD] dock preview window not created: {error}");
+                }
+            }
+        }
+        let (scale, on_top) = {
+            let cfg = self.config.lock();
+            (cfg.sidebar_scale_setting(), cfg.always_on_top)
+        };
+        let dark = self.is_dark;
+        if let Some(preview) = self.dock_preview.as_mut() {
+            preview.show_at(rect, dark, scale, on_top);
+            preview.stack_below(&self.window);
+        }
+    }
+
+    /// Python `_hide_dock_preview`: the drag is over (or never was one): hide the outline and
+    /// forget the sizes measured for it.
+    pub(crate) fn hide_dock_preview(&mut self) {
+        self.preview_sizes.clear();
+        if let Some(preview) = self.dock_preview.as_mut() {
+            preview.hide();
+        }
     }
 
     /// Python `_start_sidebar_drag`.
@@ -1980,6 +2491,8 @@ impl HUDWindow {
     /// Python `_begin_resize` after the press (the state is set by the filter).
     fn begin_resize(&mut self) {
         self.sidebar.close_flyout();
+        self.cancel_snap_animation(false);
+        self.hide_dock_preview();
         self.sidebar_hud.snap_timer.stop();
         self.window.root_widget().borrow().grab_mouse();
     }
@@ -2004,7 +2517,7 @@ impl HUDWindow {
         let (x, y) = resize_origin(&r.zone, r.geom, w, h);
         self.sidebar_hud.docking.set(true);
         self.window.set_fixed_size(w, h);
-        self.window.set_geometry(Rect::new(x, y, w, h));
+        self.set_window_geometry(Rect::new(x, y, w, h));
         self.sidebar_hud.docking.set(false);
     }
 
@@ -2090,13 +2603,17 @@ impl HUDWindow {
         }
     }
 
-    /// Python `set_provider_order`.
+    /// Python `set_provider_order`: a drag reorder of the visible tiles (ids, accounts included).
+    /// Writes `sidebar_tiles` and the base-id `provider_order`.
     pub fn set_provider_order(&mut self, order: &[String]) {
-        if crate::ui::sidebar::valid_order(order).is_none() || order == self.provider_order() {
+        let tiles = self.tiles();
+        let Some(order) = crate::ui::sidebar::valid_order(order, &tiles.all) else {
+            return;
+        };
+        if order == tiles.visible {
             return;
         }
-        let order = order.to_vec();
-        ConfigManager::update_and_save(&self.config, |cfg| cfg.provider_order = order.clone());
+        ConfigManager::update_and_save(&self.config, |cfg| accounts::set_tile_order(cfg, &order));
         self.sidebar.set_order(&order);
         // Python: `if ui_mode == "table": self._rebuild_table()`. The table follows the order in
         // every style here, so switching to it later never shows a stale one.
@@ -2210,16 +2727,8 @@ impl HUDWindow {
                 with_hud_later(move |hud| hud.set_provider_order(&order));
             });
         for (pid, card) in &self.sidebar_cards {
-            let pid = pid.clone();
-            card.borrow()
-                .row_order_changed()
-                .connect_local(move |titles: &Vec<String>| {
-                    let (pid, titles) = (pid.clone(), titles.clone());
-                    with_hud_later(move |hud| hud.set_row_order(&pid, &titles));
-                });
+            Self::wire_card(pid, card);
         }
-        let order = self.provider_order();
-        self.sidebar.set_order(&order);
         // QApplication.instance().installEventFilter(self)
         let filter = HudFilter {
             data: ObjectData::with_auto_id(),
@@ -2523,6 +3032,183 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         (hud, fetched)
+    }
+
+    // ---- extra Claude accounts, applied live ----
+
+    /// Ticks `profile` on in the config and applies it; returns the new instance id.
+    fn add_account(hud: &mut HUDWindow, profile: &str) -> String {
+        let mut id = String::new();
+        ConfigManager::update_and_save(&hud.config, |cfg| {
+            id = accounts::add_account(cfg, profile).expect("account added");
+        });
+        hud.apply_accounts();
+        id
+    }
+
+    fn remove_account(hud: &mut HUDWindow, id: &str) {
+        ConfigManager::update_and_save(&hud.config, |cfg| accounts::remove_account(cfg, id));
+        hud.apply_accounts();
+    }
+
+    #[test]
+    fn an_account_is_added_and_removed_live() {
+        let (mut hud, _rx) = hud_with_stubs();
+        assert_eq!(hud.sidebar.visible_tiles(), ["claude", "agy", "codex"]);
+        let id = add_account(&mut hud, "claude-a");
+        assert_eq!(id, "claude@claude-a");
+        assert!(hud.providers.contains_key(&id));
+        assert!(hud.refresh_ctrl.lock().states.contains_key(&id));
+        assert!(hud.sidebar_cards.contains_key(&id));
+        assert_eq!(
+            hud.sidebar.visible_tiles(),
+            ["claude", id.as_str(), "agy", "codex"]
+        );
+        // its data lands in its own card
+        hud.on_data_fetched(&UsageMetrics {
+            provider_id: id.clone(),
+            metric1_val: Some(42.0),
+            ..Default::default()
+        });
+        assert_eq!(
+            hud.sidebar_cards[&id].borrow().current_metrics.metric1_val,
+            Some(42.0)
+        );
+        remove_account(&mut hud, &id);
+        assert!(!hud.providers.contains_key(&id));
+        assert!(!hud.refresh_ctrl.lock().states.contains_key(&id));
+        assert!(!hud.raw_metrics.contains_key(&id));
+        assert!(!hud.sidebar_cards.contains_key(&id));
+        assert_eq!(hud.sidebar.visible_tiles(), ["claude", "agy", "codex"]);
+        // an unusable value keeps what runs
+        let id = add_account(&mut hud, "claude-a");
+        ConfigManager::update_and_save(&hud.config, |cfg| {
+            cfg.extra
+                .insert("accounts".to_owned(), serde_json::json!("junk"));
+        });
+        hud.apply_accounts();
+        assert!(hud.providers.contains_key(&id));
+        assert_eq!(hud.sidebar.visible_tiles().len(), 4);
+    }
+
+    #[test]
+    fn account_filter_replacement_card_persists_row_order() {
+        let el = ferrokit_core::event_loop::EventLoop::new();
+        let (mut hud, _rx) = hud_with_stubs();
+        let id = add_account(&mut hud, "claude-a");
+        let old_card = Rc::clone(&hud.sidebar_cards[&id]);
+        hud.config
+            .lock()
+            .extra
+            .get_mut(accounts::KEY_ACCOUNTS)
+            .unwrap()[0]["nickname"] = serde_json::json!("Renamed");
+        hud.apply_accounts_with(false);
+        let replacement = Rc::clone(&hud.sidebar_cards[&id]);
+        assert!(!Rc::ptr_eq(&old_card, &replacement));
+        assert_eq!(hud.accounts[&id].label, "Renamed");
+        let config = Arc::clone(&hud.config);
+        let hud = Rc::new(RefCell::new(hud));
+        register_hud(&hud);
+        let order = vec!["Weekly".to_owned(), "Session".to_owned()];
+        replacement.borrow().row_order_changed().emit(&order);
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while config.lock().row_order.get(&id) != Some(&order)
+            && std::time::Instant::now() < deadline
+        {
+            el.process_events(false);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(config.lock().row_order.get(&id), Some(&order));
+    }
+
+    #[test]
+    fn the_window_follows_the_tile_count() {
+        let (mut hud, _rx) = hud_with_stubs();
+        for (panel, horizontal) in [(false, false), (false, true), (true, false), (true, true)] {
+            ConfigManager::update_and_save(&hud.config, |cfg| {
+                cfg.sidebar_orientation =
+                    if horizontal { "horizontal" } else { "vertical" }.to_owned();
+            });
+            hud.sidebar.set_orientation(if horizontal {
+                Orientation::Horizontal
+            } else {
+                Orientation::Vertical
+            });
+            hud.set_sidebar_state(if panel { "panel" } else { "strip" });
+            let size = |hud: &HUDWindow| {
+                let g = hud.window.geometry();
+                (g.width, g.height)
+            };
+            let before = size(&hud);
+            let id = add_account(&mut hud, "claude-a");
+            hud.settle_sidebar();
+            let with = size(&hud);
+            let case = format!("panel {panel} horizontal {horizontal}");
+            assert_eq!(with, hud.sidebar.preferred_size(), "{case}");
+            assert_ne!(with, before, "{case}");
+            remove_account(&mut hud, &id);
+            hud.settle_sidebar();
+            assert_eq!(size(&hud), before, "{case}");
+        }
+    }
+
+    #[test]
+    fn removing_a_tile_with_its_flyout_open_leaves_nothing_behind() {
+        let (mut hud, _rx) = hud_with_stubs();
+        hud.set_sidebar_state("strip");
+        let id = add_account(&mut hud, "claude-a");
+        hud.sidebar.click_tile(&id);
+        assert_eq!(hud.sidebar.active().as_deref(), Some(id.as_str()));
+        remove_account(&mut hud, &id);
+        assert_eq!(hud.sidebar.active(), None);
+        // the panel: three cards and two dividers, five items; no orphan after a removal
+        hud.set_sidebar_state("panel");
+        assert_eq!(hud.sidebar.panel_item_count(), 5);
+        let id = add_account(&mut hud, "claude-a");
+        assert_eq!(hud.sidebar.panel_item_count(), 7);
+        remove_account(&mut hud, &id);
+        assert_eq!(hud.sidebar.panel_item_count(), 5);
+    }
+
+    #[test]
+    fn a_drag_reorder_is_saved_for_the_new_tile_too() {
+        let (mut hud, _rx) = hud_with_stubs();
+        let id = add_account(&mut hud, "claude-a");
+        let order: Vec<String> = [id.as_str(), "claude", "codex", "agy"]
+            .map(str::to_owned)
+            .to_vec();
+        hud.set_provider_order(&order);
+        let cfg = hud.config.lock().clone();
+        assert_eq!(
+            cfg.extra["sidebar_tiles"],
+            serde_json::json!([id, "claude", "codex", "agy"])
+        );
+        assert_eq!(cfg.provider_order, ["claude", "codex", "agy"]);
+        assert_eq!(hud.sidebar.visible_tiles(), order);
+    }
+
+    #[test]
+    fn a_hidden_tile_keeps_fetching_and_the_tray_still_resolves() {
+        let (mut hud, _rx) = hud_with_stubs();
+        hud.set_tile_visible("codex", false);
+        hud.apply_accounts();
+        assert_eq!(hud.sidebar.visible_tiles(), ["claude", "agy"]);
+        assert!(hud.providers.contains_key("codex"));
+        assert!(hud.refresh_ctrl.lock().states.contains_key("codex"));
+        for id in ["claude", "codex"] {
+            hud.on_data_fetched(&UsageMetrics {
+                provider_id: id.to_owned(),
+                metric1_key: format!("{id}:5h"),
+                metric1_val: Some(50.0),
+                ..Default::default()
+            });
+        }
+        let data = hud.quota_data();
+        let ids: Vec<&str> = data.iter().map(|m| m.provider_id.as_str()).collect();
+        assert_eq!(ids, ["claude", "codex"]);
+        let reading =
+            crate::tray_quota::resolve("claude:5h", &data, chrono::Utc::now()).expect("a reading");
+        assert_ne!(reading.state, crate::tray_quota::State::Unavailable);
     }
 
     fn fetches_within(rx: &std::sync::mpsc::Receiver<String>, ms: u64) -> usize {
@@ -3085,11 +3771,50 @@ mod sidebar_geometry_tests {
     }
 
     #[test]
-    fn a_corner_uses_the_edge_that_moved_the_furthest() {
+    fn a_corner_that_grows_follows_the_edge_that_moved_the_furthest() {
         // right grew by 5 %, bottom by 50 %
         assert_eq!(resize_scale("rb", G, 1.0, 3, 100), 1.5);
-        // width shrank (0.5) further from 1 than the height grew (1.1)
-        assert_eq!(resize_scale("rb", G, 1.0, -32, 20), 0.6);
+        // both shrank: the width to 0.5, the height to 0.9
+        assert_eq!(resize_scale("rb", G, 1.0, -32, -20), 0.6);
+    }
+
+    #[test]
+    fn a_corner_drag_does_not_jump_where_one_edge_grows_and_the_other_shrinks() {
+        // the same vectors are pinned in the Python HUD (tests/test_ui.py)
+        let strip = Rect {
+            x: 0,
+            y: 0,
+            width: 72,
+            height: 222,
+        };
+        // the pointer 7 px to the right of the press and moving up: the width grows 10 %, the height
+        // shrinks as it goes. The scale followed the one furthest from 1, which flipped from +10 % to
+        // -10 % between 18 and 22 px up; now the changes add up
+        let scales: Vec<f64> = (0..=60)
+            .map(|up| resize_scale("rb", strip, 1.0, 7, -up))
+            .collect();
+        let biggest_step = scales
+            .windows(2)
+            .map(|pair| (pair[0] - pair[1]).abs())
+            .fold(0.0, f64::max);
+        assert!(biggest_step <= 0.020_001, "{biggest_step}");
+        assert_eq!(
+            [scales[0], scales[18], scales[22], scales[60]],
+            [1.1, 1.02, 1.0, 0.83]
+        );
+    }
+
+    #[test]
+    fn the_scale_rounds_to_two_decimals_like_python_round() {
+        let strip = Rect {
+            x: 0,
+            y: 0,
+            width: 72,
+            height: 222,
+        };
+        // (72 + 45) / 72 is exactly 1.625: round() goes to the even 1.62, (x * 100).round() to 1.63
+        assert_eq!(resize_scale("r", strip, 1.0, 45, 0), 1.62);
+        assert_eq!(resize_scale("l", strip, 1.0, -45, 0), 1.62);
     }
 
     #[test]
@@ -3176,5 +3901,968 @@ mod sidebar_geometry_tests {
         assert_eq!(faded_opacity(0.88, 0.6, false), 0.88);
         assert!((faded_opacity(0.88, 0.6, true) - 0.528).abs() < 1e-6);
         assert!((faded_opacity(1.0, 0.2, true) - 0.2).abs() < 1e-6);
+    }
+}
+
+/// The dock preview against the real HUD window and the real preview window (Win32): the
+/// providers are stubs; a drag is the window's own move, as the system's drag loop makes it.
+#[cfg(all(test, windows))]
+mod dock_preview_tests {
+    use super::*;
+    use crate::config::SidebarOffset;
+    use crate::refresh_controller::RefreshController;
+
+    type Hwnd = *mut core::ffi::c_void;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
+        fn GetForegroundWindow() -> Hwnd;
+        fn GetWindow(hwnd: Hwnd, cmd: u32) -> Hwnd;
+        fn SetWindowPos(
+            hwnd: Hwnd,
+            after: Hwnd,
+            x: i32,
+            y: i32,
+            cx: i32,
+            cy: i32,
+            flags: u32,
+        ) -> i32;
+        fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn ReleaseCapture() -> i32;
+    }
+
+    const GWL_EXSTYLE: i32 = -20;
+    const WS_EX_TOPMOST: u32 = 0x0000_0008;
+    const WS_EX_TRANSPARENT: u32 = 0x0000_0020;
+    const WS_EX_TOOLWINDOW: u32 = 0x0000_0080;
+    const WS_EX_NOACTIVATE: u32 = 0x0800_0000;
+
+    fn sidebar_hud(state: &str, configure: impl FnOnce(&mut Config)) -> HUDWindow {
+        let mut c = Config::default();
+        c.ui_mode = "sidebar".into();
+        c.sidebar_state = state.into();
+        c.sidebar_edge = "right".into();
+        c.sidebar_orientation = "vertical".into();
+        c.sidebar_offset = Some(SidebarOffset::At(100));
+        configure(&mut c);
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        HUDWindow::with_providers(
+            Arc::new(Mutex::new(c)),
+            ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap()
+    }
+
+    fn work(hud: &HUDWindow) -> GeoRect {
+        hud.sidebar_work_area().expect("a screen")
+    }
+
+    /// Moves the window the way a native drag does (the window's own move, not a docking) and lets
+    /// the preview follow; `dragging` stands for the held mouse button.
+    fn drag_to(hud: &mut HUDWindow, x: i32, y: i32, dragging: bool) {
+        let g = hud.window.geometry();
+        hud.window.set_geometry(Rect::new(x, y, g.width, g.height));
+        hud.update_dock_preview(dragging);
+    }
+
+    fn shown(hud: &HUDWindow) -> bool {
+        hud.dock_preview.as_ref().is_some_and(|p| p.is_visible())
+    }
+
+    fn preview_rect(hud: &HUDWindow) -> Rect {
+        hud.dock_preview.as_ref().expect("a preview").geometry()
+    }
+
+    #[test]
+    fn the_preview_shows_where_the_bar_docks_and_finish_docks_onto_it() {
+        for state in ["strip", "panel"] {
+            let mut hud = sidebar_hud(state, |_| {});
+            let w = work(&hud);
+            let start = hud.window.geometry();
+            assert!(hud.dock_preview.is_none());
+            let orientation = hud.sidebar.orientation();
+
+            // far from every edge (centred: a tall panel on a small screen is within the snap
+            // distance of an edge anywhere else): no preview
+            drag_to(
+                &mut hud,
+                w.0 + (w.2 - start.width) / 2,
+                w.1 + (w.3 - start.height) / 2,
+                true,
+            );
+            assert!(!shown(&hud), "{state}");
+
+            // near the top edge: the bar would turn horizontal and the preview has that shape
+            drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+            assert!(shown(&hud), "{state}");
+            let top = preview_rect(&hud);
+            assert!(top.width > top.height, "{state}");
+            assert_eq!(top.y, w.1, "{state}");
+            // the real window and its layout are untouched while the preview is up
+            let g = hud.window.geometry();
+            assert_eq!((g.width, g.height), (start.width, start.height), "{state}");
+            assert_eq!((g.x, g.y), (w.0 + 150, w.1 + 4), "{state}");
+            assert_eq!(hud.sidebar.orientation(), orientation, "{state}");
+
+            // dragging on along the edge follows the pointer
+            drag_to(&mut hud, w.0 + 60, w.1 + 9, true);
+            assert_eq!(preview_rect(&hud).x, w.0 + 60, "{state}");
+
+            // the left edge flips it back to the vertical shape
+            drag_to(&mut hud, w.0 + 6, w.1 + 120, true);
+            let left = preview_rect(&hud);
+            assert!(left.height > left.width, "{state}");
+
+            // back at the top edge: finishing docks exactly onto the preview and hides it
+            drag_to(&mut hud, w.0 + 200, w.1 + 4, true);
+            let before_finish = preview_rect(&hud);
+            hud.finish_sidebar_move();
+            assert_eq!(hud.window.geometry(), before_finish, "{state}");
+            assert!(!shown(&hud), "{state}");
+            assert_eq!(hud.config.lock().sidebar_edge, "top", "{state}");
+        }
+    }
+
+    #[test]
+    fn a_corner_keeps_the_orientation_and_the_preview_matches_the_result() {
+        let mut hud = sidebar_hud("strip", |_| {});
+        let w = work(&hud);
+        let g = hud.window.geometry();
+        drag_to(
+            &mut hud,
+            w.0 + w.2 - g.width - 3,
+            w.1 + w.3 - g.height - 8,
+            true,
+        );
+        let target = preview_rect(&hud);
+        assert_eq!((target.width, target.height), (g.width, g.height));
+        assert_eq!(
+            (target.x + target.width, target.y + target.height),
+            (w.0 + w.2, w.1 + w.3)
+        );
+        hud.finish_sidebar_move();
+        assert_eq!(hud.window.geometry(), target);
+        assert_eq!(hud.config.lock().sidebar_edge, "right");
+    }
+
+    #[test]
+    fn the_preview_hides_when_there_is_nothing_to_dock() {
+        let mut hud = sidebar_hud("strip", |_| {});
+        let w = work(&hud);
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        // left the snap distance
+        drag_to(&mut hud, w.0 + 150, w.1 + 60, true);
+        assert!(!shown(&hud));
+        // a move with no button held is not a drag
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        drag_to(&mut hud, w.0 + 151, w.1 + 4, false);
+        assert!(!shown(&hud));
+        // locked
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        hud.config.lock().locked = true;
+        drag_to(&mut hud, w.0 + 152, w.1 + 4, true);
+        assert!(!shown(&hud));
+        hud.config.lock().locked = false;
+        // a resize drag
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        *hud.sidebar_hud.resize.borrow_mut() = Some(ResizeState {
+            start: Point::new(0, 0),
+            geom: hud.window.geometry(),
+            scale: 1.0,
+            zone: "l".into(),
+        });
+        hud.update_dock_preview(true);
+        assert!(!shown(&hud));
+        *hud.sidebar_hud.resize.borrow_mut() = None;
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        hud.begin_resize();
+        assert!(!shown(&hud));
+        hud.cancel_resize();
+        // the window already sits where it would dock
+        hud.dock_sidebar();
+        let g = hud.window.geometry();
+        drag_to(&mut hud, g.x, g.y, true);
+        assert!(!shown(&hud));
+        // the table style
+        drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+        assert!(shown(&hud));
+        hud.apply_ui_mode("table");
+        assert!(!shown(&hud));
+        assert!(hud.dock_preview_rect(true).is_none());
+    }
+
+    #[test]
+    fn the_preview_sits_directly_below_the_hud_in_both_stacking_bands() {
+        const GW_HWNDNEXT: u32 = 2;
+        for on_top in [true, false] {
+            let mut hud = sidebar_hud("strip", |c| c.always_on_top = on_top);
+            hud.window.set_stays_on_top(on_top);
+            hud.window.show();
+            let w = work(&hud);
+            let foreground = unsafe { GetForegroundWindow() };
+            let hud_hwnd = hud.window.native_handle() as Hwnd;
+            // every update re-stacks the outline right under the HUD, also while it moves
+            for x in [150, 160, 170] {
+                drag_to(&mut hud, w.0 + x, w.1 + 4, true);
+                assert!(shown(&hud), "{on_top}");
+                let preview = hud.dock_preview.as_ref().unwrap();
+                let preview_hwnd = preview.window().native_handle() as Hwnd;
+                assert_eq!(
+                    unsafe { GetWindow(hud_hwnd, GW_HWNDNEXT) },
+                    preview_hwnd,
+                    "on_top {on_top}: the outline is the window right below the HUD"
+                );
+                assert!(preview.stack_below(&hud.window));
+            }
+            assert_eq!(unsafe { GetForegroundWindow() }, foreground, "{on_top}");
+        }
+    }
+
+    #[test]
+    fn the_preview_window_is_click_through_and_never_takes_the_focus() {
+        for on_top in [true, false] {
+            let mut hud = sidebar_hud("strip", |c| c.always_on_top = on_top);
+            let w = work(&hud);
+            let foreground = unsafe { GetForegroundWindow() };
+            drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+            assert!(shown(&hud));
+            let preview = hud.dock_preview.as_ref().unwrap();
+            let flags = preview.window().window_flags();
+            for flag in [
+                WindowFlags::FRAMELESS,
+                WindowFlags::TOOL,
+                WindowFlags::TOOLTIP,
+                WindowFlags::CLICK_THROUGH,
+            ] {
+                assert!(flags.contains(flag), "{flag:?}");
+            }
+            assert_eq!(flags.contains(WindowFlags::STAYS_ON_TOP), on_top);
+            let style = unsafe {
+                GetWindowLongW(preview.window().native_handle() as Hwnd, GWL_EXSTYLE) as u32
+            };
+            for bit in [WS_EX_TRANSPARENT, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW] {
+                assert_ne!(style & bit, 0, "{bit:#x} in {style:#x}");
+            }
+            assert_eq!(style & WS_EX_TOPMOST != 0, on_top);
+            assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+
+            // the setting can change between drags
+            hud.config.lock().always_on_top = !on_top;
+            drag_to(&mut hud, w.0 + 152, w.1 + 4, true);
+            let preview = hud.dock_preview.as_ref().unwrap();
+            let style = unsafe {
+                GetWindowLongW(preview.window().native_handle() as Hwnd, GWL_EXSTYLE) as u32
+            };
+            assert_eq!(style & WS_EX_TOPMOST != 0, !on_top);
+        }
+    }
+
+    #[test]
+    fn the_preview_paints_a_translucent_rounded_outline_in_the_theme_colour() {
+        use crate::ui::dock_preview::{DOCK_PREVIEW_BORDER_ALPHA, DOCK_PREVIEW_FILL_ALPHA};
+        for dark in [true, false] {
+            let mut hud = sidebar_hud("strip", |c| {
+                c.appearance = if dark { "dark" } else { "light" }.into()
+            });
+            hud.is_dark = dark;
+            let w = work(&hud);
+            drag_to(&mut hud, w.0 + 150, w.1 + 4, true);
+            let preview = hud.dock_preview.as_ref().unwrap();
+            let store = preview.window().backing_store();
+            let pixmap = store.pixmap();
+            let (pw, ph) = (store.physical_width(), store.physical_height());
+            let alpha = |x: u32, y: u32| pixmap.pixel(x, y).unwrap().alpha();
+            assert_eq!(alpha(pw / 2, ph / 2), DOCK_PREVIEW_FILL_ALPHA);
+            assert_eq!(alpha(0, 0), 0, "the rounded corner is see-through");
+            assert!(
+                alpha(pw / 2, 0) > DOCK_PREVIEW_BORDER_ALPHA - 10,
+                "the outline"
+            );
+        }
+    }
+
+    // ---- the snap glide ----
+
+    /// Forces the system motion setting for a test and puts it back afterwards.
+    struct Motion(ferrokit_gui::application::MotionPreference);
+
+    impl Motion {
+        fn set(reduced: bool) -> Self {
+            use ferrokit_gui::application::{
+                GuiApplication, MotionPreference, set_system_motion_preference,
+            };
+            let before = GuiApplication::motion_preference();
+            set_system_motion_preference(if reduced {
+                MotionPreference::ReducedMotion
+            } else {
+                MotionPreference::NoPreference
+            });
+            Motion(before)
+        }
+    }
+
+    impl Drop for Motion {
+        fn drop(&mut self) {
+            ferrokit_gui::application::set_system_motion_preference(self.0);
+        }
+    }
+
+    fn shown_hud(state: &str) -> HUDWindow {
+        let mut hud = sidebar_hud(state, |_| {});
+        hud.window.show();
+        hud
+    }
+
+    /// The window dropped `y` px below the top edge with no button held, and the snap timer's slot run.
+    fn release_at_top(hud: &mut HUDWindow, w: GeoRect, y: i32) {
+        hud.sidebar_hud.stop_snap_animation();
+        hud.sidebar_hud.snap_timer.stop();
+        let g = hud.window.geometry();
+        hud.sidebar_hud.docking.set(true);
+        hud.window
+            .set_geometry(Rect::new(w.0 + 150, w.1 + y, g.width, g.height));
+        hud.sidebar_hud.docking.set(false);
+        hud.finish_sidebar_move();
+    }
+
+    fn gliding(hud: &HUDWindow) -> bool {
+        hud.sidebar_hud.snap_anim.borrow().is_some()
+    }
+
+    fn geometry(hud: &HUDWindow) -> (i32, i32, i32, i32) {
+        let g = hud.window.geometry();
+        (g.x, g.y, g.width, g.height)
+    }
+
+    #[test]
+    fn the_snap_glides_and_ends_exactly_where_a_jump_would() {
+        let mut results = Vec::new();
+        for animate in [true, false] {
+            let _motion = Motion::set(!animate);
+            let mut hud = shown_hud("strip");
+            let w = work(&hud);
+            let start = hud.window.geometry();
+            release_at_top(&mut hud, w, 4);
+            if animate {
+                assert!(gliding(&hud));
+                // the config is saved once, at the release, with the final values
+                {
+                    let cfg = hud.config.lock();
+                    assert_eq!(cfg.sidebar_edge, "top");
+                    assert_eq!(cfg.sidebar_orientation, "horizontal");
+                }
+                // nothing moved yet
+                hud.snap_animation_step_at(0.0);
+                assert_eq!(geometry(&hud).1, w.1 + 4);
+                hud.snap_animation_step_at(70.0);
+                let mid = geometry(&hud);
+                assert!(
+                    mid.1 > w.1 && mid.1 <= w.1 + 4,
+                    "part of the way up: {mid:?}"
+                );
+                assert_ne!((mid.2, mid.3), (start.width, start.height));
+                // the glide's own moves neither cancel it nor restart the snap timer
+                assert!(gliding(&hud));
+                assert!(!hud.sidebar_hud.docking.get());
+                hud.snap_animation_step_at(140.0);
+                assert!(!gliding(&hud));
+            } else {
+                assert!(!gliding(&hud));
+            }
+            let cfg = hud.config.lock();
+            results.push((
+                geometry(&hud),
+                hud.sidebar.orientation(),
+                cfg.sidebar_edge.clone(),
+                cfg.sidebar_orientation.clone(),
+                cfg.sidebar_offset,
+            ));
+        }
+        assert_eq!(results[0], results[1]);
+    }
+
+    #[test]
+    fn the_user_cancels_the_glide_and_the_window_stays_put() {
+        let _motion = Motion::set(false);
+        let mut hud = shown_hud("strip");
+        let w = work(&hud);
+        // a press (the application filter's call), a move that is not the glide's own, a resize grab
+        let cancels: [fn(&mut HUDWindow); 3] = [
+            |hud| {
+                hud.sidebar_hud.stop_snap_animation();
+            },
+            |hud| {
+                // the system's own move (a native drag), not `Window::set_geometry`
+                let g = hud.window.geometry();
+                let hwnd = hud.window.native_handle() as Hwnd;
+                let at = ferrokit_platform::screen::logical_point_to_native(Point::new(
+                    g.x + 3,
+                    g.y + 3,
+                ));
+                let ok = unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        core::ptr::null_mut(),
+                        at.x,
+                        at.y,
+                        0,
+                        0,
+                        0x0001 | 0x0004 | 0x0010,
+                    )
+                };
+                assert_ne!(ok, 0);
+            },
+            |hud| hud.begin_resize(),
+        ];
+        for (i, cancel) in cancels.into_iter().enumerate() {
+            release_at_top(&mut hud, w, 4);
+            assert!(gliding(&hud));
+            hud.snap_animation_step_at(70.0);
+            assert!(gliding(&hud), "the glide's own frame did not cancel it");
+            let before = hud.window.geometry();
+            cancel(&mut hud);
+            assert!(!gliding(&hud), "cancel {i}");
+            assert!(!hud.sidebar_hud.docking.get());
+            // Only the native drag moves the window, by three logical pixels on each axis.
+            let after = hud.window.geometry();
+            let delta = if i == 1 { 3 } else { 0 };
+            assert!(
+                (after.x - before.x - delta).abs() <= 1 && (after.y - before.y - delta).abs() <= 1,
+                "{before:?} -> {after:?}"
+            );
+            assert_eq!((after.width, after.height), (before.width, before.height));
+            hud.cancel_resize();
+            hud.sidebar_hud.snap_timer.stop();
+            // the bar docks again on its saved edge
+            hud.dock_sidebar();
+            hud.config.lock().sidebar_edge = "right".into();
+            hud.config.lock().sidebar_orientation = "vertical".into();
+            hud.sidebar.set_orientation(Orientation::Vertical);
+            hud.sidebar.set_dock_edge(Some("right"));
+            hud.dock_sidebar();
+        }
+    }
+
+    #[test]
+    fn a_lock_or_a_hide_settles_the_glide_and_a_redock_or_style_switch_drops_it() {
+        let _motion = Motion::set(false);
+        let mut hud = shown_hud("strip");
+        let w = work(&hud);
+        let settle: [fn(&mut HUDWindow); 4] = [
+            |hud| {
+                hud.cancel_snap_animation(true);
+            },
+            |hud| hud.hide(),
+            |hud| hud.dock_sidebar(),
+            |hud| hud.apply_ui_mode("table"),
+        ];
+        for (i, action) in settle.into_iter().enumerate() {
+            release_at_top(&mut hud, w, 4);
+            assert!(gliding(&hud), "{i}");
+            action(&mut hud);
+            assert!(!gliding(&hud), "{i}");
+            assert!(!hud.sidebar_hud.docking.get(), "{i}");
+            if i < 3 {
+                assert_eq!(geometry(&hud).1, w.1, "{i}: on the top edge, not half way");
+            }
+            hud.apply_ui_mode("sidebar");
+            {
+                let mut cfg = hud.config.lock();
+                cfg.sidebar_edge = "right".into();
+                cfg.sidebar_orientation = "vertical".into();
+            }
+            hud.sidebar.set_orientation(Orientation::Vertical);
+            hud.sidebar.set_dock_edge(Some("right"));
+            hud.dock_sidebar();
+            hud.window.show();
+        }
+    }
+
+    #[test]
+    fn there_is_no_glide_when_there_is_nothing_to_glide() {
+        let _motion = Motion::set(false);
+        let mut hud = sidebar_hud("strip", |_| {});
+        let w = work(&hud);
+        // a hidden window
+        release_at_top(&mut hud, w, 4);
+        assert!(!gliding(&hud));
+        assert_eq!(geometry(&hud).1, w.1);
+        // already docked on the target
+        hud.window.show();
+        release_at_top(&mut hud, w, 0);
+        assert!(!gliding(&hud));
+        // reduced motion
+        let _reduced = Motion::set(true);
+        {
+            let mut cfg = hud.config.lock();
+            cfg.sidebar_edge = "right".into();
+            cfg.sidebar_orientation = "vertical".into();
+        }
+        hud.sidebar.set_orientation(Orientation::Vertical);
+        hud.sidebar.set_dock_edge(Some("right"));
+        hud.dock_sidebar();
+        release_at_top(&mut hud, w, 4);
+        assert!(!gliding(&hud));
+        assert_eq!(geometry(&hud).1, w.1);
+    }
+
+    // ---- the drag as Windows delivers it ----
+    //
+    // The bar is dragged by the system's own move loop (`start_system_move`). While it runs, the
+    // window gets native moves and nothing else: no mouse messages, no widget events (so nothing
+    // flushes `with_hud_later`), and the button stays held. Measured with a real press, then moves
+    // and a release (SendInput): `WM_LBUTTONDOWN`, the `ReleaseCapture` of the drag request, the
+    // posted `SC_DRAGMOVE`, then (when the pointer has moved, 140 ms later in that run) the loop's own
+    // `WM_CAPTURECHANGED` with no new owner, `WM_ENTERSIZEMOVE`, a `WM_MOVE` every 15-30 ms, and
+    // `WM_EXITSIZEMOVE` after the release. The tests above move the window and call
+    // `update_dock_preview(true)` themselves; these send those messages and leave the update to
+    // the HUD's move handler, which the application registers the HUD for (`register_hud`).
+
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_CAPTURECHANGED: u32 = 0x0215;
+    const WM_ENTERSIZEMOVE: u32 = 0x0231;
+    const WM_EXITSIZEMOVE: u32 = 0x0232;
+    const MK_LBUTTON: usize = 0x0001;
+    const GW_HWNDNEXT: u32 = 2;
+
+    /// The HUD as the application holds it: shared and registered, so its window handlers reach it.
+    fn registered_hud() -> Rc<RefCell<HUDWindow>> {
+        let mut hud = sidebar_hud("strip", |_| {});
+        hud.window.show();
+        let hud = Rc::new(RefCell::new(hud));
+        register_hud(&hud);
+        hud
+    }
+
+    /// What the move loop does to the window: a native move (physical pixels), made outside any
+    /// borrow of the HUD, as in the real loop.
+    fn native_move_to(hud: &Rc<RefCell<HUDWindow>>, x: i32, y: i32) {
+        let hwnd = hud.borrow().window.native_handle() as Hwnd;
+        let at = ferrokit_platform::screen::logical_point_to_native(Point::new(x, y));
+        // SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+        let ok = unsafe {
+            SetWindowPos(
+                hwnd,
+                core::ptr::null_mut(),
+                at.x,
+                at.y,
+                0,
+                0,
+                0x0001 | 0x0004 | 0x0010,
+            )
+        };
+        assert_ne!(ok, 0);
+    }
+
+    /// Takes the `SC_DRAGMOVE` the drag request posted out of the queue unread: dispatching it
+    /// would enter the real move loop, which only the mouse ends.
+    fn discard_posted_system_commands(hwnd: Hwnd) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            MSG, PM_REMOVE, PeekMessageW, WM_SYSCOMMAND,
+        };
+        // SAFETY: `msg` is a live, zeroed MSG for the call to fill in; `hwnd` is the HUD's window.
+        unsafe {
+            let mut msg: MSG = core::mem::zeroed();
+            while PeekMessageW(&mut msg, hwnd as _, WM_SYSCOMMAND, WM_SYSCOMMAND, PM_REMOVE) != 0 {}
+        }
+    }
+
+    /// Forgets the held button and the capture, which a failed assertion would leave behind for the
+    /// next test.
+    struct NativeDragGuard;
+
+    impl Drop for NativeDragGuard {
+        fn drop(&mut self) {
+            ferrokit_platform::window::set_app_mouse_buttons(
+                ferrokit_core::event::MouseButtons::NO_BUTTON,
+            );
+            unsafe { ReleaseCapture() };
+        }
+    }
+
+    fn held_buttons() -> ferrokit_core::event::MouseButtons {
+        ferrokit_widgets::application::Application::mouse_buttons()
+    }
+
+    /// A drag of the bar to the top edge and along it, then the release, as the move loop
+    /// delivers it. `loop_takes_the_capture`: the loop's own `WM_CAPTURECHANGED` (no new owner).
+    fn drag_through_the_move_loop(loop_takes_the_capture: bool) {
+        use ferrokit_core::event::MouseButtons;
+        let hud = registered_hud();
+        let hwnd = hud.borrow().window.native_handle() as Hwnd;
+        let w = work(&hud.borrow());
+        let _guard = NativeDragGuard;
+
+        unsafe { SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, 0x0020_0020) };
+        assert_eq!(
+            held_buttons(),
+            MouseButtons::LEFT,
+            "a press is a held button"
+        );
+        hud.borrow().start_sidebar_drag();
+        discard_posted_system_commands(hwnd);
+        if loop_takes_the_capture {
+            unsafe { SendMessageW(hwnd, WM_CAPTURECHANGED, 0, 0) };
+        }
+        unsafe { SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0) };
+        // the loop swallows the release: the button stays held until `WM_EXITSIZEMOVE`
+        assert_eq!(
+            held_buttons(),
+            MouseButtons::LEFT,
+            "the button is held in the move loop"
+        );
+
+        // far from every edge (centred): nothing to preview
+        let g = hud.borrow().window.geometry();
+        native_move_to(&hud, w.0 + (w.2 - g.width) / 2, w.1 + (w.3 - g.height) / 2);
+        assert!(!shown(&hud.borrow()));
+
+        // near the top edge: the outline is there when the move returns (the move handler ran the
+        // update; no widget event was dispatched since to flush a queued one), directly below the HUD
+        native_move_to(&hud, w.0 + 160, w.1 + 4);
+        {
+            let hud = hud.borrow();
+            assert!(shown(&hud), "the preview shows while the bar is dragged");
+            let top = preview_rect(&hud);
+            assert!(top.width > top.height, "the bar turns horizontal: {top:?}");
+            let preview = hud.dock_preview.as_ref().unwrap().window().native_handle() as Hwnd;
+            let below = unsafe { GetWindow(hud.window.native_handle() as Hwnd, GW_HWNDNEXT) };
+            assert_eq!(
+                below, preview,
+                "the outline is the window right below the HUD"
+            );
+        }
+
+        // along the edge it follows the pointer
+        native_move_to(&hud, w.0 + 60, w.1 + 8);
+        assert_eq!(preview_rect(&hud.borrow()).x, w.0 + 60);
+
+        // the pointer rests (the snap timer runs out) with the button still held: the drag is not over
+        hud.borrow_mut().finish_sidebar_move();
+        {
+            let hud = hud.borrow();
+            assert!(shown(&hud), "a pause in the drag keeps the preview");
+            assert!(!gliding(&hud), "a pause in the drag does not dock the bar");
+        }
+
+        // the release: the loop ends, the application learns the button is up, the bar docks on the preview
+        let before_finish = preview_rect(&hud.borrow());
+        unsafe { SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0) };
+        assert!(
+            held_buttons().is_empty(),
+            "the loop end releases the button: {:?}",
+            held_buttons()
+        );
+        hud.borrow_mut().finish_sidebar_move();
+        {
+            let hud = hud.borrow();
+            assert!(!shown(&hud), "the preview goes with the release");
+            assert!(gliding(&hud), "the bar glides onto its docked place");
+        }
+        hud.borrow_mut().snap_animation_step_at(140.0);
+        let hud = hud.borrow();
+        assert!(!gliding(&hud));
+        assert_eq!(
+            hud.window.geometry(),
+            before_finish,
+            "it settles exactly on the outline"
+        );
+    }
+
+    #[test]
+    fn the_preview_follows_a_drag_in_the_system_move_loop() {
+        let _motion = Motion::set(false);
+        drag_through_the_move_loop(false);
+    }
+
+    /// The loop's own `WM_CAPTURECHANGED` (no new owner) must not make the application forget the
+    /// held button: with ferrokit 5422e87 `Application::mouse_buttons()` was empty for the whole
+    /// drag, so the preview never showed and the bar docked mid-drag. Qt keeps the button until
+    /// `WM_EXITSIZEMOVE` (`QWindowsContext::handleExitSizeMove`); ferrokit does since #264.
+    #[test]
+    fn the_preview_follows_a_drag_when_the_loop_takes_the_capture() {
+        let _motion = Motion::set(false);
+        drag_through_the_move_loop(true);
+    }
+}
+
+/// The sidebar's grips (`resize_zone`) read `SidebarHud::geom`, which has to follow every placement
+/// of the window. Measured on the real window (Win32); no pointer is involved.
+#[cfg(all(test, windows))]
+mod grip_geometry_tests {
+    use super::*;
+    use crate::config::SidebarOffset;
+    use crate::refresh_controller::RefreshController;
+
+    fn docked_strip() -> HUDWindow {
+        let mut c = Config::default();
+        c.ui_mode = "sidebar".into();
+        c.sidebar_state = "strip".into();
+        c.sidebar_edge = "top".into();
+        c.sidebar_orientation = "horizontal".into();
+        c.sidebar_offset = Some(SidebarOffset::End);
+        c.sidebar_scale = 0.6;
+        // far from where the bar docks: the construction position is not the docked one
+        c.window_x = Some(522);
+        c.window_y = Some(285);
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        HUDWindow::with_providers(
+            Arc::new(Mutex::new(c)),
+            ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap()
+    }
+
+    /// Whether the pointer 3 px inside each edge of the real window is on a grip.
+    fn grips_on_all_edges(hud: &HUDWindow) -> bool {
+        let w = hud.window.geometry();
+        let (cx, cy) = (w.x + w.width / 2, w.y + w.height / 2);
+        [
+            Point::new(w.x + w.width - 3, cy),
+            Point::new(cx, w.y + w.height - 3),
+            Point::new(w.x + 2, cy),
+            Point::new(cx, w.y + 2),
+        ]
+        .into_iter()
+        .all(|p| resize_zone(hud.sidebar_hud.geom.get(), p).is_some())
+    }
+
+    #[test]
+    fn the_grips_stay_on_the_window_edges_after_it_is_docked_and_enlarged() {
+        let mut hud = docked_strip();
+        assert!(grips_on_all_edges(&hud), "after docking at construction");
+        // each enlargement ends by docking the bar again, which moves it along its edge
+        for round in 1..=2 {
+            let before = hud.window.geometry();
+            let start = Point::new(before.x + before.width - 3, before.y + before.height / 2);
+            let zone = resize_zone(hud.sidebar_hud.geom.get(), start).expect("a grip");
+            *hud.sidebar_hud.resize.borrow_mut() = Some(ResizeState {
+                start,
+                geom: hud.sidebar_hud.geom.get(),
+                scale: hud.config.lock().sidebar_scale_setting(),
+                zone,
+            });
+            hud.begin_resize();
+            hud.resize_to(Point::new(start.x + 24, start.y));
+            hud.end_resize();
+            let after = hud.window.geometry();
+            assert!(after.width > before.width, "round {round}: it grew");
+            assert_ne!(
+                (after.x, after.y),
+                (before.x, before.y),
+                "round {round}: it moved"
+            );
+            assert!(
+                grips_on_all_edges(&hud),
+                "round {round}: after docking again"
+            );
+        }
+    }
+}
+
+/// The sidebar's resize through the real window procedure: the messages the window system sends
+/// (as `SendMessage` calls) reach the grips and the deferred tasks. The pointer is a test seam,
+/// never the real cursor.
+#[cfg(all(test, windows))]
+mod resize_pipeline_tests {
+    use super::*;
+    use crate::config::SidebarOffset;
+    use crate::refresh_controller::RefreshController;
+
+    type Hwnd = *mut core::ffi::c_void;
+
+    const WM_MOUSEMOVE: u32 = 0x0200;
+    const WM_LBUTTONDOWN: u32 = 0x0201;
+    const WM_LBUTTONUP: u32 = 0x0202;
+    const WM_MOUSELEAVE: u32 = 0x02A3;
+    const MK_LBUTTON: usize = 0x0001;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn GetWindowRect(hwnd: Hwnd, rect: *mut [i32; 4]) -> i32;
+        fn ReleaseCapture() -> i32;
+        fn GetCursor() -> Hwnd;
+        fn LoadCursorW(instance: Hwnd, name: usize) -> Hwnd;
+    }
+
+    /// The client position (packed, physical) of the logical global point `p`.
+    fn client(hwnd: Hwnd, p: Point) -> isize {
+        let native = ferrokit_platform::screen::logical_point_to_native(p);
+        let mut r = [0i32; 4];
+        // SAFETY: `r` is a local out array of the four RECT fields; `hwnd` is the HUD's window.
+        unsafe { GetWindowRect(hwnd, &mut r) };
+        (((native.x - r[0]) & 0xffff) | (((native.y - r[1]) & 0xffff) << 16)) as isize
+    }
+
+    fn send(hwnd: Hwnd, msg: u32, wparam: usize, p: Point) {
+        POINTER_OVERRIDE.with(|c| c.set(Some(p)));
+        // SAFETY: `hwnd` is the HUD's window on this thread; the message carries no pointer.
+        unsafe { SendMessageW(hwnd, msg, wparam, client(hwnd, p)) };
+    }
+
+    /// A free-floating strip, registered as the application holds it.
+    fn free_strip() -> Rc<RefCell<HUDWindow>> {
+        let mut c = Config::default();
+        c.ui_mode = "sidebar".into();
+        c.sidebar_state = "strip".into();
+        c.sidebar_edge = "none".into();
+        c.sidebar_orientation = "horizontal".into();
+        c.sidebar_offset = Some(SidebarOffset::End);
+        c.sidebar_x = Some(740);
+        c.sidebar_y = Some(286);
+        c.sidebar_scale = 1.0;
+        let ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let hud = HUDWindow::with_providers(
+            Arc::new(Mutex::new(c)),
+            ctrl,
+            crate::providers::stub::stub_providers(),
+        )
+        .unwrap();
+        let hud = Rc::new(RefCell::new(hud));
+        register_hud(&hud);
+        hud
+    }
+
+    /// Forgets the held button and the capture, which a failed assertion would leave behind.
+    struct Guard;
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            POINTER_OVERRIDE.with(|c| c.set(None));
+            while ferrokit_widgets::application::Application::override_cursor().is_some() {
+                ferrokit_widgets::application::Application::restore_override_cursor();
+            }
+            ferrokit_platform::window::set_app_mouse_buttons(
+                ferrokit_core::event::MouseButtons::NO_BUTTON,
+            );
+            // SAFETY: ReleaseCapture takes no arguments.
+            unsafe { ReleaseCapture() };
+        }
+    }
+
+    /// While the right edge is dragged the window system reports `WM_MOUSELEAVE` when the pointer is
+    /// outside the window, which the dragged window leaves behind for a moment. Qt delivers no leave
+    /// while the mouse is captured, and Python's drag goes on; here it ended the drag without saving
+    /// the scale, so the next drag started from the old scale and shrank the bar back.
+    #[test]
+    fn a_pointer_that_leaves_the_window_mid_drag_does_not_end_the_resize() {
+        let _guard = Guard;
+        let hud = free_strip();
+        let hwnd = hud.borrow().window.native_handle() as Hwnd;
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        let mut last_scale = 1.0;
+        for round in 1..=3 {
+            let w = hud.borrow().window.geometry();
+            let start = Point::new(w.x + w.width - 3, w.y + w.height / 2);
+            // the pointer is over the window before the press, and no message is pumped until the
+            // leave below, so the hover it set up is still there
+            send(hwnd, WM_MOUSEMOVE, 0, start);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            send(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, start);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            assert!(
+                hud.borrow().sidebar_hud.resize.borrow().is_some(),
+                "round {round}: the press on the right edge starts a resize"
+            );
+            let step = Point::new(start.x + 20, start.y);
+            send(hwnd, WM_MOUSEMOVE, MK_LBUTTON, step);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            // the window system reports the pointer outside the window
+            send(hwnd, WM_MOUSELEAVE, 0, step);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            assert!(
+                hud.borrow().sidebar_hud.resize.borrow().is_some(),
+                "round {round}: the leave ended the resize"
+            );
+            let end = Point::new(start.x + 40, start.y);
+            send(hwnd, WM_MOUSEMOVE, MK_LBUTTON, end);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            send(hwnd, WM_LBUTTONUP, 0, end);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            let (shown, saved) = {
+                let hud = hud.borrow();
+                let saved = hud.config.lock().sidebar_scale;
+                (hud.sidebar.scale(), saved)
+            };
+            assert_eq!(saved, shown, "round {round}: the release saves the scale");
+            assert!(shown > last_scale, "round {round}: the bar grew: {shown}");
+            last_scale = shown;
+        }
+    }
+
+    /// The pointer over a grip, with no button held, shows that grip's resize cursor, and loses it
+    /// when the pointer leaves the window (Python `_set_grip_cursor`). The HUD's widgets have no mouse
+    /// tracking, so the move reaches the filter only through `QApplication::notify`'s pass of
+    /// buttonless moves over such widgets through the application filters.
+    #[test]
+    fn the_pointer_over_a_grip_shows_its_resize_cursor() {
+        use ferrokit_platform::cursor::CursorShape;
+        const WM_SETCURSOR: u32 = 0x0020;
+        const HTCLIENT: isize = 1;
+        let _guard = Guard;
+        let hud = free_strip();
+        let hwnd = hud.borrow().window.native_handle() as Hwnd;
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        let w = hud.borrow().window.geometry();
+        let (cx, cy) = (w.x + w.width / 2, w.y + w.height / 2);
+        let (l, r, t, b) = (w.x + 2, w.x + w.width - 3, w.y + 2, w.y + w.height - 3);
+        // the pointer position, the cursor Qt maps the zone to, and its system id (IDC_SIZE*)
+        let grips = [
+            ("right", Point::new(r, cy), CursorShape::SizeHor, 32644),
+            ("left", Point::new(l, cy), CursorShape::SizeHor, 32644),
+            ("top", Point::new(cx, t), CursorShape::SizeVer, 32645),
+            ("bottom", Point::new(cx, b), CursorShape::SizeVer, 32645),
+            ("top left", Point::new(l, t), CursorShape::SizeFDiag, 32642),
+            (
+                "bottom right",
+                Point::new(r, b),
+                CursorShape::SizeFDiag,
+                32642,
+            ),
+            ("top right", Point::new(r, t), CursorShape::SizeBDiag, 32643),
+            (
+                "bottom left",
+                Point::new(l, b),
+                CursorShape::SizeBDiag,
+                32643,
+            ),
+        ];
+        let override_cursor = ferrokit_widgets::application::Application::override_cursor;
+        send(hwnd, WM_MOUSEMOVE, 0, Point::new(cx, cy));
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        assert_eq!(override_cursor(), None, "no cursor in the middle");
+        for (name, at, shape, system_id) in grips {
+            send(hwnd, WM_MOUSEMOVE, 0, at);
+            ferrokit_widgets::WidgetCommandQueue::flush();
+            assert_eq!(override_cursor(), Some(shape), "{name}");
+            // SAFETY: a null instance with an IDC_* id loads a shared system cursor; GetCursor takes no
+            // arguments; the message carries the window handle and the hit test, no pointer.
+            let (shown, system) = unsafe {
+                SendMessageW(
+                    hwnd,
+                    WM_SETCURSOR,
+                    hwnd as usize,
+                    HTCLIENT | ((WM_MOUSEMOVE as isize) << 16),
+                );
+                (GetCursor(), LoadCursorW(core::ptr::null_mut(), system_id))
+            };
+            assert_eq!(
+                shown, system,
+                "{name}: the system shows the {shape:?} cursor"
+            );
+        }
+        // the pointer leaves the window: the cursor goes (the window is still hovered here)
+        send(hwnd, WM_MOUSELEAVE, 0, Point::new(r, cy));
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        assert_eq!(override_cursor(), None, "after the pointer left");
     }
 }

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QEvent, QPoint
 from PySide6.QtWidgets import QApplication
 from core.config_manager import ConfigManager
 from core.providers.base import UsageMetrics, MetricRow
@@ -230,7 +230,19 @@ class HudTests(unittest.TestCase):
         from ui.hud_window import HUDWindow
         config = ConfigManager(Path(directory) / 'config.json')
         config.update(settings)
-        return config, HUDWindow(config)
+        hud = HUDWindow(config)
+        self.addCleanup(self._release, hud)
+        return config, hud
+
+    def _release(self, hud):
+        # An undeleted window keeps its app-wide event filter, colour-scheme connection and 1 s timer, so
+        # every later test would pay for every earlier window.
+        hud.refresh_controller.stop()
+        hud.countdown_timer.stop()
+        hud.geometry_timer.stop()
+        APP.processEvents()          # zero-delay callbacks (QTimer.singleShot(0, self._x)) must run while it is alive
+        hud.deleteLater()
+        APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def _close(self, hud):
         hud.refresh_controller.stop()
@@ -385,6 +397,366 @@ class HudTests(unittest.TestCase):
             finally:
                 self._close(hud)
 
+    def _drag_to(self, hud, x, y, held=True):
+        """Move the window the way a native drag does (not a `_docking` move) and let the preview follow."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        buttons = Qt.MouseButton.LeftButton if held else Qt.MouseButton.NoButton
+        hud.move(x, y)
+        with patch.object(QGuiApplication, 'mouseButtons', return_value=buttons):
+            hud._update_dock_preview()
+
+    def test_dock_preview_shows_where_the_bar_will_dock_and_matches_the_result(self):
+        from PySide6.QtGui import QGuiApplication
+        for state in ('strip', 'panel'):
+            with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+                config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state=state, sidebar_edge='right')
+                try:
+                    work = QGuiApplication.primaryScreen().availableGeometry()
+                    vertical_size, before = hud.size(), hud.sidebar.orientation()
+                    self.assertIsNone(hud._dock_preview)
+                    # far from every edge: no preview
+                    self._drag_to(hud, work.x() + work.width() // 2 - 40, work.y() + work.height() // 2 - 60)
+                    self.assertTrue(hud._dock_preview is None or not hud._dock_preview.isVisible())
+                    # near the top edge: the bar would turn horizontal, the preview already has that shape
+                    self._drag_to(hud, work.x() + 150, work.y() + 4)
+                    preview = hud._dock_preview
+                    self.assertTrue(preview.isVisible())
+                    shown = preview.geometry()
+                    self.assertGreater(shown.width(), shown.height())
+                    self.assertEqual(shown.y(), work.y())
+                    # the real window and its layout are untouched while the preview is up
+                    self.assertEqual(hud.size(), vertical_size)
+                    self.assertEqual(hud.sidebar.orientation(), before)
+                    self.assertEqual(hud.pos().y(), work.y() + 4)
+                    # dragging on along the edge follows the pointer
+                    self._drag_to(hud, work.x() + 60, work.y() + 9)
+                    self.assertEqual(preview.geometry().x(), work.x() + 60)
+                    # dragging to the left edge flips it back to the vertical shape
+                    self._drag_to(hud, work.x() + 6, work.y() + 120)
+                    self.assertGreater(preview.geometry().height(), preview.geometry().width())
+                    # back to the top edge: the finish step docks exactly onto the preview and hides it
+                    self._drag_to(hud, work.x() + 200, work.y() + 4)
+                    shown = preview.geometry()
+                    hud._finish_sidebar_move()
+                    self.assertEqual(hud.geometry(), shown)
+                    self.assertFalse(preview.isVisible())
+                    self.assertEqual(config.get('sidebar_edge'), 'top')
+                finally:
+                    self._close(hud)
+
+    def test_dock_preview_corner_keeps_orientation_and_matches_the_result(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                self._drag_to(hud, work.right() - hud.width() - 3, work.bottom() - hud.height() - 8)
+                shown = hud._dock_preview.geometry()
+                self.assertEqual(shown.size(), hud.size())
+                self.assertEqual((shown.right(), shown.bottom()), (work.right(), work.bottom()))
+                hud._finish_sidebar_move()
+                self.assertEqual(hud.geometry(), shown)
+                self.assertEqual(config.get('sidebar_edge'), 'right')
+            finally:
+                self._close(hud)
+
+    class _Clock:
+        """Stands in for the animation's QElapsedTimer: the test sets the time."""
+        def __init__(self):
+            self.ms = 0
+
+        def start(self):
+            self.ms = 0
+
+        def elapsed(self):
+            return self.ms
+
+    def _released_at_top(self, hud, work, y=4):
+        """Drop the shown HUD near the top edge with no button held and let the snap timer's slot run."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        hud._snap_timer.stop()               # the real timer must not settle the bar behind the test's back
+        hud._cancel_snap_animation()
+        hud._docking = True
+        hud.move(work.x() + 150, work.y() + y)
+        hud._docking = False
+        clock = self._Clock()
+        hud._snap_clock = clock
+        with patch.object(QGuiApplication, 'mouseButtons', return_value=Qt.MouseButton.NoButton):
+            hud._finish_sidebar_move()
+        return clock
+
+    def test_snap_glides_onto_the_docked_rectangle_and_ends_exactly_where_a_jump_would(self):
+        from PySide6.QtGui import QGuiApplication
+        results = []
+        for animate in (True, False):
+            with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                    patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=animate):
+                config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+                try:
+                    hud.show()
+                    APP.processEvents()
+                    work = QGuiApplication.primaryScreen().availableGeometry()
+                    start_size = hud.size()
+                    clock = self._released_at_top(hud, work)
+                    if animate:
+                        self.assertIsNotNone(hud._snap_anim)
+                        # the config is saved once, at the release, with the final values
+                        self.assertEqual(config.get('sidebar_edge'), 'top')
+                        self.assertEqual(config.get('sidebar_orientation'), 'horizontal')
+                        # nothing moved yet
+                        hud._snap_animation_step()
+                        self.assertEqual(hud.pos().y(), work.y() + 4)
+                        clock.ms = 70
+                        hud._snap_animation_step()
+                        mid = hud.geometry()
+                        self.assertGreater(mid.y(), work.y())           # part of the way to the top edge
+                        self.assertLessEqual(mid.y(), work.y() + 4)
+                        self.assertNotEqual(mid.size(), start_size)
+                        self.assertIsNotNone(hud._snap_anim)
+                        self.assertFalse(hud._docking)
+                        clock.ms = 140
+                        hud._snap_animation_step()
+                        self.assertIsNone(hud._snap_anim)
+                        self.assertFalse(hud._snap_frame_timer.isActive())
+                    else:
+                        self.assertIsNone(hud._snap_anim)
+                    results.append((tuple(hud.geometry().getRect()), hud.sidebar.orientation(), config.get('sidebar_edge'),
+                                    config.get('sidebar_orientation'), config.get('sidebar_offset')))
+                finally:
+                    self._close(hud)
+        self.assertEqual(results[0], results[1])
+
+    def test_snap_glide_is_cancelled_by_the_user_and_the_window_stays_put(self):
+        from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+        from PySide6.QtGui import QGuiApplication, QMouseEvent
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=True):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                hud.show()
+                APP.processEvents()
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                press = QMouseEvent(QEvent.Type.MouseButtonPress, QPointF(5, 5), QPointF(5, 5), Qt.MouseButton.LeftButton,
+                                    Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+                for cancel in (lambda: hud.eventFilter(hud, press),
+                               lambda: hud.move(hud.x() + 3, hud.y() + 3),
+                               lambda: hud._begin_resize(QPoint(0, 0), 'l')):
+                    clock = self._released_at_top(hud, work)
+                    self.assertIsNotNone(hud._snap_anim)
+                    clock.ms = 70
+                    hud._snap_animation_step()
+                    where = hud.geometry()
+                    cancel()
+                    self.assertIsNone(hud._snap_anim)
+                    self.assertFalse(hud._snap_frame_timer.isActive())
+                    APP.processEvents()
+                    hud._resize = None
+                    hud.releaseMouse()
+                    hud._snap_timer.stop()
+                    self.assertFalse(hud._docking)
+                    # the window did not jump to the target, and no second animation is left behind
+                    self.assertIn(hud.geometry().topLeft(), (where.topLeft(), where.topLeft() + QPoint(3, 3)))
+                    hud._dock_sidebar()
+                    hud.config.set_many({'sidebar_edge': 'right', 'sidebar_orientation': 'vertical'})
+                    hud.sidebar.set_orientation('vertical')
+                    hud.sidebar.set_dock_edge('right')
+                    hud._dock_sidebar()
+            finally:
+                self._close(hud)
+
+    def test_snap_glide_settles_on_lock_and_hide_and_is_dropped_by_a_redock(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}), \
+                patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=True):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                hud.show()
+                APP.processEvents()
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                for settle in (hud._toggle_lock, hud.hide, hud._dock_sidebar, lambda: hud.toggle_ui_mode()):
+                    self._released_at_top(hud, work)
+                    self.assertIsNotNone(hud._snap_anim)
+                    settle()
+                    self.assertIsNone(hud._snap_anim)
+                    self.assertFalse(hud._snap_frame_timer.isActive())
+                    self.assertFalse(hud._docking)
+                    if config.get('ui_mode') == 'sidebar':
+                        self.assertEqual(hud.geometry().y(), work.y())      # on the top edge, not half way
+                    hud.config.set('locked', False)
+                    hud.config.set_many({'ui_mode': 'sidebar', 'sidebar_edge': 'right', 'sidebar_orientation': 'vertical'})
+                    hud._apply_ui_mode('sidebar')
+                    hud.show()
+                    APP.processEvents()
+            finally:
+                self._close(hud)
+
+    def test_snap_does_not_glide_when_there_is_nothing_to_glide(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                with patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=True):
+                    # hidden window
+                    self._released_at_top(hud, work)
+                    self.assertIsNone(hud._snap_anim)
+                    self.assertEqual(hud.geometry().y(), work.y())
+                    # same target: already docked
+                    hud.show()
+                    APP.processEvents()
+                    self._released_at_top(hud, work, y=0)
+                    self.assertIsNone(hud._snap_anim)
+                    # reduced motion
+                with patch('ui.sidebar.SidebarWidget._animations_enabled', return_value=False):
+                    hud._dock_sidebar()
+                    hud.config.set_many({'sidebar_edge': 'right', 'sidebar_orientation': 'vertical'})
+                    hud.sidebar.set_orientation('vertical')
+                    hud.sidebar.set_dock_edge('right')
+                    hud._dock_sidebar()
+                    self._released_at_top(hud, work)
+                    self.assertIsNone(hud._snap_anim)
+                    self.assertEqual(hud.geometry().y(), work.y())
+            finally:
+                self._close(hud)
+
+    def test_dock_preview_follows_real_window_moves(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right',
+                                    sidebar_offset=100)
+            try:
+                hud.show()
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                with patch.object(QGuiApplication, 'mouseButtons', return_value=Qt.MouseButton.LeftButton):
+                    hud.move(work.x() + 150, work.y() + 4)
+                    APP.processEvents()
+                    self.assertIsNotNone(hud._dock_preview)
+                    self.assertTrue(hud._dock_preview.isVisible())
+                    hud.move(work.x() + 150, work.y() + 80)
+                    APP.processEvents()
+                    self.assertFalse(hud._dock_preview.isVisible())
+            finally:
+                self._close(hud)
+
+    def test_dock_preview_hides_when_there_is_nothing_to_dock(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                self._drag_to(hud, work.x() + 150, work.y() + 4)
+                preview = hud._dock_preview
+                self.assertTrue(preview.isVisible())
+                # left the snap distance
+                self._drag_to(hud, work.x() + 150, work.y() + 60)
+                self.assertFalse(preview.isVisible())
+                # a move with no button held is not a drag
+                self._drag_to(hud, work.x() + 150, work.y() + 4)
+                self.assertTrue(preview.isVisible())
+                self._drag_to(hud, work.x() + 151, work.y() + 4, held=False)
+                self.assertFalse(preview.isVisible())
+                # locked
+                self._drag_to(hud, work.x() + 150, work.y() + 4)
+                self.assertTrue(preview.isVisible())
+                config.set('locked', True)
+                self._drag_to(hud, work.x() + 152, work.y() + 4)
+                self.assertFalse(preview.isVisible())
+                config.set('locked', False)
+                # a resize drag
+                self._drag_to(hud, work.x() + 150, work.y() + 4)
+                self.assertTrue(preview.isVisible())
+                hud._begin_resize(QPoint(0, 0), 'l')
+                self.assertFalse(preview.isVisible())
+                hud._resize = None
+                hud.releaseMouse()
+                # the window already sits where it would dock
+                config.set('sidebar_offset', 100)
+                hud._dock_sidebar()
+                self._drag_to(hud, hud.x(), hud.y())
+                self.assertFalse(preview.isVisible())
+                # table mode
+                self._drag_to(hud, work.x() + 150, work.y() + 4)
+                self.assertTrue(preview.isVisible())
+                hud.toggle_ui_mode()
+                self.assertFalse(preview.isVisible())
+                self.assertIsNone(hud._dock_preview_rect())
+            finally:
+                self._close(hud)
+
+    def test_dock_preview_is_an_unowned_window_stacked_directly_below_the_hud(self):
+        from PySide6.QtGui import QGuiApplication
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right')
+            try:
+                work = QGuiApplication.primaryScreen().availableGeometry()
+                with patch('ui.dock_preview.stack_below') as stack:
+                    self._drag_to(hud, work.x() + 150, work.y() + 4)
+                    self._drag_to(hud, work.x() + 160, work.y() + 4)
+                # an owned window would be kept above its owner by Windows
+                self.assertIsNone(hud._dock_preview.parent())
+                # every update re-stacks the outline under the HUD
+                self.assertEqual([c.args for c in stack.call_args_list], [(hud._dock_preview, hud)] * 2)
+                with patch('ui.dock_preview.stack_below') as stack:
+                    self._drag_to(hud, work.x() + 160, work.y() + 80)      # no preview, nothing to stack
+                    stack.assert_not_called()
+                preview = hud._dock_preview
+            finally:
+                self._close(hud)
+            self.assertIsNone(hud._dock_preview)
+            self.assertFalse(preview.isVisible())
+
+    def test_dock_preview_window_is_click_through_and_never_takes_focus(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QGuiApplication
+        for always_on_top in (True, False):
+            with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+                config, hud = self._hud(directory, ui_mode='sidebar', sidebar_state='strip', sidebar_edge='right',
+                                        always_on_top=always_on_top, appearance='light')
+                try:
+                    work = QGuiApplication.primaryScreen().availableGeometry()
+                    self._drag_to(hud, work.x() + 150, work.y() + 4)
+                    preview = hud._dock_preview
+                    flags = preview.windowFlags()
+                    self.assertTrue(preview.isVisible())
+                    for flag in (Qt.WindowType.FramelessWindowHint, Qt.WindowType.Tool,
+                                 Qt.WindowType.WindowTransparentForInput, Qt.WindowType.WindowDoesNotAcceptFocus):
+                        self.assertTrue(flags & flag, flag)
+                    self.assertEqual(bool(flags & Qt.WindowType.WindowStaysOnTopHint), always_on_top)
+                    self.assertTrue(preview.testAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating))
+                    self.assertTrue(preview.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground))
+                    self.assertTrue(preview.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents))
+                    self.assertEqual(preview.focusPolicy(), Qt.FocusPolicy.NoFocus)
+                    # the setting can change between drags
+                    config.set('always_on_top', not always_on_top)
+                    self._drag_to(hud, work.x() + 152, work.y() + 4)
+                    self.assertTrue(preview.isVisible())
+                    self.assertEqual(bool(preview.windowFlags() & Qt.WindowType.WindowStaysOnTopHint), not always_on_top)
+                finally:
+                    self._close(hud)
+
+    def test_dock_preview_colours_follow_the_theme_and_render(self):
+        from ui.dock_preview import (DOCK_PREVIEW_BORDER_ALPHA, DOCK_PREVIEW_FILL_ALPHA, DockPreview,
+                                     preview_colors, preview_radius)
+        from ui.sidebar import SIDEBAR_TOKENS
+        for dark in (True, False):
+            fill, border = preview_colors(dark)
+            focus = SIDEBAR_TOKENS['dark' if dark else 'light']['focus']
+            self.assertEqual(fill.name(), focus)
+            self.assertEqual(border.name(), focus)
+            self.assertEqual((fill.alpha(), border.alpha()), (DOCK_PREVIEW_FILL_ALPHA, DOCK_PREVIEW_BORDER_ALPHA))
+            self.assertEqual(preview_radius(dark, 1.5), 9.0)
+            from PySide6.QtCore import QRect
+            widget = DockPreview()
+            widget.show_at(QRect(10, 10, 80, 120), dark, 1.0, True)
+            image = widget.grab().toImage()
+            self.assertEqual(image.pixelColor(40, 60).alpha(), DOCK_PREVIEW_FILL_ALPHA)    # translucent inside
+            self.assertEqual(image.pixelColor(0, 0).alpha(), 0)                              # rounded corner outside
+            self.assertGreater(image.pixelColor(40, 0).alpha(), DOCK_PREVIEW_FILL_ALPHA)    # outline on the edge
+            widget.close()
+
     def test_sidebar_scale_steps_and_persists(self):
         with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
             config, hud = self._hud(directory, ui_mode='sidebar')
@@ -436,7 +808,7 @@ class HudTests(unittest.TestCase):
                 from PySide6.QtCore import QPoint
                 hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
                 titles = [a.text() for a in captured[0].actions() if a.menu()]
-                self.assertEqual(len(titles), 4)   # 介面 / 外觀 / 行為 / 更多
+                self.assertEqual(len(titles), 5)   # 介面 / 帳號 / 外觀 / 行為 / 更多
                 style = next(a.menu() for a in captured[0].actions() if a.menu() and 'Interface' in a.text())
                 styles = [a.text() for a in style.actions() if a.isCheckable() and 'Row' not in a.text()][:2]
                 self.assertEqual(len(styles), 2)

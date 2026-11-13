@@ -102,9 +102,10 @@ fn stale_hex(dark: bool) -> &'static str {
 
 /// Python `PROVIDER_THEMES[id]["name"]`, `provider_id.upper()` for an unknown provider.
 fn theme_name(provider_id: &str) -> String {
-    match provider_id {
-        "claude" | "agy" | "codex" => default_provider_name(provider_id).to_string(),
-        other => other.to_uppercase(),
+    let base = crate::ui::brand::base_id(provider_id);
+    match base {
+        "claude" | "agy" | "codex" => default_provider_name(base).to_string(),
+        _ => provider_id.to_uppercase(),
     }
 }
 
@@ -402,10 +403,12 @@ impl CardCore {
         if !self.reorderable.get() || m1_title.is_empty() {
             return Vec::new();
         }
-        let mut cells = vec![
-            (m1_title, self.m1_cell.clone()),
-            (label_text(&self.m2_label), self.m2_cell.clone()),
-        ];
+        let mut cells = vec![(m1_title, self.m1_cell.clone())];
+        // A provider with one window leaves the second row empty and hidden.
+        let m2_title = label_text(&self.m2_label);
+        if !m2_title.is_empty() {
+            cells.push((m2_title, self.m2_cell.clone()));
+        }
         for row in self.extra_rows.borrow().iter().take(self.extra_count.get()) {
             cells.push((label_text(&row.title), row.cell.clone()));
         }
@@ -824,6 +827,11 @@ impl ProviderCardWidget {
         self.update_metrics(&metrics);
     }
 
+    /// The header text shown until the provider reports its own name (an extra account's label).
+    pub fn set_title(&self, text: &str) {
+        set_label_text(&self.title, text);
+    }
+
     pub fn update_metrics(&mut self, data: &UsageMetrics) {
         self.current_metrics = data.clone();
         let error = error_text(data);
@@ -860,6 +868,7 @@ impl ProviderCardWidget {
             set_label_color(&self.m1_sub, parse_hex(error_hex));
 
             set_label_text(&self.m2_val, "--");
+            self.core.m2_cell.borrow().set_visible(true);
             set_bar(&self.m2_bar, 0, None);
             set_label_text(&self.m2_sub, "");
             set_label_text(&self.badge, "OFFLINE");
@@ -876,6 +885,10 @@ impl ProviderCardWidget {
         );
         set_label_color(&self.m1_sub, parse_hex(NEUTRAL_HEX));
         set_label_color(&self.m2_sub, parse_hex(NEUTRAL_HEX));
+        self.core
+            .m2_cell
+            .borrow()
+            .set_visible(!data.metric2_title.is_empty());
 
         // Reset sub labels before updating to prevent residual error messages
         if !data.metric1_subtext.is_empty() {
@@ -1295,6 +1308,52 @@ mod card_logic_tests {
         card.set_appearance(false);
         assert!(local_qss(&card, &card.m1_val).contains(&ramp_color(82.0, false, None).name()));
         assert_eq!(value(&card.m1_bar), Some((82, false)));
+    }
+
+    /// A plan with one window (empty second row) shows one row; two windows show both again.
+    #[test]
+    fn single_window_card_hides_the_empty_second_row() {
+        let mut card = ProviderCardWidget::new("codex");
+        let mut data = UsageMetrics {
+            provider_id: "codex".to_string(),
+            metric1_title: "WINDOW 30D".to_string(),
+            metric1_val: Some(16.0),
+            metric1_text: "16%".to_string(),
+            metric2_title: String::new(),
+            ..Default::default()
+        };
+        card.update_metrics(&data);
+        assert!(!card.core.m2_cell.borrow().is_visible());
+        assert_eq!(card.row_titles(), ["WINDOW 30D".to_string()]);
+        data.metric2_title = "WINDOW 7D".to_string();
+        card.update_metrics(&data);
+        assert!(card.core.m2_cell.borrow().is_visible());
+    }
+
+    /// A Claude model-scoped limit (`limits[]`) shows as an extra row of the detail card.
+    #[test]
+    fn claude_scoped_limit_rows_show_in_the_card() {
+        use crate::providers::base::MetricRow;
+        let mut fable = MetricRow::new("FABLE 7D", Some(84.0), "84%");
+        fable.key = "claude:weekly_scoped:fable".to_string();
+        let mut card = ProviderCardWidget::new("claude");
+        card.set_appearance(true);
+        card.update_metrics(&UsageMetrics {
+            provider_id: "claude".to_string(),
+            metric1_val: Some(28.0),
+            metric1_text: "28%".to_string(),
+            metric2_val: Some(64.0),
+            metric2_text: "64%".to_string(),
+            extra_metrics: vec![fable, MetricRow::new("QUIET 7D", Some(0.0), "0%")],
+            ..Default::default()
+        });
+        assert_eq!(
+            card.row_titles(),
+            ["SESSION 5H", "WEEKLY 7D", "FABLE 7D", "QUIET 7D"].map(String::from)
+        );
+        let rows = card.core.extra_rows.borrow();
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.cell.borrow().is_visible()));
     }
 
     #[test]

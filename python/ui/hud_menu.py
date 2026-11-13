@@ -7,6 +7,8 @@ A setting appears exactly once. The menu is rebuilt each time it is shown, so ch
 from PySide6.QtWidgets import QMenu
 
 from core import agy_statusline
+from core import tray_quota
+from core.accounts import MAX_ACCOUNTS, MENU_LABEL_MAX, elide, profile_is_valid, profile_key
 from core.agy_rows import DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.autostart import is_autostart_enabled
 from core.logger import open_log_dir
@@ -46,9 +48,24 @@ def _build_interface(hud, menu):
         size_menu = sub.addMenu("大小 (Ctrl＋滾輪)")
         for pct in SIDEBAR_SCALES:
             _check(size_menu, f"{pct}%", pct == current, lambda p=pct: hud.set_sidebar_scale(p / 100))
+        _build_sidebar_tiles(hud, sub)
     sub.addSeparator()
     _build_agy_rows(hud, sub)
 
+
+
+def _build_sidebar_tiles(hud, menu):
+    """Show/hide each tile (hiding does not stop its fetching); order is changed by holding and dragging a tile."""
+    all_ids, visible, _hidden = hud._tile_state()
+    sub = menu.addMenu("側邊欄項目 (Sidebar tiles)")
+    for tile_id in all_ids:
+        spec = hud._tile_spec(tile_id)
+        label = spec.label if tile_id not in hud._accounts else elide(spec.label, MENU_LABEL_MAX)
+        shown = tile_id in visible
+        action = _check(sub, label, shown, lambda t=tile_id, v=not shown: hud.set_tile_visible(t, v))
+        action.setEnabled(not (shown and len(visible) == 1))
+    sub.addSeparator()
+    _note(sub, "細條模式下長按磚塊拖曳可調整順序 (Hold and drag a tile in the strip to reorder)")
 
 def _build_agy_rows(hud, menu):
     """Shows the current agy row order; the order itself is changed by dragging rows in the detail page."""
@@ -61,7 +78,7 @@ def _build_agy_rows(hud, menu):
         sub.addAction(f"{index}. {title}").setEnabled(False)
     sub.addSeparator()
     reset = sub.addAction("還原預設順序")
-    reset.setEnabled(tuple(order) != tuple(AGY_DEFAULT_ORDER))
+    reset.setEnabled(tuple(order) != tuple(AGY_DEFAULT_ORDER) + tuple(hud.agy_dynamic_titles()))
     reset.triggered.connect(hud.reset_agy_order)
 
 
@@ -115,9 +132,36 @@ def _build_behaviour(hud, menu):
         _check(interval_menu, f"{sec} 秒", current == sec, lambda s=sec: hud._set_interval(s))
 
 
-def _build_claude_accounts(hud, menu):
+def _build_tray_quota(hud, menu):
+    """Which quota's number the tray icon shows; rows are the live ones, so the labels carry current values."""
+    sub = menu.addMenu("系統匣數字 (Tray number)")
+    setting = hud.config.get("tray_quota", tray_quota.OFF)
+    rows = hud.tray_quota_readings()
+    _check(sub, "關閉 (Off)", setting == tray_quota.OFF, lambda: hud.set_tray_quota(tray_quota.OFF))
+    _check(sub, "自動：最緊的額度 (Auto)", setting == tray_quota.AUTO, lambda: hud.set_tray_quota(tray_quota.AUTO))
+    selected = tray_quota.select(setting, rows)
+    if selected is not None and selected.state == tray_quota.UNAVAILABLE:
+        _check(sub, f"{setting}  unavailable", True, lambda: None).setEnabled(False)
+    header = None
+    for row in rows:
+        if row.provider_id != header:
+            header = row.provider_id
+            sub.addSeparator()
+            _note(sub, row.provider_name)
+        if row.state == tray_quota.OFFLINE and not row.title:  # offline provider: nothing to choose yet
+            _note(sub, "offline")
+            continue
+        _check(sub, tray_quota.menu_label(row), row.key == setting, lambda k=row.key: hud.set_tray_quota(k))
+    sub.addSeparator()
+    mode = hud.config.get("tray_quota_mode", tray_quota.USED)
+    _check(sub, "顯示已用 (Show used)", mode == tray_quota.USED, lambda: hud.set_tray_quota_mode(tray_quota.USED))
+    _check(sub, "顯示剩餘 (Show remaining)", mode == tray_quota.REMAINING,
+           lambda: hud.set_tray_quota_mode(tray_quota.REMAINING))
+
+
+def _build_claude_main_account(hud, menu):
     from core.providers.claude_provider import discover_profiles, resolve_active_profile
-    sub = menu.addMenu("Claude 帳號 (Claude Account)")
+    sub = menu.addMenu("Claude 主帳號 (Main Account)")
     current = hud.config.get("claude_profile", "auto")
     is_auto = current == "auto"
     active, _ = resolve_active_profile(current)
@@ -128,6 +172,32 @@ def _build_claude_accounts(hud, menu):
     for profile in discover_profiles()[:40]:
         selected = not is_auto and (current == profile.id or (current == ".claude" and profile.id == "default"))
         _check(sub, profile.display_name, selected, lambda pid=profile.id: hud._set_claude_profile(pid))
+
+
+def _build_also_show(hud, menu, profiles):
+    """Show a second Claude profile as its own tile next to the main one (the main tile stays on its pinned profile)."""
+    sub = menu.addMenu("Claude 同時顯示 (Also show)")
+    if str(hud.config.get("claude_profile", "auto")).strip().lower() == "auto":
+        _note(sub, "主分頁為「自動」，可能與下列帳號重複，建議先在上方固定帳號 (Main tile is on Auto: pin an account above first)")
+        sub.addSeparator()
+    shown = {profile_key(spec.profile): spec for spec in hud._accounts.values()}
+    main_key = hud._main_profile_key()
+    entries, listed = [], set()
+    for profile in profiles[:40]:
+        key = profile_key(profile.id)
+        if not profile_is_valid(profile.id) or (key == main_key and key not in shown):
+            continue
+        entries.append((profile.display_name, profile.id, key in shown))
+        listed.add(key)
+    entries += [(f"{spec.profile}  找不到 (Not found)", spec.profile, True) for key, spec in shown.items() if key not in listed]
+    full = len(shown) >= MAX_ACCOUNTS
+    for label, profile_id, checked in entries:
+        action = _check(sub, label, checked, lambda p=profile_id: hud.toggle_account(p))
+        action.setEnabled(checked or not full)
+    if not entries:
+        _note(sub, "沒有其他帳號 (No other profile found)")
+    if full:
+        _note(sub, f"最多 {MAX_ACCOUNTS} 個帳號 (Max {MAX_ACCOUNTS} accounts)")
 
 
 def _note(menu, text):
@@ -158,18 +228,24 @@ def _build_agy_statusline(hud, menu):
     _note(sub, "需要 PATH 上有 python；啟用後請重開 agy 互動模式")
 
 
+def _build_accounts(hud, menu):
+    from core.providers.claude_provider import discover_profiles
+    sub = menu.addMenu("帳號 (Accounts)")
+    _build_claude_main_account(hud, sub)
+    _build_also_show(hud, sub, discover_profiles())
+    sub.addSeparator()
+    _build_agy_statusline(hud, sub)
+
+
 def _build_more(hud, menu):
     sub = menu.addMenu("更多 (More)")
-    _build_claude_accounts(hud, sub)
-    _build_agy_statusline(hud, sub)
-    sub.addSeparator()
     sub.addAction("開啟記錄檔目錄 (Open Logs)").triggered.connect(open_log_dir)
     sub.addAction("重設預設尺寸與位置").triggered.connect(hud._reset_geometry)
     sub.addAction("隱藏 HUD (Alt+C 重新喚出)").triggered.connect(hud.hide)
 
 
 def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
-    """tray=True adds show/hide on top and drops the 更多 group (rarely needed from the tray).
+    """tray=True adds show/hide on top and drops the 帳號 and 更多 groups (rarely needed from the tray).
     Pass `menu` to fill an existing QMenu (the tray rebuilds its own menu each time it opens)."""
     if menu is None:
         menu = QMenu(parent if parent is not None else hud)
@@ -178,8 +254,12 @@ def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
     menu.addAction("立即重新整理所有 AI (Refresh All)").triggered.connect(hud.trigger_async_refresh)
     menu.addSeparator()
     _build_interface(hud, menu)
+    if not tray:
+        _build_accounts(hud, menu)
     _build_appearance(hud, menu)
     _build_behaviour(hud, menu)
+    if tray:
+        _build_tray_quota(hud, menu)
     if not tray:
         _build_more(hud, menu)
     menu.addSeparator()

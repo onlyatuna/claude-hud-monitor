@@ -70,6 +70,20 @@ name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a1f896587b6f2c069c73d2f0913e2d590c3990285cd2f0b6aa02b786b4c679c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
+]
 
 [[package]]
 name = "cc"
@@ -173,7 +187,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-core"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=c1f371f4b91da0be78061d783be7ea7bf7e83dab#c1f371f4b91da0be78061d783be7ea7bf7e83dab"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=8f6312c54cc57bccb30359790d32831af72d281a#8f6312c54cc57bccb30359790d32831af72d281a"
 dependencies = [
  "ferrokit-derive",
  "libc",
@@ -184,7 +198,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-derive"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=c1f371f4b91da0be78061d783be7ea7bf7e83dab#c1f371f4b91da0be78061d783be7ea7bf7e83dab"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=8f6312c54cc57bccb30359790d32831af72d281a#8f6312c54cc57bccb30359790d32831af72d281a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -194,7 +208,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-gui"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=c1f371f4b91da0be78061d783be7ea7bf7e83dab#c1f371f4b91da0be78061d783be7ea7bf7e83dab"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=8f6312c54cc57bccb30359790d32831af72d281a#8f6312c54cc57bccb30359790d32831af72d281a"
 dependencies = [
  "ab_glyph_rasterizer",
  "ferrokit-core",
@@ -202,9 +216,11 @@ dependencies = [
  "png",
  "rustybuzz",
  "serde",
+ "skrifa",
  "tiny-skia",
  "unicode-bidi",
  "unicode-linebreak",
+ "unicode-script",
  "unicode-segmentation",
  "windows",
 ]
@@ -212,7 +228,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-platform"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=c1f371f4b91da0be78061d783be7ea7bf7e83dab#c1f371f4b91da0be78061d783be7ea7bf7e83dab"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=8f6312c54cc57bccb30359790d32831af72d281a#8f6312c54cc57bccb30359790d32831af72d281a"
 dependencies = [
  "bitflags 2.13.2",
  "ferrokit-core",
@@ -224,7 +240,7 @@ dependencies = [
 [[package]]
 name = "ferrokit-widgets"
 version = "0.1.0"
-source = "git+https://github.com/onlyatuna/ferrokit?rev=c1f371f4b91da0be78061d783be7ea7bf7e83dab#c1f371f4b91da0be78061d783be7ea7bf7e83dab"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=8f6312c54cc57bccb30359790d32831af72d281a#8f6312c54cc57bccb30359790d32831af72d281a"
 dependencies = [
  "ferrokit-core",
  "ferrokit-gui",
@@ -247,6 +263,21 @@ dependencies = [
  "crc32fast",
  "miniz_oxide 0.9.1",
  "zlib-rs",
+]
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+
+[[package]]
+name = "font-types"
+version = "0.12.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "835ae9d781464a79026cde387f9cbc650c9a4909d7cf7e658b127e3c35d2f35d"
+dependencies = [
+ "bytemuck",
 ]
 
 [[package]]
@@ -613,6 +644,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "read-fonts"
+version = "0.46.0"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=8f6312c54cc57bccb30359790d32831af72d281a#8f6312c54cc57bccb30359790d32831af72d281a"
+dependencies = [
+ "bytemuck",
+ "foldhash",
+ "font-types",
+ "once_cell",
+ "smallvec",
+ "yoke",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -755,6 +799,18 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "skrifa"
+version = "0.49.0"
+source = "git+https://github.com/onlyatuna/ferrokit?rev=8f6312c54cc57bccb30359790d32831af72d281a#8f6312c54cc57bccb30359790d32831af72d281a"
+dependencies = [
+ "bytemuck",
+ "once_cell",
+ "read-fonts",
+ "smallvec",
+ "yoke",
+]
 
 [[package]]
 name = "slab"

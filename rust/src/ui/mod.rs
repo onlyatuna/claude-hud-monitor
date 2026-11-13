@@ -4,6 +4,7 @@ pub mod brand;
 #[cfg(all(test, windows))]
 mod button_hover_tests;
 pub mod dock_geometry;
+pub mod dock_preview;
 pub mod gauge;
 #[cfg(all(test, windows))]
 mod geometry_persist_tests;
@@ -23,6 +24,7 @@ pub(crate) mod test_support;
 #[cfg(all(test, windows))]
 mod tool_tip_tests;
 pub mod tray_icon;
+pub mod tray_number_icon;
 pub mod usage_table;
 #[cfg(all(test, windows))]
 mod usage_table_relayout_tests;

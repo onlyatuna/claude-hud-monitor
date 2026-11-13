@@ -17,11 +17,13 @@ PROVIDER_THEMES = {
 class ProviderCardWidget(QWidget):
     rowOrderChanged = Signal(list)   # agy only: new order of the five row titles after a drag
 
-    def __init__(self, provider_id: str, parent=None):
+    def __init__(self, provider_id: str, parent=None, base: str = None, name: str = None):
         super().__init__(parent)
         self.provider_id = provider_id
+        self.base = base or provider_id.split("@", 1)[0]   # brand colour / default name come from the base provider
+        self._name_override = name
         self.dark = True
-        self.theme = PROVIDER_THEMES.get(provider_id, {"color": "#38bdf8", "name": provider_id.upper()})
+        self.theme = self._base_theme()
         self.current_metrics = UsageMetrics(provider_id=provider_id)
         self._init_ui()
         self._row_drag = None
@@ -274,12 +276,17 @@ class ProviderCardWidget(QWidget):
                     return True
         return super().eventFilter(obj, event)
 
+    def _base_theme(self):
+        theme = dict(PROVIDER_THEMES.get(self.base, {"color": "#38bdf8", "name": self.base.upper()}))
+        if self._name_override:
+            theme["name"] = self._name_override
+        return theme
+
     def set_appearance(self, dark: bool):
         self.dark = dark
-        base = PROVIDER_THEMES.get(self.provider_id, {"color": "#38bdf8", "name": self.provider_id.upper()})
-        self.theme = dict(base)
+        self.theme = self._base_theme()
         if not dark:
-            self.theme["color"] = brand_color(self.provider_id, False)
+            self.theme["color"] = brand_color(self.base, False)
         self.title.setStyleSheet(f"color: {self.theme['color']}; font-size: 9.5px; font-weight: 800; letter-spacing: 0.4px;")
         self.update_metrics(self.current_metrics)
 
@@ -301,6 +308,7 @@ class ProviderCardWidget(QWidget):
             self.m1_sub.setText(data.error.split("\n")[0])
             self.m1_sub.setStyleSheet(f"color: {error_color};")
 
+            self.m2_cell.setVisible(True)
             self.m2_val.setText("--")
             self.m2_bar.setValue(0)
             self.m2_sub.setText("")
@@ -333,6 +341,7 @@ class ProviderCardWidget(QWidget):
         self.m1_bar.setValue(min(100, max(0, data.metric1_val or 0)))
 
         # Metric 2
+        self.m2_cell.setVisible(bool(data.metric2_title))
         self.m2_label.setText(data.metric2_title)
         self.m2_val.setText(data.metric2_text)
         c2 = ramp_color(data.metric2_val, self.dark) if data.metric2_val is not None else "#64748b"

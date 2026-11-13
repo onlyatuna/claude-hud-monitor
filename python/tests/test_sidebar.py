@@ -268,7 +268,7 @@ class SidebarTests(unittest.TestCase):
         ys = [self.sidebar.buttons[k].y() for k in ('codex', 'claude', 'agy')]
         self.assertEqual(ys, sorted(ys))
         with self.assertRaises(ValueError):
-            self.sidebar.set_order(['claude', 'agy'])
+            self.sidebar.set_order(['nobody'])
         self.sidebar.set_state('panel')
         cards = [self.sidebar.cards[k] for k in ('codex', 'claude', 'agy')]
         self.assertEqual([c.y() for c in cards], sorted(c.y() for c in cards))
