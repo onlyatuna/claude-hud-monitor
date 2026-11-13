@@ -11,7 +11,8 @@ from PySide6.QtGui import QCursor, QGuiApplication, QIcon, QRegion
 from core.providers import PROVIDERS, UsageMetrics
 from core import agy_statusline
 from core import tray_quota
-from core.agy_rows import arrange_agy, arrange_by_order, normalize_order, DEFAULT_ORDER as AGY_DEFAULT_ORDER
+from core.agy_rows import (arrange_agy, arrange_by_order, dynamic_titles, normalize_order,
+                           DEFAULT_ORDER as AGY_DEFAULT_ORDER)
 from core.config_manager import ConfigManager, UI_MODES
 from core.refresh_controller import RefreshController
 from core.autostart import is_autostart_enabled, set_autostart
@@ -884,11 +885,14 @@ class HUDWindow(QWidget):
         if self.config.get("ui_mode", "sidebar") == "table":
             self._rebuild_table()
 
+    def agy_dynamic_titles(self) -> tuple:
+        return dynamic_titles(self._raw_metrics.get("agy"))
+
     def agy_order(self) -> tuple:
-        return normalize_order(self.config.get("agy_order", self.config.get("agy_primary")))
+        return normalize_order(self.config.get("agy_order", self.config.get("agy_primary")), self.agy_dynamic_titles())
 
     def set_agy_order(self, titles):
-        order = normalize_order(titles)
+        order = normalize_order(titles, self.agy_dynamic_titles())
         if order == self.agy_order():
             return
         self.config.set("agy_order", list(order))

@@ -3,7 +3,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from urllib.error import HTTPError
-from core.providers.agy_provider import AgyProvider
+from core.providers.agy_provider import AgyProvider, title_from_key
 
 SUMMARY_FIXTURE = (
     b'{"groups":[{"name":"Claude and GPT models","buckets":['
@@ -288,3 +288,53 @@ class AgyTransportTests(unittest.TestCase):
         self.assertEqual(result.error_code, "no_token")
         self.assertIsNotNone(result.error)
         mock_run.assert_not_called()
+
+    def test_unknown_cache_bucket_becomes_a_row_after_the_fixed_ones(self):
+        reset = datetime.now(timezone.utc) + timedelta(days=5)
+        self.cache["buckets"]["gemini-carbon-wtu-weekly"] = {"remaining_fraction": 0.6, "reset_time": reset}
+        self.cache["buckets"]["gemini-flash"] = {"remaining_fraction": 0.9, "reset_time": None}
+        self.cache_reader.return_value = self.cache
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value="token"), patch(
+            "core.providers.agy_provider.urllib.request.urlopen",
+            side_effect=[_MockResponse(SUMMARY_FIXTURE), _MockResponse(QUOTA_FIXTURE)],  # 3 per-model buckets
+        ):
+            result = provider.fetch_usage()
+        self.assertEqual([r.title for r in result.extra_metrics],
+                         ["C/G 5H", "C/G 7D", "ARGON 7D", "CARBON 7D", "GEMINI FLASH"])
+        self.assertEqual([r.key for r in result.extra_metrics],
+                         ["C/G 5H", "C/G 7D", "ARGON 7D", "agy:carbon-7d", "agy:gemini-flash"])
+        carbon = result.extra_metrics[3]
+        self.assertAlmostEqual(carbon.val, 40.0)
+        self.assertEqual((carbon.text, carbon.reset), ("40%", reset))
+        self.assertEqual((result.metric1_title, result.metric2_title), ("GEMINI 5H", "GEMINI 7D"))
+
+    def test_title_from_key(self):
+        for key, title in (("gemini-argon-wtu-weekly", "ARGON 7D"), ("gemini-carbon-wtu-weekly", "CARBON 7D"),
+                           ("foo-5h", "FOO 5H"), ("gemini-carbon-wtu-monthly", "CARBON MONTHLY"),
+                           ("gemini-flash", "GEMINI FLASH"), ("carbon", "CARBON")):
+            self.assertEqual(title_from_key(key), title)
+
+    def test_unknown_summary_group_gives_one_row_per_valid_bucket(self):
+        summary = json.dumps({"groups": [
+            {"displayName": "Claude and GPT models", "buckets": [
+                {"bucketId": "3p-weekly", "remainingFraction": 0.8449, "resetTime": "2026-10-23T12:00:00Z"}]},
+            {"displayName": "Carbon models", "buckets": [
+                {"bucketId": "carbon-weekly", "displayName": "Weekly Limit Remaining", "remainingFraction": 0.25,
+                 "resetTime": "2026-10-23T12:00:00Z"},
+                {"bucketId": "carbon-5h", "displayName": "Five Hour Limit Remaining", "remainingFraction": None},
+                {"bucketId": "carbon-x"}, "junk"]},
+            {"displayName": "Other models", "buckets": [
+                {"bucketId": "other-weekly", "displayName": "Weekly Limit Remaining", "remainingFraction": 1}]},
+        ]}).encode("utf-8")
+        provider = AgyProvider()
+        with patch("core.providers.agy_provider.urllib.request.urlopen",
+                   side_effect=[_MockResponse(summary), _MockResponse(QUOTA_FIXTURE)]):
+            result = provider._fetch_via_http("token", "12:00:00")
+        self.assertIsNone(result.error)
+        self.assertEqual([r.title for r in result.extra_metrics[3:]],
+                         ["WEEKLY LIMIT REMAINING", "OTHER MODELS WEEKLY LIMIT REMAINING"])
+        self.assertEqual([r.key for r in result.extra_metrics[3:]],
+                         ["agy:weekly-limit-remaining", "agy:other-models-weekly-limit-remaining"])
+        self.assertAlmostEqual(result.extra_metrics[3].val, 75.0)
+        self.assertEqual(len(result.extra_metrics), 5)

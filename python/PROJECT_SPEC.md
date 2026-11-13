@@ -38,6 +38,7 @@ QTimer / 手動刷新 / 休眠恢復
 - core/diagnostics.py：限制大小的操作紀錄，禁止傳入憑證、原始回應與 CLI stderr。
 - system/hotkey.py、core/autostart.py：平台整合。
 - core/tray_quota.py：系統匣圖示要顯示哪一條額度的數字（純函式，有單元測試）。設定 `tray_quota`：`off`（預設，維持原本的靜態圖示）、`auto`（已用比例最高的一條，略過離線的服務）或額度鍵（`MetricRow.key` 加上 `<provider_id>:` 前綴，已含前綴者不重複，如 `claude:5h`、`claude:weekly_scoped:fable`、`codex:WINDOW 5H`、`agy:C/G 5H`）；`tray_quota_mode`：`used`（預設）或 `remaining`。數字為整數、不含 `%`、最多兩位（已用 100 顯示 99；剩餘 0 顯示 0）；`--` 無資料、`!` 離線、琥珀色為舊資料（stale）、灰色為超過 30 分鐘未更新；選中的額度消失時設定保留不動，圖示顯示灰色 `--`，選單顯示停用的「unavailable」。圖示由 ui/tray_icon.py 以 16/20/24/32 px 灰階抗鋸齒繪製（剩餘模式在數字下方加一條橫線），僅在顯示內容改變時重繪；提示文字第一行為「Claude FABLE 7D: 84% used」。選單：系統匣選單「系統匣數字 (Tray number)」（HUD 右鍵選單不含）。
+- core/providers/codex_provider.py：Codex 額度視窗依 `limit_window_seconds` 命名（`WINDOW 5H`、`WINDOW 7D`、`WINDOW 30D`…）；只有一個視窗（如免費方案的 30 天視窗、`secondary_window` 為 null）時只顯示一列，第二列為空（卡片隱藏、系統匣選單不列出）；兩個視窗皆缺才算格式錯誤。
 
 舊 core/anthropic_client.py 已移除，新增 Claude 功能只修改 ClaudeProvider。
 

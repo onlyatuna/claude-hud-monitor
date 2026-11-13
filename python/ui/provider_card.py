@@ -301,6 +301,7 @@ class ProviderCardWidget(QWidget):
             self.m1_sub.setText(data.error.split("\n")[0])
             self.m1_sub.setStyleSheet(f"color: {error_color};")
 
+            self.m2_cell.setVisible(True)
             self.m2_val.setText("--")
             self.m2_bar.setValue(0)
             self.m2_sub.setText("")
@@ -333,6 +334,7 @@ class ProviderCardWidget(QWidget):
         self.m1_bar.setValue(min(100, max(0, data.metric1_val or 0)))
 
         # Metric 2
+        self.m2_cell.setVisible(bool(data.metric2_title))
         self.m2_label.setText(data.metric2_title)
         self.m2_val.setText(data.metric2_text)
         c2 = ramp_color(data.metric2_val, self.dark) if data.metric2_val is not None else "#64748b"

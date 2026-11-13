@@ -61,6 +61,8 @@ def readings(raw_metrics: dict, provider_order, now: Optional[datetime] = None) 
         rows = [(m.main_key(1), m.metric1_title, m.metric1_val), (m.main_key(2), m.metric2_title, m.metric2_val)]
         rows += [(r.key, r.title, r.val) for r in m.extra_metrics]
         for key, title, used in rows:
+            if not key:  # a provider with a single window has no second row
+                continue
             result.append(Reading(qualified_key(provider_id, key), provider_id, title, used, _state(m, used, now)))
     return result
 

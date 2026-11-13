@@ -7,7 +7,7 @@
 | --- | --- | --- |
 | Claude | five_hour / seven_day.utilization、resets_at；可選 seven_day_breakdown.rows；`limits[]`（模型別週額度，見下） | 未知窗口顯示 -- |
 | Codex | rate_limit.primary_window / secondary_window 的 used_percent、reset_at、limit_window_seconds；plan_type | 不猜模型、方案或窗口 |
-| AGY | `retrieveUserQuotaSummary` 的 `groups[].name`、`buckets[].id`、`remainingFraction`、`resetTime`；`retrieveUserQuota` 的 `buckets[].modelId`、`remainingFraction`、`resetTime`；statusLine 快取的 `quota.<bucket>.remaining_fraction`、`reset_time` | Gemini 5h 取 `modelId` 含 gemini 的 bucket 中最受限者；Gemini 週額度與 Argon 週額度只來自 statusLine 快取，未啟用時顯示 `--`；不認得的群組只在 log 記名稱 |
+| AGY | `retrieveUserQuotaSummary` 的 `groups[].name`、`buckets[].id`、`remainingFraction`、`resetTime`；`retrieveUserQuota` 的 `buckets[].modelId`、`remainingFraction`、`resetTime`；statusLine 快取的 `quota.<bucket>.remaining_fraction`、`reset_time` | Gemini 5h 取 `modelId` 含 gemini 的 bucket 中最受限者；Gemini 週額度與 Argon 週額度只來自 statusLine 快取，未啟用時顯示 `--`；不認得的群組與快取 bucket 以額外列顯示（見 AGY 一節） |
 
 AGY 第三方徽章為名称含 claude/gpt 群組週窗口的最小剩餘比例，不表示每個模型均有該額度。
 上游改名／缺欄位時，新增合成或脫敏 fixture 與 adapter 修正，不以預設 0/100 掩蓋差異。
@@ -30,6 +30,11 @@ OAuth 用量回應的 `limits[]` 會帶出只存在於此陣列的額度，例�
   - 啟用：右鍵選單 → 更多 → AGY 週額度掛鉤 → 啟用（或 `python main.py --install-agy-statusline`）（會先備份 `settings.json` 為 `settings.json.bak-hud-<時間>`；已有其他 statusLine 時不覆蓋）；停用：`--uninstall-agy-statusline`。啟用後需重開 agy 互動模式
   - 限制：只有 agy 互動模式開著時才會更新；agy 沒開時沿用最後一次的值，已過重置時間的 bucket 會被丟棄。設定資料夾路徑含空白時無法安裝（agy 會把含引號的指令路徑當相對路徑）
   - Argon 以徽章顯示剩餘百分比（`Argon: NN%`），與 C/G 徽章方向一致
+  - 未知額度自動成列（不需改程式）：statusLine 快取裡不屬於上述五個 bucket 的 key（例如日後 Ultra 方案的 Gemini Carbon 額度），以及 `retrieveUserQuotaSummary` 中名稱不含 gemini / claude / gpt / argon 的群組，其每個有效 bucket 都會成為額外列，排在固定五列之後（先摘要群組、API 順序；再快取、依 key 排序）。`retrieveUserQuota` 的逐模型 bucket 不會成列，仍合併為 GEMINI 5H
+  - 標題：快取 key 去掉開頭 `gemini-` 與 `wtu`，尾端 `weekly` / `week` / `7d` → `7D`、`5h` → `5H`，其餘大寫、`-` 換成空格（`gemini-carbon-wtu-weekly` → `CARBON 7D`）；不符形狀時整個 key 大寫、`-` 換空格。摘要 bucket 用其 `displayName` 大寫（沒有則由 `bucketId` 推導；標題重複時前面加群組名）。標題與固定列重複或已存在者略過
+  - 穩定 key（托盤數字用）：`agy:<標題 slug>`（slug 規則同 Claude），例如 `agy:carbon-7d`。列消失時，托盤選擇顯示 `--`（unavailable）
+  - `agy_order`：已存的排序保留仍存在的額外列位置，資料中已不存在的額外列在儲存或拖拉重排時才被丟棄；新出現的額外列排在最後。只有固定五列時行為與先前相同
+  - 限制：目前沒有任何真實的 Carbon 資料（維護者為 Google AI Pro，CLI 標示 Carbon 僅 Ultra），`gemini-carbon-wtu-weekly` 這個 key 是比照 Argon 的推測
 - 已知限制：agy 面板的資料可能另走 gRPC（`google.gca.aicode.v1main`，對 REST 回 404）或需 CSRF token 的本機 language server，HUD 都不使用
 - 禁止事項：HUD 不呼叫 agy 執行檔。`agy --print /quota` 與 `agy -p /usage` 在無頭模式會被當成提示送進模型（每次耗約 2～3.6 萬 token），不要用來查額度
 
