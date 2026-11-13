@@ -285,7 +285,11 @@ impl Reading {
             (State::Offline, _) => "offline".to_owned(),
             (_, None) => "--".to_owned(),
             (state, Some(v)) => {
-                let n = number_text(v, mode);
+                let n = if mode == MODE_REMAINING {
+                    (100.0 - v).round().clamp(0.0, 100.0) as i64
+                } else {
+                    v.round().clamp(0.0, 100.0) as i64
+                };
                 let unit = if mode == MODE_REMAINING {
                     "left"
                 } else {
