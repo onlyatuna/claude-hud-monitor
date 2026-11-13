@@ -287,8 +287,12 @@ impl RefreshController {
             return None;
         }
         let state = self.states.get_mut(&item.provider_id)?;
+        // If the result is from a previous incarnation (older epoch), silently drop it.
+        // It does not belong to the current instance lifecycle at all.
+        if (item.generation >> 32) < (state.generation >> 32) {
+            return None;
+        }
         state.running = false;
-
         // Stale result from an older generation — re-launch if pending
         if item.generation != state.generation || state.pending {
             if let Some(provider) = providers.get(&item.provider_id) {
