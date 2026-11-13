@@ -1,6 +1,7 @@
 import sys
 import os
 import time
+from dataclasses import replace
 from datetime import datetime
 from PySide6.QtCore import Qt, QElapsedTimer, QEvent, QPoint, QRect, QTimer
 from PySide6.QtWidgets import (
@@ -975,7 +976,7 @@ class HUDWindow(QWidget):
             for spec in specs:
                 old = self._accounts.get(spec.id)
                 if old is None or old.profile != spec.profile:
-                    fresh[spec.id] = (self._make_account_provider(spec), None if old else self._make_account_card(spec.id))
+                    fresh[spec.id] = (self._make_account_provider(spec), self._make_account_card(spec.id))
         except Exception as exc:
             logger.warning(f"[Accounts] could not build the new accounts, keeping the running tiles: {type(exc).__name__}")
             return
@@ -992,6 +993,11 @@ class HUDWindow(QWidget):
                 card.rowOrderChanged.connect(lambda titles, pid=pid: self.set_row_order(pid, titles))
                 card.set_appearance(self.sidebar.dark)
         self._accounts = wanted
+        for pid in wanted:
+            card = self.sidebar_cards[pid]
+            card._name_override = acct.elide(self._labels[pid], acct.CARD_LABEL_MAX)
+            card.theme['name'] = card._name_override
+            card.update_metrics(replace(card.current_metrics, provider_name=card._name_override))
         for pid, (provider, _card) in fresh.items():
             if provider is not None:
                 self.refresh_controller.add_provider(pid, provider)    # state first, then the immediate fetch
@@ -1117,6 +1123,8 @@ class HUDWindow(QWidget):
         return metrics
 
     def _publish(self, metrics: UsageMetrics):
+        if metrics.provider_id in self._accounts:
+            metrics = replace(metrics, provider_name=acct.elide(self._labels[metrics.provider_id], acct.CARD_LABEL_MAX))
         self._latest_metrics[metrics.provider_id] = metrics
         if metrics.provider_id in self.sidebar_cards:
             self.sidebar_cards[metrics.provider_id].update_metrics(metrics)

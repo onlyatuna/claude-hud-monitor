@@ -24,6 +24,33 @@ def unique():
     return f"ClaudeHUDTest-{uuid.uuid4().hex}"
 
 
+def stop_process(process, interpreter_pid=None):
+    """Wait for an owned test launch, including Windows venv redirector children."""
+    if os.name == 'nt' and interpreter_pid is not None:
+        import _winapi
+        try:
+            handle = _winapi.OpenProcess(_winapi.SYNCHRONIZE | 0x0001, False, interpreter_pid)
+        except OSError as exc:
+            if exc.winerror != 87:  # the interpreter may already have exited
+                raise
+        else:
+            try:
+                if _winapi.WaitForSingleObject(handle, 0) == _winapi.WAIT_TIMEOUT:
+                    _winapi.TerminateProcess(handle, 1)
+                if _winapi.WaitForSingleObject(handle, 10000) != _winapi.WAIT_OBJECT_0:
+                    raise TimeoutError(f'Test interpreter {interpreter_pid} did not exit')
+            finally:
+                _winapi.CloseHandle(handle)
+    if process.poll() is None:
+        if os.name != 'nt' or interpreter_pid is None:
+            process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+
+
 def pump(until, timeout=3.0):
     end = time.monotonic() + timeout
     while time.monotonic() < end and not until():
@@ -162,6 +189,7 @@ if not instance.acquire():
 expect = {expect}
 woken = []
 instance.wakeRequested.connect(lambda: woken.append(1))
+print(os.getpid(), flush=True)
 print('READY', flush=True)
 end = time.monotonic() + 25
 while time.monotonic() < end and len(woken) < expect:
@@ -183,16 +211,19 @@ class TwoProcessTests(unittest.TestCase):
             script = Path(directory) / 'child.py'
             script.write_text(SCRIPT.format(root=str(ROOT), name=name, expect=expect), encoding='utf-8')
             first = subprocess.Popen([sys.executable, '-I', str(script)], stdout=subprocess.PIPE, text=True)
+            interpreter_pid = None
             try:
+                interpreter_pid = int(first.stdout.readline())
                 self.assertEqual(first.stdout.readline().strip(), 'READY')
                 for _ in range(launches):
                     second = subprocess.run([sys.executable, '-I', str(script)], timeout=30)
                     self.assertEqual(second.returncode, 3)        # not the primary: asked it to wake, then left
                 self.assertEqual(first.wait(timeout=40), 0)       # the primary saw exactly that many wake-ups
             finally:
-                if first.poll() is None:
-                    first.kill()
-                first.stdout.close()
+                try:
+                    stop_process(first, interpreter_pid)
+                finally:
+                    first.stdout.close()
 
     def test_a_second_process_exits_and_the_first_is_woken(self):
         self._run(1)
@@ -206,11 +237,18 @@ class RealMainTests(unittest.TestCase):
 
     def test_second_launch_of_main_exits_and_wakes_the_first(self):
         with tempfile.TemporaryDirectory() as home:
-            env = dict(os.environ, QT_QPA_PLATFORM='offscreen', HOME=home, XDG_CONFIG_HOME=os.path.join(home, '.config'),
+            env = dict(os.environ, QT_QPA_PLATFORM='offscreen', HOME=home, USERPROFILE=home,
+                       XDG_CONFIG_HOME=os.path.join(home, '.config'),
                        APPDATA=home, CLAUDEHUD_SINGLE_INSTANCE_NAME=unique())
-            cmd = [sys.executable, '-B', str(ROOT / 'main.py')]
-            first = subprocess.Popen(cmd, cwd=str(ROOT), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            env.pop('CLAUDE_CONFIG_DIR', None)
+            bootstrap = ("import os, runpy; print(os.getpid(), flush=True); "
+                         f"runpy.run_path({str(ROOT / 'main.py')!r}, run_name='__main__')")
+            cmd = [sys.executable, '-B', '-c', bootstrap]
+            first = subprocess.Popen(cmd, cwd=str(ROOT), env=env, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, text=True)
+            interpreter_pid = None
             try:
+                interpreter_pid = int(first.stdout.readline())
                 logs = lambda: ''.join(p.read_text(errors='replace') for p in Path(home).rglob('*.log'))
                 end = time.monotonic() + 30
                 while time.monotonic() < end and 'HUD window created and shown' not in logs():
@@ -227,11 +265,10 @@ class RealMainTests(unittest.TestCase):
                 self.assertIsNone(first.poll())               # the first keeps running
                 self.assertEqual(logs().count('HUD window created and shown'), 1)
             finally:
-                first.terminate()
                 try:
-                    first.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    first.kill()
+                    stop_process(first, interpreter_pid)
+                finally:
+                    first.stdout.close()
 
 
 if __name__ == '__main__':

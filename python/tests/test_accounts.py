@@ -121,6 +121,10 @@ class AccountHudTests(unittest.TestCase):
             with self.subTest(state=state, edge=edge):
                 self.config_path.unlink(missing_ok=True)
                 hud = self.hud(sidebar_state=state, sidebar_edge=edge, sidebar_scale=0.6)
+                # Compare settled cards on both sides: the first fetch hides
+                # empty badges and changes the panel's initial placeholder size.
+                wait_for(lambda: {'claude', 'agy', 'codex'} <= set(hud._raw_metrics))
+                flush()
                 tiles = lambda: len(hud.sidebar.order())
                 self.assertEqual(hud.size(), hud.sidebar.preferred_size())
                 three = hud.size()
@@ -218,6 +222,42 @@ class AccountHudTests(unittest.TestCase):
         self.assertTrue(hud.add_account('claude-a'))
         self.assertFalse(hud.add_account('.Claude-A'))                  # duplicate, case-folded
         self.assertEqual(ConfigManager(self.config_path).get('accounts')[0]['id'], PID)
+
+    def test_same_id_profile_replacement_clears_old_quota_before_fetch(self):
+        hud = self.hud(sidebar_state='strip')
+        self.add(hud)
+        wait_for(lambda: PID in hud._raw_metrics)
+        controller = hud.refresh_controller
+        generation = controller.states[PID].generation
+        hud.sidebar._click_provider(PID)
+        order = hud.sidebar.order()
+        hud.config.set('accounts', [{'id': PID, 'provider': 'claude', 'profile': 'claude-b'}])
+        with patch.object(controller, '_launch'):
+            hud.apply_accounts()
+            controller._complete(PID, generation, UsageMetrics(provider_id=PID, metric1_val=88))
+            self.assertEqual(hud.sidebar_cards[PID].title.text(), 'claude-b')
+            self.assertIsNone(hud.sidebar_cards[PID].current_metrics.metric1_val)
+            self.assertEqual(hud.sidebar.buttons[PID].display, ['--', '--'])
+            self.assertNotIn(PID, hud.sidebar._metrics)
+            self.assertNotIn(PID, hud._raw_metrics)
+            self.assertIsNone(hud.sidebar._active)
+            self.assertFalse(hud.sidebar._flyout.isVisible())
+            self.assertEqual(hud.sidebar.order(), order)
+
+    def test_nickname_change_updates_card_without_new_fetch(self):
+        hud = self.hud()
+        self.add(hud)
+        wait_for(lambda: PID in hud._raw_metrics)
+        hud._on_data_fetched(UsageMetrics(provider_id=PID, provider_name='claude-a', metric1_val=10))
+        hud.config.set('accounts', [{'id': PID, 'provider': 'claude', 'profile': 'claude-a', 'nickname': 'Work'}])
+        with patch.object(hud.refresh_controller, '_launch'):
+            hud.apply_accounts()
+            self.assertEqual(hud.sidebar_cards[PID].title.text(), 'Work')
+            self.assertEqual(hud.sidebar.buttons[PID].spec.text, 'Work')
+            self.assertEqual(hud.sidebar_cards[PID].current_metrics.metric1_val, 10)
+            hud._republish_all()       # cached metrics may still carry the old provider label
+            hud.sidebar_cards[PID].set_appearance(False)
+            self.assertEqual(hud.sidebar_cards[PID].title.text(), 'Work')
 
 
 class WrapperAndRulesTests(unittest.TestCase):

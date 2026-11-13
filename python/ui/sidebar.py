@@ -494,7 +494,9 @@ class SidebarWidget(QWidget):
         """Make the tile set match `specs` (every instance, with its card in `cards`) and show `visible` (ids in order).
         Tiles that are not visible stay alive (they keep receiving data); tiles that are gone are released."""
         wanted = {spec.id for spec in specs}
-        gone = [key for key in self.buttons if key not in wanted]
+        # A stable id can point at a different account profile. Replace its whole
+        # presentation so no old quota, hover or pinned flyout survives the swap.
+        gone = [key for key in self.buttons if key not in wanted or self.cards[key] is not cards[key]]
         if self._active in gone or self._pinned_key in gone:
             self.close_flyout()
         if self._hover_id in gone:

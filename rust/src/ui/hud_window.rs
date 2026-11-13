@@ -1676,7 +1676,11 @@ impl HUDWindow {
         let cards = self.sidebar.cards();
         let fresh: Vec<(String, Rc<RefCell<ProviderCardWidget>>)> = cards
             .iter()
-            .filter(|(id, _)| !self.sidebar_cards.contains_key(id))
+            .filter(|(id, card)| {
+                self.sidebar_cards
+                    .get(id)
+                    .is_none_or(|old| !Rc::ptr_eq(old, card))
+            })
             .cloned()
             .collect();
         self.sidebar_cards = cards.into_iter().collect();
@@ -3088,6 +3092,36 @@ mod tests {
     }
 
     #[test]
+    fn account_filter_replacement_card_persists_row_order() {
+        let el = ferrokit_core::event_loop::EventLoop::new();
+        let (mut hud, _rx) = hud_with_stubs();
+        let id = add_account(&mut hud, "claude-a");
+        let old_card = Rc::clone(&hud.sidebar_cards[&id]);
+        hud.config
+            .lock()
+            .extra
+            .get_mut(accounts::KEY_ACCOUNTS)
+            .unwrap()[0]["nickname"] = serde_json::json!("Renamed");
+        hud.apply_accounts_with(false);
+        let replacement = Rc::clone(&hud.sidebar_cards[&id]);
+        assert!(!Rc::ptr_eq(&old_card, &replacement));
+        assert_eq!(hud.accounts[&id].label, "Renamed");
+        let config = Arc::clone(&hud.config);
+        let hud = Rc::new(RefCell::new(hud));
+        register_hud(&hud);
+        let order = vec!["Weekly".to_owned(), "Session".to_owned()];
+        replacement.borrow().row_order_changed().emit(&order);
+        let deadline = std::time::Instant::now() + Duration::from_millis(500);
+        while config.lock().row_order.get(&id) != Some(&order)
+            && std::time::Instant::now() < deadline
+        {
+            el.process_events(false);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(config.lock().row_order.get(&id), Some(&order));
+    }
+
+    #[test]
     fn the_window_follows_the_tile_count() {
         let (mut hud, _rx) = hud_with_stubs();
         for (panel, horizontal) in [(false, false), (false, true), (true, false), (true, true)] {
@@ -4268,12 +4302,16 @@ mod dock_preview_tests {
                 // the system's own move (a native drag), not `Window::set_geometry`
                 let g = hud.window.geometry();
                 let hwnd = hud.window.native_handle() as Hwnd;
+                let at = ferrokit_platform::screen::logical_point_to_native(Point::new(
+                    g.x + 3,
+                    g.y + 3,
+                ));
                 let ok = unsafe {
                     SetWindowPos(
                         hwnd,
                         core::ptr::null_mut(),
-                        g.x + 3,
-                        g.y + 3,
+                        at.x,
+                        at.y,
                         0,
                         0,
                         0x0001 | 0x0004 | 0x0010,
@@ -4292,12 +4330,14 @@ mod dock_preview_tests {
             cancel(&mut hud);
             assert!(!gliding(&hud), "cancel {i}");
             assert!(!hud.sidebar_hud.docking.get());
-            // the window did not jump to the target (the native move above is in physical pixels)
+            // Only the native drag moves the window, by three logical pixels on each axis.
             let after = hud.window.geometry();
+            let delta = if i == 1 { 3 } else { 0 };
             assert!(
-                (after.x - before.x).abs() <= 40 && (after.y - before.y).abs() <= 3,
+                (after.x - before.x - delta).abs() <= 1 && (after.y - before.y - delta).abs() <= 1,
                 "{before:?} -> {after:?}"
             );
+            assert_eq!((after.width, after.height), (before.width, before.height));
             hud.cancel_resize();
             hud.sidebar_hud.snap_timer.stop();
             // the bar docks again on its saved edge

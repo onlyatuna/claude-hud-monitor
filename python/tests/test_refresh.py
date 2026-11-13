@@ -87,6 +87,20 @@ class RefreshTests(unittest.TestCase):
             self.assertEqual(self.controller.states['test'].due, expected_due)
             self.controller.states['test'].failures = 0
 
+    def test_retry_after_remains_a_floor_after_negative_jitter(self):
+        self.controller.jitter = 0.25
+        self.controller._rand = lambda low, high: low
+        self.controller._complete('test', 0, UsageMetrics(
+            provider_id='test', error='limited', retry_after=120))
+        self.assertEqual(self.controller.states['test'].due, 120)
+
+    def test_retry_after_cap_applies_after_positive_jitter(self):
+        self.controller.jitter = 0.25
+        self.controller._rand = lambda low, high: high
+        self.controller._complete('test', 0, UsageMetrics(
+            provider_id='test', error='limited', retry_after=10 ** 20))
+        self.assertEqual(self.controller.states['test'].due, 86400)
+
     def test_one_slow_provider_does_not_block_another(self):
         other = Provider()
         controller = RefreshController({'slow': self.provider, 'fast': other})
