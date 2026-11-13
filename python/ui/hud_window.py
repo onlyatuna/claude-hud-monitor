@@ -498,6 +498,7 @@ class HUDWindow(QWidget):
 
     def _place(self, rect):
         """Give the window exactly `rect`; the move is the docking's own, so it does not restart the snap timer."""
+        self._last_placed_rect = QRect(*rect)
         self._docking = True
         try:
             self.setFixedSize(rect[2], rect[3])
@@ -1082,6 +1083,10 @@ class HUDWindow(QWidget):
         super().moveEvent(event)
         if self._blur_suspended:
             self._blur_resume_timer.start()
+        if getattr(self, "_last_placed_rect", None) and self.geometry() == self._last_placed_rect:
+            self._save_geometry()
+            return
+        self._last_placed_rect = None
         if self.config.get("ui_mode") == "sidebar" and not self._docking and not self._restoring_geometry:
             self._cancel_snap_animation()        # a move that is not the glide's own: the user took the bar over
             self._snap_timer.start()
