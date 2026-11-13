@@ -19,8 +19,8 @@ from ui import gauge
 from ui.styles import THEMES, get_cards_stylesheet
 
 SIDEBAR_TOKENS = {
-    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', alert='#dc2626', providers={k: v['dark'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
-    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', alert='#b91c1c', providers={k: v['light'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
+    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', alert='#dc2626', providers={k: v['dark'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=300, animation_ms=160),
+    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', alert='#b91c1c', providers={k: v['light'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=300, animation_ms=160),
 }
 BASE_BUTTON_W, BASE_BUTTON_H = 64, 64
 BASE_PANEL_W = 220
