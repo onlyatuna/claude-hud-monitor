@@ -686,7 +686,12 @@ class HUDWindow(QWidget):
             ratios.append((g.height() + dy) / g.height())
         if "t" in zone:
             ratios.append((g.height() - dy) / g.height())
-        ratio = max(ratios, key=lambda v: abs(v - 1.0))
+        if all(v >= 1.0 for v in ratios):
+            ratio = max(ratios)
+        elif all(v <= 1.0 for v in ratios):
+            ratio = min(ratios)
+        else:
+            ratio = ratios[0] + sum(v - 1.0 for v in ratios[1:])
         scale = max(0.6, min(2.0, round(r["scale"] * ratio, 2)))
         if scale == self.sidebar.scale():
             return
@@ -714,7 +719,8 @@ class HUDWindow(QWidget):
             return False
         kind = event.type()
         if kind == QEvent.Type.MouseButtonPress:
-            self._cancel_snap_animation()            # the user takes the bar over: it stays where it is
+            if self._cancel_snap_animation():
+                self._snap_timer.start()            # user clicked to stop glide: re-arm snap if not dragged
         if self._resize is not None:
             if kind == QEvent.Type.MouseMove:
                 self._resize_to(event.globalPosition().toPoint())
@@ -1108,6 +1114,7 @@ class HUDWindow(QWidget):
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        self._hide_dock_preview()
         self._cancel_snap_animation(settle=True)     # a hide (hotkey, tray) leaves the bar on its docked place
         QTimer.singleShot(150, trim_memory)
 
