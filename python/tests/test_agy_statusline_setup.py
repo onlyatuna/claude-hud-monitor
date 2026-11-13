@@ -313,8 +313,8 @@ class MenuTests(Workspace):
 
         with patch('ui.hud_menu.QMenu', RecordingMenu):
             hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
-        more = next(a.menu() for a in captured[0].actions() if a.menu() and 'More' in a.text())
-        return next(a.menu() for a in more.actions() if a.menu() and 'AGY' in a.text() and 'Row' not in a.text())
+        parent_menu = next(a.menu() for a in captured[0].actions() if a.menu() and ('Account' in a.text() or 'More' in a.text()))
+        return next(a.menu() for a in parent_menu.actions() if a.menu() and 'AGY' in a.text() and 'Row' not in a.text())
 
     @staticmethod
     def rows(menu):

@@ -10,7 +10,10 @@ from datetime import datetime
 from typing import Optional, List, Tuple
 
 from core.providers.base import BaseProvider, UsageMetrics, MetricRow, percentage, percent_text, safe_parse, retry_delay, ssl_context
+from core.accounts import CARD_LABEL_MAX, elide
 from core.logger import logger
+
+MAX_CREDENTIALS_BYTES = 64 * 1024
 
 # limits[] kinds / groups we understand; anything else is rendered generically and logged once per process.
 _KNOWN_KINDS = {"session", "weekly_all", "weekly_scoped"}
@@ -257,7 +260,10 @@ class ClaudeProvider(BaseProvider):
             return None
         try:
             with open(target, "r", encoding="utf-8") as f:
-                return self._extract_token(json.load(f))
+                text = f.read(MAX_CREDENTIALS_BYTES + 1)
+            if len(text.encode("utf-8")) > MAX_CREDENTIALS_BYTES:
+                return None
+            return self._extract_token(json.loads(text))
         except Exception:
             return None
 
@@ -300,7 +306,8 @@ class ClaudeProvider(BaseProvider):
                 provider_name=display_title,
                 provider_id=self.provider_id,
                 last_updated_time=now_str,
-                error=err_msg
+                error=err_msg,
+                error_code="auth"
             )
 
         headers = {
@@ -326,8 +333,8 @@ class ClaudeProvider(BaseProvider):
                 return metrics
         except urllib.error.HTTPError as e:
             logger.warning(f"[ClaudeProvider] HTTP error: {e.code}")
-            code = "auth" if e.code == 401 else ("rate_limit" if e.code == 429 else "http")
-            message = "登入憑證已失效，請使用原 CLI 重新登入" if e.code == 401 else f"配額查詢 HTTP {e.code}"
+            code = "auth" if e.code in (401, 403) else ("rate_limit" if e.code == 429 else "http")
+            message = "登入憑證已失效，請使用原 CLI 重新登入" if code == "auth" else f"配額查詢 HTTP {e.code}"
             return UsageMetrics(provider_name=display_title, provider_id=self.provider_id,
                                 last_updated_time=now_str, error=message, error_code=code,
                                 retry_after=retry_delay(e.headers.get("Retry-After")) if e.headers else None)
@@ -402,3 +409,30 @@ class ClaudeProvider(BaseProvider):
             extra_metrics=scoped_rows,
             error="未取得有效配額資料" if s_val is None and w_val is None else None
         )
+
+
+class ClaudeAccountProvider(BaseProvider):
+    """An extra Claude account: the Claude fetch pinned to one profile, reported under its own instance id."""
+    display_name = "Claude"
+
+    def __init__(self, instance_id: str, profile: str, label: str, timeout=10):
+        self.provider_id = instance_id
+        self.profile = profile
+        self.label = label
+        self.inner = ClaudeProvider(timeout=timeout)
+        self.inner.profile_preference = profile   # config stays None: never follows `claude_profile`
+
+    def fetch_usage(self) -> UsageMetrics:
+        return self.rewrite(self.inner.fetch_usage())
+
+    def rewrite(self, metrics: UsageMetrics) -> UsageMetrics:
+        prefix = f"{self.provider_id}:"
+        def key(value):
+            return prefix + value[len("claude:"):] if value.startswith("claude:") else value
+        metrics.provider_id = self.provider_id
+        metrics.provider_name = elide(self.label, CARD_LABEL_MAX)
+        metrics.metric1_key = key(metrics.metric1_key)
+        metrics.metric2_key = key(metrics.metric2_key)
+        for row in metrics.extra_metrics:
+            row.key = key(row.key)
+        return metrics

@@ -9,6 +9,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QCursor, QGuiApplication, QIcon, QRegion
 
 from core.providers import PROVIDERS, UsageMetrics
+from core.providers.claude_provider import ClaudeAccountProvider, resolve_active_profile
+from core import accounts as acct
 from core import agy_statusline
 from core import tray_quota
 from core.agy_rows import (arrange_agy, arrange_by_order, dynamic_titles, normalize_order,
@@ -23,7 +25,7 @@ from ui.styles import (
 )
 from ui.provider_card import ProviderCardWidget
 from ui.usage_table import UsageTable
-from ui.sidebar import SidebarWidget, DEFAULT_ORDER
+from ui.sidebar import SidebarWidget, DEFAULT_ORDER, TileSpec, base_spec
 from ui.dock_geometry import (EDGES, SNAP_ANIM_FRAME_MS, SnapAnimation, dock_to_edge, offset_along_edge,
                               orientation_for_edge, pick_work_area, plan_sidebar_snap, sidebar_dock_target,
                               snap_rect, snap_rect_corner, step_scale, clamp_scale)
@@ -102,12 +104,22 @@ class HUDWindow(QWidget):
         self._latest_metrics = {}
         self._raw_metrics = {}
         self._provider_errors = {}
-        self.providers = PROVIDERS if providers is None else providers
+        self.providers = dict(PROVIDERS) if providers is None else providers
         for p in self.providers.values():
             if hasattr(p, "config"):
                 p.config = self.config
+        self._apply_pending = False
+        self._accounts = {}      # id -> AccountSpec of the extra Claude instances that are running
+        self._labels = {}        # id -> full label
+        initial, _ok = acct.parse_accounts(self.config.get("accounts"))
+        self._labels = self._account_labels(initial)
+        for spec in initial:
+            provider = self._make_account_provider(spec)
+            if provider is not None:
+                self.providers[spec.id] = provider
+        self._accounts = {spec.id: spec for spec in initial}
         self.refresh_controller = RefreshController(
-            self.providers, config.get("refresh_interval_sec", 60), self)
+            self.providers, config.get("refresh_interval_sec", 60), self, jitter=0.25)
         self.refresh_controller.updated.connect(self._on_data_fetched)
         self.refresh_controller.busy_changed.connect(self._on_busy_changed)
 
@@ -116,16 +128,19 @@ class HUDWindow(QWidget):
 
         # Sidebar (docked strip/panel); its panel shows the full provider cards
         self.sidebar_cards = {pid: ProviderCardWidget(pid) for pid in ("claude", "agy", "codex")}
-        self.sidebar = SidebarWidget(self.sidebar_cards, parent=self)
+        for spec in initial:
+            self.sidebar_cards[spec.id] = self._make_account_card(spec.id)
+        all_ids, visible, _hidden = self._tile_state()
+        self.sidebar = SidebarWidget(self.sidebar_cards, parent=self, specs=[self._tile_spec(i) for i in all_ids])
         self.sidebar.hide()
         self.sidebar.stateChangeRequested.connect(self.set_sidebar_state)
         self.sidebar.contextMenuRequested.connect(self._show_sidebar_menu)
         self.sidebar.scaleStepRequested.connect(self._on_sidebar_scale_step)
         self.sidebar.dragRequested.connect(self._start_sidebar_drag)
-        self.sidebar.orderChanged.connect(self.set_provider_order)
+        self.sidebar.orderChanged.connect(self._on_tiles_reordered)
         for pid, card in self.sidebar_cards.items():
             card.rowOrderChanged.connect(lambda titles, pid=pid: self.set_row_order(pid, titles))
-        self.sidebar.set_order(self.provider_order())
+        self.sidebar.set_order(visible)
         self._resize = None
         self._grip_cursor = False
         self._fade_timer = QTimer(self)
@@ -169,7 +184,9 @@ class HUDWindow(QWidget):
         self.tray_icon = tray
 
     def tray_quota_readings(self) -> list:
-        return tray_quota.readings(self._raw_metrics, self.provider_order())
+        _all, visible, hidden = self._tile_state()
+        names = {i: acct.elide(self._labels.get(i, i), acct.TILE_LABEL_MAX) for i in self._accounts}
+        return tray_quota.readings(self._raw_metrics, visible + hidden, names=names)
 
     def set_tray_quota(self, key: str):
         self.config.set("tray_quota", key)
@@ -787,9 +804,16 @@ class HUDWindow(QWidget):
             self._dock_sidebar()
             QTimer.singleShot(0, self._settle_sidebar)
 
+    def _refit_sidebar(self):
+        """Dock the window again after the tile set changed (strip and panel); the panel settles once its rows are polished."""
+        if self.config.get("ui_mode", "sidebar") != "sidebar" or self._resize is not None:
+            return
+        self._dock_sidebar()
+        QTimer.singleShot(0, self._settle_sidebar)
+
     def _settle_sidebar(self):
         if self.config.get("ui_mode", "sidebar") == "sidebar" and self._resize is None \
-                and self.sidebar.state() == "panel" and self.size() != self.sidebar.preferred_size():
+                and self.size() != self.sidebar.preferred_size():
             self._dock_sidebar()
 
     def _show_sidebar_menu(self, global_pos):
@@ -881,7 +905,165 @@ class HUDWindow(QWidget):
         if sorted(order) != sorted(DEFAULT_ORDER) or order == self.provider_order():
             return
         self.config.set("provider_order", order)
-        self.sidebar.set_order(order)
+        self._sync_tiles()
+        if self.config.get("ui_mode", "sidebar") == "table":
+            self._rebuild_table()
+
+    # ================= Extra Claude accounts / sidebar tiles =================
+    def _account_labels(self, specs) -> dict:
+        """Full label per account id (core.accounts.account_label); reads only directory names."""
+        if not specs:
+            return {}
+        main_dir = resolve_active_profile(self.config.get("claude_profile", "auto"))[0].dir_path
+        dirs = {s.id: resolve_active_profile(s.profile)[0].dir_path for s in specs}
+        return {s.id: acct.account_label(s.nickname, dirs[s.id], [main_dir] + [d for i, d in dirs.items() if i != s.id], n)
+                for n, s in enumerate(specs, 1)}
+
+    def _make_account_provider(self, spec):
+        if "claude" not in self.providers:      # no live providers (snapshot, tests): tile and card only
+            return None
+        return ClaudeAccountProvider(spec.id, spec.profile, self._labels[spec.id])
+
+    def _make_account_card(self, pid) -> ProviderCardWidget:
+        label = self._labels[pid]
+        return ProviderCardWidget(pid, base="claude", name=acct.elide(label, acct.CARD_LABEL_MAX))
+
+    def _tile_spec(self, tile_id) -> TileSpec:
+        if tile_id in self._accounts:
+            label = self._labels[tile_id]
+            return TileSpec(tile_id, "claude", label, acct.elide(label, acct.TILE_LABEL_MAX))
+        return base_spec(tile_id)
+
+    def _config_accounts(self) -> list:
+        """The accounts the config asks for right now (a burst of menu clicks may not be applied yet)."""
+        return acct.parse_accounts(self.config.get("accounts"))[0]
+
+    def _tile_state(self, accounts=None):
+        """(all ids, visible ids in order, hidden ids) from the running instances (or `accounts`) and the config."""
+        accounts = list(self._accounts.values()) if accounts is None else accounts
+        return acct.resolve_tiles(self.provider_order(), accounts, self.config.get("sidebar_tiles"))
+
+    def _sync_tiles(self):
+        all_ids, visible, _hidden = self._tile_state()
+        self.sidebar.set_tiles([self._tile_spec(i) for i in all_ids], self.sidebar_cards, visible)
+        self._refit_sidebar()
+
+    def request_apply_accounts(self):
+        """Menu actions only write the config and ask; a burst of clicks is applied once, from the final config."""
+        if not self._apply_pending:
+            self._apply_pending = True
+            QTimer.singleShot(0, self._run_apply)
+
+    def _run_apply(self):
+        if self._apply_pending:
+            self.apply_accounts()
+
+    def apply_accounts(self):
+        """Make the running instances match config `accounts` / `sidebar_tiles`, without a restart.
+        Never calls anything that re-enters the HUD; an invalid value or a failure keeps the running tiles."""
+        self._apply_pending = False
+        specs, ok = acct.parse_accounts(self.config.get("accounts"))
+        tiles = self.config.get("sidebar_tiles")
+        if not ok or not (tiles is None or isinstance(tiles, list)):
+            logger.warning("[Accounts] invalid accounts/sidebar_tiles in config; keeping the running tiles")
+            return
+        wanted = {s.id: s for s in specs}
+        try:
+            labels = self._account_labels(specs)
+            self._labels.update(labels)
+            fresh = {}
+            for spec in specs:
+                old = self._accounts.get(spec.id)
+                if old is None or old.profile != spec.profile:
+                    fresh[spec.id] = (self._make_account_provider(spec), None if old else self._make_account_card(spec.id))
+        except Exception as exc:
+            logger.warning(f"[Accounts] could not build the new accounts, keeping the running tiles: {type(exc).__name__}")
+            return
+        for pid in [i for i in self._accounts if i not in wanted or i in fresh]:
+            self.refresh_controller.remove_provider(pid)
+            self._raw_metrics.pop(pid, None)
+            self._latest_metrics.pop(pid, None)
+            self._provider_errors.pop(pid, None)
+            if pid not in wanted:
+                self.sidebar_cards.pop(pid, None)
+        for pid, (provider, card) in fresh.items():
+            if card is not None:
+                self.sidebar_cards[pid] = card
+                card.rowOrderChanged.connect(lambda titles, pid=pid: self.set_row_order(pid, titles))
+                card.set_appearance(self.sidebar.dark)
+        self._accounts = wanted
+        for pid, (provider, _card) in fresh.items():
+            if provider is not None:
+                self.refresh_controller.add_provider(pid, provider)    # state first, then the immediate fetch
+        for pid, provider in self.providers.items():
+            if pid in wanted and hasattr(provider, "label"):
+                provider.label = self._labels[pid]
+        self._sync_tiles()
+        self._refresh_tray()
+
+    def _main_profile_key(self):
+        pref = str(self.config.get("claude_profile", "auto"))
+        return None if pref.strip().lower() == "auto" else acct.profile_key(resolve_active_profile(pref)[0].id)
+
+    def add_account(self, profile_id: str) -> bool:
+        """Also show another Claude profile; False when refused (invalid, duplicate, the main tile's profile, cap)."""
+        raw = self.config.get("accounts")
+        raw = [] if raw is None else raw
+        current = self._config_accounts()
+        if not isinstance(raw, list) or not acct.profile_is_valid(profile_id) or len(current) >= acct.MAX_ACCOUNTS:
+            return False
+        key = acct.profile_key(profile_id)
+        if key == self._main_profile_key() or any(acct.profile_key(a.profile) == key for a in current):
+            return False
+        taken = {a.id for a in current} | {e.get("id") for e in raw if isinstance(e, dict)}
+        new_id = acct.new_account_id(profile_id, taken)
+        updates = {"accounts": raw + [{"id": new_id, "provider": "claude", "profile": profile_id.strip()}]}
+        tiles = self.config.get("sidebar_tiles")
+        if isinstance(tiles, list) and new_id not in tiles:
+            updates["sidebar_tiles"] = tiles + [new_id]
+        self.config.set_many(updates)
+        self.request_apply_accounts()
+        return True
+
+    def remove_account(self, account_id: str) -> bool:
+        raw = self.config.get("accounts")
+        if account_id not in {a.id for a in self._config_accounts()} or not isinstance(raw, list):
+            return False
+        updates = {"accounts": [e for e in raw if not (isinstance(e, dict) and e.get("id") == account_id)]}
+        tiles = self.config.get("sidebar_tiles")
+        if isinstance(tiles, list):
+            updates["sidebar_tiles"] = [t for t in tiles if t != account_id]
+        orders = self.config.get("row_order")
+        if isinstance(orders, dict) and account_id in orders:
+            updates["row_order"] = {k: v for k, v in orders.items() if k != account_id}
+        self.config.set_many(updates)
+        self.request_apply_accounts()
+        return True
+
+    def toggle_account(self, profile_id: str):
+        key = acct.profile_key(profile_id)
+        for spec in self._config_accounts():
+            if acct.profile_key(spec.profile) == key:
+                self.remove_account(spec.id)
+                return
+        self.add_account(profile_id)
+
+    def set_tile_visible(self, tile_id: str, visible: bool) -> bool:
+        all_ids, shown, _hidden = self._tile_state(self._config_accounts())
+        if tile_id not in all_ids or (tile_id in shown) == visible or (not visible and len(shown) == 1):
+            return False
+        self.config.set("sidebar_tiles", shown + [tile_id] if visible else [t for t in shown if t != tile_id])
+        self.request_apply_accounts()
+        return True
+
+    def _on_tiles_reordered(self, ids):
+        """A tile was dragged: persist the visible order and the base-provider order (older exes read provider_order)."""
+        all_ids, shown, _hidden = self._tile_state()
+        new = [i for i in dict.fromkeys(ids) if i in all_ids]
+        if not new or new == shown:
+            return
+        bases = [b for b in new if b in DEFAULT_ORDER] + [b for b in self.provider_order() if b not in new]
+        self.config.set_many({"sidebar_tiles": new, "provider_order": bases})
         if self.config.get("ui_mode", "sidebar") == "table":
             self._rebuild_table()
 

@@ -22,6 +22,18 @@ OAuth 用量回應的 `limits[]` 會帶出只存在於此陣列的額度，例�
 - 每列另有穩定的 `key`（`MetricRow.key`，預設等於標題）：固定列為 `claude:5h`、`claude:7d`；模型別列為 `claude:<kind>:<模型名 slug>`，例如 `claude:weekly_scoped:fable`（slug＝小寫、連續非英數字元合成一個 `-`）。不使用陣列索引或 `model.id`（目前為 null）。`row_order` 仍以標題比對。
 - 未知的 `kind` / `group` 不會造成錯誤：照上述規則顯示，並每個程序只在 log 記一次名稱（不寫入檔案）。非陣列的 `limits`、非物件的項目、缺 `percent` 或數值無效的項目一律略過；`limits[]` 的任何異常都不會丟掉有效的 `five_hour` / `seven_day`。
 
+## 同時顯示第二個（以上）Claude 帳號
+
+一個目錄＝一個登入（`<目錄>/.credentials.json`）；只有**分開的目錄**才能同時顯示。HUD 只讀目錄名稱與該檔的 `accessToken`（上限 64 KB），不讀 e-mail 或帳號 id，也不刷新 token（閒置帳號的 token 失效時會顯示 OFF，請用原 CLI 登入）。
+
+- 主分頁（`claude`）永遠跟著 `claude_profile`；建議固定成一個帳號，不要用 `auto`（會在兩個帳號間跳動，也可能與額外分頁重複）。其他帳號從 右鍵選單 → 更多 → Claude 帳號 → 同時顯示 勾選，立即出現（不用重開）、取消勾選立即消失。`default`（`~/.claude`）不能當額外帳號；與主分頁相同的帳號不會列出。最多 6 個額外帳號。
+- 設定檔（`config.json`，舊版執行檔會保留未知鍵）：`accounts` = `[{"id": "claude@claude-a", "provider": "claude", "profile": "claude-a", "nickname": "選填"}]`；`sidebar_tiles` = 側邊欄項目 id 的有序清單（順序＋顯示與否，缺省＝全部顯示，依 `provider_order`，額外帳號接在 Claude 後面）。無效的項目只在使用時略過，不改寫檔案。`provider_order` 仍只有三個基本 id。
+- 額外帳號的 id 為 `claude@<profile 的 slug>`，額度鍵為 `claude@claude-a:5h`、`claude@claude-a:weekly_scoped:fable`；預設實例的鍵（`claude:5h`、`tray_quota`）不變。系統匣數字的選單與「自動」會列出所有帳號（分頁標題＝標籤）。
+- 標籤（磚、卡片、系統匣、提示共用同一個函式）：`nickname`，否則目錄名去掉開頭的 `.`（`~/.claude-a` → `claude-a`）；與另一個實例同名時加上上層目錄。磚上最多 8 字、卡片標題最多 13 字、選單最多 16 字，超過以 `…` 截斷。
+- 介面 → 側邊欄項目：每個分頁（含 AGY、Codex）可個別顯示／隱藏；隱藏不會停止抓取，系統匣數字與已儲存的 `claude:5h` 照常運作；至少保留一個。細條模式下長按磚拖曳換位，會寫入 `sidebar_tiles` 與 `provider_order`。
+- 重新整理：每個實例各自排程，每次排程加上 ±25%（不低於 20 秒）的抖動，兩個帳號不會同時打用量端點；新增的帳號立刻抓取一次。
+- 失敗：額外帳號的目錄不見了時，分頁維持 OFF，設定不會被刪除，可在選單取消勾選（顯示「找不到」）。
+
 ## AGY 資料來源與已知限制
 
 - 資料來源：只用 HTTP `POST {}` 讀取 `https://daily-cloudcode-pa.googleapis.com/v1internal` 的 `retrieveUserQuotaSummary`（C/G 週額度徽章）與 `retrieveUserQuota`（Gemini 5 小時）。`daily-cloudcode-pa` 是 agy 實際使用的後端；正式端點 `cloudcode-pa` 的 Gemini 數字是過期值，已不再使用
@@ -47,7 +59,7 @@ OAuth 用量回應的 `limits[]` 會帶出只存在於此陣列的額度，例�
 
 ## Claude / Codex
 
-- 401：在原 CLI 重新登入；HUD 不刷新／覆寫共享憑證。
+- 401 / 403 / 找不到憑證（`error_code` = `auth`）：顯示 OFF，不保留舊值；只有暫時性失敗（network、429、5xx、逾時）才保留最後一次的值並標記琥珀色 STALE。請在原 CLI 重新登入，HUD 不刷新／覆寫共享憑證。
 - 429：遵守 Retry-After 與退避，不要連續手動刷新。
 - schema：格式或窗口變更，未知資料顯示 --。
 - network：連線未完成，等待自動重試。

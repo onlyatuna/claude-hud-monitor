@@ -101,3 +101,26 @@ class RefreshTests(unittest.TestCase):
         finally:
             self.provider.release.set()
             controller.stop()
+
+    def test_auth_failure_after_success_is_offline_but_transient_failures_stay_stale(self):
+        def run(error_code):
+            controller = RefreshController({'test': Provider()}, clock=lambda: 0)
+            seen = []
+            controller.updated.connect(seen.append)
+            try:
+                state = controller.states['test']
+                controller._complete('test', state.generation, UsageMetrics(provider_id='test', metric1_val=40))
+                controller._complete('test', state.generation,
+                                     UsageMetrics(provider_id='test', error='x', error_code=error_code))
+                return seen[-1], controller.states['test']
+            finally:
+                controller.stop()
+        for code in ('network', 'rate_limit', 'http'):
+            shown, _state = run(code)
+            self.assertTrue(shown.stale, code)
+            self.assertEqual(shown.metric1_val, 40)
+        shown, state = run('auth')
+        self.assertFalse(shown.stale)
+        self.assertIsNone(shown.metric1_val)
+        self.assertEqual(shown.error_code, 'auth')
+        self.assertIsNone(state.cached)

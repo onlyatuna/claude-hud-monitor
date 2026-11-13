@@ -808,7 +808,7 @@ class HudTests(unittest.TestCase):
                 from PySide6.QtCore import QPoint
                 hud.contextMenuEvent(QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(1, 1), QPoint(1, 1)))
                 titles = [a.text() for a in captured[0].actions() if a.menu()]
-                self.assertEqual(len(titles), 4)   # 介面 / 外觀 / 行為 / 更多
+                self.assertEqual(len(titles), 5)   # 介面 / 帳號 / 外觀 / 行為 / 更多
                 style = next(a.menu() for a in captured[0].actions() if a.menu() and 'Interface' in a.text())
                 styles = [a.text() for a in style.actions() if a.isCheckable() and 'Row' not in a.text()][:2]
                 self.assertEqual(len(styles), 2)
