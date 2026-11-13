@@ -102,9 +102,10 @@ fn stale_hex(dark: bool) -> &'static str {
 
 /// Python `PROVIDER_THEMES[id]["name"]`, `provider_id.upper()` for an unknown provider.
 fn theme_name(provider_id: &str) -> String {
-    match provider_id {
-        "claude" | "agy" | "codex" => default_provider_name(provider_id).to_string(),
-        other => other.to_uppercase(),
+    let base = crate::ui::brand::base_id(provider_id);
+    match base {
+        "claude" | "agy" | "codex" => default_provider_name(base).to_string(),
+        _ => provider_id.to_uppercase(),
     }
 }
 
@@ -824,6 +825,11 @@ impl ProviderCardWidget {
         *self.core.theme_hex.borrow_mut() = hex;
         let metrics = self.current_metrics.clone();
         self.update_metrics(&metrics);
+    }
+
+    /// The header text shown until the provider reports its own name (an extra account's label).
+    pub fn set_title(&self, text: &str) {
+        set_label_text(&self.title, text);
     }
 
     pub fn update_metrics(&mut self, data: &UsageMetrics) {

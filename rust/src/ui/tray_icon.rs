@@ -80,6 +80,11 @@ pub const ACTION_TRAY_MODE_USED: u32 = 5002;
 pub const ACTION_TRAY_MODE_REMAINING: u32 = 5003;
 pub const ACTION_TRAY_QUOTA_ROW_BASE: u32 = 5100;
 
+// Right-click menu: 同時顯示 (an extra Claude account per profile, 6000 + n) and 側邊欄項目
+// (show / hide a tile, 6100 + n). The ids index the lists of the last built menu.
+pub const ACTION_ACCOUNT_BASE: u32 = 6000;
+pub const ACTION_TILE_BASE: u32 = 6100;
+
 pub const SIDEBAR_SCALES: [u32; 6] = [60, 80, 100, 125, 150, 200];
 pub const IDLE_LEVELS: [u32; 4] = [80, 60, 40, 25];
 pub const IDLE_DELAYS_MS: [u32; 4] = [500, 900, 2000, 5000];
@@ -282,6 +287,9 @@ fn build_menu(
     );
     menu.add_separator();
     build_interface(&mut menu, cfg, agy_dynamic);
+    if tray_data.is_none() {
+        build_accounts(&mut menu, cfg);
+    }
     build_appearance(&mut menu, cfg);
     build_behaviour(&mut menu, cfg);
     match tray_data {
@@ -336,7 +344,7 @@ fn build_tray_quota(menu: &mut Menu, cfg: &Config, data: &[UsageMetrics]) {
         let mut index = 0;
         for m in data {
             sub.add_separator();
-            add_disabled(sub, &tray_quota::display_name(&m.provider_id));
+            add_disabled(sub, &tray_quota::display_name_of(m));
             if tray_quota::is_offline(m) {
                 add_disabled(sub, "offline");
                 continue;
@@ -408,6 +416,19 @@ fn add_disabled(menu: &mut Menu, text: &str) {
     menu.add_action(act);
 }
 
+/// A checkable action that can be disabled.
+fn add_check_enabled(menu: &mut Menu, id: u32, text: &str, checked: bool, enabled: bool) {
+    let act = Action::new_ref(text);
+    {
+        let mut a = act.borrow_mut();
+        a.set_checkable(true);
+        a.set_checked(checked);
+        a.set_enabled(enabled);
+        a.set_data(Variant::uint(id as u64));
+    }
+    menu.add_action(act);
+}
+
 /// Python `hud_menu._build_interface`: the style, and in the sidebar style its form and size.
 fn build_interface(menu: &mut Menu, cfg: &Config, agy_dynamic: &[String]) {
     add_submenu(menu, "介面 (Interface)", cfg, |sub| {
@@ -431,9 +452,54 @@ fn build_interface(menu: &mut Menu, cfg: &Config, agy_dynamic: &[String]) {
                     );
                 }
             });
+            build_sidebar_tiles(sub, cfg);
         }
         sub.add_separator();
         build_agy_rows(sub, cfg, agy_dynamic);
+    });
+}
+
+/// `介面 > 側邊欄項目 (Sidebar tiles)`: one check per tile, ticked = visible (hiding a tile does
+/// not stop its fetching). The only visible tile cannot be hidden.
+fn build_sidebar_tiles(menu: &mut Menu, cfg: &Config) {
+    use crate::accounts;
+    let resolved = accounts::resolve_accounts(cfg);
+    let tiles = accounts::tiles_of(
+        cfg,
+        &resolved.iter().map(|r| r.spec.clone()).collect::<Vec<_>>(),
+    );
+    MENU_TILES.with(|list| {
+        *list.borrow_mut() = tiles
+            .all
+            .iter()
+            .map(|id| (id.clone(), tiles.visible.contains(id)))
+            .collect();
+    });
+    add_submenu(menu, "側邊欄項目 (Sidebar tiles)", cfg, |sub| {
+        for (i, id) in tiles.all.iter().enumerate() {
+            let label = match id.as_str() {
+                "claude" => "Claude".to_owned(),
+                "agy" => "AGY".to_owned(),
+                "codex" => "Codex".to_owned(),
+                other => resolved.iter().find(|r| r.spec.id == other).map_or_else(
+                    || other.to_owned(),
+                    |r| accounts::elide(&r.label, accounts::MENU_LABEL_MAX),
+                ),
+            };
+            let visible = tiles.visible.contains(id);
+            add_check_enabled(
+                sub,
+                ACTION_TILE_BASE + i as u32,
+                &label,
+                visible,
+                !(visible && tiles.visible.len() == 1),
+            );
+        }
+        sub.add_separator();
+        add_disabled(
+            sub,
+            "細條模式下長按磚塊拖曳可調整順序 (Hold and drag a tile in the strip to reorder)",
+        );
     });
 }
 
@@ -587,9 +653,57 @@ thread_local! {
     static MENU_PROFILE_IDS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// Python `hud_menu._build_claude_accounts`.
-fn build_claude_accounts(menu: &mut Menu, cfg: &Config) {
-    add_submenu(menu, "Claude 帳號 (Claude Account)", cfg, |sub| {
+thread_local! {
+    /// `(profile id, ticked)` of the last built 同時顯示 submenu, indexed by the action offset.
+    static MENU_ACCOUNTS: std::cell::RefCell<Vec<(String, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// `(tile id, visible)` of the last built 側邊欄項目 submenu.
+    static MENU_TILES: std::cell::RefCell<Vec<(String, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// `帳號 > Claude 同時顯示 (Also show)`: one extra Claude account per other profile.
+fn build_also_show(menu: &mut Menu, cfg: &Config) {
+    let current = cfg.claude_profile.as_str();
+    let main_is_auto = current.is_empty() || current.eq_ignore_ascii_case("auto");
+    use crate::accounts;
+    add_submenu(menu, "Claude 同時顯示 (Also show)", cfg, |sub| {
+        if main_is_auto {
+            add_disabled(
+                sub,
+                "主分頁為「自動」，可能與下列帳號重複，建議先在上方固定帳號 (Main tile is on Auto: pin an account above first)",
+            );
+            sub.add_separator();
+        }
+        let entries = accounts::menu_entries(cfg);
+        let at_cap = accounts::accounts_of(cfg).len() >= accounts::MAX_ACCOUNTS;
+        MENU_ACCOUNTS.with(|list| {
+            *list.borrow_mut() = entries
+                .iter()
+                .take(40)
+                .map(|(profile, _, ticked, _)| (profile.clone(), *ticked))
+                .collect();
+        });
+        if entries.is_empty() {
+            add_disabled(sub, "沒有其他帳號 (No other profile found)");
+            return;
+        }
+        for (i, (_, label, ticked, _)) in entries.iter().take(40).enumerate() {
+            add_check_enabled(
+                sub,
+                ACTION_ACCOUNT_BASE + i as u32,
+                label,
+                *ticked,
+                *ticked || !at_cap,
+            );
+        }
+        if at_cap {
+            add_disabled(sub, "最多 6 個帳號 (Max 6 accounts)");
+        }
+    });
+}
+
+/// Python `hud_menu._build_claude_main_account`.
+fn build_claude_main_profile(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "Claude 主帳號 (Main Account)", cfg, |sub| {
         let current = cfg.claude_profile.as_str();
         let is_auto = current.is_empty() || current.eq_ignore_ascii_case("auto");
         let (active, _) = crate::providers::claude::resolve_active_profile(current);
@@ -662,16 +776,23 @@ fn build_agy_statusline(
     });
 }
 
-/// Python `hud_menu._build_more`.
-fn build_more(menu: &mut Menu, cfg: &Config) {
-    add_submenu(menu, "更多 (More)", cfg, |sub| {
-        build_claude_accounts(sub, cfg);
+/// Python `hud_menu._build_accounts`.
+fn build_accounts(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "帳號 (Accounts)", cfg, |sub| {
+        build_claude_main_profile(sub, cfg);
+        build_also_show(sub, cfg);
+        sub.add_separator();
         let status = crate::agy_statusline::statusline_status(None, None);
         let written = (status == crate::agy_statusline::Status::Installed)
             .then(|| crate::agy_statusline::cache_written_at(None))
             .flatten();
         build_agy_statusline(sub, cfg, status, written);
-        sub.add_separator();
+    });
+}
+
+/// Python `hud_menu._build_more`.
+fn build_more(menu: &mut Menu, cfg: &Config) {
+    add_submenu(menu, "更多 (More)", cfg, |sub| {
         add_item(sub, ACTION_OPEN_LOGS, "開啟記錄檔目錄 (Open Logs)");
         add_item(sub, ACTION_RESET_GEOMETRY, "重設預設尺寸與位置");
         add_item(sub, ACTION_HIDE_HUD, "隱藏 HUD (Alt+C 重新喚出)");
@@ -1045,6 +1166,22 @@ impl HUDTrayIcon {
                     self.update_menu_state();
                 }
             }
+            id if (ACTION_ACCOUNT_BASE..ACTION_ACCOUNT_BASE + 40).contains(&id) => {
+                let entry = MENU_ACCOUNTS
+                    .with(|l| l.borrow().get((id - ACTION_ACCOUNT_BASE) as usize).cloned());
+                if let Some((profile, ticked)) = entry {
+                    hud.set_account(&profile, !ticked);
+                    self.update_menu_state();
+                }
+            }
+            id if (ACTION_TILE_BASE..ACTION_TILE_BASE + 20).contains(&id) => {
+                let entry =
+                    MENU_TILES.with(|l| l.borrow().get((id - ACTION_TILE_BASE) as usize).cloned());
+                if let Some((tile, visible)) = entry {
+                    hud.set_tile_visible(&tile, !visible);
+                    self.update_menu_state();
+                }
+            }
             ACTION_AGY_STATUSLINE_INSTALL | ACTION_AGY_STATUSLINE_UNINSTALL => {
                 let install = action_id == ACTION_AGY_STATUSLINE_INSTALL;
                 let tray = &mut self.tray;
@@ -1340,6 +1477,7 @@ mod menu_parity_tests {
                     "立即重新整理所有 AI (Refresh All)",
                     "---",
                     "介面 (Interface)",
+                    "帳號 (Accounts)",
                     "外觀 (Appearance)",
                     "行為 (Behaviour)",
                     "更多 (More)",
@@ -1407,6 +1545,7 @@ mod menu_parity_tests {
                 "固定窄欄 (Panel)",
                 "---",
                 "大小 (Ctrl＋滾輪)",
+                "側邊欄項目 (Sidebar tiles)",
                 "---",
                 "AGY 項目順序 (Row order)",
             ])
@@ -1465,11 +1604,17 @@ mod menu_parity_tests {
             ])
         );
         assert_eq!(
+            sub_labels(&menu, &["帳號 (Accounts)"]),
+            strings(&[
+                "Claude 主帳號 (Main Account)",
+                "Claude 同時顯示 (Also show)",
+                "---",
+                "AGY 週額度掛鉤 (statusLine)",
+            ])
+        );
+        assert_eq!(
             sub_labels(&menu, &["更多 (More)"]),
             strings(&[
-                "Claude 帳號 (Claude Account)",
-                "AGY 週額度掛鉤 (statusLine)",
-                "---",
                 "開啟記錄檔目錄 (Open Logs)",
                 "重設預設尺寸與位置",
                 "隱藏 HUD (Alt+C 重新喚出)",

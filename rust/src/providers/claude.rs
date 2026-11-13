@@ -290,8 +290,12 @@ fn token_from_keychain() -> Option<String> {
     extract_token(&json)
 }
 
+/// A credentials file larger than this is not read (a real one is a few hundred bytes).
+const MAX_CREDENTIALS_BYTES: u64 = 64 * 1024;
+
 fn get_access_token(credentials_path: &Path) -> Option<String> {
     if credentials_path.exists()
+        && fs::metadata(credentials_path).is_ok_and(|m| m.len() <= MAX_CREDENTIALS_BYTES)
         && let Ok(text) = fs::read_to_string(credentials_path)
         && let Ok(json) = serde_json::from_str::<Value>(&text)
         && let Some(token) = extract_token(&json)
@@ -312,6 +316,8 @@ fn get_access_token(credentials_path: &Path) -> Option<String> {
 pub struct ClaudeProvider {
     client: ureq::Agent,
     config: Option<Arc<Mutex<Config>>>,
+    /// An extra account: always this profile, whatever `claude_profile` says.
+    pinned_profile: Option<String>,
 }
 
 impl ClaudeProvider {
@@ -323,7 +329,19 @@ impl ClaudeProvider {
     pub fn with_config(config: Option<Arc<Mutex<Config>>>) -> Self {
         let timeout = Duration::from_secs(10);
         let client = ureq::AgentBuilder::new().timeout(timeout).build();
-        Self { client, config }
+        Self {
+            client,
+            config,
+            pinned_profile: None,
+        }
+    }
+
+    #[cfg_attr(test, allow(dead_code))]
+    /// The provider of an extra account: reads `profile`'s credentials and nothing else.
+    pub fn for_profile(profile: &str) -> Self {
+        let mut provider = Self::with_config(None);
+        provider.pinned_profile = Some(profile.to_owned());
+        provider
     }
 }
 
@@ -337,11 +355,12 @@ impl Provider for ClaudeProvider {
 
     fn fetch_usage(&self) -> UsageMetrics {
         let now = now_str();
-        let preference = self
-            .config
-            .as_ref()
-            .map(|c| c.lock().claude_profile.clone())
-            .unwrap_or_else(|| "auto".to_string());
+        let preference = self.pinned_profile.clone().unwrap_or_else(|| {
+            self.config
+                .as_ref()
+                .map(|c| c.lock().claude_profile.clone())
+                .unwrap_or_else(|| "auto".to_string())
+        });
 
         let (active_profile, is_auto) = resolve_active_profile(&preference);
         let display_title = if is_auto {
@@ -365,7 +384,7 @@ impl Provider for ClaudeProvider {
                     active_profile.short_name, active_profile.short_name
                 )
             };
-            return UsageMetrics::error_result("claude", &display_title, &error_msg, "");
+            return UsageMetrics::error_result("claude", &display_title, &error_msg, "auth");
         };
 
         let result = self
@@ -381,7 +400,7 @@ impl Provider for ClaudeProvider {
         match result {
             Ok(resp) => {
                 let status = resp.status();
-                if status == 401 {
+                if status == 401 || status == 403 {
                     let retry = parse_retry_after(&resp);
                     return UsageMetrics {
                         provider_id: "claude".to_owned(),

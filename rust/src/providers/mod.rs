@@ -4,6 +4,7 @@ pub mod agy;
 pub mod base;
 pub mod claude;
 pub mod codex;
+pub mod instance;
 pub mod snapshot;
 #[cfg(test)]
 pub mod stub;

@@ -110,6 +110,12 @@ The number is coloured like the gauge (green, yellow, orange, red by used percen
 
 AGY dynamic rows (both HUDs): a quota bucket the HUD has no fixed row for becomes an extra row on its own, shown after the five fixed ones (`GEMINI 5H`, `GEMINI 7D`, `C/G 5H`, `C/G 7D`, `ARGON 7D`). Sources are the status line cache (`agy-quota.json`) keys other than the five known ones, and the buckets of summary groups that are not Gemini, Claude/GPT or Argon; the per-model buckets of `retrieveUserQuota` never become rows. The title comes from the key (`gemini-carbon-wtu-weekly` is `CARBON 7D`; a key of another shape is its upper-cased self with `-` as spaces, so no row is lost) or from the bucket's display name. The row key, and so the `tray_quota` value, is `agy:<slug of the title>` (`agy:carbon-7d`). A dynamic title in a saved `agy_order` is kept while the row exists and dropped otherwise; fixed-only orders behave as before.
 
+### Two Claude accounts at once (sidebar)
+
+- `accounts` (list, absent by default): extra Claude accounts, `{"id": "claude@<slug>", "provider": "claude", "profile": "<profile id>", "nickname": "<optional>"}`. The id is generated once when you tick 更多 → Claude 帳號 → 同時顯示 (Also show) and then kept; the default profile and a profile the main tile is pinned to cannot be added; at most 6. Invalid entries are ignored, never rewritten. Row keys of an account are `claude@<slug>:5h`, `claude@<slug>:weekly_scoped:fable`, ...; a stored `claude:5h` still means the main tile.
+- `sidebar_tiles` (list, absent by default): the visible sidebar tiles in order (`claude`, `claude@<slug>`, `agy`, `codex`). Absent = every tile in `provider_order`, the accounts after `claude`. Drag a tile in the strip to reorder (writes this list and the base-id `provider_order`); 介面 → 側邊欄項目 (Sidebar tiles) shows or hides one. Hiding a tile does not stop its fetching.
+- The main Claude tile stays on `claude_profile`: pin it (`auto` flips between profiles). The tile text of an account is its directory name without the leading dot, cut to 8 characters (`claude-a` fits); the panel card header is the label only, cut to 13 characters (it shares the line with two badges), menu entries 16; the full name is in the tooltip. Both keys apply live, no restart. The table style ignores them.
+
 ## Credential Files
 
 | Provider | File |

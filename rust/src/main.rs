@@ -2,6 +2,7 @@
 #![allow(clippy::upper_case_acronyms)]
 #![allow(clippy::field_reassign_with_default)]
 
+mod accounts;
 mod agy_rows;
 mod agy_statusline;
 mod autostart;
@@ -399,7 +400,9 @@ fn main() -> std::process::ExitCode {
         cfg.refresh_interval_sec
     };
 
-    let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(interval)));
+    let refresh_ctrl = Arc::new(Mutex::new(
+        RefreshController::new(interval).with_jitter(0.25),
+    ));
 
     let mut _app = Application::new(std::env::args().collect());
     configure_application_policy();

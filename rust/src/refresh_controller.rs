@@ -53,6 +53,11 @@ type NotifyCallback = Arc<parking_lot::Mutex<Option<Arc<dyn Fn() + Send + Sync>>
 pub struct RefreshController {
     pub interval: Duration,
     pub states: HashMap<String, ProviderState>,
+    /// Generations of a state added later start above every earlier one, so a worker that was
+    /// still running for a removed instance can never match a re-added instance of the same id.
+    next_epoch: u64,
+    /// Relative jitter of every due time (0 in unit tests, 0.25 in the app).
+    jitter: f64,
     result_tx: Sender<WorkerResult>,
     pub result_rx: Receiver<WorkerResult>,
     pub updated: ferrokit_core::signal::Signal<UsageMetrics>,
@@ -66,12 +71,20 @@ impl RefreshController {
         Self {
             interval: Duration::from_secs(interval_secs.max(20)),
             states: HashMap::new(),
+            next_epoch: 0,
+            jitter: 0.0,
             result_tx: tx,
             result_rx: rx,
             updated: ferrokit_core::signal::Signal::new(),
             notify_callback: Arc::new(parking_lot::Mutex::new(None)),
             closed: false,
         }
+    }
+
+    /// Jitters every schedule by up to `jitter` (a fraction) either way.
+    pub fn with_jitter(mut self, jitter: f64) -> Self {
+        self.jitter = jitter;
+        self
     }
 
     /// Store callback to immediately request repaint / notify event loop when workers complete.
@@ -132,14 +145,35 @@ impl RefreshController {
         }
     }
 
+    /// Adds an instance and fetches it at once. The state exists before the worker starts.
+    pub fn add_instance(&mut self, id: &str, provider: Arc<dyn Provider + Send + Sync>) {
+        if self.closed || self.states.contains_key(id) {
+            return;
+        }
+        self.next_epoch += 1 << 32;
+        self.states.insert(
+            id.to_owned(),
+            ProviderState {
+                generation: self.next_epoch,
+                ..Default::default()
+            },
+        );
+        self.launch(id, provider);
+    }
+
+    /// Drops an instance: its state goes, so a result still in flight is dropped on arrival.
+    pub fn remove_instance(&mut self, id: &str) {
+        self.states.remove(id);
+    }
+
     /// Set a new interval and reset next-due timestamps.
     #[allow(dead_code)]
     pub fn set_interval(&mut self, secs: u64) {
         self.interval = Duration::from_secs(secs.max(20));
         let now = Instant::now();
-        for state in self.states.values_mut() {
+        for (id, state) in self.states.iter_mut() {
             if state.failures == 0 {
-                state.due = Some(now + self.interval);
+                state.due = Some(now + jitter_delay(self.interval, self.jitter, id));
             }
         }
     }
@@ -282,7 +316,14 @@ impl RefreshController {
             } else {
                 delay_secs as f64
             };
-            let delay = Duration::from_secs_f64(delay_f64);
+            let mut delay = jitter_delay(
+                Duration::from_secs_f64(delay_f64),
+                self.jitter,
+                &item.provider_id,
+            );
+            if let Some(ra) = result.retry_after.filter(|ra| ra.is_finite() && *ra >= 0.0) {
+                delay = delay.max(Duration::from_secs_f64(ra.clamp(1.0, 86400.0)));
+            }
             warn!(
                 "provider={} error={} retry={:.1}s",
                 item.provider_id,
@@ -291,8 +332,12 @@ impl RefreshController {
             );
             state.due = Some(now + delay);
 
-            // Preserve last successful data as stale
-            if let Some(cached) = &state.cached {
+            if result.error_code == "auth" {
+                // An authentication failure is terminal: the account shows OFF, not the last
+                // good value as stale. Only transient failures keep the previous data (below).
+                state.cached = None;
+            } else if let Some(cached) = &state.cached {
+                // Preserve last successful data as stale
                 let mut stale = cached.clone();
                 stale.error = Some(err.clone());
                 stale.error_code = result.error_code.clone();
@@ -302,7 +347,7 @@ impl RefreshController {
             }
         } else {
             state.failures = 0;
-            state.due = Some(now + self.interval);
+            state.due = Some(now + jitter_delay(self.interval, self.jitter, &item.provider_id));
             result.last_success = Some(Utc::now());
             result.stale = false;
             state.cached = Some(result.clone());
@@ -310,6 +355,27 @@ impl RefreshController {
 
         Some(result)
     }
+}
+
+/// Scales `delay` by a factor in `[1 - jitter, 1 + jitter]` (instances drift apart instead of
+/// hitting the usage endpoint in the same second every cycle); never below the 20 s minimum.
+/// `jitter == 0` leaves `delay` as it is.
+fn jitter_delay(delay: Duration, jitter: f64, id: &str) -> Duration {
+    if jitter <= 0.0 {
+        return delay;
+    }
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0)
+        .hash(&mut hasher);
+    let unit = (hasher.finish() % 10_000) as f64 / 10_000.0;
+    delay
+        .mul_f64(1.0 - jitter + 2.0 * jitter * unit)
+        .max(Duration::from_secs(20))
 }
 
 #[cfg(test)]
@@ -343,6 +409,85 @@ mod stop_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the controller publishes for a failure with `code` after one good result.
+    fn failure_after_success(code: &str) -> UsageMetrics {
+        let mut ctrl = RefreshController::new(60);
+        let providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::new();
+        ctrl.states.insert("x".to_owned(), ProviderState::default());
+        let send = |ctrl: &RefreshController, metrics: UsageMetrics| {
+            ctrl.result_tx
+                .send(WorkerResult {
+                    provider_id: "x".to_owned(),
+                    generation: 0,
+                    metrics,
+                })
+                .unwrap();
+        };
+        send(
+            &ctrl,
+            UsageMetrics {
+                provider_id: "x".to_owned(),
+                metric1_val: Some(40.0),
+                ..Default::default()
+            },
+        );
+        assert_eq!(ctrl.drain_results(&providers).updates.len(), 1);
+        send(
+            &ctrl,
+            UsageMetrics {
+                provider_id: "x".to_owned(),
+                error: Some("failed".to_owned()),
+                error_code: code.to_owned(),
+                ..Default::default()
+            },
+        );
+        ctrl.drain_results(&providers).updates.remove(0)
+    }
+
+    #[test]
+    fn an_auth_failure_is_offline_and_a_transient_one_keeps_the_value() {
+        let auth = failure_after_success("auth");
+        assert!(!auth.stale);
+        assert_eq!(auth.metric1_val, None);
+        for code in ["network", "rate_limit", "http"] {
+            let kept = failure_after_success(code);
+            assert!(kept.stale, "{code}");
+            assert_eq!(kept.metric1_val, Some(40.0), "{code}");
+        }
+    }
+
+    struct Quick;
+    impl Provider for Quick {
+        fn provider_id(&self) -> &str {
+            "x"
+        }
+        fn display_name(&self) -> &str {
+            "x"
+        }
+        fn fetch_usage(&self) -> UsageMetrics {
+            UsageMetrics {
+                provider_id: "x".to_owned(),
+                ..Default::default()
+            }
+        }
+    }
+
+    #[test]
+    fn a_late_result_of_a_removed_instance_is_dropped() {
+        let mut ctrl = RefreshController::new(60);
+        let providers: HashMap<String, Arc<dyn Provider + Send + Sync>> = HashMap::new();
+        ctrl.add_instance("x", Arc::new(Quick));
+        ctrl.remove_instance("x");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(ctrl.drain_results(&providers).updates.is_empty());
+        // added again under the same id: the old worker's result is not taken for the new one
+        ctrl.add_instance("x", Arc::new(Quick));
+        ctrl.remove_instance("x");
+        ctrl.add_instance("x", Arc::new(Quick));
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(ctrl.drain_results(&providers).updates.len(), 1);
+    }
 
     struct MockPanicProvider;
     impl Provider for MockPanicProvider {

@@ -14,10 +14,16 @@ pub const BRAND: [(&str, &str, &str); 3] = [
 ];
 pub const FALLBACK: (&str, &str) = ("#38bdf8", "#0369a1");
 
+/// The built-in provider behind an instance id: `claude@work` -> `claude`.
+pub fn base_id(provider_id: &str) -> &str {
+    provider_id.split('@').next().unwrap_or(provider_id)
+}
+
 pub fn brand_hex(provider_id: &str, dark: bool) -> &'static str {
+    let base = base_id(provider_id);
     let (d, l) = BRAND
         .iter()
-        .find(|(id, _, _)| *id == provider_id)
+        .find(|(id, _, _)| *id == base)
         .map_or(FALLBACK, |(_, d, l)| (*d, *l));
     if dark { d } else { l }
 }
