@@ -514,16 +514,12 @@ fn build_agy_rows(menu: &mut Menu, cfg: &Config, dynamic: &[String]) {
             add_disabled(sub, &format!("{}. {title}", index + 1));
         }
         sub.add_separator();
+        let default_order = crate::agy_rows::normalize_order_with(&[], dynamic);
         let reset = Action::new_ref("還原預設順序");
         {
             let mut r = reset.borrow_mut();
             r.set_data(Variant::uint(ACTION_AGY_ORDER_RESET as u64));
-            r.set_enabled(
-                order
-                    .iter()
-                    .map(String::as_str)
-                    .ne(crate::agy_rows::DEFAULT_ORDER),
-            );
+            r.set_enabled(order != default_order);
         }
         sub.add_action(reset);
     });
