@@ -1339,14 +1339,26 @@ impl HUDWindow {
         self.config.lock().provider_order_setting()
     }
 
-    /// Python `agy_order`: the five agy rows, the first two being the main pair.
+    /// Python `agy_order`: the five agy rows and the dynamic ones the data carries, the first two
+    /// being the main pair.
     pub fn agy_order(&self) -> Vec<String> {
-        crate::agy_rows::normalize_order(&self.config.lock().agy_order)
+        crate::agy_rows::normalize_order_with(
+            &self.config.lock().agy_order,
+            &self.agy_dynamic_titles(),
+        )
+    }
+
+    /// The titles of agy's dynamic rows in its latest data.
+    fn agy_dynamic_titles(&self) -> Vec<String> {
+        self.raw_metrics
+            .get("agy")
+            .map(crate::agy_rows::dynamic_titles)
+            .unwrap_or_default()
     }
 
     /// Python `set_agy_order`.
     pub fn set_agy_order(&mut self, titles: &[String]) {
-        let order = crate::agy_rows::normalize_order(titles);
+        let order = crate::agy_rows::normalize_order_with(titles, &self.agy_dynamic_titles());
         if order == self.agy_order() {
             return;
         }

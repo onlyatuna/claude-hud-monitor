@@ -108,6 +108,8 @@ Tray number (both HUDs read the same two keys):
 
 The number is coloured like the gauge (green, yellow, orange, red by used percentage), amber while the last refresh failed and the previous value is kept, grey when the value is older than 30 minutes or missing, `!` in red when the provider failed with nothing to show. The tray menu's 系統匣數字 (Tray number) submenu chooses the quota and the mode; the tooltip gets a first line such as `Claude FABLE 7D: 84% used`.
 
+AGY dynamic rows (both HUDs): a quota bucket the HUD has no fixed row for becomes an extra row on its own, shown after the five fixed ones (`GEMINI 5H`, `GEMINI 7D`, `C/G 5H`, `C/G 7D`, `ARGON 7D`). Sources are the status line cache (`agy-quota.json`) keys other than the five known ones, and the buckets of summary groups that are not Gemini, Claude/GPT or Argon; the per-model buckets of `retrieveUserQuota` never become rows. The title comes from the key (`gemini-carbon-wtu-weekly` is `CARBON 7D`; a key of another shape is its upper-cased self with `-` as spaces, so no row is lost) or from the bucket's display name. The row key, and so the `tray_quota` value, is `agy:<slug of the title>` (`agy:carbon-7d`). A dynamic title in a saved `agy_order` is kept while the row exists and dropped otherwise; fixed-only orders behave as before.
+
 ## Credential Files
 
 | Provider | File |

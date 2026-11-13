@@ -226,7 +226,7 @@ pub fn build_hud_menu(
     root: &ferrokit_widgets::widget::WidgetRef,
     tray: bool,
 ) -> Menu {
-    build_menu(cfg, root, tray.then_some(&[][..]))
+    build_menu(cfg, root, tray.then_some(&[][..]), &[])
 }
 
 /// The tray icon's menu: `build_hud_menu` for the tray plus the tray number submenu, whose rows
@@ -236,7 +236,24 @@ pub fn build_tray_menu(
     root: &ferrokit_widgets::widget::WidgetRef,
     data: &[UsageMetrics],
 ) -> Menu {
-    build_menu(cfg, root, Some(data))
+    build_menu(cfg, root, Some(data), &agy_dynamic_titles(data))
+}
+
+/// The HUD right-click menu with the live agy rows in its row order list (see `build_hud_menu`).
+pub fn build_context_menu(
+    cfg: &Config,
+    root: &ferrokit_widgets::widget::WidgetRef,
+    data: &[UsageMetrics],
+) -> Menu {
+    build_menu(cfg, root, None, &agy_dynamic_titles(data))
+}
+
+/// The dynamic row titles of agy's latest data (see `agy_rows::dynamic_titles`).
+fn agy_dynamic_titles(data: &[UsageMetrics]) -> Vec<String> {
+    data.iter()
+        .find(|m| m.provider_id == "agy")
+        .map(crate::agy_rows::dynamic_titles)
+        .unwrap_or_default()
 }
 
 /// `tray_data` is `Some` for the tray menu.
@@ -244,6 +261,7 @@ fn build_menu(
     cfg: &Config,
     root: &ferrokit_widgets::widget::WidgetRef,
     tray_data: Option<&[UsageMetrics]>,
+    agy_dynamic: &[String],
 ) -> Menu {
     let mut menu = Menu::new("");
     menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
@@ -263,7 +281,7 @@ fn build_menu(
         "立即重新整理所有 AI (Refresh All)",
     );
     menu.add_separator();
-    build_interface(&mut menu, cfg);
+    build_interface(&mut menu, cfg, agy_dynamic);
     build_appearance(&mut menu, cfg);
     build_behaviour(&mut menu, cfg);
     match tray_data {
@@ -391,7 +409,7 @@ fn add_disabled(menu: &mut Menu, text: &str) {
 }
 
 /// Python `hud_menu._build_interface`: the style, and in the sidebar style its form and size.
-fn build_interface(menu: &mut Menu, cfg: &Config) {
+fn build_interface(menu: &mut Menu, cfg: &Config, agy_dynamic: &[String]) {
     add_submenu(menu, "介面 (Interface)", cfg, |sub| {
         for (value, id, label) in UI_MODE_CHOICES {
             add_check(sub, id, label, cfg.ui_mode == value);
@@ -415,14 +433,14 @@ fn build_interface(menu: &mut Menu, cfg: &Config) {
             });
         }
         sub.add_separator();
-        build_agy_rows(sub, cfg);
+        build_agy_rows(sub, cfg, agy_dynamic);
     });
 }
 
 /// Python `hud_menu._build_agy_rows`: shows the current agy row order; the order itself is changed by
 /// dragging rows in the detail page.
-fn build_agy_rows(menu: &mut Menu, cfg: &Config) {
-    let order = crate::agy_rows::normalize_order(&cfg.agy_order);
+fn build_agy_rows(menu: &mut Menu, cfg: &Config, dynamic: &[String]) {
+    let order = crate::agy_rows::normalize_order_with(&cfg.agy_order, dynamic);
     add_submenu(menu, "AGY 項目順序 (Row order)", cfg, |sub| {
         add_disabled(sub, "在詳細頁面拖拉標題可調整，前兩條為主要顯示");
         sub.add_separator();
@@ -1648,6 +1666,20 @@ mod menu_parity_tests {
         let rows = sub_labels(&menu, &["介面 (Interface)", "AGY 項目順序 (Row order)"]);
         assert!(rows.iter().any(|l| l.starts_with("1. ")));
         assert!(rows.contains(&"還原預設順序".to_string()));
+    }
+
+    #[test]
+    fn the_row_order_list_names_a_live_dynamic_agy_row() {
+        let mut carbon = crate::providers::base::MetricRow::new("CARBON 7D", Some(40.0), "40%");
+        carbon.key = "agy:carbon-7d".into();
+        let data = [UsageMetrics {
+            provider_id: "agy".into(),
+            extra_metrics: vec![carbon],
+            ..Default::default()
+        }];
+        let menu = build_context_menu(&config("sidebar"), &test_hud_root(), &data);
+        let rows = sub_labels(&menu, &["介面 (Interface)", "AGY 項目順序 (Row order)"]);
+        assert!(rows.contains(&"6. CARBON 7D".to_string()), "{rows:?}");
     }
 
     #[test]
