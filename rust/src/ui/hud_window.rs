@@ -1573,7 +1573,10 @@ impl HUDWindow {
         let gone: Vec<String> = self
             .accounts
             .iter()
-            .filter(|(id, old)| wanted.get(*id) != Some(*old))
+            .filter(|(id, old)| match wanted.get(*id) {
+                Some(w) => w.spec.profile != old.spec.profile || w.dir != old.dir,
+                None => true,
+            })
             .map(|(id, _)| id.clone())
             .collect();
         for id in &gone {
@@ -1581,6 +1584,7 @@ impl HUDWindow {
             self.providers.remove(id);
             self.raw_metrics.remove(id);
             self.accounts.remove(id);
+            self.sidebar_cards.remove(id);
         }
 
         let tile_specs: Vec<TileSpec> = tiles
