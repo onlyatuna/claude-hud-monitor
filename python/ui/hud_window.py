@@ -1439,6 +1439,7 @@ class HUDWindow(QWidget):
                 self.remove_account(cid)
         self.request_apply_accounts()
         self.trigger_async_refresh()
+
     def _toggle_autostart(self):
         currently_enabled = is_autostart_enabled()
         new_val = not currently_enabled

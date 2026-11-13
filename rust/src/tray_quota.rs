@@ -285,7 +285,10 @@ impl Reading {
             (State::Offline, _) => "offline".to_owned(),
             (_, None) => "--".to_owned(),
             (state, Some(v)) => {
-                let rounded = format!("{v:.0}").parse::<f64>().unwrap_or(v).round().clamp(0.0, 100.0) as i64;
+                let rounded = format!("{v:.0}")
+                    .parse::<f64>()
+                    .unwrap_or(v)
+                    .clamp(0.0, 100.0) as i64;
                 let n = if mode == MODE_REMAINING {
                     100 - rounded
                 } else {
