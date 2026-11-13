@@ -415,9 +415,6 @@ impl CardCore {
                 cells.push((t, row.cell.clone()));
             }
         }
-        if cells.len() <= 1 {
-            return Vec::new();
-        }
         cells
             .into_iter()
             .filter_map(|(title, cell)| {
@@ -458,6 +455,9 @@ impl CardCore {
     /// Python `eventFilter` `MouseButtonPress` with the left button.
     fn press(&self, x: i32, y: i32) -> bool {
         let rows = self.drag_rows();
+        if rows.len() <= 1 {
+            return false;
+        }
         for (index, row) in rows.iter().enumerate() {
             if y >= row.top && y <= row.bottom && x >= row.left && x < row.right {
                 *self.drag.borrow_mut() = Some(RowDrag {
