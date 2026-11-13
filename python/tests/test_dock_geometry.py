@@ -14,9 +14,16 @@ from ui.dock_geometry import (
     offset_along_edge,
     orientation_for_edge,
     pick_work_area,
+    plan_sidebar_snap,
     scale_size,
+    sidebar_dock_target,
     snap_rect,
     snap_rect_corner,
+    SnapAnimation,
+    SNAP_ANIM_FRAME_MS,
+    SNAP_ANIM_MS,
+    ease_out_cubic,
+    interpolate_rect,
     step_scale,
 )
 
@@ -234,6 +241,73 @@ class TestDockGeometry(unittest.TestCase):
                 self.assertGreaterEqual(r[1], wa_scaled[1])
                 self.assertLessEqual(r[0] + r[2], wa_scaled[0] + wa_scaled[2])
                 self.assertLessEqual(r[1] + r[3], wa_scaled[1] + wa_scaled[3])
+
+    def test_sidebar_dock_target_matches_the_real_docking_steps(self):
+        wa = (0, 0, 1920, 1040)
+        sizes = {"vertical": (92, 270), "horizontal": (270, 92)}
+        size_for = lambda orientation: sizes[orientation]
+
+        # near the left edge: stays vertical, offset along the edge is kept
+        target = sidebar_dock_target((5, 100, 92, 270), wa, 24, "vertical", size_for)
+        self.assertEqual(target.rect, (0, 100, 92, 270))
+        self.assertEqual((target.plan.edge, target.plan.orientation, target.plan.offset), ("left", "vertical", 100))
+
+        # near the top edge of a vertical bar: turns horizontal, so the target has the horizontal size
+        target = sidebar_dock_target((200, 4, 92, 270), wa, 24, "vertical", size_for)
+        self.assertEqual(target.rect, (200, 0, 270, 92))
+        self.assertEqual(target.plan.orientation, "horizontal")
+
+        # corner: the bar keeps its orientation and sticks to the corner
+        target = sidebar_dock_target((1920 - 92 - 3, 1040 - 270 - 8, 92, 270), wa, 24, "vertical", size_for)
+        self.assertEqual(target.rect, (1920 - 92, 1040 - 270, 92, 270))
+        self.assertEqual((target.plan.edge, target.plan.offset), ("right", "end"))
+        target = sidebar_dock_target((1920 - 92 - 3, 1040 - 270 - 8, 92, 270), wa, 24, "horizontal", size_for)
+        self.assertEqual(target.rect, (1920 - 270, 1040 - 92, 270, 92))
+        self.assertEqual((target.plan.edge, target.plan.orientation), ("bottom", "horizontal"))
+
+        # outside the threshold nothing docks
+        self.assertIsNone(sidebar_dock_target((500, 400, 92, 270), wa, 24, "vertical", size_for))
+
+        # the size is only asked for the orientation the bar ends up in
+        asked = []
+        sidebar_dock_target((5, 100, 92, 270), wa, 24, "vertical", lambda o: asked.append(o) or sizes[o])
+        self.assertEqual(asked, ["vertical"])
+
+        # second monitor with a negative origin
+        left = (-1920, 0, 1920, 1080)
+        target = sidebar_dock_target((-1915, 300, 92, 270), left, 24, "vertical", size_for)
+        self.assertEqual(target.rect, (-1920, 300, 92, 270))
+
+    def test_plan_sidebar_snap_is_snap_rect_corner_plus_orientation(self):
+        wa = (0, 0, 1920, 1040)
+        for rect in ((5, 100, 92, 270), (200, 4, 92, 270), (900, 500, 92, 270), (1825, 760, 92, 270)):
+            for current in ("vertical", "horizontal"):
+                snapped, edge, offset = snap_rect_corner(rect, wa, 24, prefer=current)
+                plan = plan_sidebar_snap(rect, wa, 24, current)
+                self.assertEqual(tuple(plan), (snapped, edge, offset, orientation_for_edge(edge, current)))
+
+    def test_snap_animation_easing_and_interpolation(self):
+        # the same vectors are pinned in the Rust HUD (dock_geometry.rs)
+        self.assertEqual((SNAP_ANIM_MS, SNAP_ANIM_FRAME_MS), (140, 16))
+        self.assertEqual([ease_out_cubic(t) for t in (-1, 0, 0.25, 0.5, 1, 2)], [0.0, 0.0, 0.578125, 0.875, 1.0, 1.0])
+        start, end = (0, 0, 100, 200), (100, 50, 300, 100)
+        self.assertEqual(interpolate_rect(start, end, 0), start)
+        self.assertEqual(interpolate_rect(start, end, 0.25), (58, 29, 216, 142))
+        self.assertEqual(interpolate_rect(start, end, 0.5), (88, 44, 275, 113))
+        self.assertEqual(interpolate_rect(start, end, 1), end)
+        self.assertEqual(interpolate_rect(start, end, 1.5), end)
+        # negative coordinates (a monitor left of the primary) round the same way
+        self.assertEqual(interpolate_rect((-100, 0, 10, 10), (-200, 0, 10, 10), 0.5), (-187, 0, 10, 10))
+
+    def test_snap_animation_frames(self):
+        anim = SnapAnimation((0, 0, 100, 200), (100, 50, 300, 100))
+        self.assertEqual(anim.duration_ms, 140)
+        self.assertEqual(anim.frame(-5), ((0, 0, 100, 200), False))
+        self.assertEqual(anim.frame(0), ((0, 0, 100, 200), False))
+        self.assertEqual(anim.frame(35), ((58, 29, 216, 142), False))
+        self.assertEqual(anim.frame(70), ((88, 44, 275, 113), False))
+        self.assertEqual(anim.frame(140), ((100, 50, 300, 100), True))
+        self.assertEqual(anim.frame(999), ((100, 50, 300, 100), True))
 
     def test_offset_along_edge_round_trip(self):
         wa = (100, 50, 1920, 1040)

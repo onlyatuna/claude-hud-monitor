@@ -1558,8 +1558,32 @@ fn qt_center(g: Rect) -> Point {
     Point::new((2 * g.x + g.width - 1) / 2, (2 * g.y + g.height - 1) / 2)
 }
 
+/// The ratio of the grabbed edge(s) that sets the scale. A drag that grows (or shrinks) every
+/// grabbed edge follows the edge that moved the furthest from 1. When one edge of a corner grows and
+/// the other shrinks, the changes add up: taking the one furthest from 1 instead made the scale jump
+/// between growing and shrinking where the two are equal, 20 % of the size within 2 px of pointer
+/// movement for a 72 x 222 bar.
+fn grip_ratio(ratios: &[f64]) -> f64 {
+    let Some(&first) = ratios.first() else {
+        return 1.0;
+    };
+    if ratios.iter().all(|r| *r >= 1.0) {
+        ratios.iter().copied().fold(first, f64::max)
+    } else if ratios.iter().all(|r| *r <= 1.0) {
+        ratios.iter().copied().fold(first, f64::min)
+    } else {
+        ratios[1..].iter().fold(first, |total, r| total + (r - 1.0))
+    }
+}
+
+/// Python `round(value, 2)`: the decimal rounding of the exact binary value, ties to even
+/// (`round(1.625, 2)` is 1.62), which `(value * 100.0).round() / 100.0` is not.
+fn round_two_decimals(value: f64) -> f64 {
+    format!("{value:.2}").parse().unwrap_or(value)
+}
+
 /// Python `_resize_to`'s scale: the start scale times the ratio the drag changed the grabbed
-/// edge(s) by (the one furthest from 1), rounded to 2 decimals and held to 0.6 - 2.0.
+/// edge(s) by (`grip_ratio`), rounded to 2 decimals and held to 0.6 - 2.0.
 pub fn resize_scale(zone: &str, g: Rect, start_scale: f64, dx: i32, dy: i32) -> f64 {
     let (gw, gh) = (g.width as f64, g.height as f64);
     let mut ratios = Vec::new();
@@ -1575,14 +1599,7 @@ pub fn resize_scale(zone: &str, g: Rect, start_scale: f64, dx: i32, dy: i32) -> 
     if zone.contains('t') {
         ratios.push((gh - dy as f64) / gh);
     }
-    let ratio = ratios
-        .into_iter()
-        .fold(None::<f64>, |best, v| match best {
-            Some(b) if (b - 1.0).abs() >= (v - 1.0).abs() => Some(b),
-            _ => Some(v),
-        })
-        .unwrap_or(1.0);
-    ((start_scale * ratio * 100.0).round() / 100.0).clamp(0.6, 2.0)
+    round_two_decimals(start_scale * grip_ratio(&ratios)).clamp(0.6, 2.0)
 }
 
 /// Python `_resize_to`'s new window origin: the fixed edge stays where it was.
@@ -3085,11 +3102,50 @@ mod sidebar_geometry_tests {
     }
 
     #[test]
-    fn a_corner_uses_the_edge_that_moved_the_furthest() {
+    fn a_corner_that_grows_follows_the_edge_that_moved_the_furthest() {
         // right grew by 5 %, bottom by 50 %
         assert_eq!(resize_scale("rb", G, 1.0, 3, 100), 1.5);
-        // width shrank (0.5) further from 1 than the height grew (1.1)
-        assert_eq!(resize_scale("rb", G, 1.0, -32, 20), 0.6);
+        // both shrank: the width to 0.5, the height to 0.9
+        assert_eq!(resize_scale("rb", G, 1.0, -32, -20), 0.6);
+    }
+
+    #[test]
+    fn a_corner_drag_does_not_jump_where_one_edge_grows_and_the_other_shrinks() {
+        // the same vectors are pinned in the Python HUD (tests/test_ui.py)
+        let strip = Rect {
+            x: 0,
+            y: 0,
+            width: 72,
+            height: 222,
+        };
+        // the pointer 7 px to the right of the press and moving up: the width grows 10 %, the height
+        // shrinks as it goes. The scale followed the one furthest from 1, which flipped from +10 % to
+        // -10 % between 18 and 22 px up; now the changes add up
+        let scales: Vec<f64> = (0..=60)
+            .map(|up| resize_scale("rb", strip, 1.0, 7, -up))
+            .collect();
+        let biggest_step = scales
+            .windows(2)
+            .map(|pair| (pair[0] - pair[1]).abs())
+            .fold(0.0, f64::max);
+        assert!(biggest_step <= 0.020_001, "{biggest_step}");
+        assert_eq!(
+            [scales[0], scales[18], scales[22], scales[60]],
+            [1.1, 1.02, 1.0, 0.83]
+        );
+    }
+
+    #[test]
+    fn the_scale_rounds_to_two_decimals_like_python_round() {
+        let strip = Rect {
+            x: 0,
+            y: 0,
+            width: 72,
+            height: 222,
+        };
+        // (72 + 45) / 72 is exactly 1.625: round() goes to the even 1.62, (x * 100).round() to 1.63
+        assert_eq!(resize_scale("r", strip, 1.0, 45, 0), 1.62);
+        assert_eq!(resize_scale("l", strip, 1.0, -45, 0), 1.62);
     }
 
     #[test]
