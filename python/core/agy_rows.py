@@ -93,9 +93,9 @@ def arrange_by_order(metrics: UsageMetrics, order) -> UsageMetrics:
     """Generic row ordering for any provider: rows named in `order` come first in that order, the rest keep
     their natural position after them; the first two become metric1/metric2, the others extras."""
     rows = [MetricRow(metrics.metric1_title, metrics.metric1_val, metrics.metric1_text, metrics.metric1_reset,
-                      metrics.metric1_subtext),
+                      metrics.metric1_subtext, metrics.main_key(1)),
             MetricRow(metrics.metric2_title, metrics.metric2_val, metrics.metric2_text, metrics.metric2_reset,
-                      metrics.metric2_subtext)] + list(metrics.extra_metrics)
+                      metrics.metric2_subtext, metrics.main_key(2))] + list(metrics.extra_metrics)
     if not isinstance(order, (list, tuple)) or len(rows) < 2:
         return metrics
     wanted = [str(t).upper() for t in order]
@@ -110,6 +110,8 @@ def arrange_by_order(metrics: UsageMetrics, order) -> UsageMetrics:
     return replace(
         metrics,
         metric1_title=a.title, metric1_val=a.val, metric1_text=a.text, metric1_reset=a.reset, metric1_subtext=a.subtext,
+        metric1_key=a.key,
         metric2_title=b.title, metric2_val=b.val, metric2_text=b.text, metric2_reset=b.reset, metric2_subtext=b.subtext,
+        metric2_key=b.key,
         extra_metrics=rows[2:],
     )

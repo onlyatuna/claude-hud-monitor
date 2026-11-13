@@ -10,6 +10,7 @@ from PySide6.QtGui import QCursor, QGuiApplication, QIcon, QRegion
 
 from core.providers import PROVIDERS, UsageMetrics
 from core import agy_statusline
+from core import tray_quota
 from core.agy_rows import arrange_agy, arrange_by_order, normalize_order, DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.config_manager import ConfigManager, UI_MODES
 from core.refresh_controller import RefreshController
@@ -165,6 +166,21 @@ class HUDWindow(QWidget):
 
     def set_tray_icon(self, tray):
         self.tray_icon = tray
+
+    def tray_quota_readings(self) -> list:
+        return tray_quota.readings(self._raw_metrics, self.provider_order())
+
+    def set_tray_quota(self, key: str):
+        self.config.set("tray_quota", key)
+        self._refresh_tray()
+
+    def set_tray_quota_mode(self, mode: str):
+        self.config.set("tray_quota_mode", mode)
+        self._refresh_tray()
+
+    def _refresh_tray(self):
+        if self.tray_icon is not None:
+            self.tray_icon.refresh()
 
     def _init_window_flags(self):
         flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool
@@ -923,6 +939,7 @@ class HUDWindow(QWidget):
         self.table.update_metrics(metrics)
         self._provider_errors[metrics.provider_id] = bool(metrics.error)
         self.time_label.setText(datetime.now().strftime("%H:%M:%S"))
+        self._refresh_tray()
 
     def _on_busy_changed(self, busy):
         color = "#38bdf8" if busy else ("#f59e0b" if any(self._provider_errors.values()) else "#10b981")
