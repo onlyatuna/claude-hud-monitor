@@ -101,6 +101,13 @@ Config file location:
 
 Default values match the Python original exactly.
 
+Tray number (both HUDs read the same two keys):
+
+- `tray_quota`: `"off"` (default, the plain app icon), `"auto"` (the quota with the highest used percentage), or the key of one quota row. A key is the row's key prefixed with its provider unless it already is: `claude:5h`, `claude:7d`, `claude:weekly_scoped:fable`, `codex:WINDOW 5H`, `agy:C/G 5H`. A missing or non-text value is `"off"`; a key that matches no current row (for example a model scope that went away) is kept and shown as unavailable (`--`), never replaced.
+- `tray_quota_mode`: `"used"` (default) or `"remaining"`. The number is whole percent without the `%`, at most two digits (a full quota shows `99` when counting used, `0` when counting remaining). Remaining mode adds a bar under the digits. Any other value is `"used"`.
+
+The number is coloured like the gauge (green, yellow, orange, red by used percentage), amber while the last refresh failed and the previous value is kept, grey when the value is older than 30 minutes or missing, `!` in red when the provider failed with nothing to show. The tray menu's 系統匣數字 (Tray number) submenu chooses the quota and the mode; the tooltip gets a first line such as `Claude FABLE 7D: 84% used`.
+
 ## Credential Files
 
 | Provider | File |

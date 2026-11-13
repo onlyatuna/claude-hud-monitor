@@ -140,6 +140,18 @@ pub struct Config {
         deserialize_with = "lenient_compact_height"
     )]
     pub table_compact_height: u32,
+    /// Which quota's number the tray icon shows: `"off"`, `"auto"` or a row key (see `tray_quota`).
+    #[serde(
+        default = "default_tray_quota",
+        deserialize_with = "lenient_tray_quota"
+    )]
+    pub tray_quota: String,
+    /// `"used"` or `"remaining"`: what the tray number counts.
+    #[serde(
+        default = "default_tray_quota_mode",
+        deserialize_with = "lenient_tray_quota_mode"
+    )]
+    pub tray_quota_mode: String,
     /// Keys this build does not know, kept so the file round-trips: the retired Classic Cards keys
     /// (`layout_mode`, `vertical_*`, `horizontal_*`) stay for downgrades, as in Python, whose config
     /// is a plain dict.
@@ -216,6 +228,12 @@ fn default_refresh_interval() -> u64 {
 fn default_hotkey() -> String {
     "Alt+C".to_owned()
 }
+fn default_tray_quota() -> String {
+    crate::tray_quota::QUOTA_OFF.to_owned()
+}
+fn default_tray_quota_mode() -> String {
+    crate::tray_quota::MODE_USED.to_owned()
+}
 fn default_claude_profile() -> String {
     "auto".to_owned()
 }
@@ -280,6 +298,8 @@ impl Default for Config {
             locked: false,
             autostart: false,
             claude_profile: default_claude_profile(),
+            tray_quota: default_tray_quota(),
+            tray_quota_mode: default_tray_quota_mode(),
             table_blur: true,
             table_compact: false,
             table_compact_width: default_table_compact_width(),
@@ -351,6 +371,25 @@ lenient_field!(lenient_opacity, f32, default_opacity());
 lenient_field!(lenient_refresh_interval, u64, default_refresh_interval());
 lenient_field!(lenient_hotkey, String, default_hotkey());
 lenient_field!(lenient_claude_profile, String, default_claude_profile());
+
+/// A string setting that is only kept when `valid` accepts it; anything else is the default.
+fn lenient_checked<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+    valid: fn(&str) -> bool,
+    default: String,
+) -> Result<String, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::String(s) if valid(&s) => s,
+        _ => default,
+    })
+}
+fn lenient_tray_quota<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_checked(d, crate::tray_quota::valid_quota, default_tray_quota())
+}
+fn lenient_tray_quota_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_checked(d, crate::tray_quota::valid_mode, default_tray_quota_mode())
+}
 lenient_field!(lenient_sidebar_state, String, default_sidebar_state());
 lenient_field!(lenient_sidebar_edge, String, default_sidebar_edge());
 lenient_field!(
@@ -1209,6 +1248,29 @@ mod tests {
         assert!(!cfg.click_through);
         assert_eq!(cfg.refresh_interval_sec, 60);
         assert_eq!(cfg.hotkey, "Alt+C");
+    }
+
+    #[test]
+    fn tray_number_settings_default_to_off_and_used_when_missing_or_invalid() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            (cfg.tray_quota.as_str(), cfg.tray_quota_mode.as_str()),
+            ("off", "used")
+        );
+        let cfg: Config =
+            serde_json::from_str(r#"{"tray_quota": 5, "tray_quota_mode": "left"}"#).unwrap();
+        assert_eq!(
+            (cfg.tray_quota.as_str(), cfg.tray_quota_mode.as_str()),
+            ("off", "used")
+        );
+        let cfg: Config = serde_json::from_str(
+            r#"{"tray_quota": "claude:weekly_scoped:gone", "tray_quota_mode": "remaining"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (cfg.tray_quota.as_str(), cfg.tray_quota_mode.as_str()),
+            ("claude:weekly_scoped:gone", "remaining")
+        );
     }
 
     #[test]

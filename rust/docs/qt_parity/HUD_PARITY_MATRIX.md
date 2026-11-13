@@ -276,6 +276,7 @@ No P0/P1 discrepancies found in this slice. `missing`: Claude `CREDENTIALS_PATH`
 |Connection failure -> `配額連線失敗，將自動重試`, `network` (claude_provider.py:393-396)|claude.rs:660-668|same|Py test_credentials::test_providers_pass_context_to_urlopen; Rust none||
 |Parse: `five_hour`/`seven_day` utilization -> metric1/2, titles SESSION 5H / WEEKLY 7D (claude_provider.py:400-440)|claude.rs:673-715|same|Rust claude::test_parse_claude_response; Py test_providers::test_zero_and_partial_data|Zero preserved in both.|
 |Badges `Code: x%` / `Chat: x%` from `seven_day_breakdown.rows` keys `claude_code`/`chat` (claude_provider.py:403-411,441-442)|claude.rs:681-694,713-714|same|Rust claude::test_parse_claude_response|Non-dict row: Python schema error, Rust skips.|
+|`limits[]` (top-level array): `session`/`weekly_all` entries only fill a missing `five_hour`/`seven_day`; every other entry with percent 0-100 becomes an extra row titled `<MODEL> 7D` (`FABLE 7D`; surface, then kind, when there is no model; `5H` for group `session`), key `claude:<kind>:<slug>`, API order, duplicate key: first wins; `is_active` not a filter; unknown kind/group logged once per process; non-list `limits` ignored; main pair keys `claude:5h`/`claude:7d` (`MetricRow.key`)|claude.rs `parse_limits`/`scoped_row`|same|Rust claude::{scoped_limits_become_extra_rows_and_the_main_pair_is_unchanged, missing_top_level_windows_fall_back_to_limits, wrong_typed_limits_never_break_the_main_pair}, provider_card::claude_scoped_limit_rows_show_in_the_card; Py: see Python PR|Shape from public captures, not verified against a live account. The table UI ignores extras.|
 |Both metrics None -> `未取得有效配額資料` + `schema` (claude_provider.py:444; base.py:30-31)|claude.rs:716-725|same|Py test_providers::test_missing_data_is_not_zero; Rust none||
 |`resets_at` via `fromisoformat` (claude_provider.py:413-425)|claude.rs:696-697,730-736|diff|Rust claude::test_parse_claude_response (Z form)|RFC3339 only.|
 
@@ -526,6 +527,7 @@ Only one `missing` (double-click refresh); the rest are small `diff`s; `unverifi
 |QMenu style, cards sheet: bg #161920 / border rgba(255,255,255,.18) / radius 6 / padding 4 0 / item `6px 24px 6px 20px`, 11 px, text #e2e8f0, selected bg #272f3d + #38bdf8, separator rgba(255,255,255,.12) margin 4 8, light variant mapped (styles.py:157-203)|tray_icon.rs:105-188 `hud_menu_style` (non-table branch)|same|Rust `test_menu_text_does_not_depend_on_window_offset`, `sidebar_disabled_menu_rows_keep_the_normal_text_colour`; Py none|dark and light RGBA decoded: 22,25,32 / 46 / 226,232,240 / 39,47,61 / 56,189,248; light 248,250,252 / 23,32,51 / 226,232,240 / 3,105,161; separator 31; all match|
 |QMenu style, table sheet: bg `menu_bg` (.97), border `separator`, radius 8, padding 5, item `5px 26px 5px 22px`, 12 px, selected `menu_hover`, disabled `text3`, separator margin 5 10 (styles.py:229-238, theme dicts 28-52)|tray_icon.rs:119-152|same|none|dark 40,40,46,247 / 31 / 242,242,247 / 26 / 82; light 250,250,252,247 / 36 / 31,31,36 / 18 / 87 (all equal to alpha*255); Qt-vs-toolkit pixel layout `unverified` on desktop|
 |Dark/light for popup menu follows `appearance` setting|tray_icon.rs:107-108,214 `resolve_is_dark(&cfg.appearance)`|same|Rust `tray_and_body_menus_share_dark_mode`; Py none|equal|
+|Tray menu only, after 行為: 系統匣數字 (Tray number) submenu: 關閉 (Off), 自動：最緊的額度 (Auto), a disabled checked `<key>  unavailable` entry when the stored key matches no row, per provider a separator + disabled name + one check per row labelled `<title>  <used%>`, separator, 顯示已用 (Show used) / 顯示剩餘 (Show remaining); checks, no radio group (hud_menu.py `build_hud_menu` with `tray=True`, `core/tray_quota.py`)|tray_icon.rs `build_tray_quota`, `run_quota_action`; action ids 5000-5003 and 5100+n (free range); `tray_quota.rs`|same|Rust `tray_number_menu_tests` (checks follow the config, unavailable entry, choosing stores the key and the mode), `tray_quota::tests`, config `tray_number_settings_default_to_off_and_used_when_missing_or_invalid`; Py see the Python tests|the HUD right-click menu is unchanged; Rust stores the row key of the clicked entry from the key list of the menu that was shown, so a row vanishing while the menu is open cannot pick another one|
 
 ### H. Tray icon (`tray_icon.py` vs `tray_icon.rs`)
 
@@ -537,15 +539,18 @@ Only one `missing` (double-click refresh); the rest are small `diff`s; `unverifi
 |`get_app_icon`: frozen `_MEIPASS`/assets, win32 `.ico`, mac `.icns`, else `.png`; painted fallback (rounded rect, "C") (tray_icon.py:11-42)|tray_icon.rs:89-101 (embedded PNG, fallback cyan square)|diff|none|P2, see top|
 |`_toggle_autostart` in tray class is dead code in py (menu uses `hud._toggle_autostart`)|tray_icon.rs:573-584 (live)|intentional-diff|Rust autostart tests (see F)|Rust tray owns the toggle because it hosts the action handler|
 |`set_tray_icon` back-reference and `showMessage(title, msg, icon, ms)` (tray_icon.py:49; hud_window.py:884-889)|tray_icon.rs:539-584; main.rs wires `tray` + `hud` through thread-locals|intentional-diff|none|no reference cycle in Rust; same behaviour|
+|Tray icon number: `tray_quota` off = the static app icon; else one icon with 16/20/24/32 px pixmaps, rounded dark tile, bold digits (largest size whose ink fits), grey-scale text, bar under the digits in remaining mode; colour by state (ramp / amber stale / grey old or missing / red `!`); rebuilt only when the (text, colour, mode) changes (ui/tray_icon.py)|ui/tray_number_icon.rs `render`/`build_icon`, tray_icon.rs `HUDTrayIcon::refresh_quota`|same|Rust `tray_number_icon::tests`, `tray_quota::tests`; Py see the Python tests|digits are drawn with ferrokit's grey-scale painter text; the real taskbar at 100/125/150/200 % is `unverified`|
+|Tooltip first line `<Provider> <TITLE>: <n>% used` (or `<n>% left`) above the existing lines (tray_icon.py)|tray_quota.rs `Reading::tooltip_line`, tray_icon.rs `refresh_quota`|same|Rust `tray_quota::tests::keys_labels_and_tooltip`|label cut so the tooltip stays inside 127 UTF-16 units|
+|Refresh hook: the HUD's `_publish` calls the tray (ui/hud_window.py)|hud_window.rs `quota_changed` / `set_quota_changed` / `quota_data`, main.rs `refresh_tray_quota`|intentional-diff|none|Rust `HUDWindow` has no tray reference, so `main` connects a callback that refreshes the tray once per event-loop turn|
 
 ## Counts (rows in the matrix section)
 
-- same: 93
-- intentional-diff: 10
+- same: 96
+- intentional-diff: 11
 - diff: 4
 - missing: 1
 - unverified: 4
-- total rows: 112
+- total rows: 116
 
 
 ---

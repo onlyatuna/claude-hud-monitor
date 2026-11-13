@@ -24,6 +24,7 @@ pub(crate) mod test_support;
 #[cfg(all(test, windows))]
 mod tool_tip_tests;
 pub mod tray_icon;
+pub mod tray_number_icon;
 pub mod usage_table;
 #[cfg(all(test, windows))]
 mod usage_table_relayout_tests;

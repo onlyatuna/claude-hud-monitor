@@ -14,6 +14,9 @@ use ferrokit_widgets::menu::{Menu, MenuRef};
 
 use super::hud_window::HUDWindow;
 use crate::config::Config;
+use crate::config::ConfigManager;
+use crate::providers::base::UsageMetrics;
+use crate::tray_quota;
 
 // Menu Action IDs
 pub const ACTION_TOGGLE_VISIBILITY: u32 = 1;
@@ -68,6 +71,14 @@ pub const ACTION_IDLE_DELAY_BASE: u32 = 100_000; // + milliseconds
 pub const ACTION_AGY_ORDER_RESET: u32 = 150;
 pub const ACTION_AGY_STATUSLINE_INSTALL: u32 = 160;
 pub const ACTION_AGY_STATUSLINE_UNINSTALL: u32 = 161;
+
+// Tray number submenu (tray menu only): 5000 off, 5001 auto, 5002 used, 5003 remaining, and
+// 5100 + n for the n-th quota row of `quota_keys`.
+pub const ACTION_TRAY_QUOTA_OFF: u32 = 5000;
+pub const ACTION_TRAY_QUOTA_AUTO: u32 = 5001;
+pub const ACTION_TRAY_MODE_USED: u32 = 5002;
+pub const ACTION_TRAY_MODE_REMAINING: u32 = 5003;
+pub const ACTION_TRAY_QUOTA_ROW_BASE: u32 = 5100;
 
 pub const SIDEBAR_SCALES: [u32; 6] = [60, 80, 100, 125, 150, 200];
 pub const IDLE_LEVELS: [u32; 4] = [80, 60, 40, 25];
@@ -215,12 +226,31 @@ pub fn build_hud_menu(
     root: &ferrokit_widgets::widget::WidgetRef,
     tray: bool,
 ) -> Menu {
+    build_menu(cfg, root, tray.then_some(&[][..]))
+}
+
+/// The tray icon's menu: `build_hud_menu` for the tray plus the tray number submenu, whose rows
+/// come from `data` (the providers' latest data, see `HUDWindow::quota_data`).
+pub fn build_tray_menu(
+    cfg: &Config,
+    root: &ferrokit_widgets::widget::WidgetRef,
+    data: &[UsageMetrics],
+) -> Menu {
+    build_menu(cfg, root, Some(data))
+}
+
+/// `tray_data` is `Some` for the tray menu.
+fn build_menu(
+    cfg: &Config,
+    root: &ferrokit_widgets::widget::WidgetRef,
+    tray_data: Option<&[UsageMetrics]>,
+) -> Menu {
     let mut menu = Menu::new("");
     menu.set_dark_mode(crate::ui::resolve_is_dark(&cfg.appearance));
     menu.set_style(hud_menu_style(cfg));
     ferrokit_widgets::Widget::set_parent_widget(&menu, Some(std::rc::Rc::downgrade(root)));
 
-    if tray {
+    if tray_data.is_some() {
         add_item(
             &mut menu,
             ACTION_TOGGLE_VISIBILITY,
@@ -236,12 +266,87 @@ pub fn build_hud_menu(
     build_interface(&mut menu, cfg);
     build_appearance(&mut menu, cfg);
     build_behaviour(&mut menu, cfg);
-    if !tray {
-        build_more(&mut menu, cfg);
+    match tray_data {
+        Some(data) => build_tray_quota(&mut menu, cfg, data),
+        None => build_more(&mut menu, cfg),
     }
     menu.add_separator();
     add_item(&mut menu, ACTION_EXIT, "結束程式 (Exit)");
     menu
+}
+
+/// The qualified key of every choosable quota row in the tray number submenu, in menu order: row
+/// `n` has the action id `ACTION_TRAY_QUOTA_ROW_BASE + n`. A provider that is offline has none.
+pub fn quota_keys(data: &[UsageMetrics]) -> Vec<String> {
+    data.iter()
+        .filter(|m| !tray_quota::is_offline(m))
+        .flat_map(tray_quota::rows)
+        .map(|row| row.key)
+        .collect()
+}
+
+/// The tray number submenu: off, auto, then every row of every provider (labelled with its live
+/// title and used percent), then the used / remaining switch. A stored key that is not in the data
+/// (a model scope that went away) stays, shown checked and disabled; the setting is not touched.
+fn build_tray_quota(menu: &mut Menu, cfg: &Config, data: &[UsageMetrics]) {
+    add_submenu(menu, "系統匣數字 (Tray number)", cfg, |sub| {
+        let setting = cfg.tray_quota.as_str();
+        add_check(
+            sub,
+            ACTION_TRAY_QUOTA_OFF,
+            "關閉 (Off)",
+            setting == tray_quota::QUOTA_OFF,
+        );
+        add_check(
+            sub,
+            ACTION_TRAY_QUOTA_AUTO,
+            "自動：最緊的額度 (Auto)",
+            setting == tray_quota::QUOTA_AUTO,
+        );
+        let gone_selection = tray_quota::resolve(setting, data, chrono::Utc::now())
+            .is_some_and(|r| r.state == tray_quota::State::Unavailable);
+        if gone_selection {
+            let gone = Action::new_ref(format!("{setting}  unavailable"));
+            {
+                let mut a = gone.borrow_mut();
+                a.set_checkable(true);
+                a.set_checked(true);
+                a.set_enabled(false);
+            }
+            sub.add_action(gone);
+        }
+        let mut index = 0;
+        for m in data {
+            sub.add_separator();
+            add_disabled(sub, &tray_quota::display_name(&m.provider_id));
+            if tray_quota::is_offline(m) {
+                add_disabled(sub, "offline");
+                continue;
+            }
+            for row in tray_quota::rows(m) {
+                add_check(
+                    sub,
+                    ACTION_TRAY_QUOTA_ROW_BASE + index,
+                    &tray_quota::menu_label(&row),
+                    setting == row.key,
+                );
+                index += 1;
+            }
+        }
+        sub.add_separator();
+        add_check(
+            sub,
+            ACTION_TRAY_MODE_USED,
+            "顯示已用 (Show used)",
+            cfg.tray_quota_mode == tray_quota::MODE_USED,
+        );
+        add_check(
+            sub,
+            ACTION_TRAY_MODE_REMAINING,
+            "顯示剩餘 (Show remaining)",
+            cfg.tray_quota_mode == tray_quota::MODE_REMAINING,
+        );
+    });
 }
 
 /// A submenu styled like its parent (dark or light appearance).
@@ -620,20 +725,104 @@ pub(crate) fn run_agy_statusline_action(
     outcome
 }
 
+/// The tooltip every state starts with; a tray number puts its line above these.
+const TOOLTIP_BASE: &str = "AI HUD Monitor (3-in-1)\n• Alt+C: 顯隱\n• Alt+Shift+C: 穿透模式";
+
 pub struct HUDTrayIcon {
     pub tray: Box<TrayIcon>,
     pub config: Arc<Mutex<Config>>,
+    /// The app icon, what `tray_quota = "off"` shows.
+    static_icon: ferrokit_gui::image::Icon,
+    /// What the tray icon shows now (`None`: the static icon), to send only changes.
+    shown_spec: Option<tray_quota::IconSpec>,
+    shown_tooltip: String,
+}
+
+/// Stores the choice behind a tray number action id in the config (`keys` as in
+/// `HUDTrayIcon::apply_quota_action`); `false` when `action_id` is not a tray number action.
+pub(crate) fn run_quota_action(config: &Mutex<Config>, action_id: u32, keys: &[String]) -> bool {
+    let mut quota = None;
+    let mut mode = None;
+    match action_id {
+        ACTION_TRAY_QUOTA_OFF => quota = Some(tray_quota::QUOTA_OFF),
+        ACTION_TRAY_QUOTA_AUTO => quota = Some(tray_quota::QUOTA_AUTO),
+        ACTION_TRAY_MODE_USED => mode = Some(tray_quota::MODE_USED),
+        ACTION_TRAY_MODE_REMAINING => mode = Some(tray_quota::MODE_REMAINING),
+        id => match id
+            .checked_sub(ACTION_TRAY_QUOTA_ROW_BASE)
+            .and_then(|n| keys.get(n as usize))
+        {
+            Some(key) => quota = Some(key.as_str()),
+            None => return false,
+        },
+    }
+    ConfigManager::update_and_save(config, |cfg| {
+        if let Some(q) = quota {
+            cfg.tray_quota = q.to_owned();
+        }
+        if let Some(m) = mode {
+            cfg.tray_quota_mode = m.to_owned();
+        }
+    });
+    true
 }
 
 impl HUDTrayIcon {
     pub fn new(config: Arc<Mutex<Config>>) -> Self {
-        let pixmap = create_default_tray_pixmap();
-        let icon = ferrokit_gui::image::Icon::from_pixmap(&pixmap);
-        let mut tray = TrayIcon::from_icon("AI HUD Monitor (3-in-1)", &icon)
-            .expect("failed to create TrayIcon");
-        let _ = tray.set_tooltip("AI HUD Monitor (3-in-1)\n• Alt+C: 顯隱\n• Alt+Shift+C: 穿透模式");
+        let static_icon = ferrokit_gui::image::Icon::from_pixmap(&create_default_tray_pixmap());
+        let mut tray =
+            TrayIcon::from_icon(TOOLTIP_BASE, &static_icon).expect("failed to create TrayIcon");
+        let _ = tray.set_tooltip(TOOLTIP_BASE);
 
-        Self { tray, config }
+        Self {
+            tray,
+            config,
+            static_icon,
+            shown_spec: None,
+            shown_tooltip: TOOLTIP_BASE.to_owned(),
+        }
+    }
+
+    /// Applies a tray number menu action (`keys` are the `quota_keys` of the menu that was shown,
+    /// `data` the current quota data); `false` when `action_id` is not one of them.
+    pub fn apply_quota_action(
+        &mut self,
+        action_id: u32,
+        keys: &[String],
+        data: &[UsageMetrics],
+    ) -> bool {
+        let handled = run_quota_action(&self.config, action_id, keys);
+        if handled {
+            self.refresh_quota(data);
+        }
+        handled
+    }
+
+    /// Draws the chosen quota's number on the icon and puts its line on top of the tooltip. Only
+    /// what changed is sent to the shell. `off` is the static app icon.
+    pub fn refresh_quota(&mut self, data: &[UsageMetrics]) {
+        let (setting, mode) = {
+            let cfg = self.config.lock();
+            (cfg.tray_quota.clone(), cfg.tray_quota_mode.clone())
+        };
+        let reading = tray_quota::resolve(&setting, data, chrono::Utc::now());
+        let spec = reading.as_ref().map(|r| r.icon_spec(&mode));
+        if spec != self.shown_spec {
+            let icon = match &spec {
+                Some(spec) => super::tray_number_icon::build_icon(spec),
+                None => self.static_icon.clone(),
+            };
+            let _ = self.tray.set_icon_from(&icon);
+            self.shown_spec = spec;
+        }
+        let tooltip = match &reading {
+            Some(r) => format!("{}\n{TOOLTIP_BASE}", r.tooltip_line(&mode)),
+            None => TOOLTIP_BASE.to_owned(),
+        };
+        if tooltip != self.shown_tooltip {
+            let _ = self.tray.set_tooltip(tooltip.as_str());
+            self.shown_tooltip = tooltip;
+        }
     }
 
     pub fn show(&mut self) {
@@ -1157,6 +1346,7 @@ mod menu_parity_tests {
                     "介面 (Interface)",
                     "外觀 (Appearance)",
                     "行為 (Behaviour)",
+                    "系統匣數字 (Tray number)",
                     "---",
                     "結束程式 (Exit)",
                 ]),
@@ -1530,5 +1720,119 @@ mod menu_parity_tests {
         let inst_with_data = build(Status::Installed, Some(ts));
         let rows = labels(&inst_with_data.borrow());
         assert!(rows[1].starts_with("資料最後更新："), "{}", rows[1]);
+    }
+}
+
+/// The tray number submenu of the tray menu.
+#[cfg(test)]
+mod tray_number_menu_tests {
+    use super::*;
+    use crate::providers::base::MetricRow;
+
+    const SUBMENU: &str = "系統匣數字 (Tray number)";
+
+    fn data() -> Vec<UsageMetrics> {
+        let claude = UsageMetrics {
+            provider_id: "claude".into(),
+            provider_name: "Claude".into(),
+            metric1_title: "SESSION 5H".into(),
+            metric2_title: "WEEKLY 7D".into(),
+            metric1_key: "claude:5h".into(),
+            metric2_key: "claude:7d".into(),
+            metric1_val: Some(12.0),
+            metric2_val: Some(40.0),
+            extra_metrics: vec![MetricRow {
+                key: "claude:weekly_scoped:fable".into(),
+                ..MetricRow::new("FABLE 7D", Some(84.0), "84%")
+            }],
+            ..Default::default()
+        };
+        let codex = UsageMetrics {
+            provider_id: "codex".into(),
+            provider_name: "Codex".into(),
+            metric1_title: "WINDOW 5H".into(),
+            metric1_val: Some(5.0),
+            ..Default::default()
+        };
+        vec![claude, codex]
+    }
+
+    /// (label, checked, enabled, action id) of the submenu's entries.
+    fn entries(cfg: &Config) -> Vec<(String, bool, bool, Option<u64>)> {
+        let menu = build_tray_menu(cfg, &test_hud_root(), &data());
+        let sub = menu
+            .actions()
+            .iter()
+            .find(|a| a.borrow().text() == SUBMENU)
+            .and_then(|a| a.borrow().menu())
+            .expect("the tray menu has the tray number submenu");
+        let actions = sub.borrow().actions();
+        actions
+            .iter()
+            .filter(|a| !a.borrow().is_separator())
+            .map(|a| {
+                let a = a.borrow();
+                (
+                    a.text().to_string(),
+                    a.is_checked(),
+                    a.is_enabled(),
+                    a.data().to_u64(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn checks_follow_the_config_and_a_vanished_row_is_kept_as_unavailable() {
+        let cfg = Config {
+            tray_quota: "claude:weekly_scoped:fable".into(),
+            tray_quota_mode: "remaining".into(),
+            ..Config::default()
+        };
+        let rows = entries(&cfg);
+        let checked: Vec<&str> = rows.iter().filter(|e| e.1).map(|e| e.0.as_str()).collect();
+        assert_eq!(checked, ["FABLE 7D  84%", "顯示剩餘 (Show remaining)"]);
+
+        let cfg = Config {
+            tray_quota: "claude:weekly_scoped:gone".into(),
+            ..Config::default()
+        };
+        let rows = entries(&cfg);
+        let gone = rows
+            .iter()
+            .find(|e| e.0 == "claude:weekly_scoped:gone  unavailable")
+            .expect("the selection stays in the menu");
+        assert!(gone.1 && !gone.2);
+        // Only the mode is checked besides it: no row took over the selection.
+        assert_eq!(rows.iter().filter(|e| e.1).count(), 2);
+        let emoji = |c: char| matches!(c as u32, 0x2600..=0x27bf | 0x1f000..=0x1faff);
+        assert!(!rows.iter().any(|e| e.0.chars().any(emoji)));
+    }
+
+    #[test]
+    fn choosing_an_entry_stores_the_key_and_the_mode() {
+        let rows = entries(&Config::default());
+        let id_of = |label: &str| {
+            rows.iter()
+                .find(|e| e.0 == label)
+                .and_then(|e| e.3)
+                .unwrap_or_else(|| panic!("{label} has an action id")) as u32
+        };
+        let keys = quota_keys(&data());
+        let config = Mutex::new(Config::default());
+        assert!(run_quota_action(&config, id_of("FABLE 7D  84%"), &keys));
+        assert_eq!(config.lock().tray_quota, "claude:weekly_scoped:fable");
+        assert!(run_quota_action(&config, id_of("WINDOW 5H  5%"), &keys));
+        assert_eq!(config.lock().tray_quota, "codex:WINDOW 5H");
+        assert!(run_quota_action(
+            &config,
+            id_of("顯示剩餘 (Show remaining)"),
+            &keys
+        ));
+        assert_eq!(config.lock().tray_quota_mode, "remaining");
+        assert!(run_quota_action(&config, id_of("關閉 (Off)"), &keys));
+        assert_eq!(config.lock().tray_quota, "off");
+        // Not a tray number action.
+        assert!(!run_quota_action(&config, ACTION_REFRESH_ALL, &keys));
     }
 }
