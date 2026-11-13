@@ -1432,8 +1432,13 @@ class HUDWindow(QWidget):
             cp = self.providers.get("claude")
             if cp and hasattr(cp, "profile_preference"):
                 cp.profile_preference = profile_id
+        main_key = self._main_profile_key()
+        if main_key is not None:
+            clashing = [a.id for a in self._config_accounts() if acct.profile_key(a.profile) == main_key]
+            for cid in clashing:
+                self.remove_account(cid)
+        self.request_apply_accounts()
         self.trigger_async_refresh()
-
     def _toggle_autostart(self):
         currently_enabled = is_autostart_enabled()
         new_val = not currently_enabled

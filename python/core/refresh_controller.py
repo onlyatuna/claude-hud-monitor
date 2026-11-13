@@ -140,7 +140,8 @@ class RefreshController(QObject):
         now = self.clock()
         if result.error:
             state.failures += 1
-            delay = min(900, self.interval * 2 ** min(state.failures - 1, 4))
+            backoff = min(900, self.interval * 2 ** min(state.failures - 1, 4))
+            delay = self._delay(backoff)
             retry_after = result.retry_after
             valid_retry_after = (isinstance(retry_after, (int, float)) and not isinstance(retry_after, bool)
                                  and math.isfinite(retry_after) and retry_after >= 0)
