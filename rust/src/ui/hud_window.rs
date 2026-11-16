@@ -1544,12 +1544,16 @@ impl HUDWindow {
         self.refresh_ctrl.lock().set_interval(seconds);
     }
 
+    fn pinned_claude_profile_key(profile_id: &str) -> Option<String> {
+        let (resolved, is_auto) = crate::providers::claude::resolve_active_profile(profile_id);
+        (!is_auto).then(|| accounts::profile_key(&resolved.id))
+    }
+
     pub fn set_claude_profile(&mut self, profile_id: &str) {
-        let (resolved, _) = crate::providers::claude::resolve_active_profile(profile_id);
-        let main_key = accounts::profile_key(&resolved.id);
+        let main_key = Self::pinned_claude_profile_key(profile_id);
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.claude_profile = profile_id.to_string();
-            if !main_key.is_empty() && !main_key.eq_ignore_ascii_case("auto") {
+            if let Some(main_key) = main_key.as_deref().filter(|key| !key.is_empty()) {
                 let clashing: Vec<String> = accounts::accounts_of(cfg)
                     .into_iter()
                     .filter(|a| accounts::profile_key(&a.profile) == main_key)
@@ -3066,6 +3070,15 @@ mod tests {
     fn remove_account(hud: &mut HUDWindow, id: &str) {
         ConfigManager::update_and_save(&hud.config, |cfg| accounts::remove_account(cfg, id));
         hud.apply_accounts();
+    }
+
+    #[test]
+    fn auto_profile_has_no_pinned_claude_account_key() {
+        assert_eq!(HUDWindow::pinned_claude_profile_key("auto"), None);
+        assert_eq!(
+            HUDWindow::pinned_claude_profile_key("default"),
+            Some("default".to_owned())
+        );
     }
 
     #[test]
