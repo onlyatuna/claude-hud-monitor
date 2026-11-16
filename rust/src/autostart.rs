@@ -86,13 +86,47 @@ fn xml_escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn desktop_exec_arg(argument: &str) -> Option<String> {
+    if argument.chars().any(|c| matches!(c, '\n' | '\r' | '\0')) {
+        return None;
+    }
+    let mut escaped = String::with_capacity(argument.len() + 2);
+    escaped.push('"');
+    for character in argument.chars() {
+        match character {
+            '\\' | '"' | '`' | '$' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            '%' => escaped.push_str("%%"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped.push('"');
+    Some(escaped)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::xml_escape;
+    use super::{desktop_exec_arg, xml_escape};
 
     #[test]
     fn plist_values_are_xml_escaped() {
         assert_eq!(xml_escape("/a&b/<c>"), "/a&amp;b/&lt;c&gt;");
+    }
+
+    #[test]
+    fn desktop_exec_arguments_are_quoted_and_escaped() {
+        assert_eq!(
+            desktop_exec_arg("/opt/My App/app"),
+            Some(r#""/opt/My App/app""#.to_owned())
+        );
+        assert_eq!(
+            desktop_exec_arg(r#"a\b"c$d`e%f"#),
+            Some(r#""a\\b\"c\$d\`e%%f""#.to_owned())
+        );
+        assert_eq!(desktop_exec_arg("/opt/bad\napp"), None);
     }
 }
 
@@ -162,9 +196,6 @@ fn linux_desktop_path() -> std::path::PathBuf {
 fn linux_set(enable: bool) -> bool {
     let desktop_path = linux_desktop_path();
     if enable {
-        if let Some(parent) = desktop_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
         let exe = match std::env::current_exe() {
             Ok(p) => p.to_string_lossy().to_string(),
             Err(e) => {
@@ -172,9 +203,15 @@ fn linux_set(enable: bool) -> bool {
                 return false;
             }
         };
+        let Some(exec) = desktop_exec_arg(&exe) else {
+            error!("[Autostart] Executable path cannot be encoded in a desktop entry");
+            return false;
+        };
+        if let Some(parent) = desktop_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let content = format!(
-            "[Desktop Entry]\nType=Application\nName=ClaudeHUDMonitor\nExec={}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
-            exe
+            "[Desktop Entry]\nType=Application\nName=ClaudeHUDMonitor\nExec={exec}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
         );
         match std::fs::write(&desktop_path, content) {
             Ok(_) => true,

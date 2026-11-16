@@ -114,10 +114,10 @@ def _load_settings(path):
     return settings
 
 
-def _owned(statusline):
+def _owned(statusline, command_path):
     return (isinstance(statusline, dict)
-            and isinstance(statusline.get('command'), str)
-            and HOOK_FILENAME in statusline['command'])
+            and statusline.get('type') == 'command'
+            and _command_targets(statusline, command_path))
 
 
 def _backup(path):
@@ -232,16 +232,22 @@ def _hook_current(hook_path) -> bool:
         return False
 
 
+def _command_targets(statusline, command_path):
+    command = statusline.get('command')
+    tokens = command.split() if isinstance(command, str) else []
+    return (bool(command_path) and bool(tokens)
+            and os.path.normcase(os.path.abspath(tokens[-1])) ==
+            os.path.normcase(os.path.abspath(command_path)))
+
+
 def _points_at(statusline, command_path) -> bool:
-    command = statusline.get('command', '')
-    tokens = command.split()
-    return (statusline.get('type') == 'command' and statusline.get('enabled') is True and bool(command_path)
-            and bool(tokens) and os.path.normcase(os.path.abspath(tokens[-1])) == os.path.normcase(os.path.abspath(command_path)))
+    return (statusline.get('type') == 'command' and statusline.get('enabled') is True
+            and _command_targets(statusline, command_path))
 
 
 def statusline_status(settings_path=None, config_dir=None) -> str:
-    """'installed', 'needs_update' (ours but stale or pointing elsewhere), 'not_installed', 'conflict' (someone
-    else's statusLine), 'agy_missing' (no agy settings file) or 'error'. Changes nothing."""
+    """'installed', 'needs_update' (ours but hook stale or missing), 'not_installed', 'conflict' (someone
+    else's statusLine), 'error'. Changes nothing."""
     try:
         settings_path = settings_path if settings_path is not None else agy_settings_path()
         if not os.path.isfile(settings_path):
@@ -249,11 +255,12 @@ def statusline_status(settings_path=None, config_dir=None) -> str:
         settings = _load_settings(settings_path)
         if 'statusLine' not in settings:
             return 'not_installed'
-        if not _owned(settings['statusLine']):
-            return 'conflict'
         config_dir = config_dir if config_dir is not None else get_user_config_dir()
         hook_path = os.path.abspath(os.path.join(config_dir, HOOK_FILENAME))
-        if not _hook_current(hook_path) or not _points_at(settings['statusLine'], _command_hook_path(hook_path, create=False)):
+        command_path = _command_hook_path(hook_path, create=False)
+        if not _owned(settings['statusLine'], command_path):
+            return 'conflict'
+        if not _hook_current(hook_path) or not _points_at(settings['statusLine'], command_path):
             return 'needs_update'
         return 'installed'
     except Exception:
@@ -275,9 +282,11 @@ def install_statusline(settings_path=None, config_dir=None, python_cmd=None):
             return 'agy_missing'
         settings = _load_settings(settings_path)
         statusline = settings.get('statusLine')
-        if 'statusLine' in settings and not _owned(statusline):
+        command_path = _command_hook_path(hook_path, create=False)
+        if 'statusLine' in settings and not _owned(statusline, command_path):
             return 'conflict'
-        command_path = _command_hook_path(hook_path)        # on Windows this may need the directory to exist
+        if command_path is None:
+            command_path = _command_hook_path(hook_path)
         if command_path is None:
             return 'unsupported_path'
         ours_before = 'statusLine' in settings
@@ -309,7 +318,10 @@ def uninstall_statusline(settings_path=None, config_dir=None):
         settings = _load_settings(settings_path)
         if 'statusLine' not in settings:
             return 'not_installed'
-        if not _owned(settings['statusLine']):
+        config_dir = config_dir if config_dir is not None else get_user_config_dir()
+        hook_path = os.path.abspath(os.path.join(config_dir, HOOK_FILENAME))
+        command_path = _command_hook_path(hook_path, create=False)
+        if not _owned(settings['statusLine'], command_path):
             return 'conflict'
         _backup(settings_path)
         del settings['statusLine']
