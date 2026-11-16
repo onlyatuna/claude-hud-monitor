@@ -20,7 +20,7 @@ providers/
   mod.rs                 — provider registry
   base.rs                — UsageMetrics, Provider trait, helpers
   claude.rs              — Claude Code (Anthropic OAuth API)
-  agy.rs                 — Antigravity CLI (subprocess + JSON)
+  agy.rs                 — Antigravity quota provider (HTTP API; OS credential store)
   codex.rs               — OpenAI Codex (WHAM API)
   stub.rs                — test-only stub provider
 ui/
@@ -74,7 +74,7 @@ On release the bar glides (not jumps) onto that rectangle: 140 ms cubic ease-out
 
 ### Prerequisites
 
-- Rust 1.75+ (`rustup install stable`)
+- Rust 1.85+ (`rustup install stable`; edition 2024)
 - Windows: Visual Studio Build Tools (MSVC target)
 - macOS: Xcode Command Line Tools
 - Linux: X11/GL dev packages for the ferrokit platform layer, as installed in `.github/workflows/release.yml`: `libxkbcommon-dev libx11-dev libxrandr-dev libxcursor-dev libxi-dev libxinerama-dev libgl1-mesa-dev libgles2-mesa-dev pkg-config`
@@ -116,12 +116,12 @@ AGY dynamic rows (both HUDs): a quota bucket the HUD has no fixed row for become
 - `sidebar_tiles` (list, absent by default): the visible sidebar tiles in order (`claude`, `claude@<slug>`, `agy`, `codex`). Absent = every tile in `provider_order`, the accounts after `claude`. Drag a tile in the strip to reorder (writes this list and the base-id `provider_order`); 介面 → 側邊欄項目 (Sidebar tiles) shows or hides one. Hiding a tile does not stop its fetching.
 - The main Claude tile stays on `claude_profile`: pin it (`auto` flips between profiles). The tile text of an account is its directory name without the leading dot, cut to 8 characters (`claude-a` fits); the panel card header is the label only, cut to 13 characters (it shares the line with two badges), menu entries 16; the full name is in the tooltip. Both keys apply live, no restart. The table style ignores them.
 
-## Credential Files
+## Credential Sources
 
-| Provider | File |
+| Provider | Credential source |
 |----------|------|
 | Claude Code | `~/.claude/.credentials.json` |
-| Antigravity | `agy` binary on PATH |
+| Antigravity | OS credential store; quota fetched over HTTP (the `agy` CLI is not spawned) |
 | OpenAI Codex | `~/.codex/auth.json` |
 
 ## Hotkeys

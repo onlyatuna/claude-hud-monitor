@@ -64,7 +64,7 @@ OAuth 用量回應的 `limits[]` 會帶出只存在於此陣列的額度，例�
 - schema：格式或窗口變更，未知資料顯示 --。
 - network：連線未完成，等待自動重試。
 
-目前只支援 README 列出的認證檔格式。系統鑰匙圈、自訂設定目錄、API key-only 登入不在本輪支援範圍。
+認證來源依 provider 而異：Claude 支援 `CLAUDE_CONFIG_DIR`／profiles，macOS 另讀 Keychain；Antigravity 使用 OS 憑證儲存並查詢 quota HTTP API；Codex 使用 `~/.codex/auth.json`。目前不支援 API key-only 登入。
 
 ## 新增 Provider
 

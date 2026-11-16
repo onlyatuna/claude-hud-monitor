@@ -16,7 +16,7 @@
 | **GUI 框架** | 原生無邊框視窗架構（Windows Win32, Cocoa, X11/Wayland） | PySide6 (Qt 6.7+) |
 | **HTTP 客戶端** | ureq 2.12 (TLS) | urllib.request (標準函式庫) |
 | **行程與記憶體機制** | 原生編譯二進制，無額外 Runtime 依賴 | 內建 gc.collect() 與 Win32 EmptyWorkingSet 工作集釋放機制 |
-| **打包方式** | `cargo build --release` (opt-level="z"、strip、panic="abort"；lto=false、codegen-units=16；渲染相關 crate 以 opt-level=3 覆寫) | PyInstaller 6.x (自訂 spec 排除未使用的 Qt 模組與語系) |
+| **打包方式** | `cargo build --release` (opt-level="z"、strip、panic="unwind"；lto=false、codegen-units=16；渲染相關 crate 以 opt-level=3 覆寫) | PyInstaller 6.x (自訂 spec 排除未使用的 Qt 模組與語系) |
 | **支援平台與架構** | **正式支援：Windows (x86_64)**。實驗性（只保證能編譯，HUD 未實機驗證；macOS 的輸入、快捷鍵、剪貼簿與對話框只做過型別檢查與 mock 測試，從未在真機執行）：macOS (Universal：arm64 與 x86_64 以 lipo 合併)、Linux (x86_64, ubuntu-22.04) | Windows (x86_64), macOS (arm64) |
 
 ---
@@ -55,7 +55,7 @@ claude-hud-monitor/
 
 ### Rust 實作 (`rust/`)
 
-需要 Rust 1.80+ 工具鏈。
+需要 Rust 1.85+ 工具鏈（edition 2024）。
 
 ```powershell
 cd rust

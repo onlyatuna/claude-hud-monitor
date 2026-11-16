@@ -95,7 +95,7 @@ We enforce the [Conventional Commits v1.0.0](https://www.conventionalcommits.org
 
 3. **Install dependencies**:
    ```bash
-   python -m pip install -r requirements-build.txt
+   python -m pip install -r python/requirements-build.txt
    ```
 
 4. **Create a topic branch**:
@@ -105,6 +105,7 @@ We enforce the [Conventional Commits v1.0.0](https://www.conventionalcommits.org
 
 5. **Run and verify locally**:
    ```bash
+   cd python
    python -B -m unittest discover -s tests -v
    python main.py
    ```
@@ -113,7 +114,7 @@ We enforce the [Conventional Commits v1.0.0](https://www.conventionalcommits.org
 
 ## 📬 Pull Request (PR) Process
 
-1. Run `python -B -m unittest discover -s tests -v` locally. Tests must use synthetic data and temporary settings, never real credentials.
+1. From `python/`, run `python -B -m unittest discover -s tests -v` locally. Tests must use synthetic data and temporary settings, never real credentials.
 2. Submit your PR targeting the **`develop`** branch (not `main`).
 3. Fill out the [Pull Request Template](.github/PULL_REQUEST_TEMPLATE.md) completely.
 4. Link the relevant GitHub Issue in your PR description (e.g., `Fixes #12`).
