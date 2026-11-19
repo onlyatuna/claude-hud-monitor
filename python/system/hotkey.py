@@ -42,6 +42,22 @@ _NAMED_VKS = {
     "DOWN": 0x28,
 }
 
+_MAC_VK = {
+    "A": 0, "B": 11, "C": 8, "D": 2, "E": 14, "F": 3, "G": 5, "H": 4,
+    "I": 34, "J": 38, "K": 40, "L": 37, "M": 46, "N": 45, "O": 31, "P": 35,
+    "Q": 12, "R": 15, "S": 1, "T": 17, "U": 32, "V": 9, "W": 13, "X": 7,
+    "Y": 16, "Z": 6,
+    "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25,
+    "F1": 122, "F2": 120, "F3": 99, "F4": 118, "F5": 96, "F6": 97,
+    "F7": 98, "F8": 100, "F9": 101, "F10": 109, "F11": 103, "F12": 111,
+    "F13": 105, "F14": 107, "F15": 113, "F16": 106, "F17": 64, "F18": 79,
+    "F19": 80, "F20": 90,
+    "SPACE": 49, "TAB": 48, "RETURN": 36, "ENTER": 36, "ESC": 53, "ESCAPE": 53,
+    "BACKSPACE": 51, "DELETE": 117, "DEL": 117, "HOME": 115, "END": 119,
+    "PGUP": 116, "PAGEUP": 116, "PGDOWN": 121, "PAGEDOWN": 121,
+    "LEFT": 123, "RIGHT": 124, "DOWN": 125, "UP": 126,
+}
+
 
 def _parse_key_token(token: str):
     upper = token.strip().upper()
@@ -60,7 +76,7 @@ def _parse_key_token(token: str):
 
 def resolve_hotkey(text: str) -> tuple[int, int, str]:
     """Parse portable hotkey text (e.g. 'Alt+C', 'Ctrl+Shift+H') into (win32_mods, vk, label)."""
-    raw = (text or "").strip()
+    raw = text.strip() if isinstance(text, str) else ""
     if len(raw) == 1 and raw.isalnum():
         raw = f"Alt+{raw.upper()}"
     parts = [p.strip() for p in raw.split("+") if p.strip()]
@@ -247,13 +263,15 @@ class GlobalHotkeyManager(QObject):
                     state |= MOD_WIN
                 return state
 
+            mac_vk = _MAC_VK.get(key_label.upper())
+
             def matches_key(key, token):
-                if vk == ord("C") and token == 8:
+                if mac_vk is not None and token == mac_vk:
                     return True
                 char = getattr(key, "char", None)
-                if isinstance(char, str) and char.upper() == key_label:
+                if isinstance(char, str) and char.upper() == key_label.upper():
                     return True
-                return token == vk
+                return False
 
             def on_press(key):
                 token = getattr(key, "vk", None)

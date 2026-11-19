@@ -13,6 +13,7 @@ fn make_widget<W: Widget + 'static>(w: W) -> WidgetRef {
 }
 
 pub(crate) fn dump(cases: &Value) -> Value {
+    let _guard = crate::ui::test_support::lock_global_ui_test();
     let sheet: &'static str = Box::leak(
         cases["sheet"]
             .as_str()

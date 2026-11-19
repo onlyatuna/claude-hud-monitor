@@ -143,16 +143,22 @@ impl log::Log for DualLogger {
                 record.args()
             );
 
-            // Stderr output (if console attached); a failed write must not panic inside the hook.
-            let _ = std::io::stderr().write_all(line.as_bytes());
+            // Stderr output (if console attached); INFO+ only, matching Python console handler.
+            if record.level() <= log::Level::Info {
+                let _ = std::io::stderr().write_all(line.as_bytes());
+            }
 
-            // File output with continuous 2MB rolling check
-            if let Ok(mut sink) = self.sink.lock() {
+            // File output with continuous 2MB rolling check (DEBUG+ for this crate, INFO+ for deps)
+            if (record.level() <= log::Level::Info
+                || record.target().starts_with("claude_hud_monitor"))
+                && let Ok(mut sink) = self.sink.lock()
+            {
                 sink.write_line(line.as_bytes());
             }
 
-            // Core diagnostics sink beside config.json (256 KB x 2 backups)
-            if is_core_target(record.target())
+            // Core diagnostics sink beside config.json (256 KB x 2 backups, INFO+)
+            if record.level() <= log::Level::Info
+                && is_core_target(record.target())
                 && let Some(diag) = DIAGNOSTICS_SINK.get()
                 && let Ok(mut sink) = diag.lock()
             {
@@ -188,11 +194,11 @@ pub fn setup_logging() {
     let log_path = dir.join("hud_monitor.log");
 
     let logger = DualLogger {
-        sink: Mutex::new(RotatingFileSink::open(log_path, MAX_LOG_SIZE, 1)),
+        sink: Mutex::new(RotatingFileSink::open(log_path, MAX_LOG_SIZE, 3)),
     };
 
     let _ = log::set_boxed_logger(Box::new(logger));
-    log::set_max_level(LevelFilter::Info);
+    log::set_max_level(LevelFilter::Debug);
     let _ = MAIN_THREAD.set(std::thread::current().id());
     std::panic::set_hook(Box::new(panic_hook));
 }
@@ -273,8 +279,21 @@ fn log_panic(info: &std::panic::PanicHookInfo<'_>) {
     );
 }
 
-/// Return the log directory path.
+/// Return the log directory path (`exe_dir/logs` when a writable portable `config.json` sits
+/// beside the executable, matching Python `logger.py`).
 pub fn log_dir() -> PathBuf {
+    #[cfg(not(test))]
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        let portable_cfg = exe_dir.join("config.json");
+        if std::fs::metadata(&portable_cfg)
+            .ok()
+            .is_some_and(|m| !m.permissions().readonly())
+        {
+            return exe_dir.join("logs");
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_owned());

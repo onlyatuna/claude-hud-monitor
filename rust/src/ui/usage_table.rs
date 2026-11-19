@@ -1931,6 +1931,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn test_grid_matches_qt_geometry() {
+        let _guard = crate::ui::test_support::lock_global_ui_test();
+        ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.0);
         let table = table_mode_table();
         let container = table.widget();
         container
@@ -2087,6 +2089,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn test_columns_follow_widest_cell_hint() {
+        let _lock = crate::ui::test_support::lock_global_ui_test();
         let _guard = DevicePixelRatioGuard;
         ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.25);
         let table = table_mode_table();

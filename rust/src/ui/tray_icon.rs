@@ -1200,7 +1200,9 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     /// Restores the application device pixel ratio the other tests run under.
-    struct DevicePixelRatioGuard;
+    struct DevicePixelRatioGuard {
+        _lock: parking_lot::ReentrantMutexGuard<'static, ()>,
+    }
 
     impl Drop for DevicePixelRatioGuard {
         fn drop(&mut self) {
@@ -1216,7 +1218,9 @@ mod tests {
     fn test_menu_text_does_not_depend_on_window_offset() {
         use ferrokit_gui::paint::{Painter, Pixmap};
         use ferrokit_widgets::Widget;
-        let _guard = DevicePixelRatioGuard;
+        let _guard = DevicePixelRatioGuard {
+            _lock: crate::ui::test_support::lock_global_ui_test(),
+        };
         ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.25);
         let mut menu = build_hud_menu(&Config::default(), &test_hud_root(), false);
         menu.set_visible(true);

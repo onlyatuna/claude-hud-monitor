@@ -69,4 +69,27 @@ class PlatformTests(unittest.TestCase):
         self.assertEqual(compute_ct_mods(MOD_CONTROL | MOD_ALT | MOD_SHIFT), MOD_CONTROL | MOD_ALT)
         self.assertEqual(resolve_hotkey("invalid-chord"), (MOD_ALT, ord("C"), "Alt+C"))
         self.assertEqual(resolve_hotkey("C"), (MOD_ALT, ord("C"), "Alt+C"))
+        self.assertEqual(resolve_hotkey(123), (MOD_ALT, ord("C"), "Alt+C"))
         self.assertEqual(MOD_WIN & compute_ct_mods(MOD_WIN), MOD_WIN)
+
+    def test_mac_custom_hotkey_uses_macos_virtual_keycode(self):
+        keyboard = MagicMock()
+        keyboard.Listener.IS_TRUSTED = True
+        with patch.dict('sys.modules', {'pynput': MagicMock(keyboard=keyboard)}):
+            manager = GlobalHotkeyManager()
+            show, ghost = [], []
+            manager.hotkey_triggered.connect(lambda: show.append(True))
+            manager.clickthrough_triggered.connect(lambda: ghost.append(True))
+            manager._start_macos('Ctrl+H')
+            callbacks = keyboard.Listener.call_args.kwargs
+            for name in ['alt', 'alt_l', 'alt_r', 'shift', 'shift_l', 'shift_r', 'ctrl', 'ctrl_l', 'ctrl_r', 'cmd', 'cmd_l', 'cmd_r']:
+                getattr(keyboard.Key, name).vk = None
+            key_h = MagicMock(vk=4, char='\x08')
+            callbacks['on_press'](keyboard.Key.ctrl)
+            callbacks['on_press'](key_h)
+            callbacks['on_release'](key_h)
+            callbacks['on_press'](keyboard.Key.shift)
+            callbacks['on_press'](key_h)
+            self.assertEqual(len(show), 1)
+            self.assertEqual(len(ghost), 1)
+            manager.stop()

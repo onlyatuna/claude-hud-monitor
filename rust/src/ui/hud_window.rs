@@ -939,6 +939,9 @@ impl HUDWindow {
             }
             EventKind::Hide => {
                 with_hud_later(|hud| {
+                    if hud.window.is_visible() {
+                        return;
+                    }
                     hud.cancel_snap_animation(true);
                     hud.hide_dock_preview();
                 });
@@ -1198,6 +1201,9 @@ impl HUDWindow {
             cfg.always_on_top
         };
         self.window.set_stays_on_top(aot);
+        if self.is_click_through {
+            self.window.set_click_through(true);
+        }
     }
 
     pub fn apply_ui_mode(&mut self, mode: &str) {
@@ -2126,7 +2132,9 @@ impl QObject for HudFilter {
             }
         }
         // the user takes the bar over: a running glide stops and the window stays where it is
-        if matches!(event.kind, EventKind::MouseButtonPress { .. }) && hud.stop_snap_animation() {
+        if matches!(event.kind, EventKind::MouseButtonPress { button: 1, .. })
+            && hud.stop_snap_animation()
+        {
             hud.snap_timer.start();
         }
         if hud.resize.borrow().is_some() {
@@ -3153,6 +3161,7 @@ mod tests {
 
     #[test]
     fn the_window_follows_the_tile_count() {
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         let (mut hud, _rx) = hud_with_stubs();
         for (panel, horizontal) in [(false, false), (false, true), (true, false), (true, true)] {
             ConfigManager::update_and_save(&hud.config, |cfg| {
@@ -3494,6 +3503,7 @@ mod tests {
     fn test_hud_window_close_flushes_pending_resize() {
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         let mut hud = HUDWindow::with_providers(
             Arc::clone(&cfg),
             refresh_ctrl,
@@ -3539,6 +3549,7 @@ mod tests {
 
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         let mut hud = HUDWindow::with_providers(
             Arc::clone(&cfg),
             refresh_ctrl,
@@ -4197,6 +4208,7 @@ mod dock_preview_tests {
     #[test]
     fn the_preview_paints_a_translucent_rounded_outline_in_the_theme_colour() {
         use crate::ui::dock_preview::{DOCK_PREVIEW_BORDER_ALPHA, DOCK_PREVIEW_FILL_ALPHA};
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         for dark in [true, false] {
             let mut hud = sidebar_hud("strip", |c| {
                 c.appearance = if dark { "dark" } else { "light" }.into()
@@ -4378,6 +4390,47 @@ mod dock_preview_tests {
             hud.sidebar.set_dock_edge(Some("right"));
             hud.dock_sidebar();
         }
+    }
+    #[test]
+    fn a_right_click_does_not_cancel_or_rearm_the_snap_glide() {
+        let _motion = Motion::set(false);
+        let mut hud = shown_hud("strip");
+        hud.config.lock().locked = true;
+        let w = work(&hud);
+        release_at_top(&mut hud, w, 4);
+        assert!(gliding(&hud));
+
+        let mut filter = HudFilter {
+            data: ObjectData::with_auto_id(),
+            state: Rc::downgrade(&hud.sidebar_hud),
+            config: Arc::clone(&hud.config),
+        };
+        for (button, expected_gliding) in [(2, true), (1, false)] {
+            let mut event = Event::new(EventKind::MouseButtonPress { x: 0, y: 0, button });
+            filter.event_filter(hud.sidebar_hud.root_id, &mut event);
+            assert_eq!(gliding(&hud), expected_gliding, "button {button}");
+        }
+        hud.sidebar_hud.snap_timer.stop();
+    }
+    #[test]
+    fn queued_hide_cleanup_does_not_settle_a_reshown_window() {
+        let _motion = Motion::set(false);
+        let hud = registered_hud();
+        let w = work(&hud.borrow());
+
+        hud.borrow_mut().hide();
+        hud.borrow_mut().show();
+        {
+            let mut hud = hud.borrow_mut();
+            release_at_top(&mut hud, w, 4);
+            assert!(gliding(&hud));
+        }
+
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        assert!(gliding(&hud.borrow()));
+
+        hud.borrow_mut().hide();
+        ferrokit_widgets::WidgetCommandQueue::flush();
     }
 
     #[test]

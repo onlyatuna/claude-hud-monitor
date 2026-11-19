@@ -1,9 +1,17 @@
 //! Shared setup for tests that measure the cards-mode layout against PySide6 numbers.
 
+static GLOBAL_UI_TEST_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantMutex::new(());
+
+pub(crate) fn lock_global_ui_test() -> parking_lot::ReentrantMutexGuard<'static, ()> {
+    GLOBAL_UI_TEST_LOCK.lock()
+}
+
 /// Installs the cards-mode application sheet and the device pixel ratio the PySide6 oracle ran at
 /// (`rust/tools/geometry_audit`: 1.25, DirectWrite text), and restores both on drop.
 #[cfg_attr(not(windows), allow(dead_code))] // the PySide6 oracle tests are Windows-only
-pub(crate) struct CardsOracleSetup;
+pub(crate) struct CardsOracleSetup {
+    _guard: parking_lot::ReentrantMutexGuard<'static, ()>,
+}
 
 impl CardsOracleSetup {
     #[cfg_attr(not(windows), allow(dead_code))] // the PySide6 oracle tests are Windows-only
@@ -14,11 +22,12 @@ impl CardsOracleSetup {
     /// The same cards-mode sheet at another device pixel ratio (the oracle was also measured at 1.0).
     #[cfg_attr(not(windows), allow(dead_code))] // the PySide6 oracle tests are Windows-only
     pub(crate) fn at_dpr(dpr: f32) -> Self {
+        let guard = lock_global_ui_test();
         ferrokit_gui::text::font_database::set_application_device_pixel_ratio(dpr);
         ferrokit_widgets::application::Application::set_style_sheet(
             crate::ui::styles::get_cards_stylesheet(true),
         );
-        Self
+        Self { _guard: guard }
     }
 }
 

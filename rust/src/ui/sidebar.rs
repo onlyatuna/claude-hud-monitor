@@ -3291,6 +3291,7 @@ mod hover_delay_tests {
     }
     #[test]
     fn active_flyout_resizes_when_metrics_arrive() {
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         let _el = EventLoop::new();
         let cfg = Arc::new(parking_lot::Mutex::new(Config::default()));
         let ctrl = Arc::new(parking_lot::Mutex::new(RefreshController::new(60)));
@@ -3327,6 +3328,15 @@ mod hover_delay_tests {
             "flyout stayed at {initial_height}px after rows grew to {loaded_height}px"
         );
         let _ = ferrokit_core::application::CoreApplication::process_events(false);
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        ferrokit_widgets::LayoutScheduler::activate_pending();
+        sidebar
+            .inner()
+            .flyout
+            .borrow()
+            .root_widget()
+            .borrow()
+            .update_layout();
         let settled = sidebar.inner().flyout.borrow().geometry();
         let card = sidebar
             .cards()
