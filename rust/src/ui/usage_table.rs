@@ -2309,4 +2309,40 @@ mod tests {
             crate::ui::gauge::skia(brand_color("claude", false))
         );
     }
+
+    #[test]
+    fn dial_colors_follow_scheme_and_usage_level() {
+        let mut table = UsageTable::new(Theme::dark(), "scale");
+        let low_high = UsageMetrics {
+            provider_id: "claude".to_string(),
+            metric1_val: Some(10.0),
+            metric1_text: "10%".to_string(),
+            metric2_val: Some(95.0),
+            metric2_text: "95%".to_string(),
+            ..Default::default()
+        };
+        table.update_metrics(&low_high);
+
+        let dark = Theme::dark();
+        let (expected_scale_1, _) = scale_colors(&dark, Some(10.0));
+        let (expected_scale_2, _) = scale_colors(&dark, Some(95.0));
+        {
+            let col = &table.columns["claude"];
+            let dial = col.dial.borrow();
+            let dial = dial.as_any().downcast_ref::<UsageDial>().unwrap();
+            assert_eq!(dial.inner.2, expected_scale_1);
+            assert_eq!(dial.outer.2, expected_scale_2);
+            assert_ne!(dial.inner.2, dial.outer.2);
+        }
+
+        table.set_theme(Theme::light(), "duo");
+        let light = Theme::light();
+        let (expected_duo_1, _) = duo_colors(&light, true);
+        let (expected_duo_2, _) = duo_colors(&light, false);
+        let col = &table.columns["claude"];
+        let dial = col.dial.borrow();
+        let dial = dial.as_any().downcast_ref::<UsageDial>().unwrap();
+        assert_eq!(dial.inner.2, expected_duo_1);
+        assert_eq!(dial.outer.2, expected_duo_2);
+    }
 }

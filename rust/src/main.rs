@@ -390,10 +390,9 @@ fn main() -> std::process::ExitCode {
     }
 
     let config = Arc::new(Mutex::new(ConfigManager::load()));
-    info!(
-        "Config loaded from: {}",
-        ConfigManager::config_path().display()
-    );
+    let config_path = ConfigManager::config_path();
+    logger::configure_diagnostics(&config_path);
+    info!("Config loaded from: {}", config_path.display());
 
     let interval = {
         let cfg = config.lock();

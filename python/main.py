@@ -98,7 +98,7 @@ def main():
         hotkey.hotkey_failed.connect(on_hotkey_failed)
         if hasattr(hotkey, "unavailable"):
             hotkey.unavailable.connect(on_hotkey_failed)
-        hotkey.start(key_char="C")
+        hotkey.start(config.get("hotkey", "Alt+C"))
         logger.info("Hotkey manager started")
 
     def on_exit():

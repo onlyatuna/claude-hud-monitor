@@ -7,7 +7,16 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 from PySide6.QtWidgets import QApplication
 from core import autostart
-from system.hotkey import GlobalHotkeyManager
+from system.hotkey import (
+    MOD_ALT,
+    MOD_CONTROL,
+    MOD_SHIFT,
+    MOD_WIN,
+    GlobalHotkeyManager,
+    compute_ct_mods,
+    format_hotkey_labels,
+    resolve_hotkey,
+)
 
 APP = QApplication.instance() or QApplication([])
 
@@ -51,3 +60,13 @@ class PlatformTests(unittest.TestCase):
             self.assertEqual(len(show), 1)
             self.assertEqual(len(ghost), 1)
             manager.stop()
+
+    def test_hotkey_string_parsing_and_clickthrough_modifiers(self):
+        mods, vk, label = resolve_hotkey("Control+H")
+        self.assertEqual((mods, vk, label), (MOD_CONTROL, ord("H"), "Ctrl+H"))
+        self.assertEqual(format_hotkey_labels("Control+H"), ("Ctrl+H", "Ctrl+Shift+H"))
+        self.assertEqual(format_hotkey_labels("Win+Shift+K"), ("Shift+Meta+K", "Ctrl+Shift+Meta+K"))
+        self.assertEqual(compute_ct_mods(MOD_CONTROL | MOD_ALT | MOD_SHIFT), MOD_CONTROL | MOD_ALT)
+        self.assertEqual(resolve_hotkey("invalid-chord"), (MOD_ALT, ord("C"), "Alt+C"))
+        self.assertEqual(resolve_hotkey("C"), (MOD_ALT, ord("C"), "Alt+C"))
+        self.assertEqual(MOD_WIN & compute_ct_mods(MOD_WIN), MOD_WIN)

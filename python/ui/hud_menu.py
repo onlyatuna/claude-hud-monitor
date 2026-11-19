@@ -12,6 +12,7 @@ from core.accounts import MAX_ACCOUNTS, MENU_LABEL_MAX, elide, profile_is_valid,
 from core.agy_rows import DEFAULT_ORDER as AGY_DEFAULT_ORDER
 from core.autostart import is_autostart_enabled
 from core.logger import open_log_dir
+from system.hotkey import format_hotkey_labels
 
 SIDEBAR_SCALES = (60, 80, 100, 125, 150, 200)
 IDLE_LEVELS = (80, 60, 40, 25)
@@ -238,10 +239,11 @@ def _build_accounts(hud, menu):
 
 
 def _build_more(hud, menu):
+    toggle_label, _ct_label = format_hotkey_labels(hud.config.get("hotkey", "Alt+C"))
     sub = menu.addMenu("更多 (More)")
     sub.addAction("開啟記錄檔目錄 (Open Logs)").triggered.connect(open_log_dir)
     sub.addAction("重設預設尺寸與位置").triggered.connect(hud._reset_geometry)
-    sub.addAction("隱藏 HUD (Alt+C 重新喚出)").triggered.connect(hud.hide)
+    sub.addAction(f"隱藏 HUD ({toggle_label} 重新喚出)").triggered.connect(hud.hide)
 
 
 def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
@@ -250,7 +252,8 @@ def build_hud_menu(hud, parent=None, tray=False, menu=None) -> QMenu:
     if menu is None:
         menu = QMenu(parent if parent is not None else hud)
     if tray:
-        menu.addAction("顯示 / 隱藏 HUD (Alt+C)").triggered.connect(hud.toggle_visibility)
+        toggle_label, _ct_label = format_hotkey_labels(hud.config.get("hotkey", "Alt+C"))
+        menu.addAction(f"顯示 / 隱藏 HUD ({toggle_label})").triggered.connect(hud.toggle_visibility)
     menu.addAction("立即重新整理所有 AI (Refresh All)").triggered.connect(hud.trigger_async_refresh)
     menu.addSeparator()
     _build_interface(hud, menu)
