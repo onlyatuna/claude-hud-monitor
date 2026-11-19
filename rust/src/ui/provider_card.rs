@@ -340,6 +340,7 @@ fn build_metric_block(title: &str, styles: &LocalStyles) -> MetricBlock {
 /// Python `extra_rows` entry `(widget, title, value, bar, sub)`.
 struct ExtraRow {
     cell: WidgetRef,
+    header: WidgetRef,
     title: WidgetRef,
     value: WidgetRef,
     bar: WidgetRef,
@@ -759,14 +760,16 @@ impl ProviderCardWidget {
         title_lbl.set_font(Font::new("Segoe UI", 10.0).with_weight(FontWeight::Bold));
         let title = make_widget(title_lbl);
         title.borrow_mut().set_object_name("MetricTitle");
+
         let mut value_lbl = Label::new("");
         value_lbl.set_font(Font::new("Consolas", 14.0).with_weight(FontWeight::Bold));
         let value = make_widget(value_lbl);
         value.borrow_mut().set_object_name("MetricValue");
+
         header.add_widget(title.clone());
         header.add_stretch(1);
         header.add_widget(value.clone());
-        layout.add_layout(Box::new(header), 0);
+        let header_widget = layout.add_layout(Box::new(header), 0);
         let bar = make_bar();
         layout.add_widget(bar.clone());
         let mut sub_lbl = Label::new("");
@@ -783,6 +786,7 @@ impl ProviderCardWidget {
         }
         self.core.extra_rows.borrow_mut().push(ExtraRow {
             cell,
+            header: header_widget,
             title,
             value,
             bar,
@@ -811,6 +815,9 @@ impl ProviderCardWidget {
                 format!("color: {color}; font-size: 14px;"),
                 Some(parse_hex(&color)),
             );
+            row.header
+                .borrow()
+                .with_box_layout(|layout| layout.update_layout());
             set_bar(&row.bar, bar_value(metric.val), Some(self.dark));
             set_label_color(&row.sub, parse_hex(NEUTRAL_HEX));
             set_label_text(

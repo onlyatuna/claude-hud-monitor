@@ -106,11 +106,10 @@ mod os_cred {
             .stderr(Stdio::null())
             .spawn()
             .ok()?;
-        let stdout_handle = child.stdout.take()?;
+        let mut stdout_handle = child.stdout.take()?;
         let reader = std::thread::spawn(move || {
             let mut stdout = String::new();
-            let mut handle = stdout_handle;
-            let _ = handle.read_to_string(&mut stdout);
+            let _ = stdout_handle.read_to_string(&mut stdout);
             stdout
         });
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -359,12 +358,12 @@ impl AgyProvider {
             result.metric1_reset = bucket.reset_time;
         }
         let weekly = buckets.get("gemini-weekly");
-        if result.metric2_val.is_none() {
-            if let Some(bucket) = weekly {
-                result.metric2_val = Some(used(bucket.remaining_fraction));
-                result.metric2_reset = bucket.reset_time;
-                result.metric2_subtext.clear();
-            }
+        if result.metric2_val.is_none()
+            && let Some(bucket) = weekly
+        {
+            result.metric2_val = Some(used(bucket.remaining_fraction));
+            result.metric2_reset = bucket.reset_time;
+            result.metric2_subtext.clear();
         }
         if result.metric2_val.is_none() {
             result.metric2_subtext = STATUSLINE_HINT.to_owned();
@@ -378,10 +377,7 @@ impl AgyProvider {
                 .map(|b| b.remaining_fraction * 100.0);
             result.badge1_text = format!("C/G 剩餘: {}", percent_text(remaining));
         }
-        let argon_remaining = rows
-            .get(2)
-            .and_then(|row| row.val)
-            .map(|used| 100.0 - used);
+        let argon_remaining = rows.get(2).and_then(|row| row.val).map(|used| 100.0 - used);
         result.badge2_text = format!("Argon 剩餘: {}", percent_text(argon_remaining));
         result.metric1_title = "GEMINI 5H".to_owned();
         result.metric2_title = "GEMINI 7D".to_owned();
@@ -891,7 +887,6 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1152,19 +1147,17 @@ mod tests {
         let quota = r#"{"buckets":[
             {"modelId":"gemini-3.8-flash-low","remainingFraction":0.9676124,"resetTime":"2026-11-17T06:50:35Z"},
             {"modelId":"gemini-4-argon-high","remainingFraction":0.0726212,"resetTime":"2026-11-23T08:57:11Z"}]}"#;
-        let (p, _) = provider(vec![ok(summary), ok(quota)], Some("token"), Some(full_cache()));
+        let (p, _) = provider(
+            vec![ok(summary), ok(quota)],
+            Some("token"),
+            Some(full_cache()),
+        );
         let r = p.fetch_usage();
         assert!(r.error.is_none());
         near(r.metric1_val, 3.23876);
-        assert_eq!(
-            r.metric1_reset,
-            Some(iso("2026-11-17T06:50:35+00:00"))
-        );
+        assert_eq!(r.metric1_reset, Some(iso("2026-11-17T06:50:35+00:00")));
         near(r.metric2_val, 29.34068);
-        assert_eq!(
-            r.metric2_reset,
-            Some(iso("2026-11-23T05:50:20+00:00"))
-        );
+        assert_eq!(r.metric2_reset, Some(iso("2026-11-23T05:50:20+00:00")));
         near(r.extra_metrics[2].val, 92.73788);
     }
 

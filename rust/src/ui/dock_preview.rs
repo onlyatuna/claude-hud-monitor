@@ -138,17 +138,17 @@ impl DockPreview {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub fn is_visible(&self) -> bool {
         self.window.is_visible()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub fn geometry(&self) -> Rect {
         self.window.geometry()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     pub fn window(&self) -> &Window {
         &self.window
     }
