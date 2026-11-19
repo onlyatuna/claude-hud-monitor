@@ -3292,7 +3292,7 @@ mod hover_delay_tests {
     #[test]
     fn active_flyout_resizes_when_metrics_arrive() {
         let _guard = crate::ui::test_support::lock_global_ui_test();
-        let _el = EventLoop::new();
+        let mut el = EventLoop::new();
         let cfg = Arc::new(parking_lot::Mutex::new(Config::default()));
         let ctrl = Arc::new(parking_lot::Mutex::new(RefreshController::new(60)));
         let mut hud =
@@ -3327,16 +3327,10 @@ mod hover_delay_tests {
             loaded_height > initial_height,
             "flyout stayed at {initial_height}px after rows grew to {loaded_height}px"
         );
+        pump(&mut el, 30);
         let _ = ferrokit_core::application::CoreApplication::process_events(false);
         ferrokit_widgets::WidgetCommandQueue::flush();
         ferrokit_widgets::LayoutScheduler::activate_pending();
-        sidebar
-            .inner()
-            .flyout
-            .borrow()
-            .root_widget()
-            .borrow()
-            .update_layout();
         let settled = sidebar.inner().flyout.borrow().geometry();
         let card = sidebar
             .cards()
@@ -3344,6 +3338,14 @@ mod hover_delay_tests {
             .find(|(key, _)| key == "agy")
             .unwrap()
             .1;
+        fn layout_subtree(w: &ferrokit_widgets::WidgetRef) {
+            w.borrow().update_layout();
+            let children = w.borrow().children();
+            for child in &children {
+                layout_subtree(child);
+            }
+        }
+        layout_subtree(&sidebar.inner().flyout.borrow().root_widget());
         for title in ["GEMINI 5H", "C/G 7D"] {
             let (width, hint, parent_width) = label_width(&card.borrow().widget(), title)
                 .unwrap_or_else(|| panic!("missing extra metric title {title}"));
