@@ -196,11 +196,24 @@ jobs:
     needs: [build-rust, rust-macos-universal, build-python-windows, build-python-macos]
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: release-dist/
           merge-multiple: true
+
+      - name: Bundle license notices (LGPL-3.0-only / AGPL-3.0)
+        run: |
+          mkdir -p release-dist/licenses/ferrokit/LICENSES
+          cp LICENSE release-dist/licenses/LICENSE
+          FERROKIT_REV=$(python3 -c "import re, pathlib; m=re.search(r'ferrokit-core\s*=\s*\{[^}]*rev\s*=\s*\"([0-9a-f]+)\"', pathlib.Path('rust/Cargo.toml').read_text()); print(m.group(1))")
+          for f in LICENSE NOTICE LICENSES/GPL-3.0-only.txt; do
+            curl -fsSL "https://raw.githubusercontent.com/onlyatuna/ferrokit/${FERROKIT_REV}/${f}" -o "release-dist/licenses/ferrokit/${f}"
+          done
+          (cd release-dist/licenses && zip -r ../ClaudeHUD-Licenses.zip .)
+          rm -rf release-dist/licenses
 
       - name: Generate SHA256 Checksums
         run: |
@@ -217,7 +230,11 @@ jobs:
             release-dist/ClaudeHUD-Rust-Linux-x64
             release-dist/ClaudeHUD-Python-Windows-x64.exe
             release-dist/ClaudeHUD-Python-macOS-arm64.zip
+            release-dist/ClaudeHUD-Licenses.zip
             release-dist/SHA256SUMS.txt
+          body: |
+            The Rust binaries link against [ferrokit](https://github.com/onlyatuna/ferrokit) (LGPL-3.0-only).
+            See `ClaudeHUD-Licenses.zip` for the accompanying `LICENSE` (AGPL-3.0) and ferrokit `LICENSE`, `NOTICE`, and `LICENSES/GPL-3.0-only.txt` texts.
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
