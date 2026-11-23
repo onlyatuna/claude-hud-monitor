@@ -1,13 +1,13 @@
 # Provider 相容性與故障排查
 
-以本機 adapter 格式為基準，不聲稱端點為穩定公開 API。Windows 已實測 AGY CLI 1.4.0（2026-10-16）。
+以本機 adapter 格式為基準，不聲稱端點為穩定公開 API。Windows 已實測 AGY CLI 1.5.14（2026-11-23）；額度請求使用 `antigravity/cli/1.5.14`。
 尚未建立完整 CLI 支援矩陣。問題回報請附平台、CLI 版本、error_code 與診斷耗時，勿附認證檔。
 
 | Adapter | 解析欄位 | 缺失處理 |
 | --- | --- | --- |
 | Claude | five_hour / seven_day.utilization、resets_at；可選 seven_day_breakdown.rows；`limits[]`（模型別週額度，見下） | 未知窗口顯示 -- |
 | Codex | rate_limit.primary_window / secondary_window 的 used_percent、reset_at、limit_window_seconds；plan_type | 不猜模型、方案或窗口 |
-| AGY | `retrieveUserQuotaSummary` 的 `groups[].name`、`buckets[].id`、`remainingFraction`、`resetTime`；`retrieveUserQuota` 的 `buckets[].modelId`、`remainingFraction`、`resetTime`；statusLine 快取的 `quota.<bucket>.remaining_fraction`、`reset_time` | Gemini 5h 取 `modelId` 含 gemini 的 bucket 中最受限者；Gemini 週額度與 Argon 週額度只來自 statusLine 快取，未啟用時顯示 `--`；不認得的群組與快取 bucket 以額外列顯示（見 AGY 一節） |
+| AGY | `retrieveUserQuotaSummary` 的 `groups[].name` / `displayName`、`buckets[].id` / `bucketId`、`window`、`remainingFraction`、`resetTime`；`retrieveUserQuota` 的 `buckets[].modelId`、`remainingFraction`、`resetTime`；statusLine 快取的 `quota.<bucket>.remaining_fraction`、`reset_time` | Summary 優先提供 Gemini Models（5h／7d）、Claude and GPT models（5h／7d）與 Gemini 4 Argon（7d）；Gemini 5h 缺漏時改取 `retrieveUserQuota` 中 `modelId` 含 `gemini` 且排除 `argon` 的最受限 bucket；statusLine 快取僅補缺值或離線備援；不認得的群組與快取 bucket 以額外列顯示 |
 
 AGY 第三方徽章為名称含 claude/gpt 群組週窗口的最小剩餘比例，不表示每個模型均有該額度。
 上游改名／缺欄位時，新增合成或脫敏 fixture 與 adapter 修正，不以預設 0/100 掩蓋差異。
@@ -36,18 +36,17 @@ OAuth 用量回應的 `limits[]` 會帶出只存在於此陣列的額度，例�
 
 ## AGY 資料來源與已知限制
 
-- 資料來源：只用 HTTP `POST {}` 讀取 `https://daily-cloudcode-pa.googleapis.com/v1internal` 的 `retrieveUserQuotaSummary`（C/G 週額度徽章）與 `retrieveUserQuota`（Gemini 5 小時）。`daily-cloudcode-pa` 是 agy 實際使用的後端；正式端點 `cloudcode-pa` 的 Gemini 數字是過期值，已不再使用
+- 資料來源：只用 HTTP `POST {}` 讀取 `https://daily-cloudcode-pa.googleapis.com/v1internal` 的 `retrieveUserQuotaSummary`（搭配 `User-Agent: antigravity/cli/1.5.14`，回傳完整三組：`Gemini Models` 的 5h／7d、`Claude and GPT models` 的 5h／7d 與 `Gemini 4 Argon` 的 7d；舊版 `antigravity/1.2.4` 只會回傳 `Claude and GPT models`）；僅在 Summary 未回傳 `GEMINI 5H` 時才補查 `retrieveUserQuota`（並排除含 `argon` 的每週模型 bucket）。`daily-cloudcode-pa` 是 agy 實際使用的後端；正式端點 `cloudcode-pa` 的數字與真實額度不符，已不再使用
 - 認證：Windows 認證管理員 `gemini:antigravity`（macOS 為 Keychain 同名項目），備援 `~/.gemini/antigravity-cli/antigravity-oauth-token`；token 只在記憶體使用
-- statusLine 快取（Gemini 週額度與 Argon 週額度的來源）：agy 互動模式會把 session JSON 從 stdin 餵給設定的 `statusLine.command`，其中 `quota` 含 `gemini-5h`、`gemini-weekly`、`3p-5h`、`3p-weekly`、`gemini-argon-wtu-weekly`（Argon，只有每週）五個 bucket（AGY 1.4.0 實測）。HUD 的 hook 只把 bucket 的 `remaining_fraction` 與 `reset_time` 寫到設定資料夾的 `agy-quota.json`，不保存 email、路徑或其他欄位
+- statusLine 快取（HTTP 端點缺值或離線時的備援來源）：agy 互動模式會把 session JSON 從 stdin 餵給設定的 `statusLine.command`，其中 `quota` 含 `gemini-5h`、`gemini-weekly`、`3p-5h`、`3p-weekly`、`gemini-argon-wtu-weekly`（Argon，只有每週）。HUD 的 hook 只把 bucket 的 `remaining_fraction` 與 `reset_time` 寫到設定資料夾的 `agy-quota.json`，不保存 email、路徑或其他欄位
   - 啟用：右鍵選單 → 更多 → AGY 週額度掛鉤 → 啟用（或 `python main.py --install-agy-statusline`）（會先備份 `settings.json` 為 `settings.json.bak-hud-<時間>`；已有其他 statusLine 時不覆蓋）；停用：`--uninstall-agy-statusline`。啟用後需重開 agy 互動模式
-  - 限制：只有 agy 互動模式開著時才會更新；agy 沒開時沿用最後一次的值，已過重置時間的 bucket 會被丟棄。設定資料夾路徑含空白時無法安裝（agy 會把含引號的指令路徑當相對路徑）
-  - Argon 以徽章顯示剩餘百分比（`Argon: NN%`），與 C/G 徽章方向一致
-  - 未知額度自動成列（不需改程式）：statusLine 快取裡不屬於上述五個 bucket 的 key（例如日後 Ultra 方案的 Gemini Carbon 額度），以及 `retrieveUserQuotaSummary` 中名稱不含 gemini / claude / gpt / argon 的群組，其每個有效 bucket 都會成為額外列，排在固定五列之後（先摘要群組、API 順序；再快取、依 key 排序）。`retrieveUserQuota` 的逐模型 bucket 不會成列，仍合併為 GEMINI 5H
+  - 限制：只有 agy 互動模式開著時才會更新快取；agy 沒開時沿用最後一次的值，已過重置時間的 bucket 會被丟棄。設定資料夾路徑含空白時無法安裝（agy 會把含引號的指令路徑當相對路徑）
+- 優先順序：Summary API 優先，`retrieveUserQuota` 備援 `GEMINI 5H`，`statusLine` 快取僅補缺值；固定列顯示已用比例，徽章顯示剩餘比例
+- 未知額度自動成列（不需改程式）：statusLine 快取裡不屬於上述五個 bucket 的 key（例如日後 Ultra 方案的 Gemini Carbon 額度），以及 `retrieveUserQuotaSummary` 中名稱不含 gemini / claude / gpt / argon 的群組，其每個有效 bucket 都會成為額外列，排在固定五列之後（先摘要群組、API 順序；再快取、依 key 排序）。`retrieveUserQuota` 的逐模型 bucket 不會成列，仍合併為 GEMINI 5H
   - 標題：快取 key 去掉開頭 `gemini-` 與 `wtu`，尾端 `weekly` / `week` / `7d` → `7D`、`5h` → `5H`，其餘大寫、`-` 換成空格（`gemini-carbon-wtu-weekly` → `CARBON 7D`）；不符形狀時整個 key 大寫、`-` 換空格。摘要 bucket 用其 `displayName` 大寫（沒有則由 `bucketId` 推導；標題重複時前面加群組名）。標題與固定列重複或已存在者略過
   - 穩定 key（托盤數字用）：`agy:<標題 slug>`（slug 規則同 Claude），例如 `agy:carbon-7d`。列消失時，托盤選擇顯示 `--`（unavailable）
   - `agy_order`：已存的排序保留仍存在的額外列位置，資料中已不存在的額外列在儲存或拖拉重排時才被丟棄；新出現的額外列排在最後。只有固定五列時行為與先前相同
   - 限制：目前沒有任何真實的 Carbon 資料（維護者為 Google AI Pro，CLI 標示 Carbon 僅 Ultra），`gemini-carbon-wtu-weekly` 這個 key 是比照 Argon 的推測
-- 已知限制：agy 面板的資料可能另走 gRPC（`google.gca.aicode.v1main`，對 REST 回 404）或需 CSRF token 的本機 language server，HUD 都不使用
 - 禁止事項：HUD 不呼叫 agy 執行檔。`agy --print /quota` 與 `agy -p /usage` 在無頭模式會被當成提示送進模型（每次耗約 2～3.6 萬 token），不要用來查額度
 
 ## AGY 查詢失敗
@@ -64,7 +63,7 @@ OAuth 用量回應的 `limits[]` 會帶出只存在於此陣列的額度，例�
 - schema：格式或窗口變更，未知資料顯示 --。
 - network：連線未完成，等待自動重試。
 
-目前只支援 README 列出的認證檔格式。系統鑰匙圈、自訂設定目錄、API key-only 登入不在本輪支援範圍。
+認證來源依 provider 而異：Claude 支援 `CLAUDE_CONFIG_DIR`／profiles，macOS 另讀 Keychain；Antigravity 使用 OS 憑證儲存並查詢 quota HTTP API；Codex 使用 `~/.codex/auth.json`。目前不支援 API key-only 登入。
 
 ## 新增 Provider
 

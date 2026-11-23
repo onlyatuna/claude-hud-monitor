@@ -17,7 +17,7 @@ const SUMMARY_URL: &str =
     "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary";
 const QUOTA_URL: &str = "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota";
 #[cfg_attr(test, allow(dead_code))]
-const USER_AGENT: &str = "antigravity/1.2.4";
+const USER_AGENT: &str = "antigravity/cli/1.5.14";
 #[cfg_attr(test, allow(dead_code))]
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
 
@@ -68,12 +68,15 @@ mod os_cred {
             return None;
         }
 
-        let slice = unsafe {
-            std::slice::from_raw_parts(
-                (*cred_ptr).credential_blob,
-                (*cred_ptr).credential_blob_size as usize,
-            )
-        };
+        let blob = unsafe { (*cred_ptr).credential_blob };
+        if blob.is_null() {
+            unsafe {
+                CredFree(cred_ptr as *mut std::ffi::c_void);
+            }
+            return None;
+        }
+        let size = unsafe { (*cred_ptr).credential_blob_size as usize };
+        let slice = unsafe { std::slice::from_raw_parts(blob, size) };
         let text = String::from_utf8_lossy(slice).to_string();
         unsafe {
             CredFree(cred_ptr as *mut std::ffi::c_void);
@@ -84,25 +87,21 @@ mod os_cred {
 
 #[cfg(target_os = "macos")]
 mod os_cred {
-    use std::process::Command;
+    use std::time::Duration;
 
-    /// The access token in the Keychain item `gemini:antigravity`.
+    /// The access token in the Keychain item `gemini:antigravity` (3s timeout, matching Python).
     pub fn get_gemini_token() -> Option<String> {
-        let output = Command::new("security")
-            .args([
+        let text = crate::providers::base::read_keychain_password(
+            &[
                 "find-generic-password",
                 "-s",
                 "gemini",
                 "-a",
                 "antigravity",
                 "-w",
-            ])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            ],
+            Duration::from_secs(3),
+        )?;
         super::token_of(&serde_json::from_str(&text).ok()?)
     }
 }
@@ -209,21 +208,35 @@ impl AgyProvider {
         }
 
         let mut quota: Option<UsageMetrics> = None;
-        match self.request(QUOTA_URL, token) {
-            Reply::Auth => return failure(now, "auth", AUTH_MESSAGE),
-            Reply::Body(body) => {
-                let parsed = parse_model_buckets(&body, now);
-                if parsed.error.is_none() {
-                    quota = Some(parsed);
-                } else {
-                    debug!("[AgyProvider] {QUOTA_URL} returned no usable quota data");
+        if summary.as_ref().and_then(|s| s.metric1_val).is_none() {
+            match self.request(QUOTA_URL, token) {
+                Reply::Auth => return failure(now, "auth", AUTH_MESSAGE),
+                Reply::Body(body) => {
+                    let parsed = parse_model_buckets(&body, now);
+                    if parsed.error.is_none() {
+                        quota = Some(parsed);
+                    } else {
+                        debug!("[AgyProvider] {QUOTA_URL} returned no usable quota data");
+                    }
                 }
+                Reply::Failed => {}
             }
-            Reply::Failed => {}
         }
 
-        let m1_val = quota.as_ref().and_then(|q| q.metric1_val);
-        let m1_reset = quota.as_ref().and_then(|q| q.metric1_reset);
+        let summary_m1 = summary.as_ref().filter(|s| s.metric1_val.is_some());
+        let m1_val = summary_m1
+            .and_then(|s| s.metric1_val)
+            .or_else(|| quota.as_ref().and_then(|q| q.metric1_val));
+        let m1_reset = summary_m1
+            .and_then(|s| s.metric1_reset)
+            .or_else(|| quota.as_ref().and_then(|q| q.metric1_reset));
+        let m2_val = summary.as_ref().and_then(|s| s.metric2_val);
+        let m2_reset = summary.as_ref().and_then(|s| s.metric2_reset);
+        let m2_subtext = if m2_val.is_some() {
+            String::new()
+        } else {
+            "Gemini 週額度來源未知".to_owned()
+        };
         let badge1 = summary
             .as_ref()
             .filter(|s| !s.badge1_text.is_empty())
@@ -231,10 +244,14 @@ impl AgyProvider {
                 || format!("C/G 剩餘: {}", percent_text(None)),
                 |s| s.badge1_text.clone(),
             );
+        let badge2 = summary
+            .as_ref()
+            .map(|s| s.badge2_text.clone())
+            .filter(|text| !text.is_empty())
+            .unwrap_or_else(|| format!("Argon 剩餘: {}", percent_text(None)));
         let rows = summary.map_or_else(empty_rows, |s| s.extra_metrics);
-        let has_cg = rows.iter().take(2).any(|row| row.val.is_some());
-        let has_error = m1_val.is_none() && !has_cg;
-
+        let has_rows = rows.iter().any(|row| row.val.is_some());
+        let has_error = m1_val.is_none() && m2_val.is_none() && !has_rows;
         UsageMetrics {
             provider_name: "Antigravity".to_owned(),
             provider_id: "agy".to_owned(),
@@ -243,12 +260,12 @@ impl AgyProvider {
             metric1_text: percent_text(m1_val),
             metric1_reset: m1_reset,
             metric2_title: "GEMINI 7D".to_owned(),
-            metric2_val: None,
-            metric2_text: "--".to_owned(),
-            metric2_reset: None,
-            metric2_subtext: "Gemini 週額度來源未知".to_owned(),
+            metric2_val: m2_val,
+            metric2_text: percent_text(m2_val),
+            metric2_reset: m2_reset,
+            metric2_subtext: m2_subtext,
+            badge2_text: badge2,
             badge1_text: badge1,
-            badge2_text: "Gemini Models".to_owned(),
             last_updated_time: now.to_owned(),
             error: has_error.then(|| NO_DATA_MESSAGE.to_owned()),
             error_code: if has_error { "schema" } else { "" }.to_owned(),
@@ -317,13 +334,16 @@ impl AgyProvider {
             result.metric1_reset = bucket.reset_time;
         }
         let weekly = buckets.get("gemini-weekly");
-        result.metric2_val = weekly.map(|b| used(b.remaining_fraction));
-        result.metric2_reset = weekly.and_then(|b| b.reset_time);
-        result.metric2_subtext = if weekly.is_some() {
-            String::new()
-        } else {
-            STATUSLINE_HINT.to_owned()
-        };
+        if result.metric2_val.is_none()
+            && let Some(bucket) = weekly
+        {
+            result.metric2_val = Some(used(bucket.remaining_fraction));
+            result.metric2_reset = bucket.reset_time;
+            result.metric2_subtext.clear();
+        }
+        if result.metric2_val.is_none() {
+            result.metric2_subtext = STATUSLINE_HINT.to_owned();
+        }
         if !had_response
             || result.badge1_text.is_empty()
             || result.badge1_text == format!("C/G 剩餘: {}", percent_text(None))
@@ -333,10 +353,8 @@ impl AgyProvider {
                 .map(|b| b.remaining_fraction * 100.0);
             result.badge1_text = format!("C/G 剩餘: {}", percent_text(remaining));
         }
-        let argon = buckets
-            .get("gemini-argon-wtu-weekly")
-            .map(|b| b.remaining_fraction * 100.0);
-        result.badge2_text = format!("Argon 剩餘: {}", percent_text(argon));
+        let argon_remaining = rows.get(2).and_then(|row| row.val).map(|used| 100.0 - used);
+        result.badge2_text = format!("Argon 剩餘: {}", percent_text(argon_remaining));
         result.metric1_title = "GEMINI 5H".to_owned();
         result.metric2_title = "GEMINI 7D".to_owned();
         result.metric1_text = percent_text(result.metric1_val);
@@ -383,7 +401,9 @@ impl Provider for AgyProvider {
                     "未找到 Antigravity 登入憑證\n請先登入 Antigravity",
                 )
             });
-            res.badge2_text = "Argon: --".to_owned();
+            if res.badge2_text.is_empty() {
+                res.badge2_text = format!("Argon 剩餘: {}", percent_text(None));
+            }
             return res;
         };
         debug!("[AgyProvider] completing the quota with the statusLine cache");
@@ -618,7 +638,8 @@ fn parse_model_buckets(raw: &Value, now: &str) -> UsageMetrics {
         let Ok(model_id) = text_of(bucket, &["modelId", "model_id"]) else {
             return format_error(now);
         };
-        if !model_id.to_lowercase().contains("gemini") {
+        let model_id = model_id.to_lowercase();
+        if !model_id.contains("gemini") || model_id.contains("argon") {
             continue;
         }
         let Some(remaining) = remaining_fraction(bucket) else {
@@ -713,7 +734,37 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
             Some(Value::Array(list)) => Some(list),
             Some(_) => None,
         };
-        if lower.contains("gemini") && !lower.contains("argon") {
+        if lower.contains("argon") {
+            let Some(buckets) = buckets_of() else {
+                return format_error(now);
+            };
+            for bucket in buckets {
+                if !bucket.is_object() {
+                    return format_error(now);
+                }
+                let (Ok(id), Ok(window)) = (
+                    text_of(bucket, &["id", "bucketId"]),
+                    text_of(bucket, &["window"]),
+                ) else {
+                    return format_error(now);
+                };
+                let (id, window) = (id.to_lowercase(), window.to_lowercase());
+                if !(id.contains("week") || window.contains("week")) {
+                    continue;
+                }
+                let Some(remaining) = remaining_fraction(bucket) else {
+                    continue;
+                };
+                let used = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
+                let row = &mut rows[2];
+                if row.val.is_none_or(|current| used > current) {
+                    row.val = Some(used);
+                    row.text = percent_text(Some(used));
+                    row.reset = reset_time(bucket);
+                    row.subtext.clear();
+                }
+            }
+        } else if lower.contains("gemini") {
             let Some(buckets) = buckets_of() else {
                 return format_error(now);
             };
@@ -745,7 +796,7 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
                     m2_reset = reset;
                 }
             }
-        } else if (lower.contains("claude") || lower.contains("gpt")) && !lower.contains("argon") {
+        } else if lower.contains("claude") || lower.contains("gpt") {
             let Some(buckets) = buckets_of() else {
                 return format_error(now);
             };
@@ -753,13 +804,16 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
                 if !bucket.is_object() {
                     return format_error(now);
                 }
-                let Ok(id) = text_of(bucket, &["id", "bucketId"]) else {
+                let (Ok(id), Ok(window)) = (
+                    text_of(bucket, &["id", "bucketId"]),
+                    text_of(bucket, &["window"]),
+                ) else {
                     return format_error(now);
                 };
-                let id = id.to_lowercase();
-                let index = if id.contains("week") {
+                let (id, window) = (id.to_lowercase(), window.to_lowercase());
+                let index = if id.contains("week") || window.contains("week") {
                     1
-                } else if id.contains("5h") {
+                } else if id.contains("5h") || window.contains("5h") {
                     0
                 } else {
                     continue;
@@ -767,7 +821,7 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
                 let Some(remaining) = remaining_fraction(bucket) else {
                     continue;
                 };
-                let used = (1.0 - remaining) * 100.0;
+                let used = ((1.0 - remaining) * 100.0).clamp(0.0, 100.0);
                 let row = &mut rows[index];
                 if row.val.is_none_or(|current| used > current) {
                     row.val = Some(used);
@@ -780,13 +834,12 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
             }
         } else {
             info!("[AgyProvider] unknown quota group: {name}");
-            if !lower.contains("argon") {
-                push_group_rows(&name, group, &mut rows);
-            }
+            push_group_rows(&name, group, &mut rows);
         }
     }
 
     let has_error = m1_used.is_none() && m2_used.is_none() && rows.iter().all(|r| r.val.is_none());
+    let argon_remaining = rows[2].val.map(|used| 100.0 - used);
     UsageMetrics {
         provider_name: "Antigravity".to_owned(),
         provider_id: "agy".to_owned(),
@@ -804,7 +857,7 @@ fn parse_agy_json(raw: &Value, now: &str) -> UsageMetrics {
             String::new()
         },
         badge1_text: format!("C/G 剩餘: {}", percent_text(third_party_remaining)),
-        badge2_text: "Gemini Models".to_owned(),
+        badge2_text: format!("Argon 剩餘: {}", percent_text(argon_remaining)),
         last_updated_time: now.to_owned(),
         error: has_error.then(|| NO_DATA_MESSAGE.to_owned()),
         error_code: if has_error { "schema" } else { "" }.to_owned(),
@@ -823,6 +876,12 @@ mod tests {
     const SUMMARY_FIXTURE: &str = r#"{"groups":[{"name":"Claude and GPT models","buckets":[
         {"id":"3p-weekly","remainingFraction":0.8449,"resetTime":"2026-10-23T12:00:00Z"},
         {"id":"3p-5h","remainingFraction":0.694,"resetTime":"2026-10-16T14:00:00Z"}]}]}"#;
+    const ARGON_SUMMARY_FIXTURE: &str = r#"{"groups":[
+        {"name":"Claude and GPT models","buckets":[
+            {"id":"3p-weekly","remainingFraction":0.8449,"resetTime":"2026-10-23T12:00:00Z"},
+            {"id":"3p-5h","remainingFraction":0.694,"resetTime":"2026-10-16T14:00:00Z"}]},
+        {"name":"Gemini 4 Argon","buckets":[
+            {"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":0.74,"resetTime":"2026-10-23T12:00:00Z"}]}]}"#;
 
     const QUOTA_FIXTURE: &str = r#"{"buckets":[
         {"modelId":"gemini-3.8-flash-tiered","remainingFraction":0.9743,"resetTime":"2026-10-16T13:41:00Z","tokenType":"WTUS"},
@@ -907,7 +966,7 @@ mod tests {
         let cache = full_cache();
         let weekly_reset = cache.buckets["gemini-weekly"].reset_time;
         let (p, _) = provider(
-            vec![ok(SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)],
+            vec![ok(ARGON_SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)],
             Some("token"),
             Some(cache),
         );
@@ -927,14 +986,14 @@ mod tests {
             .map(|row| row.title.as_str())
             .collect();
         assert_eq!(titles, ["C/G 5H", "C/G 7D", "ARGON 7D"]);
-        near(r.extra_metrics[2].val, 21.369666);
+        near(r.extra_metrics[2].val, 26.0);
         near(r.extra_metrics[1].val, 15.51);
         assert_eq!(
             (r.metric1_title.as_str(), r.metric2_title.as_str()),
             ("GEMINI 5H", "GEMINI 7D")
         );
         assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
-        assert_eq!(r.badge2_text, "Argon 剩餘: 79%");
+        assert_eq!(r.badge2_text, "Argon 剩餘: 74%");
     }
 
     #[test]
@@ -975,6 +1034,7 @@ mod tests {
         cache.buckets.remove("gemini-weekly");
         let (p, _) = provider(vec![], None, Some(cache));
         let r = p.fetch_usage();
+        assert_eq!(r.metric2_title, "GEMINI 7D");
         assert_eq!(r.metric2_val, None);
         assert_eq!(r.metric2_text, "--");
         assert_eq!(r.metric2_subtext, "需啟用 agy statusLine");
@@ -985,7 +1045,7 @@ mod tests {
         let (p, _) = provider(vec![], None, None);
         let r = p.fetch_usage();
         assert_eq!(r.error_code, "no_token");
-        assert_eq!(r.badge2_text, "Argon: --");
+        assert_eq!(r.badge2_text, "Argon 剩餘: --");
         assert!(r.extra_metrics.is_empty());
     }
 
@@ -994,7 +1054,7 @@ mod tests {
         let (p, _) = provider(vec![status(401)], Some("token"), None);
         let r = p.fetch_usage();
         assert_eq!(r.error_code, "auth");
-        assert_eq!(r.badge2_text, "Argon: --");
+        assert_eq!(r.badge2_text, "Argon 剩餘: --");
         assert!(r.extra_metrics.is_empty());
     }
 
@@ -1028,9 +1088,10 @@ mod tests {
         );
         assert_eq!(r.metric1_text, "3%");
         assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
-        assert_eq!(r.badge2_text, "Argon: --");
+        assert_eq!(r.badge2_text, "Argon 剩餘: --");
         assert_eq!(r.extra_metrics[2].val, None);
         assert_eq!(r.extra_metrics[2].subtext, "需啟用 agy statusLine");
+        assert_eq!(r.metric2_title, "GEMINI 7D");
         assert_eq!(r.metric2_val, None);
         assert_eq!(r.metric2_text, "--");
         assert_eq!(r.metric2_subtext, "Gemini 週額度來源未知");
@@ -1044,10 +1105,11 @@ mod tests {
     }
 
     #[test]
-    fn the_most_constrained_gemini_bucket_is_the_five_hour_row() {
+    fn argon_weekly_model_buckets_are_excluded_from_the_five_hour_fallback() {
         let quota = r#"{"buckets":[
             {"modelId":"gemini-3.8-flash-low","remainingFraction":0.9,"resetTime":"2026-10-16T13:00:00Z"},
-            {"modelId":"gemini-3.8-pro-high","remainingFraction":0.25,"resetTime":"2026-10-16T15:00:00Z"}]}"#;
+            {"modelId":"gemini-3.8-pro-high","remainingFraction":0.25,"resetTime":"2026-10-16T15:00:00Z"},
+            {"modelId":"gemini-4-argon-high","remainingFraction":0.15,"resetTime":"2026-10-23T12:00:00Z"}]}"#;
         let (p, _) = provider(vec![ok(SUMMARY_FIXTURE), ok(quota)], None, None);
         let r = p.fetch_via_http("token", "12:00:00");
         assert!(r.error.is_none());
@@ -1055,18 +1117,91 @@ mod tests {
         assert_eq!(r.metric1_text, "75%");
         assert_eq!(r.metric1_reset, Some(iso("2026-10-16T15:00:00+00:00")));
     }
+    #[test]
+    fn summary_gemini_five_hour_value_wins_over_argon_weekly_model_values() {
+        let summary = r#"{"groups":[
+            {"name":"Gemini Models","buckets":[
+                {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.70,"resetTime":"2026-10-23T12:00:00Z"},
+                {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.95,"resetTime":"2026-10-16T14:00:00Z"}]},
+            {"name":"Gemini 4 Argon","buckets":[
+                {"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":0.15,"resetTime":"2026-10-23T12:00:00Z"}]}]}"#;
+        let quota = r#"{"buckets":[
+            {"modelId":"gemini-3.8-flash-low","remainingFraction":0.95,"resetTime":"2026-10-16T14:00:00Z"},
+            {"modelId":"gemini-4-argon-high","remainingFraction":0.15,"resetTime":"2026-10-23T12:00:00Z"}]}"#;
+        let (p, requests) = provider(
+            vec![ok(summary), ok(quota)],
+            Some("token"),
+            Some(full_cache()),
+        );
+        let r = p.fetch_usage();
+        assert!(r.error.is_none());
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        near(r.metric1_val, 5.0);
+        assert_eq!(r.metric1_reset, Some(iso("2026-10-16T14:00:00+00:00")));
+        near(r.metric2_val, 30.0);
+        assert_eq!(r.metric2_reset, Some(iso("2026-10-23T12:00:00+00:00")));
+        near(r.extra_metrics[2].val, 85.0);
+    }
 
     #[test]
-    fn an_unknown_group_is_ignored() {
-        let summary = r#"{"groups":[
-            {"name":"Claude and GPT models","buckets":[{"id":"3p-weekly","remainingFraction":0.8449,"resetTime":"2026-10-23T12:00:00Z"}]},
-            {"name":"Gemini 4 Argon","buckets":[{"id":"argon-5h","remainingFraction":0.1}]}]}"#;
-        let (p, _) = provider(vec![ok(summary), ok(QUOTA_FIXTURE)], None, None);
+    fn argon_summary_group_populates_weekly_row_and_badge() {
+        let (p, _) = provider(
+            vec![ok(ARGON_SUMMARY_FIXTURE), ok(QUOTA_FIXTURE)],
+            None,
+            None,
+        );
         let r = p.fetch_via_http("token", "12:00:00");
         assert!(r.error.is_none());
-        near(r.metric1_val, 2.57);
-        assert_eq!(r.extra_metrics[0].val, None);
-        assert_eq!(r.badge1_text, "C/G 剩餘: 84%");
+        near(r.extra_metrics[2].val, 26.0);
+        assert_eq!(
+            r.extra_metrics[2].reset,
+            Some(iso("2026-10-23T12:00:00+00:00"))
+        );
+        assert!(r.extra_metrics[2].subtext.is_empty());
+        assert_eq!(r.badge2_text, "Argon 剩餘: 74%");
+    }
+
+    #[test]
+    fn fetch_via_http_without_cache_sets_gemini_7d_title_and_allows_arrange_agy() {
+        let summary = r#"{"groups":[
+            {"displayName":"Gemini Models","buckets":[
+                {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.70,"resetTime":"2026-10-23T12:00:00Z"},
+                {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.95,"resetTime":"2026-10-16T14:00:00Z"}]},
+            {"displayName":"Claude and GPT models","buckets":[
+                {"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.8449,"resetTime":"2026-10-23T12:00:00Z"},
+                {"bucketId":"3p-5h","window":"5h","remainingFraction":0.694,"resetTime":"2026-10-16T14:00:00Z"}]},
+            {"displayName":"Gemini 4 Argon","buckets":[
+                {"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":0.15,"resetTime":"2026-10-23T12:00:00Z"}]}]}"#;
+        let (p, _) = provider(vec![ok(summary), ok(QUOTA_FIXTURE)], Some("token"), None);
+        let r = p.fetch_usage();
+        assert!(r.error.is_none());
+        assert_eq!(r.metric1_title, "GEMINI 5H");
+        assert_eq!(r.metric2_title, "GEMINI 7D");
+        assert!(r.metric2_subtext.is_empty());
+        near(r.metric1_val, 5.0);
+        near(r.metric2_val, 30.0);
+        let arranged = crate::agy_rows::arrange_agy(&r, &[]);
+        assert_eq!(arranged.metric1_title, "C/G 5H");
+        assert_eq!(arranged.metric2_title, "ARGON 7D");
+        let extra_titles: Vec<&str> = arranged
+            .extra_metrics
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect();
+        assert_eq!(extra_titles, ["GEMINI 5H", "GEMINI 7D", "C/G 7D"]);
+    }
+
+    #[test]
+    fn summary_with_only_gemini_weekly_is_not_an_error() {
+        let summary = r#"{"groups":[
+            {"displayName":"Gemini Models","buckets":[
+                {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.70,"resetTime":"2026-10-23T12:00:00Z"}]}]}"#;
+        let (p, _) = provider(vec![ok(summary), status(503)], Some("token"), None);
+        let r = p.fetch_usage();
+        assert!(r.error.is_none(), "{:?}", r.error);
+        assert_eq!(r.metric2_title, "GEMINI 7D");
+        near(r.metric2_val, 30.0);
+        assert!(r.metric2_subtext.is_empty());
     }
 
     #[test]

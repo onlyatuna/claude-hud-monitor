@@ -287,8 +287,12 @@ impl RefreshController {
             return None;
         }
         let state = self.states.get_mut(&item.provider_id)?;
+        // If the result is from a previous incarnation (older epoch), silently drop it.
+        // It does not belong to the current instance lifecycle at all.
+        if (item.generation >> 32) < (state.generation >> 32) {
+            return None;
+        }
         state.running = false;
-
         // Stale result from an older generation — re-launch if pending
         if item.generation != state.generation || state.pending {
             if let Some(provider) = providers.get(&item.provider_id) {
@@ -302,28 +306,20 @@ impl RefreshController {
 
         if let Some(ref err) = result.error.clone() {
             state.failures += 1;
-            let delay_secs = u64::min(
+            let backoff_secs = u64::min(
                 900,
                 (self.interval.as_secs() as f64 * 2f64.powi((state.failures as i32 - 1).min(4)))
                     as u64,
             );
-            let delay_f64 = if let Some(ra) = result.retry_after {
-                if ra.is_finite() && ra >= 0.0 {
-                    (delay_secs as f64).max(ra).clamp(1.0, 86400.0)
-                } else {
-                    delay_secs as f64
-                }
-            } else {
-                delay_secs as f64
-            };
             let mut delay = jitter_delay(
-                Duration::from_secs_f64(delay_f64),
+                Duration::from_secs(backoff_secs),
                 self.jitter,
                 &item.provider_id,
             );
             if let Some(ra) = result.retry_after.filter(|ra| ra.is_finite() && *ra >= 0.0) {
                 delay = delay.max(Duration::from_secs_f64(ra.clamp(1.0, 86400.0)));
             }
+            delay = delay.min(Duration::from_secs(86400));
             warn!(
                 "provider={} error={} retry={:.1}s",
                 item.provider_id,

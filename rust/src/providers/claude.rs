@@ -265,35 +265,29 @@ fn extract_token(data: &Value) -> Option<String> {
     data.get("claudeAiOauth")
         .and_then(|oauth| oauth.get("accessToken"))
         .and_then(|tok| tok.as_str())
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
 }
 
 #[cfg(target_os = "macos")]
 fn token_from_keychain() -> Option<String> {
-    use std::process::Command;
-    let output = Command::new("/usr/bin/security")
-        .args([
+    let stdout = crate::providers::base::read_keychain_password(
+        &[
             "find-generic-password",
             "-s",
             "Claude Code-credentials",
             "-w",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8(output.stdout).ok()?;
-    let json: Value = serde_json::from_str(stdout.trim()).ok()?;
+        ],
+        std::time::Duration::from_secs(5),
+    )?;
+    let json: Value = serde_json::from_str(&stdout).ok()?;
     extract_token(&json)
 }
 
 /// A credentials file larger than this is not read (a real one is a few hundred bytes).
 const MAX_CREDENTIALS_BYTES: u64 = 64 * 1024;
 
-fn get_access_token(credentials_path: &Path) -> Option<String> {
+fn get_access_token(credentials_path: &Path, _use_keychain_fallback: bool) -> Option<String> {
     if credentials_path.exists()
         && fs::metadata(credentials_path).is_ok_and(|m| m.len() <= MAX_CREDENTIALS_BYTES)
         && let Ok(text) = fs::read_to_string(credentials_path)
@@ -304,10 +298,8 @@ fn get_access_token(credentials_path: &Path) -> Option<String> {
     }
 
     #[cfg(target_os = "macos")]
-    {
-        if let Some(token) = token_from_keychain() {
-            return Some(token);
-        }
+    if _use_keychain_fallback && let Some(token) = token_from_keychain() {
+        return Some(token);
     }
 
     None
@@ -375,7 +367,10 @@ impl Provider for ClaudeProvider {
             format!("CLAUDE ({})", active_profile.short_name)
         };
 
-        let Some(token) = get_access_token(&active_profile.credentials_path) else {
+        let Some(token) = get_access_token(
+            &active_profile.credentials_path,
+            active_profile.id == "default",
+        ) else {
             let error_msg = if active_profile.id == "default" {
                 "未找到 Claude 登入憑證\n請於終端機執行 claude 登入".to_string()
             } else {
@@ -800,6 +795,35 @@ mod tests {
 
         let empty_json = serde_json::json!({});
         assert_eq!(extract_token(&empty_json), None);
+
+        let blank_token = serde_json::json!({
+            "claudeAiOauth": {
+                "accessToken": ""
+            }
+        });
+        assert_eq!(extract_token(&blank_token), None);
+    }
+
+    #[test]
+    fn test_get_access_token_reads_file_and_skips_missing_non_default() {
+        let dir =
+            std::env::temp_dir().join(format!("claude-hud-token-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let cred_file = dir.join(".credentials.json");
+        std::fs::write(
+            &cred_file,
+            r#"{"claudeAiOauth":{"accessToken":"sk-ant-profile"}}"#,
+        )
+        .expect("write credentials");
+        assert_eq!(
+            get_access_token(&cred_file, false),
+            Some("sk-ant-profile".to_string())
+        );
+
+        let missing = dir.join("missing.json");
+        assert_eq!(get_access_token(&missing, false), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn limits_payload() -> Value {

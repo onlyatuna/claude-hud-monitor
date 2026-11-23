@@ -166,11 +166,9 @@ fn load_settings(path: &Path) -> Result<Map<String, Value>, String> {
     }
 }
 
-fn owned(statusline: &Value) -> bool {
-    statusline
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| command.contains(HOOK_FILENAME))
+fn owned(statusline: &Value, command_path: Option<&str>) -> bool {
+    statusline.get("type").and_then(Value::as_str) == Some("command")
+        && command_targets(statusline, command_path)
 }
 
 /// Copies `path` to `<path>.bak-hud-<stamp>`; an exclusive create keeps the backups made within the
@@ -388,6 +386,7 @@ fn win32_short_path(_path: &Path) -> Option<PathBuf> {
 fn command_hook_path_with(
     hook_path: &Path,
     is_win32: bool,
+    create: bool,
     short_path_fn: impl FnOnce(&Path) -> Option<PathBuf>,
 ) -> Option<String> {
     let text = hook_path.to_string_lossy().into_owned();
@@ -398,7 +397,12 @@ fn command_hook_path_with(
         return None;
     }
     let directory = hook_path.parent()?;
-    let _ = fs::create_dir_all(directory); // a short name only exists for a directory that exists
+    if create {
+        let _ = fs::create_dir_all(directory);
+    }
+    if !directory.is_dir() {
+        return None;
+    }
     let short_dir = short_path_fn(directory)?;
     let candidate = short_dir.join(hook_path.file_name()?);
     let candidate_text = candidate.to_string_lossy().into_owned();
@@ -418,15 +422,10 @@ fn normcase_abspath(path: &Path) -> String {
     }
 }
 
-fn points_at(statusline: &Value, command_path: Option<&str>) -> bool {
+fn command_targets(statusline: &Value, command_path: Option<&str>) -> bool {
     let Some(command_path) = command_path.filter(|s| !s.is_empty()) else {
         return false;
     };
-    if statusline.get("type").and_then(Value::as_str) != Some("command")
-        || statusline.get("enabled").and_then(Value::as_bool) != Some(true)
-    {
-        return false;
-    }
     let Some(command) = statusline.get("command").and_then(Value::as_str) else {
         return false;
     };
@@ -434,6 +433,12 @@ fn points_at(statusline: &Value, command_path: Option<&str>) -> bool {
         return false;
     };
     normcase_abspath(Path::new(last)) == normcase_abspath(Path::new(command_path))
+}
+
+fn points_at(statusline: &Value, command_path: Option<&str>) -> bool {
+    statusline.get("type").and_then(Value::as_str) == Some("command")
+        && statusline.get("enabled").and_then(Value::as_bool) == Some(true)
+        && command_targets(statusline, command_path)
 }
 
 /// Python `statusline_status` values.
@@ -483,12 +488,12 @@ fn statusline_status_with(
     let Some(statusline) = settings.get("statusLine") else {
         return Status::NotInstalled;
     };
-    if !owned(statusline) {
-        return Status::Conflict;
-    }
     let config_dir = config_dir.map_or_else(ConfigManager::config_dir, Path::to_path_buf);
     let hook_path = absolute(&config_dir.join(HOOK_FILENAME));
-    let cmd_path = command_hook_path_with(&hook_path, is_win32, short_path_fn);
+    let cmd_path = command_hook_path_with(&hook_path, is_win32, false, short_path_fn);
+    if !owned(statusline, cmd_path.as_deref()) {
+        return Status::Conflict;
+    }
     if !hook_current(&hook_path) || !points_at(statusline, cmd_path.as_deref()) {
         return Status::NeedsUpdate;
     }
@@ -580,7 +585,8 @@ fn install_statusline_with(
     if python_cmd.is_some_and(|cmd| cmd.chars().any(|c| c == '"' || c == '\'')) {
         return Outcome::UnsupportedPath;
     }
-    let Some(command_path) = command_hook_path_with(&hook_path, is_win32, short_path_fn) else {
+    let Some(command_path) = command_hook_path_with(&hook_path, is_win32, true, short_path_fn)
+    else {
         return Outcome::UnsupportedPath;
     };
     let settings_path = settings_path.map_or_else(agy_settings_path, Path::to_path_buf);
@@ -592,7 +598,7 @@ fn install_statusline_with(
     };
     let statusline = settings.get("statusLine");
     if let Some(current) = statusline
-        && !owned(current)
+        && !owned(current, Some(&command_path))
     {
         return Outcome::Conflict;
     }
@@ -647,6 +653,10 @@ fn install_statusline_with(
 
 /// Python `uninstall_statusline`: removes our `statusLine` entry; the hook file stays.
 pub fn uninstall_statusline(settings_path: Option<&Path>) -> Outcome {
+    uninstall_statusline_with(settings_path, None)
+}
+
+fn uninstall_statusline_with(settings_path: Option<&Path>, config_dir: Option<&Path>) -> Outcome {
     let settings_path = settings_path.map_or_else(agy_settings_path, Path::to_path_buf);
     if !settings_path.is_file() {
         return Outcome::NotInstalled;
@@ -654,10 +664,14 @@ pub fn uninstall_statusline(settings_path: Option<&Path>) -> Outcome {
     let Ok(mut settings) = load_settings(&settings_path) else {
         return Outcome::Error;
     };
-    match settings.get("statusLine") {
-        None => return Outcome::NotInstalled,
-        Some(current) if !owned(current) => return Outcome::Conflict,
-        Some(_) => {}
+    let Some(statusline) = settings.get("statusLine") else {
+        return Outcome::NotInstalled;
+    };
+    let config_dir = config_dir.map_or_else(ConfigManager::config_dir, Path::to_path_buf);
+    let hook_path = absolute(&config_dir.join(HOOK_FILENAME));
+    let command_path = command_hook_path_with(&hook_path, cfg!(windows), false, win32_short_path);
+    if !owned(statusline, command_path.as_deref()) {
+        return Outcome::Conflict;
     }
     let written = (|| -> std::io::Result<()> {
         backup(&settings_path)?;
@@ -837,11 +851,17 @@ mod tests {
         assert_eq!(backups.len(), 1);
         assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), original);
         assert_eq!(install(&dir, &settings), Outcome::Already);
-        assert_eq!(uninstall_statusline(Some(&settings)), Outcome::Removed);
+        assert_eq!(
+            uninstall_statusline_with(Some(&settings), Some(&dir.path().join("config"))),
+            Outcome::Removed
+        );
         let data: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
         assert_eq!(data, json!({"model": "x"}));
         assert!(hook.exists(), "the hook file stays");
-        assert_eq!(uninstall_statusline(Some(&settings)), Outcome::NotInstalled);
+        assert_eq!(
+            uninstall_statusline_with(Some(&settings), Some(&dir.path().join("config"))),
+            Outcome::NotInstalled
+        );
     }
 
     #[test]
@@ -852,10 +872,38 @@ mod tests {
             let raw = json!({"statusLine": value}).to_string();
             fs::write(&settings, &raw).unwrap();
             assert_eq!(install(&dir, &settings), Outcome::Conflict);
-            assert_eq!(uninstall_statusline(Some(&settings)), Outcome::Conflict);
+            assert_eq!(
+                uninstall_statusline_with(Some(&settings), Some(&dir.path().join("config"))),
+                Outcome::Conflict
+            );
             assert_eq!(fs::read_to_string(&settings).unwrap(), raw);
         }
         assert!(!dir.path().join("config").exists());
+    }
+
+    #[test]
+    fn a_different_hook_with_the_same_filename_is_not_claimed() {
+        let dir = Dir::new("foreign_hook");
+        let settings = dir.path().join("settings.json");
+        let config_dir = dir.path().join("config");
+        let statusline = json!({
+            "type": "command",
+            "command": format!("python /other/{HOOK_FILENAME}"),
+            "enabled": true,
+        });
+        fs::write(&settings, json!({"statusLine": statusline}).to_string()).unwrap();
+
+        assert_eq!(
+            statusline_status(Some(&settings), Some(&config_dir)),
+            Status::Conflict
+        );
+        assert_eq!(install(&dir, &settings), Outcome::Conflict);
+        assert_eq!(
+            uninstall_statusline_with(Some(&settings), Some(&config_dir)),
+            Outcome::Conflict
+        );
+        let data: Value = serde_json::from_str(&fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(data["statusLine"], statusline);
     }
 
     #[test]
@@ -916,7 +964,10 @@ mod tests {
         let status = data.shift_remove("statusLine").unwrap();
         data.shift_insert(0, "statusLine".to_owned(), status);
         fs::write(&settings, serde_json::to_string(&data).unwrap()).unwrap();
-        assert_eq!(uninstall_statusline(Some(&settings)), Outcome::Removed);
+        assert_eq!(
+            uninstall_statusline_with(Some(&settings), Some(&dir.path().join("config"))),
+            Outcome::Removed
+        );
         let text = fs::read_to_string(&settings).unwrap();
         let (zeta, alpha, mid) = (
             text.find("zeta").unwrap(),

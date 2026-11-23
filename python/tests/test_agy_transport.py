@@ -19,6 +19,16 @@ QUOTA_FIXTURE = (
     b'{"modelId":"claude-sonnet-5-5-high","remainingFraction":0.694,"resetTime":"2026-10-16T14:00:00Z"}'
     b']}'
 )
+ARGON_SUMMARY_FIXTURE = (
+    b'{"groups":['
+    b'{"name":"Claude and GPT models","buckets":['
+    b'{"id":"3p-weekly","remainingFraction":0.8449,"resetTime":"2026-10-23T12:00:00Z"},'
+    b'{"id":"3p-5h","remainingFraction":0.694,"resetTime":"2026-10-16T14:00:00Z"}]},'
+    b'{"name":"Gemini 4 Argon","buckets":['
+    b'{"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":0.74,'
+    b'"resetTime":"2026-10-23T12:00:00Z"}]}]}'
+)
+
 
 
 class _MockResponse:
@@ -77,6 +87,21 @@ class AgyTransportTests(unittest.TestCase):
         self.assertEqual(result.badge1_text, "C/G 剩餘: 84%")
         self.assertEqual(result.badge2_text, "Argon 剩餘: 79%")
 
+    def test_live_argon_quota_takes_precedence_over_statusline_cache(self):
+        self.cache_reader.return_value = self.cache
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value="token"), patch(
+            "core.providers.agy_provider.urllib.request.urlopen",
+            side_effect=[_MockResponse(ARGON_SUMMARY_FIXTURE), _MockResponse(QUOTA_FIXTURE)],
+        ):
+            result = provider.fetch_usage()
+
+        self.assertIsNone(result.error)
+        self.assertAlmostEqual(result.extra_metrics[2].val, 26.0)
+        self.assertEqual(result.extra_metrics[2].reset.isoformat(), "2026-10-23T12:00:00+00:00")
+        self.assertEqual(result.badge2_text, "Argon 剩餘: 74%")
+
+
     def test_cache_without_token_provides_complete_metrics(self):
         self.cache_reader.return_value = self.cache
         provider = AgyProvider()
@@ -122,7 +147,7 @@ class AgyTransportTests(unittest.TestCase):
         with patch.object(provider, "_get_access_token", return_value=None):
             result = provider.fetch_usage()
         self.assertEqual(result.error_code, "no_token")
-        self.assertEqual(result.badge2_text, "Argon: --")
+        self.assertEqual(result.badge2_text, "Argon 剩餘: --")
         if result.error:
             self.assertEqual(result.extra_metrics, [])
         else:
@@ -137,7 +162,7 @@ class AgyTransportTests(unittest.TestCase):
         ):
             result = provider.fetch_usage()
         self.assertEqual(result.error_code, "auth")
-        self.assertEqual(result.badge2_text, "Argon: --")
+        self.assertEqual(result.badge2_text, "Argon 剩餘: --")
         if result.error:
             self.assertEqual(result.extra_metrics, [])
         else:
@@ -167,7 +192,7 @@ class AgyTransportTests(unittest.TestCase):
         self.assertEqual(result.extra_metrics[0].reset.isoformat(), "2026-10-16T14:00:00+00:00")
         self.assertEqual(result.metric1_text, "3%")
         self.assertEqual(result.badge1_text, "C/G 剩餘: 84%")
-        self.assertEqual(result.badge2_text, "Argon: --")
+        self.assertEqual(result.badge2_text, "Argon 剩餘: --")
         if result.error:
             self.assertEqual(result.extra_metrics, [])
         else:
@@ -183,6 +208,7 @@ class AgyTransportTests(unittest.TestCase):
             self.assertEqual(req.get_method(), "POST")
             self.assertEqual(req.data, b"{}")
             self.assertEqual(req.get_header("Authorization"), "Bearer token")
+            self.assertEqual(req.get_header("User-agent"), "antigravity/cli/1.5.14")
 
     def test_gemini_picks_most_constrained_bucket(self):
         quota_payload = json.dumps(
@@ -205,35 +231,121 @@ class AgyTransportTests(unittest.TestCase):
         self.assertEqual(result.metric1_text, "75%")
         self.assertEqual(result.metric1_reset.isoformat(), "2026-10-16T15:00:00+00:00")
 
-    def test_unknown_group_logged_and_ignored(self):
-        summary_with_unknown = json.dumps(
-            {
-                "groups": [
-                    {
-                        "name": "Claude and GPT models",
-                        "buckets": [{"id": "3p-weekly", "remainingFraction": 0.8449, "resetTime": "2026-10-23T12:00:00Z"}],
-                    },
-                    {
-                        "name": "Gemini 4 Argon",
-                        "buckets": [{"id": "argon-5h", "remainingFraction": 0.1}],
-                    },
-                ]
-            }
-        ).encode("utf-8")
+    def test_argon_summary_group_populates_weekly_row_and_badge(self):
         provider = AgyProvider()
-        with patch("core.providers.agy_provider.logger") as mock_logger, patch(
+        with patch(
             "core.providers.agy_provider.urllib.request.urlopen",
-            side_effect=[_MockResponse(summary_with_unknown), _MockResponse(QUOTA_FIXTURE)],
+            side_effect=[_MockResponse(ARGON_SUMMARY_FIXTURE), _MockResponse(QUOTA_FIXTURE)],
         ):
             result = provider._fetch_via_http("token", "12:00:00")
 
         self.assertIsNone(result.error)
         self.assertAlmostEqual(result.metric1_val, 2.57)
-        self.assertIsNone(result.extra_metrics[0].val)
         self.assertEqual(result.badge1_text, "C/G 剩餘: 84%")
-        mock_logger.info.assert_called()
-        logged_msgs = [str(call.args[0]) for call in mock_logger.info.call_args_list]
-        self.assertTrue(any("Gemini 4 Argon" in msg for msg in logged_msgs))
+        self.assertAlmostEqual(result.extra_metrics[2].val, 26.0)
+        self.assertEqual(result.extra_metrics[2].reset.isoformat(), "2026-10-23T12:00:00+00:00")
+        self.assertEqual(result.extra_metrics[2].subtext, "")
+        self.assertEqual(result.badge2_text, "Argon 剩餘: 74%")
+
+    def test_argon_weekly_model_buckets_excluded_from_five_hour_fallback(self):
+        quota_payload = json.dumps(
+            {
+                "buckets": [
+                    {"modelId": "gemini-3.8-flash-low", "remainingFraction": 0.9, "resetTime": "2026-10-16T13:00:00Z"},
+                    {"modelId": "gemini-3.8-pro-high", "remainingFraction": 0.25, "resetTime": "2026-10-16T15:00:00Z"},
+                    {"modelId": "gemini-4-argon-high", "remainingFraction": 0.15, "resetTime": "2026-10-23T12:00:00Z"},
+                ]
+            }
+        ).encode("utf-8")
+        provider = AgyProvider()
+        with patch(
+            "core.providers.agy_provider.urllib.request.urlopen",
+            side_effect=[_MockResponse(SUMMARY_FIXTURE), _MockResponse(quota_payload)],
+        ):
+            result = provider._fetch_via_http("token", "12:00:00")
+
+        self.assertIsNone(result.error)
+        self.assertAlmostEqual(result.metric1_val, 75.0)
+        self.assertEqual(result.metric1_text, "75%")
+        self.assertEqual(result.metric1_reset.isoformat(), "2026-10-16T15:00:00+00:00")
+
+    def test_summary_gemini_group_wins_over_quota_and_cache(self):
+        summary = json.dumps(
+            {
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.70, "resetTime": "2026-10-23T12:00:00Z"},
+                            {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.95, "resetTime": "2026-10-16T14:00:00Z"},
+                        ],
+                    },
+                    {
+                        "displayName": "Claude and GPT models",
+                        "buckets": [
+                            {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.8449, "resetTime": "2026-10-23T12:00:00Z"},
+                            {"bucketId": "3p-5h", "window": "5h", "remainingFraction": 0.694, "resetTime": "2026-10-16T14:00:00Z"},
+                        ],
+                    },
+                    {
+                        "displayName": "Gemini 4 Argon",
+                        "buckets": [
+                            {"bucketId": "gemini-argon-wtu-weekly", "window": "weekly", "remainingFraction": 0.15, "resetTime": "2026-10-23T12:00:00Z"},
+                        ],
+                    },
+                ]
+            }
+        ).encode("utf-8")
+        quota = json.dumps(
+            {
+                "buckets": [
+                    {"modelId": "gemini-3.8-flash-low", "remainingFraction": 0.90, "resetTime": "2026-10-16T13:00:00Z"},
+                    {"modelId": "gemini-4-argon-high", "remainingFraction": 0.15, "resetTime": "2026-10-23T12:00:00Z"},
+                ]
+            }
+        ).encode("utf-8")
+        self.cache_reader.return_value = self.cache
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value="token"), patch(
+            "core.providers.agy_provider.urllib.request.urlopen",
+            side_effect=[_MockResponse(summary), _MockResponse(quota)],
+        ) as urlopen:
+            result = provider.fetch_usage()
+
+        self.assertIsNone(result.error)
+        self.assertEqual(urlopen.call_count, 1)
+        self.assertAlmostEqual(result.metric1_val, 5.0)
+        self.assertEqual(result.metric1_reset.isoformat(), "2026-10-16T14:00:00+00:00")
+        self.assertAlmostEqual(result.metric2_val, 30.0)
+        self.assertEqual(result.metric2_reset.isoformat(), "2026-10-23T12:00:00+00:00")
+        self.assertEqual(result.metric2_subtext, "")
+        self.assertAlmostEqual(result.extra_metrics[2].val, 85.0)
+        self.assertEqual(result.extra_metrics[2].reset.isoformat(), "2026-10-23T12:00:00+00:00")
+
+    def test_summary_with_only_gemini_weekly_is_not_an_error(self):
+        summary = json.dumps(
+            {
+                "groups": [
+                    {
+                        "displayName": "Gemini Models",
+                        "buckets": [
+                            {"bucketId": "gemini-weekly", "window": "weekly", "remainingFraction": 0.70, "resetTime": "2026-10-23T12:00:00Z"},
+                        ],
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        provider = AgyProvider()
+        with patch.object(provider, "_get_access_token", return_value="token"), patch(
+            "core.providers.agy_provider.urllib.request.urlopen",
+            side_effect=[_MockResponse(summary), HTTPError(provider.QUOTA_URL, 503, "down", {}, None)],
+        ):
+            result = provider.fetch_usage()
+
+        self.assertIsNone(result.error)
+        self.assertEqual(result.metric2_title, "GEMINI 7D")
+        self.assertAlmostEqual(result.metric2_val, 30.0)
+        self.assertEqual(result.metric2_subtext, "")
 
     def test_endpoint_a_401_returns_auth_error(self):
         provider = AgyProvider()

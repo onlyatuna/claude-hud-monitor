@@ -8,6 +8,47 @@
 
 use chrono::{DateTime, Local, Utc};
 
+/// Reads a generic password item from the macOS Keychain via `/usr/bin/security`, killing the
+/// subprocess if `timeout` elapses so background refreshes cannot hang indefinitely.
+#[cfg(target_os = "macos")]
+pub fn read_keychain_password(args: &[&str], timeout: std::time::Duration) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let mut child = Command::new("/usr/bin/security")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let mut stdout_handle = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut stdout = String::new();
+        let _ = stdout_handle.read_to_string(&mut stdout);
+        stdout
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().ok()? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    let stdout = reader.join().ok()?;
+    if !status.success() {
+        return None;
+    }
+    Some(stdout.trim().to_owned())
+}
+
 /// A validated percentage in [0.0, 100.0].  Returns None for invalid/unavailable values.
 /// Allows a 1e-6 epsilon for floating-point calculation inaccuracies and clamps to [0.0, max].
 pub fn percentage(value: Option<f64>, max: f64) -> Option<f64> {

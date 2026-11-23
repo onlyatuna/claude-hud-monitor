@@ -67,16 +67,22 @@ class StatusTests(Workspace):
         self.hook.unlink()
         self.assertEqual(self.status(), 'needs_update')
 
-    def test_command_pointing_somewhere_else_or_disabled_needs_an_update(self):
+    def test_disabled_managed_command_needs_an_update(self):
         self.write_settings({})
         self.install()
         data = self.read_settings()
         data['statusLine']['enabled'] = False
         self.write_settings(data)
         self.assertEqual(self.status(), 'needs_update')
-        self.write_settings({'statusLine': {'type': 'command', 'command': f'python {self.root / "elsewhere" / HOOK}',
-                                            'enabled': True}})
-        self.assertEqual(self.status(), 'needs_update')
+
+    def test_command_pointing_to_another_hook_is_a_conflict(self):
+        statusline = {'type': 'command', 'command': f'python {self.root / "elsewhere" / HOOK}',
+                      'enabled': True}
+        self.write_settings({'statusLine': statusline})
+        self.assertEqual(self.status(), 'conflict')
+        self.assertEqual(self.install(), 'conflict')
+        self.assertEqual(agy.uninstall_statusline(self.settings, self.config), 'conflict')
+        self.assertEqual(self.read_settings()['statusLine'], statusline)
 
     def test_broken_settings(self):
         for raw in ('{', '[]'):
@@ -112,12 +118,15 @@ class InstallTests(Workspace):
         self.assertEqual(self.install(), 'updated')
         self.assertTrue(self.hook.exists())
 
-    def test_a_command_for_another_location_is_replaced_with_a_backup(self):
-        self.write_settings({'statusLine': {'type': 'command', 'command': f'python {self.root / "old" / HOOK}',
-                                            'enabled': True}})
-        self.assertEqual(self.install(), 'updated')
-        self.assertEqual(self.read_settings()['statusLine']['command'], f'python {self.hook}')
-        self.assertTrue(list(self.agy_dir.glob('settings.json.bak-hud-*')))
+    def test_a_command_for_another_location_is_not_overwritten(self):
+        statusline = {'type': 'command', 'command': f'python {self.root / "old" / HOOK}',
+                      'enabled': True}
+        self.write_settings({'statusLine': statusline})
+        original = self.settings.read_text(encoding='utf-8')
+        self.assertEqual(self.install(), 'conflict')
+        self.assertEqual(self.settings.read_text(encoding='utf-8'), original)
+        self.assertFalse(list(self.agy_dir.glob('settings.json.bak-hud-*')))
+        self.assertFalse(self.config.exists())
 
     def test_nothing_is_changed_when_python_cannot_be_found(self):
         self.write_settings({'model': 'x'})
@@ -223,7 +232,7 @@ class ShortPathTests(Workspace):
                                             'enabled': True}})
         config = self.spaced()
         with patch.object(agy.sys, 'platform', 'win32'), patch.object(agy, '_short_path', return_value=str(self.root / 'JOHNSM~1')):
-            self.assertEqual(agy.statusline_status(self.settings, config), 'needs_update')
+            self.assertEqual(agy.statusline_status(self.settings, config), 'conflict')
         self.assertFalse(config.exists())
         self.assertFalse(config.parent.exists())
 

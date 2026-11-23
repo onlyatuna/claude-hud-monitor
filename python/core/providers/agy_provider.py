@@ -17,7 +17,7 @@ from core.providers.claude_provider import slugify
 # Cache keys with a fixed row (or a row's data) of their own; every other cache key becomes a row by itself.
 KNOWN_CACHE_KEYS = frozenset({"3p-5h", "3p-weekly", "gemini-5h", "gemini-weekly", "gemini-argon-wtu-weekly"})
 _WINDOW_TAGS = {"weekly": "7D", "week": "7D", "7d": "7D", "5h": "5H"}
-_KNOWN_GROUP_WORDS = ("gemini", "claude", "gpt", "argon")
+USER_AGENT = "antigravity/cli/1.5.14"
 
 
 def title_from_key(key: str) -> str:
@@ -164,7 +164,7 @@ class AgyProvider(BaseProvider):
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
-            "User-Agent": "antigravity/1.2.4"
+            "User-Agent": USER_AGENT
         }
 
         summary_metrics: Optional[UsageMetrics] = None
@@ -189,32 +189,45 @@ class AgyProvider(BaseProvider):
             logger.debug(f"[AgyProvider] {self.SUMMARY_URL} HTTP fetch error: {e}")
 
         quota_metrics: Optional[UsageMetrics] = None
-        req_b = urllib.request.Request(self.QUOTA_URL, data=b"{}", headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req_b, timeout=self.HTTP_TIMEOUT) as resp:
-                if resp.status == 401:
-                    return self._failure(now_str, "auth", "登入憑證已失效，請使用原 CLI 重新登入")
-                if resp.status == 200:
-                    parsed = self._parse_model_buckets(json.loads(resp.read().decode("utf-8")), now_str)
-                    if not parsed.error:
-                        quota_metrics = parsed
+        if not (summary_metrics and summary_metrics.metric1_val is not None):
+            req_b = urllib.request.Request(self.QUOTA_URL, data=b"{}", headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req_b, timeout=self.HTTP_TIMEOUT) as resp:
+                    if resp.status == 401:
+                        return self._failure(now_str, "auth", "登入憑證已失效，請使用原 CLI 重新登入")
+                    if resp.status == 200:
+                        parsed = self._parse_model_buckets(json.loads(resp.read().decode("utf-8")), now_str)
+                        if not parsed.error:
+                            quota_metrics = parsed
+                        else:
+                            logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned no usable quota data")
                     else:
-                        logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned no usable quota data")
-                else:
-                    logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned HTTP {resp.status}")
-        except urllib.error.HTTPError as e:
-            logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned HTTP {e.code}")
-            if e.code == 401:
-                return self._failure(now_str, "auth", "登入憑證已失效，請使用原 CLI 重新登入")
-        except Exception as e:
-            logger.debug(f"[AgyProvider] {self.QUOTA_URL} HTTP fetch error: {e}")
+                        logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned HTTP {resp.status}")
+            except urllib.error.HTTPError as e:
+                logger.debug(f"[AgyProvider] {self.QUOTA_URL} returned HTTP {e.code}")
+                if e.code == 401:
+                    return self._failure(now_str, "auth", "登入憑證已失效，請使用原 CLI 重新登入")
+            except Exception as e:
+                logger.debug(f"[AgyProvider] {self.QUOTA_URL} HTTP fetch error: {e}")
 
-        m1_val = quota_metrics.metric1_val if quota_metrics else None
-        m1_reset = quota_metrics.metric1_reset if quota_metrics else None
+        if summary_metrics and summary_metrics.metric1_val is not None:
+            m1_val = summary_metrics.metric1_val
+            m1_reset = summary_metrics.metric1_reset
+        elif quota_metrics:
+            m1_val = quota_metrics.metric1_val
+            m1_reset = quota_metrics.metric1_reset
+        else:
+            m1_val = None
+            m1_reset = None
+        m2_val = summary_metrics.metric2_val if summary_metrics else None
+        m2_reset = summary_metrics.metric2_reset if summary_metrics else None
+        m2_subtext = "" if m2_val is not None else "Gemini 週額度來源未知"
         badge1 = summary_metrics.badge1_text if summary_metrics and summary_metrics.badge1_text else f"C/G 剩餘: {percent_text(None)}"
         rows = summary_metrics.extra_metrics if summary_metrics else self._empty_rows()
-        has_cg = any(row.val is not None for row in rows[:2])
-        has_error = m1_val is None and not has_cg
+        has_rows = any(row.val is not None for row in rows)
+        has_error = m1_val is None and m2_val is None and not has_rows
+
+        badge2 = summary_metrics.badge2_text if summary_metrics else f"Argon 剩餘: {percent_text(None)}"
 
         return UsageMetrics(
             provider_name="Antigravity",
@@ -224,12 +237,12 @@ class AgyProvider(BaseProvider):
             metric1_text=percent_text(m1_val),
             metric1_reset=m1_reset,
             metric2_title="GEMINI 7D",
-            metric2_val=None,
-            metric2_text="--",
-            metric2_reset=None,
-            metric2_subtext="Gemini 週額度來源未知",
+            metric2_val=m2_val,
+            metric2_text=percent_text(m2_val),
+            metric2_reset=m2_reset,
+            metric2_subtext=m2_subtext,
             badge1_text=badge1,
-            badge2_text="Gemini Models",
+            badge2_text=badge2,
             last_updated_time=now_str,
             error="未取得有效配額資料" if has_error else None,
             error_code="schema" if has_error else "",
@@ -247,7 +260,8 @@ class AgyProvider(BaseProvider):
         if cache is None:
             if res is None:
                 res = self._failure(now_str, "no_token", "未找到 Antigravity 登入憑證\n請先登入 Antigravity")
-            res.badge2_text = "Argon: --"
+            if not res.badge2_text:
+                res.badge2_text = f"Argon 剩餘: {percent_text(None)}"
             return res
         return self._merge_cache(res, cache, now_str)
 
@@ -269,14 +283,16 @@ class AgyProvider(BaseProvider):
             result.metric1_val = max(0.0, min(100.0, (1 - bucket["remaining_fraction"]) * 100))
             result.metric1_reset = bucket["reset_time"]
         weekly = buckets.get("gemini-weekly")
-        result.metric2_val = max(0.0, min(100.0, (1 - weekly["remaining_fraction"]) * 100)) if weekly else None
-        result.metric2_reset = weekly["reset_time"] if weekly else None
-        result.metric2_subtext = "" if weekly else "需啟用 agy statusLine"
+        if result.metric2_val is None and weekly:
+            result.metric2_val = max(0.0, min(100.0, (1 - weekly["remaining_fraction"]) * 100))
+            result.metric2_reset = weekly["reset_time"]
+            result.metric2_subtext = ""
+        if result.metric2_val is None:
+            result.metric2_subtext = "需啟用 agy statusLine"
         if res is None or result.badge1_text in ("", "C/G 剩餘: --"):
             cg = buckets.get("3p-weekly")
             result.badge1_text = f"C/G 剩餘: {percent_text(cg['remaining_fraction'] * 100 if cg else None)}"
-        argon = buckets.get("gemini-argon-wtu-weekly")
-        result.badge2_text = f"Argon 剩餘: {percent_text(argon['remaining_fraction'] * 100 if argon else None)}"
+        result.badge2_text = f"Argon 剩餘: {percent_text(100 - rows[2].val if rows[2].val is not None else None)}"
         result.metric1_title = "GEMINI 5H"
         result.metric2_title = "GEMINI 7D"
         result.metric1_text = percent_text(result.metric1_val)
@@ -320,7 +336,7 @@ class AgyProvider(BaseProvider):
 
         for b in buckets:
             model_id = (b.get("modelId") or b.get("model_id") or "").lower()
-            if "gemini" not in model_id:
+            if "gemini" not in model_id or "argon" in model_id:
                 continue
             rem_frac = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
             if rem_frac is None:
@@ -391,7 +407,27 @@ class AgyProvider(BaseProvider):
         for g in groups:
             name = g.get("name") or g.get("displayName") or ""
             g_name = name.lower()
-            if "gemini" in g_name and "argon" not in g_name:
+            if "argon" in g_name:
+                for b in g.get("buckets", []):
+                    b_id = (b.get("id") or b.get("bucketId") or "").lower()
+                    b_window = (b.get("window") or "").lower()
+                    if "week" not in b_id and "week" not in b_window:
+                        continue
+                    rem_frac = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
+                    if rem_frac is None:
+                        continue
+                    used = max(0.0, min(100.0, (1.0 - rem_frac) * 100.0))
+                    row = rows[2]
+                    if row.val is None or used > row.val:
+                        row.val = used
+                        row.text = percent_text(used)
+                        reset = b.get("reset_time") or b.get("resetTime")
+                        try:
+                            row.reset = datetime.fromisoformat(reset.replace("Z", "+00:00")) if reset else None
+                        except (ValueError, TypeError, AttributeError):
+                            row.reset = None
+                        row.subtext = ""
+            elif "gemini" in g_name:
                 for b in g.get("buckets", []):
                     b_id = (b.get("id") or b.get("bucketId") or "").lower()
                     b_window = (b.get("window") or "").lower()
@@ -418,13 +454,15 @@ class AgyProvider(BaseProvider):
             elif ("claude" in g_name or "gpt" in g_name) and "argon" not in g_name:
                 for b in g.get("buckets", []):
                     b_id = (b.get("id") or b.get("bucketId") or "").lower()
-                    row = rows[1] if "week" in b_id else rows[0] if "5h" in b_id else None
+                    b_window = (b.get("window") or "").lower()
+                    row = (rows[1] if ("week" in b_id or "week" in b_window)
+                           else rows[0] if ("5h" in b_id or "5h" in b_window) else None)
                     if row is None:
                         continue
                     rem_frac = percentage(b.get("remaining_fraction") if "remaining_fraction" in b else b.get("remainingFraction"), 1.0)
                     if rem_frac is None:
                         continue
-                    used = (1 - rem_frac) * 100
+                    used = max(0.0, min(100.0, (1.0 - rem_frac) * 100.0))
                     if row.val is None or used > row.val:
                         row.val = used
                         row.text = percent_text(used)
@@ -437,13 +475,13 @@ class AgyProvider(BaseProvider):
                         third_party_rem_pct = 100 - row.val
             else:
                 logger.info(f"[AgyProvider] unknown quota group: {name}")
-                if not any(word in g_name for word in _KNOWN_GROUP_WORDS):  # an Argon group's data comes from the cache
-                    _add_group_rows(rows, name, g.get("buckets"))
+                _add_group_rows(rows, name, g.get("buckets"))
 
         m1_text = percent_text(m1_used_pct)
         m2_text = percent_text(m2_used_pct)
         badge1 = f"C/G 剩餘: {percent_text(third_party_rem_pct)}"
-        badge2 = "Gemini Models"
+        argon_remaining = 100 - rows[2].val if rows[2].val is not None else None
+        badge2 = f"Argon 剩餘: {percent_text(argon_remaining)}"
         has_error = m1_used_pct is None and m2_used_pct is None and all(row.val is None for row in rows)
 
         return UsageMetrics(
