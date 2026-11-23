@@ -3,9 +3,10 @@
 //   Alt+C  (id 9527) → toggle visibility
 //   Alt+Shift+C (id 9528) → toggle click-through
 //
-// Registration and the worker thread belong to ferrokit's `GlobalHotkeyManager` (Windows only;
-// elsewhere it reports `Unsupported`). A press runs the handler on that worker thread, which only
-// forwards it to the UI thread (`Signal::connect_local_to` in main.rs).
+// Registration and the worker thread belong to ferrokit's `GlobalHotkeyManager` (Windows
+// `RegisterHotKey`; macOS Carbon `RegisterEventHotKey` and Linux X11 in newer ferrokit, or
+// `Unsupported` on unsupported/un-bumped backends). A press runs the handler on that worker
+// thread, which only forwards it to the UI thread (`Signal::connect_local_to` in main.rs).
 
 use ferrokit_platform::{GlobalHotkeyManager, HotkeyError, HotkeyModifiers};
 use ferrokit_widgets::KeySequence;
@@ -26,8 +27,9 @@ pub enum HotkeyAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyStatus {
     Registered,
-    /// The system refused the registration (`HotkeyError::Os { code }`: `GetLastError()` taken
-    /// right after `RegisterHotKey`, 1409 = `ERROR_HOTKEY_ALREADY_REGISTERED`).
+    /// The system refused the registration (`HotkeyError::Os { code }`: `GetLastError()` on Windows
+    /// such as 1409 = `ERROR_HOTKEY_ALREADY_REGISTERED`, signed `OSStatus` bit-cast to `u32` on
+    /// macOS such as `-9878` = `eventHotKeyExistsErr`, or platform error code on Linux).
     Failed(u32),
     /// This platform has no global-hotkey backend.
     Unsupported,
@@ -40,6 +42,68 @@ pub struct HotkeyRegistration {
     pub toggle_label: String,
     pub clickthrough: HotkeyStatus,
     pub clickthrough_label: String,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+enum OsKind {
+    Windows,
+    MacOs,
+    Other,
+}
+
+impl OsKind {
+    const fn current() -> Self {
+        if cfg!(target_os = "windows") {
+            Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::MacOs
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// Returns true when a portable hotkey label uses Option/Alt without Ctrl or Meta/Cmd
+/// (restricted by macOS 15 Sequoia+ for global shortcuts).
+fn is_macos_option_only_label(label: &str) -> bool {
+    let mut has_alt = false;
+    let mut has_ctrl_or_meta = false;
+    for token in label.split('+').map(|s| s.trim().to_ascii_lowercase()) {
+        match token.as_str() {
+            "alt" | "option" => has_alt = true,
+            "ctrl" | "control" | "meta" | "cmd" | "command" => has_ctrl_or_meta = true,
+            _ => {}
+        }
+    }
+    has_alt && !has_ctrl_or_meta
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn has_option_only_mods(mods: HotkeyModifiers) -> bool {
+    mods.contains(HotkeyModifiers::ALT)
+        && !mods.intersects(HotkeyModifiers::CONTROL | HotkeyModifiers::WIN)
+}
+
+fn format_os_error(code: u32, os: OsKind) -> String {
+    match os {
+        OsKind::Windows => format!("Win32 Error: {code}"),
+        OsKind::MacOs => format!("macOS Error: {}", code as i32),
+        OsKind::Other => format!("Error: {code}"),
+    }
+}
+
+fn push_failure_notice(notices: &mut Vec<String>, label: &str, kind: &str, code: u32, os: OsKind) {
+    let err_text = format_os_error(code, os);
+    let caveat = if os == OsKind::MacOs && is_macos_option_only_label(label) {
+        "（macOS 15+ 通常不允許純 Option 組合鍵，建議改為 Ctrl+Option 或 Cmd 組合鍵）"
+    } else {
+        ""
+    };
+    notices.push(format!(
+        "{label} {kind}註冊失敗 ({err_text})，可能已被其他程式佔用{caveat}"
+    ));
+    notices.push(format!("{label} 已被占用，請使用系統匣操作"));
 }
 
 impl HotkeyRegistration {
@@ -59,27 +123,26 @@ impl HotkeyRegistration {
     }
 
     /// The tray messages Python shows for failed registrations, in its order: for each failed
-    /// hotkey `hotkey_failed` (with the Win32 error) and then `unavailable`
+    /// hotkey `hotkey_failed` (with the platform error code) and then `unavailable`
     /// (`python/system/hotkey.py:70-86`). The caller appends the "use the tray" hint
     /// (`python/main.py:77-84`).
     pub fn failure_notices(&self) -> Vec<String> {
+        self.failure_notices_for(OsKind::current())
+    }
+
+    fn failure_notices_for(&self, os: OsKind) -> Vec<String> {
         let mut notices = Vec::new();
         if let HotkeyStatus::Failed(err) = self.toggle {
-            notices.push(format!(
-                "{} 全域快捷鍵註冊失敗 (Win32 Error: {err})，可能已被其他程式佔用",
-                self.toggle_label
-            ));
-            notices.push(format!("{} 已被占用，請使用系統匣操作", self.toggle_label));
+            push_failure_notice(&mut notices, &self.toggle_label, "全域快捷鍵", err, os);
         }
         if let HotkeyStatus::Failed(err) = self.clickthrough {
-            notices.push(format!(
-                "{} 穿透模式快捷鍵註冊失敗 (Win32 Error: {err})，可能已被其他程式佔用",
-                self.clickthrough_label
-            ));
-            notices.push(format!(
-                "{} 已被占用，請使用系統匣操作",
-                self.clickthrough_label
-            ));
+            push_failure_notice(
+                &mut notices,
+                &self.clickthrough_label,
+                "穿透模式快捷鍵",
+                err,
+                os,
+            );
         }
         notices
     }
@@ -152,6 +215,26 @@ fn register(
     }
 }
 
+fn log_registration_status(role: &str, label: &str, status: HotkeyStatus, _mods: HotkeyModifiers) {
+    match status {
+        HotkeyStatus::Registered => {
+            info!("[Hotkey] {role} hotkey registered ({label})");
+        }
+        HotkeyStatus::Failed(_) => {
+            warn!("[Hotkey] {role} hotkey registration failed ({label}, {status:?})");
+        }
+        HotkeyStatus::Unsupported => {
+            info!("[Hotkey] {role} hotkey unsupported on this platform ({label})");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if has_option_only_mods(_mods) {
+        warn!(
+            "[Hotkey] {label} uses Option without Ctrl/Cmd, which macOS 15+ may block for global shortcuts"
+        );
+    }
+}
+
 impl HotkeyManager {
     /// Registration status of the global hotkeys. `start` returns once the registrations have
     /// been attempted, so this is final; a refused registration does not make `start` fail, since
@@ -186,23 +269,13 @@ impl HotkeyManager {
         let (mods, vk) = resolve_hotkey(hotkey_str);
         let toggle = register(&manager, HOTKEY_ID_TOGGLE, mods, vk)?;
         let toggle_label = label(mods, vk);
-        match toggle {
-            HotkeyStatus::Failed(_) => {
-                warn!("[Hotkey] Main hotkey registration failed ({toggle_label}, {toggle:?})")
-            }
-            _ => info!("[Hotkey] Main hotkey registered ({toggle_label})"),
-        }
+        log_registration_status("Main", &toggle_label, toggle, mods);
 
         // Secondary hotkey: toggle click-through (distinct non-conflicting modifier)
         let ct_mods = compute_ct_mods(mods);
         let clickthrough = register(&manager, HOTKEY_ID_CLICKTHROUGH, ct_mods, vk)?;
         let clickthrough_label = label(ct_mods, vk);
-        match clickthrough {
-            HotkeyStatus::Failed(_) => warn!(
-                "[Hotkey] Click-through hotkey registration failed ({clickthrough_label}, {clickthrough:?})"
-            ),
-            _ => info!("[Hotkey] Click-through hotkey registered ({clickthrough_label})"),
-        }
+        log_registration_status("Click-through", &clickthrough_label, clickthrough, ct_mods);
 
         Ok(Self {
             registration: HotkeyRegistration {
@@ -307,12 +380,61 @@ mod tests {
             clickthrough_label: "Alt+Shift+C".into(),
         };
         assert_eq!(
-            r.failure_notices(),
+            r.failure_notices_for(OsKind::Windows),
             vec![
                 "Alt+C 全域快捷鍵註冊失敗 (Win32 Error: 1409)，可能已被其他程式佔用",
                 "Alt+C 已被占用，請使用系統匣操作",
                 "Alt+Shift+C 穿透模式快捷鍵註冊失敗 (Win32 Error: 5)，可能已被其他程式佔用",
                 "Alt+Shift+C 已被占用，請使用系統匣操作",
+            ]
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(r.failure_notices(), r.failure_notices_for(OsKind::Windows));
+    }
+
+    #[test]
+    fn failure_notices_format_macos_signed_errors_and_option_caveat() {
+        let os_err = (-9878_i32) as u32;
+        let r = HotkeyRegistration {
+            toggle: HotkeyStatus::Failed(os_err),
+            toggle_label: "Alt+C".into(),
+            clickthrough: HotkeyStatus::Failed((-50_i32) as u32),
+            clickthrough_label: "Ctrl+Alt+Shift+C".into(),
+        };
+        assert_eq!(
+            r.failure_notices_for(OsKind::MacOs),
+            vec![
+                "Alt+C 全域快捷鍵註冊失敗 (macOS Error: -9878)，可能已被其他程式佔用（macOS 15+ 通常不允許純 Option 組合鍵，建議改為 Ctrl+Option 或 Cmd 組合鍵）",
+                "Alt+C 已被占用，請使用系統匣操作",
+                "Ctrl+Alt+Shift+C 穿透模式快捷鍵註冊失敗 (macOS Error: -50)，可能已被其他程式佔用",
+                "Ctrl+Alt+Shift+C 已被占用，請使用系統匣操作",
+            ]
+        );
+        assert!(is_macos_option_only_label("Alt+C"));
+        assert!(is_macos_option_only_label("Alt+Shift+C"));
+        assert!(!is_macos_option_only_label("Ctrl+Alt+Shift+C"));
+        assert!(!is_macos_option_only_label("Meta+Alt+C"));
+        assert!(!is_macos_option_only_label("Ctrl+Shift+H"));
+
+        assert!(has_option_only_mods(ALT));
+        assert!(has_option_only_mods(ALT | SHIFT));
+        assert!(!has_option_only_mods(CONTROL | ALT));
+        assert!(!has_option_only_mods(HotkeyModifiers::WIN | ALT));
+    }
+
+    #[test]
+    fn failure_notices_format_linux_generic_errors() {
+        let r = HotkeyRegistration {
+            toggle: HotkeyStatus::Failed(10),
+            toggle_label: "Ctrl+Alt+C".into(),
+            clickthrough: HotkeyStatus::Registered,
+            clickthrough_label: "Ctrl+Alt+Shift+C".into(),
+        };
+        assert_eq!(
+            r.failure_notices_for(OsKind::Other),
+            vec![
+                "Ctrl+Alt+C 全域快捷鍵註冊失敗 (Error: 10)，可能已被其他程式佔用",
+                "Ctrl+Alt+C 已被占用，請使用系統匣操作",
             ]
         );
     }

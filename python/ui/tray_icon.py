@@ -7,6 +7,7 @@ from PySide6.QtCore import Qt, QRectF
 from core import tray_quota
 from core.autostart import is_autostart_enabled, set_autostart
 from core.logger import open_log_dir
+from system.hotkey import format_hotkey_labels
 from ui.gauge import ramp_color
 from ui.hud_menu import build_hud_menu
 
@@ -115,7 +116,10 @@ class HUDTrayIcon(QSystemTrayIcon):
         self.hud_window.set_tray_icon(self)
 
         self._app_icon = icon
-        self._base_tooltip = "AI HUD Monitor (3-in-1)\n• Alt+C: 顯隱\n• Alt+Shift+C: 穿透模式"
+        toggle_label, ct_label = format_hotkey_labels(
+            self.hud_window.config.get("hotkey", "Alt+C")
+        )
+        self._base_tooltip = f"AI HUD Monitor (3-in-1)\n• {toggle_label}: 顯隱\n• {ct_label}: 穿透模式"
         self._signature = None
         self._tooltip = None
         self._init_menu()

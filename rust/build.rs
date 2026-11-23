@@ -33,6 +33,6 @@ fn main() {
   </application>
 </assembly>
 "#);
-        let _ = res.compile();
+        res.compile().expect("failed to compile Windows resources");
     }
 }

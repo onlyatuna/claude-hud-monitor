@@ -86,13 +86,74 @@ fn xml_escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
+/// Renders the macOS LaunchAgent plist XML for `exe`.
+#[cfg(any(target_os = "macos", test))]
+fn macos_plist_content(exe: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claudehud</string>
+    <key>ProgramArguments</key>
+    <array><string>{}</string></array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>"#,
+        xml_escape(exe)
+    )
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn desktop_exec_arg(argument: &str) -> Option<String> {
+    if argument.chars().any(|c| matches!(c, '\n' | '\r' | '\0')) {
+        return None;
+    }
+    let mut escaped = String::with_capacity(argument.len() + 2);
+    escaped.push('"');
+    for character in argument.chars() {
+        match character {
+            '\\' | '"' | '`' | '$' => {
+                escaped.push('\\');
+                escaped.push(character);
+            }
+            '%' => escaped.push_str("%%"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped.push('"');
+    Some(escaped)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::xml_escape;
+    use super::{desktop_exec_arg, xml_escape};
 
     #[test]
     fn plist_values_are_xml_escaped() {
         assert_eq!(xml_escape("/a&b/<c>"), "/a&amp;b/&lt;c&gt;");
+        let plist = super::macos_plist_content("/Applications/Claude & HUD.app/Contents/MacOS/hud");
+        assert!(plist.contains("<string>com.claudehud</string>"));
+        assert!(
+            plist
+                .contains("<string>/Applications/Claude &amp; HUD.app/Contents/MacOS/hud</string>")
+        );
+        assert!(plist.contains("<key>RunAtLoad</key>"));
+    }
+
+    #[test]
+    fn desktop_exec_arguments_are_quoted_and_escaped() {
+        assert_eq!(
+            desktop_exec_arg("/opt/My App/app"),
+            Some(r#""/opt/My App/app""#.to_owned())
+        );
+        assert_eq!(
+            desktop_exec_arg(r#"a\b"c$d`e%f"#),
+            Some(r#""a\\b\"c\$d\`e%%f""#.to_owned())
+        );
+        assert_eq!(desktop_exec_arg("/opt/bad\napp"), None);
     }
 }
 
@@ -110,24 +171,14 @@ fn macos_plist_path() -> std::path::PathBuf {
 fn macos_set(enable: bool) -> bool {
     let plist_path = macos_plist_path();
     if enable {
-        let exe = std::env::current_exe()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        let plist_content = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.claudehud</string>
-    <key>ProgramArguments</key>
-    <array><string>{}</string></array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>"#,
-            xml_escape(&exe)
-        );
+        let exe = match std::env::current_exe() {
+            Ok(p) => p.display().to_string(),
+            Err(e) => {
+                error!("[AutoStart] Cannot determine current exe path: {e}");
+                return false;
+            }
+        };
+        let plist_content = macos_plist_content(&exe);
         if let Some(dir) = plist_path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -138,6 +189,7 @@ fn macos_set(enable: bool) -> bool {
         if plist_path.exists() {
             let _ = std::process::Command::new("launchctl")
                 .args(["unload", &plist_path.display().to_string()])
+                .stdin(std::process::Stdio::null())
                 .output();
             std::fs::remove_file(&plist_path)
                 .map_err(|e| error!("[AutoStart] {e}"))
@@ -162,9 +214,6 @@ fn linux_desktop_path() -> std::path::PathBuf {
 fn linux_set(enable: bool) -> bool {
     let desktop_path = linux_desktop_path();
     if enable {
-        if let Some(parent) = desktop_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
         let exe = match std::env::current_exe() {
             Ok(p) => p.to_string_lossy().to_string(),
             Err(e) => {
@@ -172,9 +221,15 @@ fn linux_set(enable: bool) -> bool {
                 return false;
             }
         };
+        let Some(exec) = desktop_exec_arg(&exe) else {
+            error!("[Autostart] Executable path cannot be encoded in a desktop entry");
+            return false;
+        };
+        if let Some(parent) = desktop_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let content = format!(
-            "[Desktop Entry]\nType=Application\nName=ClaudeHUDMonitor\nExec={}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
-            exe
+            "[Desktop Entry]\nType=Application\nName=ClaudeHUDMonitor\nExec={exec}\nHidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
         );
         match std::fs::write(&desktop_path, content) {
             Ok(_) => true,

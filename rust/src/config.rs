@@ -710,8 +710,22 @@ static SMOKE_ENV_LOCK: parking_lot::ReentrantMutex<()> = parking_lot::ReentrantM
 pub struct SmokeIsolation {
     root: PathBuf,
     previous_appdata: Option<std::ffi::OsString>,
+    #[cfg(not(windows))]
+    previous_home: Option<std::ffi::OsString>,
     previous_override: Option<PathBuf>,
     _env_guard: parking_lot::ReentrantMutexGuard<'static, ()>,
+}
+
+/// Restores an environment variable captured prior to `SmokeIsolation`.
+///
+/// SAFETY: callers must hold `SMOKE_ENV_LOCK`.
+unsafe fn restore_env_var(name: &str, previous: &Option<std::ffi::OsString>) {
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
 }
 
 impl SmokeIsolation {
@@ -720,11 +734,21 @@ impl SmokeIsolation {
         let previous_appdata = std::env::var_os("APPDATA");
         // SAFETY: serialized across threads via SMOKE_ENV_LOCK.
         unsafe { std::env::set_var("APPDATA", root) };
+        #[cfg(not(windows))]
+        let previous_home = {
+            let prev = std::env::var_os("HOME");
+            // SAFETY: serialized across threads via SMOKE_ENV_LOCK; isolates macOS/Linux logs &
+            // home-relative dirs from real user directories during `--smoke-test`.
+            unsafe { std::env::set_var("HOME", root) };
+            prev
+        };
         let config_file = root.join("ClaudeHUDMonitor").join("config.json");
         let previous_override = CONFIG_PATH_OVERRIDE.lock().replace(config_file);
         Self {
             root: root.to_path_buf(),
             previous_appdata,
+            #[cfg(not(windows))]
+            previous_home,
             previous_override,
             _env_guard: env_guard,
         }
@@ -734,12 +758,11 @@ impl SmokeIsolation {
 impl Drop for SmokeIsolation {
     fn drop(&mut self) {
         *CONFIG_PATH_OVERRIDE.lock() = self.previous_override.take();
-        // SAFETY: restores prior environment captured at isolation entry.
+        // SAFETY: serialized across threads via SMOKE_ENV_LOCK held until `_env_guard` drops.
         unsafe {
-            match &self.previous_appdata {
-                Some(value) => std::env::set_var("APPDATA", value),
-                None => std::env::remove_var("APPDATA"),
-            }
+            restore_env_var("APPDATA", &self.previous_appdata);
+            #[cfg(not(windows))]
+            restore_env_var("HOME", &self.previous_home);
         }
         let _ = fs::remove_dir_all(&self.root);
     }
@@ -2050,6 +2073,12 @@ mod tests {
             assert!(
                 expected.is_file(),
                 "smoke must persist under the isolated root: missing {expected:?}"
+            );
+            #[cfg(not(windows))]
+            assert!(
+                crate::logger::log_dir().starts_with(&root),
+                "smoke log dir must stay isolated under {root:?}, got {:?}",
+                crate::logger::log_dir()
             );
             let leaked: Vec<_> = fs::read_dir(&decoy).expect("read decoy").collect();
             assert!(

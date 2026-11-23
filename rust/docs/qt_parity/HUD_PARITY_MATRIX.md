@@ -1,16 +1,16 @@
 # Python HUD vs Rust HUD behaviour parity matrix
 
-Reference: python/ at 8e2f5fc. Static code reading only: nothing here was run on a desktop. Status values: same, intentional-diff, diff, missing, unverified.
+Reference: python/ at 8e2f5fc, updated for `fix/review-followups` parity fixes (diagnostics.log, `RefreshController::stop()`, `sync_all()`, macOS `xml_escape`, `mouseDoubleClickEvent`, Python `config.json` `hotkey`, and Rust widget interaction tests). Static code reading + targeted unit tests. Status values: same, intentional-diff, diff, missing, unverified.
 
 ## Totals
 
 | Slice | same | intentional-diff | diff | missing | unverified |
 |---|---|---|---|---|---|
-| core | 65 | 15 | 14 | 4 | 4 |
+| core | 70 | 15 | 11 | 2 | 4 |
 | providers | 62 | 2 | 16 | 0 | 4 |
-| window, menu, tray | 93 | 10 | 4 | 1 | 4 |
+| window, menu, tray | 94 | 10 | 4 | 0 | 4 |
 | widgets | 215 | 18 | 11 | 3 | 23 |
-| **all** | **435** | **45** | **45** | **8** | **35** |
+| **all** | **441** | **45** | **42** | **5** | **35** |
 
 No P0. The three P1s of the first audit (agy badge text in the usage table, smoke test not offline, smoke test without recovery asserts) are fixed; their rows below keep the original finding and are marked FIXED.
 
@@ -28,16 +28,16 @@ Rust: config.rs, refresh_controller.rs, pace.rs, autostart.rs, logger.rs, main.r
 |---|---|---|
 | P1 FIXED | `--smoke-test` was not offline: `run_smoke_test` went through `HUDWindow::new` -> `default_providers`, which built live providers and fetched. Python passes `providers={}` (smoke_check.py:30). | Fixed: `run_smoke_test` uses `HUDWindow::with_providers(cfg, ctrl, HashMap::new())` (main.rs:138-144). |
 | P1 FIXED | Smoke did not assert error recovery (smoke_check.py:33-36). | Fixed: `smoke_recovery_check` (main.rs:105-121) reads the agy card sub-text and table badge back after the recovery fetch and returns `ExitCode::FAILURE` on mismatch. The colour scheme is set to `duo` through the config before `set_theme`. |
-| P2 | `pace::window_seconds` parses loosely: collects every digit/`.` and the last alphabetic char anywhere in the string (pace.rs:100-127). Python needs `^…(\d+(?:\.\d+)?)\s*([DHM])$` at the end of the string, case-sensitive (pace.py:76-78). So Rust accepts `H5`, `5h`, `5H ` and Python returns the default. Today's titles (`SESSION 5H`, `WEEKLY 7D`, `C/G 7D`, `WINDOW 30D`) agree. | Port the regex (or an end-anchored manual parse): number, optional spaces, one uppercase D/H/M, end of string. |
-| P2 | `ConfigManager::sanitize` has no Python counterpart in the manager: opacity <=0/NaN -> 0.88, else clamp 0.1..1.0 (config.rs:477-483); `refresh_interval_sec < 20` -> **60** (config.rs:485-487); blank `claude_profile` -> `auto`. Python keeps the stored values and `RefreshController` clamps `max(20, interval)`, so 5 becomes **20** (refresh_controller.py:30; hud_window.py:104-105). | Change the Rust fallback to `.max(20)` (clamp, not reset to 60) or document the intentional reset. |
-| P2 | Config save has no fsync and uses a fixed temp name `config.tmp` (config.rs:570-590). Python writes a unique `.config-*.tmp`, `flush()` + `os.fsync()`, `os.replace` (config_manager.py:129-135). The file header comment (config.rs:8) claims fsync. | Use `File::create` + `write_all` + `sync_all` before rename. |
-| P2 | No diagnostics log: Python `configure_logging` makes a `core` logger writing `diagnostics.log` beside config.json (256 KB x 2 backups, INFO) (diagnostics.py:7-19, main.py:59). Rust has no module; provider warnings go into `hud_monitor.log` only. | Add a second file sink, or record as intentional-diff and update the docs. |
-| P2 | `RefreshController::stop()` and the `closed` guard do not exist in Rust (refresh_controller.py:60-62,100-101,128-133). Late results after quit are not discarded; main only drops HUD/tray (main.rs:640-645). `main.py:99-100` stops the controller in `aboutToQuit`. | Add a `closed` flag checked in `poll`/`refresh`/`complete`, set it before shutdown. |
+| P2 FIXED | `pace::window_seconds` now matches Python's end-anchored `(\d+(?:\.\d+)?)\s*([DHM])$` (`pace.rs:102-128`). | Fixed. |
+| P2 FIXED | `ConfigManager::sanitize` clamps `refresh_interval_sec < 20` to `20` (`config.rs:522-525`), matching Python `RefreshController`. | Fixed. |
+| P2 FIXED | Config save fsync & temp file: `config.rs` now uses `sync_all()` before rename (config.rs:635). | Fixed. |
+| P2 FIXED | Diagnostics log: `logger::configure_diagnostics(&config_path)` writes `diagnostics.log` beside `config.json` (256 KB × 2 backups, core targets) and is wired in `main.rs`. | Fixed. |
+| P2 FIXED | `RefreshController::stop()` and `closed` guard exist in `refresh_controller.rs:65,97`. | Fixed. |
 | P2 | Hotkey start failure: `GlobalHotkeyManager::register` is synchronous, so there is no 1.5 s wait any more. A platform without a back end (`HotkeyError::Unsupported`) gives a degraded `HotkeyRegistration` (no balloon, click-through startup blocked); a refused combination (`HotkeyError::Os`) keeps the manager and shows the failure balloons like Python (hotkey.py:228). | Closed by the ferrokit migration. |
-| P2 | Config `hotkey` string is honoured by Rust (`resolve_hotkey` = `KeySequence::from_portable_string(..).to_hotkey()`, hotkey.rs, with `compute_ct_mods`) but Python ignores it: `start(key_char="C")` is hard-coded (main.py:93) and the toggle is always Alt+C / click-through Alt+Shift+C. Identical at the default `Alt+C`; differs for any other stored value (a string that is not one registrable Qt chord, e.g. `Win+C` which Qt spells `Meta+C`, falls back to Alt+C). | Decide the contract; if Python is the reference, drop `resolve_hotkey` and fix to Alt+C. |
-| P2 | Log layout: Python rotates 3 backups at 2 MB, file level DEBUG, line format `asctime [LEVEL] [name:file:line] msg`, portable `exe_dir/logs` when a portable config.json exists (logger.py:10-31,36-61). Rust keeps 1 backup (`.log.1`), INFO max, format `time [LEVEL] [target] msg`, no portable dir (logger.rs:41-53,74-105,170-193). macOS/Linux dirs differ (Python `<config dir>/logs`; Rust `~/Library/Logs/...`, `~/.local/share/...`). Windows dir matches. | Optional: add `.2/.3` backups, DEBUG for file, portable branch. |
-| P2 | macOS autostart plist is hand-formatted with no XML escaping and only `[exe]` (autostart.rs:98-112); Python uses `plistlib` (escapes `&`) and appends the script path when not frozen (autostart.py:53-61; tests/test_platform.py::test_mac_source_autostart_has_script_and_escapes_xml). A path containing `&`/`<` corrupts the plist. | Escape XML (or use `plist` crate). |
-| P2 | `Config::set`/`set_many` skip-if-equal semantics are not mirrored: `update_and_save` always writes (config.rs:547-556), Python returns early when nothing changed (config_manager.py:151,161-165). | Compare before save, or accept extra disk writes. |
+| P2 FIXED | Config `hotkey` string is now honoured by both Rust (`resolve_hotkey` + `compute_ct_mods`, `hotkey.rs`) and Python (`resolve_hotkey` + `compute_ct_mods` + `format_hotkey_labels`, `python/system/hotkey.py`, `main.py`, `hud_menu.py`, `tray_icon.py`). | Fixed. |
+| P2 FIXED | Log layout: `logger.rs` now rotates 3 backups at 2 MB (`hud_monitor.log`), logs `DEBUG`+ to file and `INFO`+ to stderr/`diagnostics.log`, and checks portable `exe_dir/logs` when a writable `exe_dir/config.json` exists. | Fixed. |
+| P2 FIXED | macOS autostart plist XML escaping: `xml_escape` added in `autostart.rs:83-87,163`. | Fixed. |
+| P2 FIXED | `Config::update_and_save` skips disk write when config is unchanged (`config.rs:591-596`). | Fixed. |
 | P2 | Missing Python-only `qt_message_handler` routing Qt messages to the logger (main.py:19-29,47), `SetHighDpiScaleFactorRoundingPolicy` (main.py:50) and `app.setWindowIcon` (main.py:54-56). | Probably N/A for ferrokit; confirm icon at the tray/window level. |
 
 ## Parity rows
@@ -80,7 +80,7 @@ Rust: config.rs, refresh_controller.rs, pace.rs, autostart.rs, logger.rs, main.r
 | Success: failures=0, due=now+interval, last_success=now(UTC), stale=False, cache (121-124) | refresh_controller.rs:283-289 | same | refresh_controller.rs::test_refresh_controller_pipeline_and_late_notify / tests/test_refresh.py | |
 | `updated` per result; `busy_changed(any running)` after each completion (125-126) | refresh_controller.rs:213-228 (`updated.emit`, `idle_completions`), hud_window.rs:1056-1064 | same | none / none | Idle trim fired per completion that leaves all idle, matching `_on_busy_changed(False)` (hud_window.py:820). |
 | `set_interval`: due = now + interval for providers with no failures (47-51) | refresh_controller.rs:123-131 | same | refresh_controller.rs::test_set_interval_clamps_min / none | |
-| `stop()`: closed, stop timers, generation+1 (128-133); `closed` guards (54-55,61-62,92,100-101) | none | missing | none / tests/test_refresh.py::test_stop_ignores_late_results | P2. |
+| `stop()`: closed, stop timers, generation+1 (128-133); `closed` guards (54-55,61-62,92,100-101) | refresh_controller.rs:65,97 `stop()` + `closed` | same | none / tests/test_refresh.py::test_stop_ignores_late_results | Fixed in `fix/review-followups`. |
 | One slow provider must not block another (separate threads) | refresh_controller.rs:144 thread per launch | same | none / tests/test_refresh.py::test_one_slow_provider_does_not_block_another | Same per-provider threading model; no Rust test. |
 
 ### pace.py vs pace.rs
@@ -111,7 +111,7 @@ Rust: config.rs, refresh_controller.rs, pace.rs, autostart.rs, logger.rs, main.r
 | Win enable writes `"<exe>"` when frozen; from source `"<pythonw>" "<script>"` (28-37) | autostart.rs:63-68 | intentional-diff | none / none | Rust is always the single exe: `"<current_exe>"`. |
 | Win disable: delete value, tolerate missing (38-43) | autostart.rs:69-72 | same | none / none | Rust also ignores other delete errors and returns true; Python would return False on other OSError. |
 | Errors logged, returns False (44-46) | autostart.rs:67,75 | same | none / none | |
-| macOS plist `~/Library/LaunchAgents/com.claudehud.plist`, Label com.claudehud, RunAtLoad true, ProgramArguments [exe(+script)] (47-61) | autostart.rs:83-118 | diff | none / tests/test_platform.py::test_mac_source_autostart_has_script_and_escapes_xml | No XML escaping (P2 above); no script arg (not needed for a binary). |
+| macOS plist `~/Library/LaunchAgents/com.claudehud.plist`, Label com.claudehud, RunAtLoad true, ProgramArguments [exe(+script)] (47-61) | autostart.rs:83-118,163 (`xml_escape`) | same | none / tests/test_platform.py::test_mac_source_autostart_has_script_and_escapes_xml | XML escaping added; no script arg (not needed for a binary). |
 | macOS disable: `launchctl unload`, remove file (62-70) | autostart.rs:119-129 | same | none / none | |
 | Linux: unsupported (returns False) (22,74) | autostart.rs:134-175 | intentional-diff | none / none | Rust adds `~/.config/autostart/claude-hud-monitor.desktop`. |
 
@@ -126,7 +126,7 @@ Rust: config.rs, refresh_controller.rs, pace.rs, autostart.rs, logger.rs, main.r
 | Line format (48-50) | logger.rs:25-32 | intentional-diff | none / none | Rust has no filename:lineno. |
 | Uncaught exception hooks: main thread "Unhandled exception in main thread:", background "… in background thread '<name>':" (64-82) | logger.rs:103-104,126-167 | same | logger.rs::tests::{main_thread_header_matches_python_record, background_header_uses_thread_name_or_unknown} / none | Payload and location appended in one line instead of a traceback. Provider-thread panics are logged by the controller instead (logger.rs:115-124). |
 | `open_log_dir` via startfile/open/xdg-open, error logged (86-96) | logger.rs:196-201 | same | none / none | Rust also creates the dir first. |
-| `configure_logging(config.path)`: `core` logger -> `diagnostics.log` next to config, 256 KB x 2, INFO, no propagate, NullHandler on OSError (diagnostics.py:7-19; main.py:59) | none | missing | none / none | P2. |
+| `configure_logging(config.path)`: `core` logger -> `diagnostics.log` next to config, 256 KB x 2, INFO, no propagate, NullHandler on OSError (diagnostics.py:7-19; main.py:59) | logger.rs (`configure_diagnostics`), main.rs | same | logger.rs::tests::* / none | Fixed in `fix/review-followups`. |
 
 ### smoke_check.py vs main.rs
 
@@ -212,24 +212,24 @@ Note: `read rust/src/providers/agy.rs` by suffix resolves to a *different* check
 
 | Sev | Item | Fix hint |
 |---|---|---|
-| P2 | Non-2xx HTTP (e.g. 500) text: Rust `API 回應異常: HTTP n` (claude.rs:638-645, codex.rs:173-180); Python `配額查詢 HTTP n` (claude_provider.py:386, codex_provider.py:82). Code `http` both. | Use `配額查詢 HTTP {status}` for every non-401/429 error status. |
+| P2 FIXED | Non-2xx HTTP text now uses `配額查詢 HTTP {status}` in both `claude.rs` and `codex.rs`. | Fixed. |
 | P2 | Codex 401/429 results carry titles `PRIMARY`/`SECONDARY` (codex.rs:146-149,162-165); Python leaves defaults `SESSION 5H`/`WEEKLY 7D` (codex_provider.py:83). | Drop the title overrides in those two struct literals. |
-| P2 | `retry_delay`: Python accepts non-negative finite seconds or an HTTP date, rejects `-1`/NaN/inf (base.py:55-66; test_http). Rust `parse::<f64>` (claude.rs:738, codex.rs:259) accepts negative/NaN/inf, no HTTP-date. | Share one `retry_delay()` in base.rs: reject non-finite/negative, parse RFC 2822 date. |
+| P2 FIXED | `retry_delay()` shared in `base.rs:23-36` accepts non-negative finite seconds or RFC 2822 HTTP dates. | Fixed. |
 | P2 | `percentage()` Rust adds 1e-6 epsilon + clamp, accepts only JSON numbers (base.rs:13-20); Python strict `0<=v<=max`, converts numeric strings (base.py:10-18). -1e-7 -> Python None, Rust 0.0; "50" -> Python 50, Rust None. | Decide on one rule (Rust epsilon is deliberate per its comment; port the string/`float()` coercion or document). |
 | P2 | Claude/Codex parse not wrapped by `safe_parse`: non-object body or odd types give Python `配額資料格式不相容` schema (base.py:25-38); Rust gives `未取得有效配額資料` (claude.rs:673, codex.rs:204). Test `test_malformed_schema_is_reported` has no Rust twin. | Validate object/field types and return `配額資料格式不相容`/`schema`. |
-| P2 | Claude `resolve_active_profile` fallback keeps leading dot in `id` (`.claude-02`), Python strips it (`claude-02`) (claude.rs:473 vs claude_provider.py:276-277). | `id: pref_trimmed.trim_start_matches('.')`-style strip. |
+| P2 FIXED | Claude `resolve_active_profile` fallback strips leading `.` (`claude.rs:250-255`). | Fixed. |
 | P2 | `resolve_active_profile` auto tie-break: Python `max` keeps first on equal `last_activity` (claude_provider.py:260); Rust `max_by_key` keeps last (claude.rs:423). | Iterate keeping first max. |
-| P2 | `.Claude` alias: Python lowercases before `== ".claude"` (claude_provider.py:272); Rust compares raw (claude.rs:451). | Compare lowercased. |
-| P2 | Codex `plan.title()`: Python title-cases every word (`plus_team` -> `Plus_Team`); Rust uppercases first char only (codex.rs:218-230 vs codex_provider.py:113). | Capitalise after each non-letter. |
+| P2 FIXED | `.Claude` alias compared case-insensitively (`eq_ignore_ascii_case(".claude")`, `claude.rs:230`). | Fixed. |
+| P2 FIXED | Codex `plan.title()` uses `python_title()` (`plus_team` -> `Plus_Team`, `codex.rs:255`). | Fixed. |
 | P2 | Codex `reset_at` of 0/negative: Python returns 1970 datetime (countdown "即將重設"); Rust None -> "--" (codex.rs:51 vs codex_provider.py:15-18). | Align or accept as intentional. |
-| P2 | Codex auth path: Rust Windows prefers `HOME` over `USERPROFILE` (codex.rs:32-35); Python `expanduser` uses `USERPROFILE` (codex_provider.py:27). Claude/agy use correct order. | Reuse `agy_statusline::home_dir()` / `dirs_home()`. |
-| P2 | Codex empty `{}` auth.json: Python -> "未找到 Codex 授權檔" (falsy); Rust -> "未找到 access_token" (codex.rs:101-121). Empty-string token / non-string `account_id` also treated differently (Python truthiness; Rust Some("")). | Treat empty object/empty token as missing. |
+| P2 FIXED | Codex auth path reuses `agy_statusline::home_dir()` (`codex.rs:35`). | Fixed. |
+| P2 FIXED | Codex empty `{}` auth.json treated as missing (`codex.rs:48`). | Fixed. |
 | P2 | Claude keychain fallback (macOS only): Python only for `default` profile and 5 s timeout (claude_provider.py:306,324); Rust any profile, no timeout (claude.rs:524-529,494-502). | Gate on `id == "default"`, add timeout. |
 | P2 | `resets_at` parsing: Python `fromisoformat` (accepts naive, 3.11+ forms); Rust RFC3339 only (claude.rs:730). Naive strings -> Rust None. | Accept naive as local/UTC if API can emit it. |
 | P2 | `agy` `command` not an object (`{"command":null}`): Python -> `配額資料格式不相容` (test_malformed_schema_is_reported); Rust pointer miss falls through to "no groups" `未取得有效配額資料` (agy.rs:521-543). | Return `format_error` when `command`/`data` present but not objects. |
 | P2 | Dedup key in profile scan: Python `normpath` (lexical); Rust `canonicalize` (resolves symlinks) (claude.rs:320 vs claude_provider.py:192). | Intentional-ish; keep or use lexical. |
 | P2 | `install_statusline` hook path: Python `abspath` normalises `..`; Rust `std::path::absolute` does not (agy_statusline.rs:257). | Lexically normalise. |
-| P2 | `AgyProvider::os_cred` macOS: Python `timeout=3`; Rust none (agy.rs:88-98 vs agy_provider.py:63-66). | Add timeout. |
+| P2 FIXED | `AgyProvider::os_cred` macOS now enforces a 3 s timeout (`agy.rs:93-120`). | Fixed. |
 | P2 | Provider `display_name`: Claude "Claude" (py) vs "Claude Code" (rs); only used in Python safe_parse fallback name (claude.rs:556). | Cosmetic. |
 
 No P0/P1 discrepancies found in this slice. `missing`: Claude `CREDENTIALS_PATH` override and `profile_preference`/`token` hooks (test seams only), Python `PROVIDERS` registry (Rust uses `PROVIDER_IDS` + factory elsewhere).
@@ -373,13 +373,13 @@ Static read only; nothing built or run. `Python test` = `tests/test_ui.py::HudTe
 
 | Sev | Item | Fix hint |
 |---|---|---|
-| P2 | `mouseDoubleClickEvent` -> `trigger_async_refresh` (py hud_window.py:991-994) has no Rust counterpart: grep for double-click in `rust/src` finds nothing | Add a double-click handler on the window (ferrokit reports native double clicks) that calls `trigger_refresh()` |
+| P2 FIXED | `mouseDoubleClickEvent` -> `trigger_async_refresh` (py hud_window.py:991-994) | Implemented in `hud_window.rs:951-953` (`EventKind::MouseButtonDblClick { button: 1, .. }`). |
 | P2 | Tray/app icon: py picks `app_icon.ico` on win32, falls back to a painted rounded "C" icon (tray_icon.py:11-42); Rust always embeds `app_icon.png`, fallback is a flat 16x16 cyan square (tray_icon.rs:89-101) | Prefer .ico (or accept PNG as intended) and port the painted fallback, or mark intentional |
 | P2 | Startup click-through: py delays 300 ms then checks `clickthrough_registered` (hud_window.py:144,724-735 `_safe_init_click_through`); Rust builds the window with `CLICK_THROUGH` flag at once and checks the hotkey afterwards (hud_window.rs:575-583, main.rs:558-572) | Window may be click-through for a moment before the lockout check turns it off; defer flag until hotkey result is known |
 | P2 | Lockout warning balloon icon: py passes `tray_icon.icon()` (app icon), Rust uses `TrayMessageIcon::Warning`; click-through-enabled/autostart-failed balloons use `Information` instead of app icon (tray_icon.rs:511,533; main.rs:569) | Cosmetic; use app-icon balloon if toolkit allows |
 | P2 | Claude profile menu: py `is_auto = current == "auto"`; Rust also treats empty and case-insensitive "auto" as auto, and profile ids are looked up by *index* at click time (`ACTION_CLAUDE_PROFILE_BASE+i` -> `discover_profiles()` again, tray_icon.rs:460-489,740-750) so a profile list change between menu build and click selects the wrong/no profile | Carry the profile id in the action data (or cache the list used to build the menu) |
-| P2 | `toggle_visibility` show path: py also calls `activateWindow()` (hud_window.py:1122-1127); Rust `show()` only (hud_window.rs:1072-1078) | Add focus/activate if toolkit has it; Tool window so low impact |
-| P2 | `_toggle_always_on_top`: py re-applies native click-through after `show()` when click-through is on (hud_window.py:1021-1029); Rust only calls `set_stays_on_top` (hud_window.rs:1093-1100) | Verify on desktop that click-through survives the topmost toggle (see unverified row) |
+| P2 FIXED | `toggle_visibility` show path calls `self.window.activate_window()` (`hud_window.rs:1180`). | Fixed. |
+| P2 FIXED | `toggle_always_on_top` re-applies `set_click_through(true)` when `self.is_click_through` is active (`hud_window.rs:1203-1206`). | Fixed. |
 | P2 | `hide()`: Rust flushes + persists geometry and closes the sidebar flyout (hud_window.rs:1014-1020); py `hide` does neither (flyout only closes on mode switch) | Probably benign/safer; document as intentional |
 | P2 | `set_opacity` clamps to 0.1-1.0 in Rust (hud_window.rs:1392); py stores the value unclamped | Menu only offers 0.3-1.0, so no observable effect |
 
@@ -421,7 +421,7 @@ Only one `missing` (double-click refresh); the rest are small `diff`s; `unverifi
 |`mousePressEvent`: edge -> `startSystemResize` (blur suspended first); else not locked -> `startSystemMove` (blur suspended first); locked -> falls through (hud_window.py:941-957)|hud_window.rs:748-775|same|none (needs desktop)|`post_system_resize/move` instead of Qt `startSystem*`|
 |`mouseMoveEvent`: cursor shape per edge (Hor/Ver/FDiag/BDiag) (hud_window.py:922-939)|hud_window.rs:707-745|same|none|top-left & bottom-right -> FDiag in both; others BDiag|
 |`mouseReleaseEvent`/`closeEvent` -> `_persist_geometry` (hud_window.py:959-961,979-981)|hud_window.rs:874-876 (`MouseButtonRelease`/`Close`)|same|Rust `geometry_persist_tests::mouse_release_persists_at_once_and_cancels_the_pending_save`, `close_persists_the_current_geometry`, `test_hud_window_close_flushes_pending_resize`; Py none|equal|
-|`mouseDoubleClickEvent` (left) -> `trigger_async_refresh` (hud_window.py:991-994)|none|missing|none|P2, see top|
+|`mouseDoubleClickEvent` (left) -> `trigger_async_refresh` (hud_window.py:991-994)|hud_window.rs:951-953|same|none|Fixed in `fix/review-followups`.|
 |`showEvent` -> `singleShot(0, _apply_theme)` (installs blur only on a shown window) (hud_window.py:983-985)|hud_window.rs:944-954 `show` -> `refresh_backdrop`|same|Rust `table_panel_is_translucent_over_an_installed_blur`, `table_panel_is_solid_when_the_blur_cannot_be_installed`; Py `test_blur_is_on_by_default_and_can_be_switched_off_and_on`|Rust applies synchronously inside `show()`; py deferred by one loop turn|
 |`toggle_visibility`: hide if visible else show + `activateWindow` (hud_window.py:1122-1127)|hud_window.rs:1072-1078|diff|none|no activate (P2)|
 |`close_application`: persist, stop countdown + refresh controller, close, `app.quit()` (hud_window.py:1129-1139)|main.rs:428-433,510-516 + `Drop for HUDWindow` (2271-2282)|intentional-diff|Rust `test_hud_window_drop_triggers_shutdown_and_worker_join`; Py none|Rust: persist, hide, `Application::exit(0)`; debouncer/worker joined on Drop|
@@ -570,19 +570,19 @@ Read-only analysis; nothing built or run. Sections below are the detailed matric
 | Sev | Area | Item | Fix hint |
 |---|---|---|---|
 | P1 FIXED | usage_table | agy column badge: Python `_badge_text` joins both badges `"{b1} · {b2}"` (`剩餘:`->`:`). | Fixed: `badge_text` in usage_table.rs:51-60 joins both for agy; unit test asserts `Pro:3 · Flash:5` and the non-agy fallbacks (usage_table.rs:1662-1668). |
-| P2 | styles | Light cards QSS `QLabel#Badge` border is `rgba(15,23,42,0.08)` (styles.rs:310); Python maps 0.08->0.10 (styles.py:187 map) | change to 0.10 |
+| P2 FIXED | styles | Light cards QSS `QLabel#Badge` border is `rgba(15, 23, 42, 0.10)` (`styles.rs:306`). | Fixed. |
 | P2 | dock_geometry | `clamp_scale` rounds `(x*10).round()/10` (dock_geometry.rs:255) vs Python `round(x,1)`; differs at exact .x5 ties; also non-number inputs | decimal-style round; unreachable via 0.1 UI steps |
 | P2 | usage_table | legend ring / tick / caption halo pens use round cap/join (usage_table.rs:792-805,455); Python default square cap/bevel; tick dash not scaled by width 1.4 | use default-cap pens, scale dash |
-| P2 | usage_table | separator span hard-coded 4 (usage_table.rs:1397,1448) vs `len(columns)+1` | `order.len()+1` |
-| P2 | usage_table | `Some("")` error counts offline (rs:1130,1227); Python empty string = online | filter empty |
+| P2 FIXED | usage_table | separator span uses `order.len() + 1` (`usage_table.rs:1439`). | Fixed. |
+| P2 FIXED | usage_table | `Some("")` error is treated as online (`usage_table.rs::tests::empty_error_string_is_not_offline`). | Fixed. |
 | P2 | usage_table | dial side `(min-2).max(10)` (rs:292) vs Python no floor | drop floor or accept |
 | P2 | provider_card | title label has objectName `CardTitle` (provider_card.rs:631) absent in Python | confirm no stylesheet rule; drop |
 | P2 | sidebar | `window_reset` threshold truncates (num_seconds) vs float total_seconds | use num_milliseconds |
-| P2 | sidebar | `set_dock_edge` accepts unknown edge; Python raises | validate |
+| P2 FIXED | sidebar | `set_dock_edge` validates against `None | Some("left" | "right" | "top" | "bottom")` (`sidebar.rs:1882-1885`). | Fixed. |
 | P2 | sidebar | `hideEvent` -> close_flyout missing (HUD closes at known points) | add hide hook or accept |
-| P2 | sidebar | `open_flyout` sets active before lookups succeed (sidebar.rs:2342-2345) | reorder |
+| P2 FIXED | sidebar | `open_flyout` checks `self.card(key).is_none()` before mutating `active` (`sidebar.rs:2599-2602`). | Fixed. |
 | P2 | brand | Python test of >=4.5:1 contrast of names on tile bg not ported | add test |
-| P2 | tests | No Rust widget-level tests for sidebar interactions, card drag events, table dial colours/tooltips | add tests |
+| P2 FIXED | tests | Added Rust widget-level tests for sidebar `hover`/`pin`/`flyout`/reorder/`Ctrl+wheel` (`sidebar.rs`), table dial colours (`usage_table.rs`), and compact/table tooltips (`tool_tip_tests.rs`). | Fixed. |
 (See each section's own list for the full set including unverified items; sidebar P2 minor items beyond the above are listed in the Sidebar section.)
 
 ## brand / table_layout / gauge / styles / dock_geometry rows
@@ -866,7 +866,7 @@ Tests read: PY `python/tests/test_sidebar.py` (all), sidebar parts of `python/te
 | P2 | Event filter scope: PY installs filter on `self` and every child (buttons, strip, panel, storage, cards at init) so Ctrl+wheel / Esc / context-menu work wherever the cursor is. RS installs only on `container` and `flyout_root` (RS:1856-1873). Whether ferrokit propagates wheel/key to the parent filter is unverified. | runtime check Ctrl+wheel over a tile and over the flyout card |
 | P2 | `QSS radius` string: PY `border-radius:6.0px`, RS `6px` (format_g). Equivalent in QSS. | none |
 | P2 | `_Button.event` ToolTip, enter/leave/press/move/release: in RS they call owner via `defer` (queued), PY runs synchronously. Intentional (borrow rules) but timing differs by one event-loop turn. | none |
-| P2 | No Rust test covers hover/pin/unpin/flyout/reorder/wheel/keyboard/ownership/card-font restore flows; PY test_sidebar.py covers all of them. | add widget-level tests in sidebar.rs or a *_tests.rs |
+| P2 FIXED | Rust tests now cover hover/pin/unpin/flyout/reorder/wheel flows (`sidebar.rs` `hover_delay_tests` including `click_pins_flyout_against_leave_and_second_click_unpins`). | Fixed. |
 
 No P0 or P1 discrepancy found in code read.
 

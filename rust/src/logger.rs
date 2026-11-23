@@ -5,14 +5,126 @@ use log::{LevelFilter, Metadata, Record, info};
 use std::cell::Cell;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+struct RotatingFileSink {
+    file: Option<File>,
+    current_size: u64,
+    path: PathBuf,
+    max_bytes: u64,
+    backup_count: usize,
+}
+
+impl RotatingFileSink {
+    fn open(path: PathBuf, max_bytes: u64, backup_count: usize) -> Self {
+        let initial_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if initial_size > max_bytes {
+            Self::rotate_files(&path, backup_count);
+        }
+        let current_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .ok();
+        Self {
+            file,
+            current_size,
+            path,
+            max_bytes,
+            backup_count,
+        }
+    }
+
+    fn backup_path(path: &Path, index: usize) -> PathBuf {
+        let mut os = path.as_os_str().to_os_string();
+        os.push(format!(".{index}"));
+        PathBuf::from(os)
+    }
+
+    fn rotate_files(path: &Path, backup_count: usize) {
+        if backup_count == 0 {
+            let _ = std::fs::remove_file(path);
+            return;
+        }
+        let oldest = Self::backup_path(path, backup_count);
+        let _ = std::fs::remove_file(&oldest);
+        for index in (1..backup_count).rev() {
+            let src = Self::backup_path(path, index);
+            let dst = Self::backup_path(path, index + 1);
+            let _ = std::fs::rename(&src, &dst);
+        }
+        let _ = std::fs::rename(path, Self::backup_path(path, 1));
+    }
+
+    fn write_line(&mut self, bytes: &[u8]) {
+        if self.file.is_none() {
+            return;
+        }
+        if self.current_size + bytes.len() as u64 > self.max_bytes {
+            // Drop existing open file before renaming (essential on Windows).
+            self.file = None;
+            Self::rotate_files(&self.path, self.backup_count);
+            self.file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+                .ok();
+            self.current_size = 0;
+        }
+        self.current_size += bytes.len() as u64;
+        if let Some(ref mut f) = self.file {
+            let _ = f.write_all(bytes);
+            let _ = f.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if let Some(ref mut f) = self.file {
+            let _ = f.flush();
+        }
+    }
+}
+
+static DIAGNOSTICS_SINK: OnceLock<Mutex<RotatingFileSink>> = OnceLock::new();
+
+fn is_core_target(target: &str) -> bool {
+    const CORE_PREFIXES: &[&str] = &[
+        "claude_hud_monitor::providers",
+        "claude_hud_monitor::refresh_controller",
+        "claude_hud_monitor::config",
+        "claude_hud_monitor::accounts",
+        "claude_hud_monitor::agy_statusline",
+        "claude_hud_monitor::agy_rows",
+        "claude_hud_monitor::autostart",
+        "claude_hud_monitor::pace",
+        "claude_hud_monitor::tray_quota",
+    ];
+    CORE_PREFIXES.iter().any(|prefix| {
+        target == *prefix
+            || target
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with("::"))
+    })
+}
+
+/// Configure `diagnostics.log` beside `config_path` (256 KB x 2 backups, INFO), matching Python `core/diagnostics.py`.
+pub fn configure_diagnostics(config_path: &Path) {
+    const MAX_DIAG_SIZE: u64 = 256 * 1024;
+    const DIAG_BACKUPS: usize = 2;
+    let _ = DIAGNOSTICS_SINK.get_or_init(|| {
+        let diag_path = config_path.with_file_name("diagnostics.log");
+        Mutex::new(RotatingFileSink::open(
+            diag_path,
+            MAX_DIAG_SIZE,
+            DIAG_BACKUPS,
+        ))
+    });
+}
+
 struct DualLogger {
-    file: Mutex<Option<File>>,
-    current_size: Mutex<u64>,
-    log_path: PathBuf,
-    backup_path: PathBuf,
+    sink: Mutex<RotatingFileSink>,
 }
 
 impl log::Log for DualLogger {
@@ -31,75 +143,62 @@ impl log::Log for DualLogger {
                 record.args()
             );
 
-            // Stderr output (if console attached); a failed write must not panic inside the hook.
-            let _ = std::io::stderr().write_all(line.as_bytes());
+            // Stderr output (if console attached); INFO+ only, matching Python console handler.
+            if record.level() <= log::Level::Info {
+                let _ = std::io::stderr().write_all(line.as_bytes());
+            }
 
-            // File output with continuous 2MB rolling check
-            if let Ok(mut lock) = self.file.lock() {
-                let bytes = line.as_bytes();
-                if let Ok(mut size) = self.current_size.lock() {
-                    const MAX_LOG_SIZE: u64 = 2 * 1024 * 1024;
-                    if *size + bytes.len() as u64 > MAX_LOG_SIZE {
-                        // Drop existing open file before renaming (essential on Windows)
-                        *lock = None;
-                        let _ = std::fs::remove_file(&self.backup_path);
-                        let _ = std::fs::rename(&self.log_path, &self.backup_path);
-                        *lock = OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&self.log_path)
-                            .ok();
-                        *size = 0;
-                    }
-                    *size += bytes.len() as u64;
-                }
-                if let Some(ref mut f) = *lock {
-                    let _ = f.write_all(bytes);
-                    let _ = f.flush();
-                }
+            // File output with continuous 2MB rolling check (DEBUG+ for this crate, INFO+ for deps)
+            if (record.level() <= log::Level::Info
+                || record.target().starts_with("claude_hud_monitor"))
+                && let Ok(mut sink) = self.sink.lock()
+            {
+                sink.write_line(line.as_bytes());
+            }
+
+            // Core diagnostics sink beside config.json (256 KB x 2 backups, INFO+)
+            if record.level() <= log::Level::Info
+                && is_core_target(record.target())
+                && let Some(diag) = DIAGNOSTICS_SINK.get()
+                && let Ok(mut sink) = diag.lock()
+            {
+                let diag_line = format!(
+                    "{} {} {} {}\n",
+                    timestamp,
+                    record.target(),
+                    record.level(),
+                    record.args()
+                );
+                sink.write_line(diag_line.as_bytes());
             }
         }
     }
 
     fn flush(&self) {
-        if let Ok(mut lock) = self.file.lock()
-            && let Some(ref mut f) = *lock
+        if let Ok(mut sink) = self.sink.lock() {
+            sink.flush();
+        }
+        if let Some(diag) = DIAGNOSTICS_SINK.get()
+            && let Ok(mut sink) = diag.lock()
         {
-            let _ = f.flush();
+            sink.flush();
         }
     }
 }
 
 /// Initialize logging with physical file persistence in `log_dir()`.
 pub fn setup_logging() {
+    const MAX_LOG_SIZE: u64 = 2 * 1024 * 1024;
     let dir = log_dir();
     let _ = std::fs::create_dir_all(&dir);
     let log_path = dir.join("hud_monitor.log");
-    let backup_path = dir.join("hud_monitor.log.1");
-
-    // 2MB log rotation at startup
-    let initial_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
-    if initial_size > 2 * 1024 * 1024 {
-        let _ = std::fs::remove_file(&backup_path);
-        let _ = std::fs::rename(&log_path, &backup_path);
-    }
-    let current_size = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
-
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .ok();
 
     let logger = DualLogger {
-        file: Mutex::new(file),
-        current_size: Mutex::new(current_size),
-        log_path,
-        backup_path,
+        sink: Mutex::new(RotatingFileSink::open(log_path, MAX_LOG_SIZE, 3)),
     };
 
     let _ = log::set_boxed_logger(Box::new(logger));
-    log::set_max_level(LevelFilter::Info);
+    log::set_max_level(LevelFilter::Debug);
     let _ = MAIN_THREAD.set(std::thread::current().id());
     std::panic::set_hook(Box::new(panic_hook));
 }
@@ -180,8 +279,21 @@ fn log_panic(info: &std::panic::PanicHookInfo<'_>) {
     );
 }
 
-/// Return the log directory path.
+/// Return the log directory path (`exe_dir/logs` when a writable portable `config.json` sits
+/// beside the executable, matching Python `logger.py`).
 pub fn log_dir() -> PathBuf {
+    #[cfg(not(test))]
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        let portable_cfg = exe_dir.join("config.json");
+        if std::fs::metadata(&portable_cfg)
+            .ok()
+            .is_some_and(|m| !m.permissions().readonly())
+        {
+            return exe_dir.join("logs");
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         let appdata = std::env::var("APPDATA").unwrap_or_else(|_| ".".to_owned());
@@ -216,7 +328,7 @@ pub fn open_log_dir() {
 
 #[cfg(test)]
 mod tests {
-    use super::format_unhandled;
+    use super::{RotatingFileSink, format_unhandled, is_core_target};
 
     #[test]
     fn main_thread_header_matches_python_record() {
@@ -236,5 +348,39 @@ mod tests {
             format_unhandled(false, None, "boom", "a.rs:1"),
             "Unhandled exception in background thread 'unknown': boom (a.rs:1)"
         );
+    }
+
+    #[test]
+    fn core_targets_route_to_diagnostics_and_ui_targets_do_not() {
+        assert!(is_core_target("claude_hud_monitor::providers::claude"));
+        assert!(is_core_target("claude_hud_monitor::refresh_controller"));
+        assert!(is_core_target("claude_hud_monitor::config"));
+        assert!(!is_core_target("claude_hud_monitor::ui::hud_window"));
+        assert!(!is_core_target("claude_hud_monitor"));
+    }
+
+    #[test]
+    fn rotating_sink_keeps_requested_backup_count() {
+        let dir = std::env::temp_dir().join(format!(
+            "hud-logger-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("diagnostics.log");
+        let mut sink = RotatingFileSink::open(base.clone(), 16, 2);
+        sink.write_line(b"0123456789\n");
+        sink.write_line(b"abcdefghij\n");
+        sink.write_line(b"klmnopqrst\n");
+        drop(sink);
+
+        assert!(base.exists());
+        assert!(dir.join("diagnostics.log.1").exists());
+        assert!(dir.join("diagnostics.log.2").exists());
+        assert!(!dir.join("diagnostics.log.3").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
