@@ -514,16 +514,12 @@ fn build_agy_rows(menu: &mut Menu, cfg: &Config, dynamic: &[String]) {
             add_disabled(sub, &format!("{}. {title}", index + 1));
         }
         sub.add_separator();
+        let default_order = crate::agy_rows::normalize_order_with(&[], dynamic);
         let reset = Action::new_ref("還原預設順序");
         {
             let mut r = reset.borrow_mut();
             r.set_data(Variant::uint(ACTION_AGY_ORDER_RESET as u64));
-            r.set_enabled(
-                order
-                    .iter()
-                    .map(String::as_str)
-                    .ne(crate::agy_rows::DEFAULT_ORDER),
-            );
+            r.set_enabled(order != default_order);
         }
         sub.add_action(reset);
     });
@@ -911,6 +907,7 @@ impl HUDTrayIcon {
         let static_icon = ferrokit_gui::image::Icon::from_pixmap(&create_default_tray_pixmap());
         let mut tray =
             TrayIcon::from_icon(TOOLTIP_BASE, &static_icon).expect("failed to create TrayIcon");
+        tray.set_template(false);
         let _ = tray.set_tooltip(TOOLTIP_BASE);
 
         Self {
@@ -1204,7 +1201,9 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     /// Restores the application device pixel ratio the other tests run under.
-    struct DevicePixelRatioGuard;
+    struct DevicePixelRatioGuard {
+        _lock: parking_lot::ReentrantMutexGuard<'static, ()>,
+    }
 
     impl Drop for DevicePixelRatioGuard {
         fn drop(&mut self) {
@@ -1220,7 +1219,9 @@ mod tests {
     fn test_menu_text_does_not_depend_on_window_offset() {
         use ferrokit_gui::paint::{Painter, Pixmap};
         use ferrokit_widgets::Widget;
-        let _guard = DevicePixelRatioGuard;
+        let _guard = DevicePixelRatioGuard {
+            _lock: crate::ui::test_support::lock_global_ui_test(),
+        };
         ferrokit_gui::text::font_database::set_application_device_pixel_ratio(1.25);
         let mut menu = build_hud_menu(&Config::default(), &test_hud_root(), false);
         menu.set_visible(true);

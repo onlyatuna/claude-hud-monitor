@@ -340,6 +340,7 @@ fn build_metric_block(title: &str, styles: &LocalStyles) -> MetricBlock {
 /// Python `extra_rows` entry `(widget, title, value, bar, sub)`.
 struct ExtraRow {
     cell: WidgetRef,
+    header: WidgetRef,
     title: WidgetRef,
     value: WidgetRef,
     bar: WidgetRef,
@@ -410,7 +411,10 @@ impl CardCore {
             cells.push((m2_title, self.m2_cell.clone()));
         }
         for row in self.extra_rows.borrow().iter().take(self.extra_count.get()) {
-            cells.push((label_text(&row.title), row.cell.clone()));
+            let t = label_text(&row.title);
+            if !t.is_empty() {
+                cells.push((t, row.cell.clone()));
+            }
         }
         cells
             .into_iter()
@@ -452,6 +456,9 @@ impl CardCore {
     /// Python `eventFilter` `MouseButtonPress` with the left button.
     fn press(&self, x: i32, y: i32) -> bool {
         let rows = self.drag_rows();
+        if rows.len() <= 1 {
+            return false;
+        }
         for (index, row) in rows.iter().enumerate() {
             if y >= row.top && y <= row.bottom && x >= row.left && x < row.right {
                 *self.drag.borrow_mut() = Some(RowDrag {
@@ -753,14 +760,16 @@ impl ProviderCardWidget {
         title_lbl.set_font(Font::new("Segoe UI", 10.0).with_weight(FontWeight::Bold));
         let title = make_widget(title_lbl);
         title.borrow_mut().set_object_name("MetricTitle");
+
         let mut value_lbl = Label::new("");
         value_lbl.set_font(Font::new("Consolas", 14.0).with_weight(FontWeight::Bold));
         let value = make_widget(value_lbl);
         value.borrow_mut().set_object_name("MetricValue");
+
         header.add_widget(title.clone());
         header.add_stretch(1);
         header.add_widget(value.clone());
-        layout.add_layout(Box::new(header), 0);
+        let header_widget = layout.add_layout(Box::new(header), 0);
         let bar = make_bar();
         layout.add_widget(bar.clone());
         let mut sub_lbl = Label::new("");
@@ -777,6 +786,7 @@ impl ProviderCardWidget {
         }
         self.core.extra_rows.borrow_mut().push(ExtraRow {
             cell,
+            header: header_widget,
             title,
             value,
             bar,
@@ -805,6 +815,9 @@ impl ProviderCardWidget {
                 format!("color: {color}; font-size: 14px;"),
                 Some(parse_hex(&color)),
             );
+            row.header
+                .borrow()
+                .with_box_layout(|layout| layout.update_layout());
             set_bar(&row.bar, bar_value(metric.val), Some(self.dark));
             set_label_color(&row.sub, parse_hex(NEUTRAL_HEX));
             set_label_text(

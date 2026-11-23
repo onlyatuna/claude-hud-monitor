@@ -487,6 +487,37 @@ class HudTests(unittest.TestCase):
             hud._finish_sidebar_move()
         return clock
 
+    def test_right_click_does_not_cancel_snap_animation(self):
+        from PySide6.QtCore import QEvent, Qt
+
+        class MousePress:
+            def __init__(self, button):
+                self._button = button
+
+            def type(self):
+                return QEvent.Type.MouseButtonPress
+
+            def button(self):
+                return self._button
+
+        with tempfile.TemporaryDirectory() as directory, patch('ui.hud_window.PROVIDERS', {}):
+            _config, hud = self._hud(directory, ui_mode='sidebar', locked=True)
+            try:
+                hud._snap_anim = object()
+                hud._snap_timer.stop()
+                hud.eventFilter(hud, MousePress(Qt.MouseButton.RightButton))
+                self.assertIsNotNone(hud._snap_anim)
+                self.assertFalse(hud._snap_timer.isActive())
+
+                hud.eventFilter(hud, MousePress(Qt.MouseButton.LeftButton))
+                self.assertIsNone(hud._snap_anim)
+                self.assertTrue(hud._snap_timer.isActive())
+            finally:
+                hud._snap_timer.stop()
+                hud._snap_anim = None
+                self._close(hud)
+
+
     def test_snap_glides_onto_the_docked_rectangle_and_ends_exactly_where_a_jump_would(self):
         from PySide6.QtGui import QGuiApplication
         results = []

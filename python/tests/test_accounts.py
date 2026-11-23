@@ -74,8 +74,13 @@ class AccountHudTests(unittest.TestCase):
         config = ConfigManager(self.config_path)
         config.update({'ui_mode': 'sidebar', 'claude_profile': 'default', 'sidebar_idle_fade': False, **settings})
         hud = HUDWindow(config)
-        self.addCleanup(self.close, hud)
+        self.addCleanup(self._release, hud)
         return hud
+
+    @classmethod
+    def _release(cls, hud):
+        cls.close(hud)
+        flush()
 
     @staticmethod
     def close(hud):

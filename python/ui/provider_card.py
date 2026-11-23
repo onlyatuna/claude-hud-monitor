@@ -206,11 +206,13 @@ class ProviderCardWidget(QWidget):
             top = cell.mapTo(self, QPoint(0, 0)).y()
             return QRect(0, top, self.width(), max(1, cell.height()))
 
-        rows = [(self.m1_label.text(), rect(self.m1_cell), self.m1_cell),
-                (self.m2_label.text(), rect(self.m2_cell), self.m2_cell)]
+        rows = [(self.m1_label.text(), rect(self.m1_cell), self.m1_cell)]
+        if self.m2_label.text():
+            rows.append((self.m2_label.text(), rect(self.m2_cell), self.m2_cell))
         for widget, title, _value, _bar, _sub in self.extra_rows[:len(data.extra_metrics)]:
-            rows.append((title.text(), rect(widget), widget))
-        return rows
+            if title.text():
+                rows.append((title.text(), rect(widget), widget))
+        return rows if len(rows) > 1 else []
 
     def _cell_of(self, obj):
         cells = {id(self.m1_cell), id(self.m2_cell)} | {id(row[0]) for row in self.extra_rows}

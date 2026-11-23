@@ -19,8 +19,8 @@ from ui import gauge
 from ui.styles import THEMES, get_cards_stylesheet
 
 SIDEBAR_TOKENS = {
-    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', alert='#dc2626', providers={k: v['dark'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
-    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', alert='#b91c1c', providers={k: v['light'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=300, leave_ms=600, animation_ms=160),
+    'dark': dict(background='#1e1e24', text='#f2f2f7', muted='#a6a6b3', hover='#30303a', pressed='#40404c', focus='#38bdf8', separator='#454550', stale='#f59e0b', alert='#dc2626', providers={k: v['dark'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=200, leave_ms=300, animation_ms=160),
+    'light': dict(background='#f6f4fa', text='#1f1f24', muted='#555563', hover='#e6e4ed', pressed='#d8d6e1', focus='#0369a1', separator='#ceced8', stale='#92400e', alert='#b91c1c', providers={k: v['light'] for k, v in BRAND.items()}, font='Segoe UI', font_size=12, spacing=4, radius=6, focus_width=2, hover_ms=200, leave_ms=300, animation_ms=160),
 }
 BASE_BUTTON_W, BASE_BUTTON_H = 64, 64
 BASE_PANEL_W = 220
@@ -112,6 +112,9 @@ class _Button(QPushButton):
         self._hold = QTimer(self)
         self._hold.setSingleShot(True)
         self._hold.timeout.connect(self._begin_reorder)
+        self._flash_step = 0.0
+        self._flash_timer = QTimer(self)
+        self._flash_timer.timeout.connect(self._tick_flash)
         self.rows = [('5H', None, owner._color(None)), ('7D', None, owner._color(None, 'outer'))]
         self.display = ['--', '--']
         self.show_labels = owner.scale() >= 0.8
@@ -126,6 +129,12 @@ class _Button(QPushButton):
         self.spec, self.base = spec, spec.base
         self.setAccessibleName(spec.label)
         self.update()
+
+    def _tick_flash(self):
+        self.flash = max(0.0, self.flash - self._flash_step)
+        self.update()
+        if self.flash <= 0.0:
+            self._flash_timer.stop()
 
     def event(self, event):
         # The flyout already shows the details; a native tooltip on top of it only flickers.
@@ -351,6 +360,9 @@ class SidebarWidget(QWidget):
         self._leave_timer = QTimer(self)
         self._leave_timer.setSingleShot(True)
         self._leave_timer.timeout.connect(self._maybe_close)
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.timeout.connect(self._fit_flyout)
         self._layout = QBoxLayout(QBoxLayout.TopToBottom, self)
         self.toggle_button = _Button('toggle', self)
         self.toggle_button.clicked.connect(lambda: self.stateChangeRequested.emit('panel' if self._state == 'strip' else 'strip'))
@@ -475,6 +487,7 @@ class SidebarWidget(QWidget):
         button = self.buttons.pop(key)
         self._specs.pop(key, None)
         button._hold.stop()
+        button._flash_timer.stop()
         self._strip_layout.removeWidget(button)
         button.hide()
         button.setParent(None)
@@ -698,6 +711,9 @@ class SidebarWidget(QWidget):
         self._refresh_tooltip(data.provider_id)
         if self._state == 'panel':
             self._relayout()
+        elif self._active == data.provider_id:
+            self._fit_flyout()
+            self._defer_flyout_fit(data.provider_id)
 
     def _refresh_tile(self, key):
         button, data = self.buttons[key], self._metrics[key]
@@ -736,17 +752,13 @@ class SidebarWidget(QWidget):
         button.flash = 1.0
         steps = max(1, FLASH_MS // FLASH_STEP_MS)
         if not self._animations_enabled():
-            QTimer.singleShot(FLASH_MS, lambda: (setattr(button, 'flash', 0.0), button.update()))
+            button._flash_step = 1.0
+            button._flash_timer.start(FLASH_MS)
             button.update()
             return
-
-        def tick():
-            button.flash = max(0.0, button.flash - 1.0 / steps)
-            button.update()
-            if button.flash > 0:
-                QTimer.singleShot(FLASH_STEP_MS, tick)
+        button._flash_step = 1.0 / steps
+        button._flash_timer.start(FLASH_STEP_MS)
         button.update()
-        QTimer.singleShot(FLASH_STEP_MS, tick)
 
     def _refresh_tooltip(self, key):
         button, data = self.buttons[key], self._metrics[key]
@@ -840,6 +852,25 @@ class SidebarWidget(QWidget):
             target = QPoint(rect.left()-size.width(),rect.top())
         return QPoint(max(area.left(),min(target.x(),area.right()-size.width()+1)),max(area.top(),min(target.y(),area.bottom()-size.height()+1)))
 
+    def _fit_flyout(self):
+        key = self._active
+        if self._state != 'strip' or key is None:
+            return
+        button = self.buttons.get(key)
+        if button is None:
+            return
+        area = button.screen().availableGeometry()
+        self._flyout_layout.activate()
+        size_hint = self._flyout_layout.sizeHint()
+        self._flyout.setFixedSize(min(260, area.width()), min(size_hint.height(), area.height()))
+        self._flyout.move(self._flyout_position(button, self._flyout.size(), area))
+
+    def _defer_flyout_fit(self, key):
+        """Refit after Qt polishes newly added or restyled metric rows."""
+        if self._active == key:
+            self._fit_timer.start(0)
+
+
     def _open_flyout(self, key):
         if self._state != 'strip' or key not in self.cards:
             return
@@ -856,12 +887,9 @@ class SidebarWidget(QWidget):
         card.setMaximumWidth(16777215)
         self._flyout_layout.addWidget(card)
         card.show()
-        button = self.buttons[key]
-        area = button.screen().availableGeometry()
-        self._flyout.setFixedSize(min(260,area.width()),min(self._flyout_layout.sizeHint().height(),area.height()))
-        target = self._flyout_position(button,self._flyout.size(),area)
-        self._flyout.move(target)
+        self._fit_flyout()
         self._flyout.show()
+        self._defer_flyout_fit(key)
         if self._animations_enabled():
             self._animation.setDuration(self.tokens['animation_ms'])
             # Opacity keeps the window inside the screen throughout the animation.
@@ -891,7 +919,7 @@ class SidebarWidget(QWidget):
         return True
 
     def close_flyout(self):
-        self._hover_timer.stop(); self._leave_timer.stop(); self._animation.stop()
+        self._hover_timer.stop(); self._leave_timer.stop(); self._fit_timer.stop(); self._animation.stop()
         if self._active is not None:
             card=self.cards[self._active]; self._flyout_layout.removeWidget(card); card.setParent(self._storage); card.hide()
         self._flyout.hide(); self._active=None; self._pinned=False; self._pinned_key=None

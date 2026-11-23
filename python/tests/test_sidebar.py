@@ -219,11 +219,43 @@ class SidebarTests(unittest.TestCase):
         self.sidebar._open_flyout('claude'); self.sidebar.set_state('panel')
         self.assertFalse(self.sidebar._flyout.isVisible())
         self.assertTrue(all(c.isVisible() for c in self.cards.values()))
+
+    def test_open_flyout_resizes_when_metrics_arrive(self):
+        self.sidebar.set_state('strip')
+        initial = UsageMetrics(provider_id='agy')
+        self.cards['agy'].update_metrics(initial)
+        self.sidebar.update_metrics(initial)
+        self.sidebar._open_flyout('agy')
+        initial_height = self.sidebar._flyout.height()
+
+        loaded = UsageMetrics(
+            provider_id='agy',
+            metric1_title='C/G 5H', metric1_val=42, metric1_text='42%',
+            metric2_title='ARGON 7D', metric2_val=58, metric2_text='58%',
+            extra_metrics=[
+                MetricRow('GEMINI 5H', 21, '21%'),
+                MetricRow('C/G 7D', 34, '34%'),
+                MetricRow('ARGON 7D', 58, '58%'),
+            ],
+        )
+        self.cards['agy'].update_metrics(loaded)
+        self.sidebar.update_metrics(loaded)
+        APP.processEvents()
+        self.assertGreater(self.sidebar._flyout.height(), initial_height)
+        card_height = self.cards['agy'].sizeHint().height()
+        self.assertGreaterEqual(self.sidebar._flyout.height(), card_height + 16)
+        button = self.sidebar.buttons['agy']
+        area = button.screen().availableGeometry()
+        self.assertEqual(
+            self.sidebar._flyout.pos(),
+            self.sidebar._flyout_position(button, self.sidebar._flyout.size(), area),
+        )
+
     def test_unpinned_leave_and_hover(self):
-        self.sidebar._hover('claude'); self.assertEqual(self.sidebar._hover_timer.interval(),300)
+        self.sidebar._hover('claude'); self.assertEqual(self.sidebar._hover_timer.interval(),200)
         self.sidebar._hover_timer.timeout.emit(); self.assertEqual(self.sidebar._active,'claude')
         with patch('ui.sidebar.QCursor.pos',return_value=QPoint(-1000,-1000)):
-            self.sidebar._schedule_close(); self.assertEqual(self.sidebar._leave_timer.interval(),600)
+            self.sidebar._schedule_close(); self.assertEqual(self.sidebar._leave_timer.interval(),300)
             self.sidebar._maybe_close()
         self.assertIsNone(self.sidebar._active)
     def test_keyboard_and_geometry_without_motion(self):

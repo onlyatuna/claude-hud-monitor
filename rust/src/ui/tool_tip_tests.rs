@@ -337,3 +337,19 @@ fn leaving_before_the_wake_up_shows_no_tip_and_a_click_hides_it() {
     );
     assert!(!ToolTip::is_visible(), "a click hides the tip at once");
 }
+
+#[test]
+fn compact_dial_tooltip_shows_on_hover() {
+    let mut el = EventLoop::new();
+    let mut h = hud("table");
+    h.table.set_compact(true);
+    h.table.update_metrics(&offline("agy", "compact-boom"));
+    h.window.root_widget().borrow().update_layout();
+    ferrokit_widgets::widget::adopt_tree(&h.window.root_widget());
+
+    let compact_dial = h.table.columns["agy"].compact_dial.clone();
+    assert_eq!(
+        tip_after_hover(&mut el, &h, &compact_dial).as_deref(),
+        Some("Antigravity\ncompact-boom")
+    );
+}

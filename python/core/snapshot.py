@@ -92,12 +92,14 @@ def _render(name, settings, states, size, menu, out_dir: Path, app) -> Path:
                 raise RuntimeError(f"could not write {path}")
             return path
         finally:
+            from PySide6.QtCore import QEvent
             hud.refresh_controller.stop()
             hud.countdown_timer.stop()
             hud.geometry_timer.stop()
             hud.close()
-            hud.deleteLater()
             app.processEvents()
+            hud.deleteLater()
+            app.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 def run(out_dir=DEFAULT_DIR) -> list:

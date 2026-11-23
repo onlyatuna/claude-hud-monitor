@@ -78,15 +78,18 @@ fn cells(col: &ProviderColumn, table: &WidgetRef) -> Cells {
 }
 
 /// Restores the application sheet and device pixel ratio.
-struct Setup;
+struct Setup {
+    _guard: parking_lot::ReentrantMutexGuard<'static, ()>,
+}
 
 impl Setup {
     fn new(dpr: f32) -> Self {
+        let guard = crate::ui::test_support::lock_global_ui_test();
         ferrokit_gui::text::font_database::set_application_device_pixel_ratio(dpr);
         ferrokit_widgets::application::Application::set_style_sheet(
             crate::ui::styles::get_hud_stylesheet(true),
         );
-        Self
+        Self { _guard: guard }
     }
 }
 

@@ -14,13 +14,11 @@ from typing import List, Optional, Tuple
 BASE_IDS = ("claude", "agy", "codex")
 MAX_ACCOUNTS = 6
 TILE_LABEL_MAX = 8      # characters of a label on a 64 px strip tile
-CARD_LABEL_MAX = 16     # characters in a card header / menu entry
-NICKNAME_MAX = 32
-PROFILE_MAX = 128
-TILE_LABEL_MAX = 8      # characters of a label on a 64 px strip tile
 CARD_LABEL_MAX = 13     # characters in a panel card header (next to the two badges)
 MENU_LABEL_MAX = 16     # characters in a menu entry
-ID_PATTERN = re.compile(r"^claude@[a-z0-9][a-z0-9_-]{0,15}$")
+NICKNAME_MAX = 32
+PROFILE_MAX = 128
+ID_PATTERN = re.compile(r"^claude@[a-z0-9][a-z0-9_-]{0,15}\Z")
 
 
 @dataclass(frozen=True)

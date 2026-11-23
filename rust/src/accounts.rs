@@ -321,7 +321,7 @@ pub fn is_main_profile(cfg: &Config, profile: &str) -> bool {
     }
     let (main, _) = resolve_active_profile(pinned);
     let (other, _) = resolve_active_profile(profile);
-    main.id.eq_ignore_ascii_case(&other.id)
+    profile_key(&main.id) == profile_key(&other.id)
 }
 
 /// The profiles the menu offers: discovered, without `default` and without the pinned main one,
@@ -330,11 +330,19 @@ pub fn is_main_profile(cfg: &Config, profile: &str) -> bool {
 pub fn menu_entries(cfg: &Config) -> Vec<(String, String, bool, bool)> {
     let accounts = accounts_of(cfg);
     let mut out: Vec<(String, String, bool, bool)> = Vec::new();
+    let main_profile_key = {
+        let pinned = cfg.claude_profile.trim();
+        if pinned.is_empty() || pinned.eq_ignore_ascii_case("auto") {
+            None
+        } else {
+            let (main, _) = resolve_active_profile(pinned);
+            Some(profile_key(&main.id))
+        }
+    };
     for prof in discover_profiles() {
-        let ticked = accounts
-            .iter()
-            .any(|a| profile_key(&a.profile) == profile_key(&prof.id));
-        if prof.id == "default" || (!ticked && is_main_profile(cfg, &prof.id)) {
+        let prof_k = profile_key(&prof.id);
+        let ticked = accounts.iter().any(|a| profile_key(&a.profile) == prof_k);
+        if prof.id == "default" || (!ticked && main_profile_key.as_ref() == Some(&prof_k)) {
             continue;
         }
         out.push((prof.id.clone(), prof.display_name.clone(), ticked, true));

@@ -334,16 +334,45 @@ const HIDE_TRIM_DELAY_MS: u64 = 150;
 const IDLE_TRIM_DELAY_MS: u64 = 1000;
 /// Python `HUDWindow.__init__`: `QTimer.singleShot(2500, trim_memory)` (`:114`).
 const INITIAL_TRIM_DELAY_MS: u64 = 2500;
-fn schedule_trim(trim: &Arc<parking_lot::Mutex<TrimFn>>, delay_ms: u64) {
+/// The memory trim the HUD schedules (`crate::memory::trim_memory`; tests count calls instead).
+type TrimFn = Arc<dyn Fn() + Send + Sync>;
+
+struct TrimHook {
+    callback: TrimFn,
+    #[cfg(test)]
+    generation: u64,
+    #[cfg(test)]
+    min_generation: u64,
+}
+
+impl TrimHook {
+    fn new(callback: TrimFn) -> Self {
+        Self {
+            callback,
+            #[cfg(test)]
+            generation: 0,
+            #[cfg(test)]
+            min_generation: 0,
+        }
+    }
+}
+
+fn schedule_trim(trim: &Arc<parking_lot::Mutex<TrimHook>>, delay_ms: u64) {
     let trim_holder = Arc::clone(trim);
+    #[cfg(test)]
+    let scheduled_gen = trim_holder.lock().generation;
     ferrokit_core::timer::Timer::single_shot(delay_ms, move || {
-        let trim = Arc::clone(&trim_holder.lock());
+        let trim = {
+            let guard = trim_holder.lock();
+            #[cfg(test)]
+            if scheduled_gen < guard.min_generation {
+                return;
+            }
+            Arc::clone(&guard.callback)
+        };
         trim();
     });
 }
-
-/// The memory trim the HUD schedules (`crate::memory::trim_memory`; tests count calls instead).
-type TrimFn = Arc<dyn Fn() + Send + Sync>;
 
 /// What installs the window backdrop (`Window::set_backdrop`; tests substitute a failing one).
 type BackdropFn = fn(&mut Window, BackdropType, bool) -> bool;
@@ -360,8 +389,10 @@ fn install_backdrop(
     blur: bool,
 ) -> bool {
     if ui_mode == "table" && blur {
+        window.set_backdrop_corner_radius(TABLE_RADIUS as f32);
         window.is_visible() && set(window, BackdropType::Acrylic, dark)
     } else {
+        window.set_backdrop_corner_radius(0.0);
         set(window, BackdropType::None, dark);
         false
     }
@@ -467,7 +498,7 @@ pub struct HUDWindow {
     /// Diagnostic counter of long-gap refreshes; never read by any decision.
     wake_refresh_seq: u64,
     /// What the trim timers call; shared with the window event handler.
-    trim: Arc<parking_lot::Mutex<TrimFn>>,
+    trim: Arc<parking_lot::Mutex<TrimHook>>,
     /// The table panel sits on an installed blur (Python `vibrant`); read by the panel painter.
     vibrant: Rc<Cell<bool>>,
     set_backdrop: BackdropFn,
@@ -633,6 +664,7 @@ impl HUDWindow {
         // Python `_apply_ui_mode(..., initial=True)` sets the mode's minimum size on construction
         // (`hud_window.py:102, 296, 327, 347`; G12.8.q / RC-161).
         window.set_minimum_size(min_w, min_h);
+        window.set_hides_on_deactivate(false);
         window.set_opacity(opacity);
         // The window is not shown yet, so table mode starts on the solid panel; `show` installs the
         // blur (Python: `showEvent` -> `_apply_theme`).
@@ -703,7 +735,7 @@ impl HUDWindow {
                 )
             })
             .collect();
-        let flyout = Window::with_parent(
+        let mut flyout = Window::with_parent(
             &window,
             "",
             Rect::new(0, 0, 260, 100),
@@ -713,6 +745,7 @@ impl HUDWindow {
                 | WindowFlags::LAYERED
                 | WindowFlags::TOOLTIP,
         )?;
+        flyout.set_hides_on_deactivate(false);
         let tiles: Vec<(TileSpec, Rc<RefCell<ProviderCardWidget>>)> = sidebar_cards
             .iter()
             .filter_map(|(id, card)| Some((TileSpec::builtin(id)?, Rc::clone(card))))
@@ -747,40 +780,38 @@ impl HUDWindow {
             table.set_compact(compact_start);
         }
         chrome.sync_header();
+        // The window's current geometry as the events report it: used both by window events and by
+        // non-Windows frameless edge detection where ferrokit's fallback uses a fixed size.
+        let geom_now = Rc::new(Cell::new(window.geometry()));
+        let table_resize: Rc<RefCell<Option<TableResizeState>>> = Rc::new(RefCell::new(None));
+        let edge_cursor = Rc::new(Cell::new(CursorShape::Arrow));
+
         // Connect frameless window dragging and edge resizing
         let hwnd = window.native_handle();
         let cfg_move = Arc::clone(&config);
+        let geom_move = Rc::clone(&geom_now);
+        let table_resize_move = Rc::clone(&table_resize);
+        #[cfg(not(windows))]
+        let edge_cursor_move = Rc::clone(&edge_cursor);
         window.set_mouse_move_handler(move |pos| {
             let (locked, sidebar) = {
                 let cfg = cfg_move.lock();
                 (cfg.locked, cfg.ui_mode == "sidebar")
             };
-            if sidebar {
-                // the sidebar has its own edge / corner resize (`HudFilter`), not the native one
+            if sidebar || table_resize_move.borrow().is_some() {
+                // the sidebar has its own edge / corner resize (`HudFilter`), and an active
+                // table edge drag preserves its grip cursor until release
                 return;
             }
-            let edges = ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked);
-            let shape = if edges.is_empty() {
-                ferrokit_platform::cursor::CursorShape::Arrow
-            } else if edges == ferrokit_platform::platform_window::WindowEdges::LEFT
-                || edges == ferrokit_platform::platform_window::WindowEdges::RIGHT
-            {
-                ferrokit_platform::cursor::CursorShape::SizeHor
-            } else if edges == ferrokit_platform::platform_window::WindowEdges::TOP
-                || edges == ferrokit_platform::platform_window::WindowEdges::BOTTOM
-            {
-                ferrokit_platform::cursor::CursorShape::SizeVer
-            } else if edges == ferrokit_platform::platform_window::WindowEdges::TOP_LEFT
-                || edges == ferrokit_platform::platform_window::WindowEdges::BOTTOM_RIGHT
-            {
-                ferrokit_platform::cursor::CursorShape::SizeFDiag
-            } else {
-                ferrokit_platform::cursor::CursorShape::SizeBDiag
-            };
+            let edges = resolve_frameless_edges(hwnd, geom_move.get(), pos, locked);
+            let shape = edge_cursor_shape(edges);
             #[cfg(windows)]
-            ferrokit_platform::cursor::win32_cursor::Win32Cursor::set_shape(shape);
+            Cursor::set_shape(shape);
             #[cfg(not(windows))]
-            let _ = shape;
+            if edge_cursor_move.replace(shape) != shape {
+                Cursor::set_shape(shape);
+                with_hud_later(move |hud| hud.apply_edge_cursor(shape));
+            }
         });
 
         let mask_key: Rc<Cell<Option<(i32, i32, i32)>>> = Rc::new(Cell::new(None));
@@ -793,6 +824,10 @@ impl HUDWindow {
             .connect_local(move |()| resume_blur_or_retry());
 
         let cfg_press = Arc::clone(&config);
+        #[cfg(not(windows))]
+        let geom_press = Rc::clone(&geom_now);
+        #[cfg(not(windows))]
+        let table_resize_press = Rc::clone(&table_resize);
         window.set_mouse_press_handler(move |pos, button| {
             if button == ferrokit_platform::MouseButton::Left {
                 let (locked, sidebar) = {
@@ -803,15 +838,72 @@ impl HUDWindow {
                 let edges = if sidebar {
                     ferrokit_platform::platform_window::WindowEdges::empty()
                 } else {
-                    ferrokit_platform::window::calc_frameless_edge(hwnd, pos, locked)
+                    #[cfg(windows)]
+                    {
+                        resolve_frameless_edges(hwnd, Rect::default(), pos, locked)
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        resolve_frameless_edges(hwnd, geom_press.get(), pos, locked)
+                    }
                 };
                 if !edges.is_empty() {
-                    with_hud(|hud| hud.suspend_blur());
-                    ferrokit_platform::window::post_system_resize(hwnd, edges);
+                    #[cfg(windows)]
+                    {
+                        with_hud(|hud| hud.suspend_blur());
+                        ferrokit_platform::window::post_system_resize(hwnd, edges);
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        let mut started = false;
+                        let mut min_size = table_min_size();
+                        let mut cur_geom = geom_press.get();
+                        with_hud(|hud| {
+                            hud.suspend_blur();
+                            cur_geom = hud.window.geometry();
+                            geom_press.set(cur_geom);
+                            started = hud.window.start_system_resize(edges);
+                            if !started {
+                                min_size = hud.window.minimum_size();
+                            }
+                        });
+                        if !started {
+                            *table_resize_press.borrow_mut() = Some(TableResizeState {
+                                edges,
+                                start: pointer_pos(),
+                                geom: cur_geom,
+                                min_size,
+                            });
+                            with_hud_later(|hud| hud.begin_table_resize());
+                        }
+                    }
                     return true;
                 } else if !locked {
-                    with_hud(|hud| hud.suspend_blur());
-                    ferrokit_platform::window::post_system_move(hwnd);
+                    #[cfg(windows)]
+                    {
+                        with_hud(|hud| hud.suspend_blur());
+                        ferrokit_platform::window::post_system_move(hwnd);
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        let mut before = None;
+                        let ran = with_hud(|hud| {
+                            hud.suspend_blur();
+                            let geom_before = hud.window.geometry();
+                            if hud.window.start_system_move() {
+                                before = Some(geom_before);
+                            }
+                        });
+                        if ran && let Some(geom_before) = before {
+                            with_hud_later(move |hud| {
+                                let after = hud.window.geometry();
+                                if after != geom_before {
+                                    hud.sidebar_hud.geom.set(after);
+                                    persist_rect(&hud.debouncer, after);
+                                }
+                            });
+                        }
+                    }
                     return true;
                 }
             }
@@ -825,9 +917,6 @@ impl HUDWindow {
         let mask_key_resize = Rc::clone(&mask_key);
         let suspended_resize = Rc::clone(&blur_suspended);
         let timer_resize = Rc::clone(&blur_resume_timer);
-        // The window's current geometry as the events report it: the window event handler below
-        // cannot reach `window.geometry()`, and Python reads `self.pos()`/`self.size()` instead.
-        let geom_now = Rc::new(Cell::new(window.geometry()));
         // Python `_snap_timer` (single shot, 180 ms) and `_fade_timer` (single shot).
         let snap_timer = Timer::new();
         snap_timer.set_single_shot(true);
@@ -851,6 +940,8 @@ impl HUDWindow {
             docking: Cell::new(false),
             resize: RefCell::new(None),
             grip_cursor: Cell::new(false),
+            table_resize,
+            edge_cursor,
             snap_timer,
             fade_timer,
             snap_anim: RefCell::new(None),
@@ -890,9 +981,9 @@ impl HUDWindow {
         });
         // Python `moveEvent` / `mouseReleaseEvent` / `closeEvent` / `hideEvent`
         // (`hud_window.py:595-617`). `hide()` and the close request both reach `hideEvent`.
-        let trim: Arc<parking_lot::Mutex<TrimFn>> = Arc::new(parking_lot::Mutex::new(Arc::new(
+        let trim = Arc::new(parking_lot::Mutex::new(TrimHook::new(Arc::new(
             crate::memory::trim_memory,
-        )));
+        ))));
         let trim_events = Arc::clone(&trim);
         let suspended_events = Rc::clone(&blur_suspended);
         let timer_events = Rc::clone(&blur_resume_timer);
@@ -938,7 +1029,13 @@ impl HUDWindow {
                 persist_rect(&debouncer_events, geom_now.get());
             }
             EventKind::Hide => {
-                hud_state_events.stop_snap_animation();
+                with_hud_later(|hud| {
+                    if hud.window.is_visible() {
+                        return;
+                    }
+                    hud.cancel_snap_animation(true);
+                    hud.hide_dock_preview();
+                });
                 schedule_trim(&trim_events, HIDE_TRIM_DELAY_MS)
             }
             // Python `mouseDoubleClickEvent` (left): refresh now
@@ -1113,9 +1210,16 @@ impl HUDWindow {
     }
 
     /// Replaces what the trim timers call, so tests can observe the scheduling.
+    /// When `include_pending` is false, timers armed earlier (such as the constructor's 2500 ms
+    /// initial trim) are ignored so setup latency cannot leak them into a later test's window.
     #[cfg(test)]
-    fn set_trim(&self, trim: TrimFn) {
-        *self.trim.lock() = trim;
+    fn set_trim(&self, trim: TrimFn, include_pending: bool) {
+        let mut guard = self.trim.lock();
+        if !include_pending {
+            guard.generation += 1;
+            guard.min_generation = guard.generation;
+        }
+        guard.callback = trim;
     }
 
     /// Replaces what installs the backdrop, so tests can make it fail.
@@ -1176,6 +1280,10 @@ impl HUDWindow {
     }
 
     pub fn set_click_through(&mut self, enabled: bool) {
+        if enabled {
+            self.cancel_resize();
+            self.cancel_table_resize();
+        }
         self.is_click_through = enabled;
         self.window.set_click_through(enabled);
         self.config.lock().click_through = enabled;
@@ -1195,6 +1303,9 @@ impl HUDWindow {
             cfg.always_on_top
         };
         self.window.set_stays_on_top(aot);
+        if self.is_click_through {
+            self.window.set_click_through(true);
+        }
     }
 
     pub fn apply_ui_mode(&mut self, mode: &str) {
@@ -1230,6 +1341,7 @@ impl HUDWindow {
         if mode == "sidebar" {
             // Python `_apply_ui_mode("sidebar")`: the flyout goes, the bar is sized by its content
             self.cancel_resize();
+            self.cancel_table_resize();
             self.sidebar.close_flyout();
             self.refresh_backdrop(mode);
             self.window.set_minimum_size(0, 0);
@@ -1243,6 +1355,7 @@ impl HUDWindow {
         if self.sidebar_layout {
             // leaving the sidebar: back to the header + page layout and a resizable window
             self.cancel_resize();
+            self.cancel_table_resize();
             self.sidebar.close_flyout();
             self.install_root_layout(false);
             self.window
@@ -1541,10 +1654,27 @@ impl HUDWindow {
         self.refresh_ctrl.lock().set_interval(seconds);
     }
 
+    fn pinned_claude_profile_key(profile_id: &str) -> Option<String> {
+        let (resolved, is_auto) = crate::providers::claude::resolve_active_profile(profile_id);
+        (!is_auto).then(|| accounts::profile_key(&resolved.id))
+    }
+
     pub fn set_claude_profile(&mut self, profile_id: &str) {
+        let main_key = Self::pinned_claude_profile_key(profile_id);
         crate::config::ConfigManager::update_and_save(&self.config, |cfg| {
             cfg.claude_profile = profile_id.to_string();
+            if let Some(main_key) = main_key.as_deref().filter(|key| !key.is_empty()) {
+                let clashing: Vec<String> = accounts::accounts_of(cfg)
+                    .into_iter()
+                    .filter(|a| accounts::profile_key(&a.profile) == main_key)
+                    .map(|a| a.id)
+                    .collect();
+                for id in clashing {
+                    accounts::remove_account(cfg, &id);
+                }
+            }
         });
+        self.request_apply_accounts();
         self.trigger_refresh();
     }
 
@@ -1628,6 +1758,7 @@ impl HUDWindow {
             self.providers.remove(id);
             self.raw_metrics.remove(id);
             self.accounts.remove(id);
+            self.sidebar_cards.remove(id);
         }
 
         let tile_specs: Vec<TileSpec> = tiles
@@ -1796,6 +1927,111 @@ const SIDEBAR_FADE_GRACE_MS: u64 = 1500;
 /// Python `self._snap_timer.setInterval(180)`.
 const SIDEBAR_SNAP_DELAY_MS: u64 = 180;
 
+/// Frameless resize border width in logical pixels (matches `ferrokit_platform::window::calc_frameless_edge`).
+const FRAMELESS_RESIZE_BORDER: i32 = 8;
+
+/// Edge hit-test for frameless table/cards mode given an explicit window size.
+///
+/// Mirrors `ferrokit_platform::window::calc_frameless_edge` without relying on ferrokit's
+/// fixed fallback size on non-Windows.
+#[cfg_attr(windows, allow(dead_code))]
+fn frameless_edge_for_size(
+    pos: Point,
+    width: i32,
+    height: i32,
+    locked: bool,
+) -> ferrokit_platform::platform_window::WindowEdges {
+    use ferrokit_platform::platform_window::WindowEdges;
+    if locked || width <= 0 || height <= 0 {
+        return WindowEdges::empty();
+    }
+    let mut edges = WindowEdges::empty();
+    if pos.x < FRAMELESS_RESIZE_BORDER {
+        edges |= WindowEdges::LEFT;
+    } else if pos.x > width - FRAMELESS_RESIZE_BORDER {
+        edges |= WindowEdges::RIGHT;
+    }
+    if pos.y < FRAMELESS_RESIZE_BORDER {
+        edges |= WindowEdges::TOP;
+    } else if pos.y > height - FRAMELESS_RESIZE_BORDER {
+        edges |= WindowEdges::BOTTOM;
+    }
+    edges
+}
+
+fn resolve_frameless_edges(
+    _hwnd: isize,
+    _geom: Rect,
+    pos: Point,
+    locked: bool,
+) -> ferrokit_platform::platform_window::WindowEdges {
+    #[cfg(windows)]
+    {
+        ferrokit_platform::window::calc_frameless_edge(_hwnd, pos, locked)
+    }
+    #[cfg(not(windows))]
+    {
+        frameless_edge_for_size(pos, _geom.width, _geom.height, locked)
+    }
+}
+
+/// Cursor shape corresponding to a frameless window resize edge mask.
+fn edge_cursor_shape(edges: ferrokit_platform::platform_window::WindowEdges) -> CursorShape {
+    use ferrokit_platform::platform_window::WindowEdges;
+    if edges.is_empty() {
+        CursorShape::Arrow
+    } else if edges == WindowEdges::LEFT || edges == WindowEdges::RIGHT {
+        CursorShape::SizeHor
+    } else if edges == WindowEdges::TOP || edges == WindowEdges::BOTTOM {
+        CursorShape::SizeVer
+    } else if edges == WindowEdges::TOP_LEFT || edges == WindowEdges::BOTTOM_RIGHT {
+        CursorShape::SizeFDiag
+    } else {
+        CursorShape::SizeBDiag
+    }
+}
+
+/// Active manual edge/corner drag state for non-Windows frameless table/cards windows.
+#[derive(Clone, Debug)]
+struct TableResizeState {
+    edges: ferrokit_platform::platform_window::WindowEdges,
+    start: Point,
+    geom: Rect,
+    min_size: (i32, i32),
+}
+
+/// Computes the next window rectangle during a manual frameless table/cards edge or corner drag.
+fn compute_table_resize_rect(
+    orig: Rect,
+    edges: ferrokit_platform::platform_window::WindowEdges,
+    dx: i32,
+    dy: i32,
+    min_size: (i32, i32),
+) -> Rect {
+    use ferrokit_platform::platform_window::WindowEdges;
+    let min_w = min_size.0.max(1);
+    let min_h = min_size.1.max(1);
+    let mut x = orig.x;
+    let mut y = orig.y;
+    let mut w = orig.width;
+    let mut h = orig.height;
+    if edges.contains(WindowEdges::LEFT) {
+        let right = orig.x + orig.width;
+        w = (orig.width - dx).max(min_w);
+        x = right - w;
+    } else if edges.contains(WindowEdges::RIGHT) {
+        w = (orig.width + dx).max(min_w);
+    }
+    if edges.contains(WindowEdges::TOP) {
+        let bottom = orig.y + orig.height;
+        h = (orig.height - dy).max(min_h);
+        y = bottom - h;
+    } else if edges.contains(WindowEdges::BOTTOM) {
+        h = (orig.height + dy).max(min_h);
+    }
+    Rect::new(x, y, w, h)
+}
+
 /// Python `self._resize`: the state of an edge / corner drag.
 #[derive(Clone, Debug)]
 struct ResizeState {
@@ -1812,6 +2048,8 @@ pub struct SidebarHud {
     docking: Cell<bool>,
     resize: RefCell<Option<ResizeState>>,
     grip_cursor: Cell<bool>,
+    table_resize: Rc<RefCell<Option<TableResizeState>>>,
+    edge_cursor: Rc<Cell<CursorShape>>,
     /// Python `_snap_timer`.
     snap_timer: Timer,
     /// Python `_fade_timer`.
@@ -2087,6 +2325,42 @@ impl QObject for HudFilter {
             return false;
         };
         if !sidebar_mode {
+            if hud.table_resize.borrow().is_some() {
+                if locked {
+                    with_hud_later(|hud| hud.cancel_table_resize());
+                    return false;
+                }
+                let buttons_up =
+                    ferrokit_widgets::application::Application::mouse_buttons().is_empty();
+                return match &event.kind {
+                    EventKind::MouseMove { .. } if resize_lost_release(buttons_up) => {
+                        with_hud_later(|hud| hud.end_table_resize());
+                        true
+                    }
+                    EventKind::MouseMove { .. } => {
+                        let pos = pointer_pos();
+                        with_hud_later(move |hud| hud.table_resize_to(pos));
+                        true
+                    }
+                    EventKind::MouseButtonRelease { .. } => {
+                        with_hud_later(|hud| hud.end_table_resize());
+                        true
+                    }
+                    EventKind::FocusOut { .. } if watched == hud.root_id => {
+                        with_hud_later(|hud| hud.cancel_table_resize());
+                        false
+                    }
+                    _ => false,
+                };
+            }
+            #[cfg(not(windows))]
+            if watched == hud.root_id
+                && matches!(event.kind, EventKind::Leave)
+                && hud.edge_cursor.replace(CursorShape::Arrow) != CursorShape::Arrow
+            {
+                Cursor::set_shape(CursorShape::Arrow);
+                with_hud_later(|hud| hud.apply_edge_cursor(CursorShape::Arrow));
+            }
             return false;
         }
         // enterEvent / leaveEvent of the window: stop / start the idle-fade timer. Deferred: the
@@ -2105,8 +2379,10 @@ impl QObject for HudFilter {
             }
         }
         // the user takes the bar over: a running glide stops and the window stays where it is
-        if matches!(event.kind, EventKind::MouseButtonPress { .. }) {
-            hud.stop_snap_animation();
+        if matches!(event.kind, EventKind::MouseButtonPress { button: 1, .. })
+            && hud.stop_snap_animation()
+        {
+            hud.snap_timer.start();
         }
         if hud.resize.borrow().is_some() {
             let buttons_up = ferrokit_widgets::application::Application::mouse_buttons().is_empty();
@@ -2519,6 +2795,78 @@ impl HUDWindow {
         self.window.set_fixed_size(w, h);
         self.set_window_geometry(Rect::new(x, y, w, h));
         self.sidebar_hud.docking.set(false);
+    }
+
+    /// Updates the window cursor rect for frameless edge hover/resize on non-Windows backends.
+    fn apply_edge_cursor(&mut self, shape: CursorShape) {
+        if shape == CursorShape::Arrow {
+            self.window.unset_cursor();
+        } else {
+            self.window.set_cursor(shape);
+        }
+    }
+
+    #[cfg_attr(windows, allow(dead_code))]
+    fn begin_table_resize(&mut self) {
+        let Some(edges) = self
+            .sidebar_hud
+            .table_resize
+            .borrow()
+            .as_ref()
+            .map(|r| r.edges)
+        else {
+            return;
+        };
+        let shape = edge_cursor_shape(edges);
+        self.sidebar_hud.edge_cursor.set(shape);
+        Cursor::set_shape(shape);
+        self.apply_edge_cursor(shape);
+        self.window.root_widget().borrow().grab_mouse();
+    }
+
+    fn table_resize_to(&mut self, pos: Point) {
+        let Some(r) = self.sidebar_hud.table_resize.borrow().clone() else {
+            return;
+        };
+        let next = compute_table_resize_rect(
+            r.geom,
+            r.edges,
+            pos.x - r.start.x,
+            pos.y - r.start.y,
+            r.min_size,
+        );
+        if next != self.window.geometry() {
+            self.set_window_geometry(next);
+        }
+    }
+
+    fn reset_table_edge_cursor(&mut self) {
+        self.sidebar_hud.edge_cursor.set(CursorShape::Arrow);
+        self.apply_edge_cursor(CursorShape::Arrow);
+        Cursor::set_shape(CursorShape::Arrow);
+    }
+
+    fn finish_table_resize_common(&mut self) {
+        self.window.root_widget().borrow().release_mouse();
+        self.reset_table_edge_cursor();
+        if self.blur_suspended.get() {
+            self.blur_resume_timer.start();
+        }
+    }
+
+    fn end_table_resize(&mut self) {
+        if self.sidebar_hud.table_resize.borrow_mut().take().is_some() {
+            self.finish_table_resize_common();
+            persist_rect(&self.debouncer, self.window.geometry());
+        }
+    }
+
+    fn cancel_table_resize(&mut self) {
+        if self.sidebar_hud.table_resize.borrow_mut().take().is_some() {
+            self.finish_table_resize_common();
+        } else if self.sidebar_hud.edge_cursor.replace(CursorShape::Arrow) != CursorShape::Arrow {
+            self.reset_table_edge_cursor();
+        }
     }
 
     /// A resize that ends without a release (mode switch, focus lost): the grab, the cursor and
@@ -3052,6 +3400,15 @@ mod tests {
     }
 
     #[test]
+    fn auto_profile_has_no_pinned_claude_account_key() {
+        assert_eq!(HUDWindow::pinned_claude_profile_key("auto"), None);
+        assert_eq!(
+            HUDWindow::pinned_claude_profile_key("default"),
+            Some("default".to_owned())
+        );
+    }
+
+    #[test]
     fn an_account_is_added_and_removed_live() {
         let (mut hud, _rx) = hud_with_stubs();
         assert_eq!(hud.sidebar.visible_tiles(), ["claude", "agy", "codex"]);
@@ -3123,6 +3480,7 @@ mod tests {
 
     #[test]
     fn the_window_follows_the_tile_count() {
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         let (mut hud, _rx) = hud_with_stubs();
         for (panel, horizontal) in [(false, false), (false, true), (true, false), (true, true)] {
             ConfigManager::update_and_save(&hud.config, |cfg| {
@@ -3227,13 +3585,20 @@ mod tests {
 
     impl TrimLog {
         fn install(hud: &HUDWindow) -> Self {
-            Self::install_at(hud, std::time::Instant::now())
+            Self::install_with(hud, std::time::Instant::now(), false)
         }
 
         fn install_at(hud: &HUDWindow, start: std::time::Instant) -> Self {
+            Self::install_with(hud, start, true)
+        }
+
+        fn install_with(hud: &HUDWindow, start: std::time::Instant, include_pending: bool) -> Self {
             let calls = Arc::new(Mutex::new(Vec::new()));
             let sink = Arc::clone(&calls);
-            hud.set_trim(Arc::new(move || sink.lock().push(start.elapsed())));
+            hud.set_trim(
+                Arc::new(move || sink.lock().push(start.elapsed())),
+                include_pending,
+            );
             TrimLog(calls, start)
         }
 
@@ -3464,6 +3829,7 @@ mod tests {
     fn test_hud_window_close_flushes_pending_resize() {
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         let mut hud = HUDWindow::with_providers(
             Arc::clone(&cfg),
             refresh_ctrl,
@@ -3509,6 +3875,7 @@ mod tests {
 
         let cfg = Arc::new(Mutex::new(Config::default()));
         let refresh_ctrl = Arc::new(Mutex::new(RefreshController::new(60)));
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         let mut hud = HUDWindow::with_providers(
             Arc::clone(&cfg),
             refresh_ctrl,
@@ -4167,6 +4534,7 @@ mod dock_preview_tests {
     #[test]
     fn the_preview_paints_a_translucent_rounded_outline_in_the_theme_colour() {
         use crate::ui::dock_preview::{DOCK_PREVIEW_BORDER_ALPHA, DOCK_PREVIEW_FILL_ALPHA};
+        let _guard = crate::ui::test_support::lock_global_ui_test();
         for dark in [true, false] {
             let mut hud = sidebar_hud("strip", |c| {
                 c.appearance = if dark { "dark" } else { "light" }.into()
@@ -4348,6 +4716,47 @@ mod dock_preview_tests {
             hud.sidebar.set_dock_edge(Some("right"));
             hud.dock_sidebar();
         }
+    }
+    #[test]
+    fn a_right_click_does_not_cancel_or_rearm_the_snap_glide() {
+        let _motion = Motion::set(false);
+        let mut hud = shown_hud("strip");
+        hud.config.lock().locked = true;
+        let w = work(&hud);
+        release_at_top(&mut hud, w, 4);
+        assert!(gliding(&hud));
+
+        let mut filter = HudFilter {
+            data: ObjectData::with_auto_id(),
+            state: Rc::downgrade(&hud.sidebar_hud),
+            config: Arc::clone(&hud.config),
+        };
+        for (button, expected_gliding) in [(2, true), (1, false)] {
+            let mut event = Event::new(EventKind::MouseButtonPress { x: 0, y: 0, button });
+            filter.event_filter(hud.sidebar_hud.root_id, &mut event);
+            assert_eq!(gliding(&hud), expected_gliding, "button {button}");
+        }
+        hud.sidebar_hud.snap_timer.stop();
+    }
+    #[test]
+    fn queued_hide_cleanup_does_not_settle_a_reshown_window() {
+        let _motion = Motion::set(false);
+        let hud = registered_hud();
+        let w = work(&hud.borrow());
+
+        hud.borrow_mut().hide();
+        hud.borrow_mut().show();
+        {
+            let mut hud = hud.borrow_mut();
+            release_at_top(&mut hud, w, 4);
+            assert!(gliding(&hud));
+        }
+
+        ferrokit_widgets::WidgetCommandQueue::flush();
+        assert!(gliding(&hud.borrow()));
+
+        hud.borrow_mut().hide();
+        ferrokit_widgets::WidgetCommandQueue::flush();
     }
 
     #[test]
@@ -4864,5 +5273,103 @@ mod resize_pipeline_tests {
         send(hwnd, WM_MOUSELEAVE, 0, Point::new(r, cy));
         ferrokit_widgets::WidgetCommandQueue::flush();
         assert_eq!(override_cursor(), None, "after the pointer left");
+    }
+}
+
+#[cfg(test)]
+mod frameless_edge_tests {
+    use super::*;
+    use ferrokit_platform::platform_window::WindowEdges;
+
+    #[test]
+    fn frameless_edge_for_size_respects_live_dimensions_and_lock() {
+        assert_eq!(
+            frameless_edge_for_size(Point::new(2, 50), 900, 700, false),
+            WindowEdges::LEFT
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(895, 50), 900, 700, false),
+            WindowEdges::RIGHT
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(400, 3), 900, 700, false),
+            WindowEdges::TOP
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(400, 696), 900, 700, false),
+            WindowEdges::BOTTOM
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(2, 2), 900, 700, false),
+            WindowEdges::TOP_LEFT
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(898, 698), 900, 700, false),
+            WindowEdges::BOTTOM_RIGHT
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(898, 2), 900, 700, false),
+            WindowEdges::TOP_RIGHT
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(2, 698), 900, 700, false),
+            WindowEdges::BOTTOM_LEFT
+        );
+        // Beyond ferrokit's old hardcoded 600x400 fallback, interior coordinates stay empty
+        // and real edges trigger at the live bounds.
+        assert_eq!(
+            frameless_edge_for_size(Point::new(598, 398), 900, 700, false),
+            WindowEdges::empty()
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(2, 2), 900, 700, true),
+            WindowEdges::empty()
+        );
+        assert_eq!(
+            frameless_edge_for_size(Point::new(2, 2), 0, 0, false),
+            WindowEdges::empty()
+        );
+    }
+
+    #[test]
+    fn edge_cursor_shape_maps_all_edges_and_corners() {
+        assert_eq!(edge_cursor_shape(WindowEdges::empty()), CursorShape::Arrow);
+        assert_eq!(edge_cursor_shape(WindowEdges::LEFT), CursorShape::SizeHor);
+        assert_eq!(edge_cursor_shape(WindowEdges::RIGHT), CursorShape::SizeHor);
+        assert_eq!(edge_cursor_shape(WindowEdges::TOP), CursorShape::SizeVer);
+        assert_eq!(edge_cursor_shape(WindowEdges::BOTTOM), CursorShape::SizeVer);
+        assert_eq!(
+            edge_cursor_shape(WindowEdges::TOP_LEFT),
+            CursorShape::SizeFDiag
+        );
+        assert_eq!(
+            edge_cursor_shape(WindowEdges::BOTTOM_RIGHT),
+            CursorShape::SizeFDiag
+        );
+        assert_eq!(
+            edge_cursor_shape(WindowEdges::TOP_RIGHT),
+            CursorShape::SizeBDiag
+        );
+        assert_eq!(
+            edge_cursor_shape(WindowEdges::BOTTOM_LEFT),
+            CursorShape::SizeBDiag
+        );
+    }
+
+    #[test]
+    fn compute_table_resize_rect_anchors_opposite_edges_and_clamps_minimum() {
+        let orig = Rect::new(100, 200, 400, 300);
+        let min_size = (260, 180);
+
+        // Bottom-right grows normally
+        assert_eq!(
+            compute_table_resize_rect(orig, WindowEdges::BOTTOM_RIGHT, 30, -20, min_size),
+            Rect::new(100, 200, 430, 280)
+        );
+        // Top-left anchors bottom-right corner at (500, 500) even when shrinking past min_size
+        let clamped = compute_table_resize_rect(orig, WindowEdges::TOP_LEFT, 300, 300, min_size);
+        assert_eq!(clamped, Rect::new(240, 320, 260, 180));
+        assert_eq!(clamped.x + clamped.width, orig.x + orig.width);
+        assert_eq!(clamped.y + clamped.height, orig.y + orig.height);
     }
 }

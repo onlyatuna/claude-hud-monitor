@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication
 from core import tray_quota as tq
 from core.config_manager import ConfigManager
@@ -75,7 +76,14 @@ class TrayUiTests(unittest.TestCase):
         config.update(settings)
         hud = HUDWindow(config)
         hud._raw_metrics.update({'claude': claude(), 'codex': codex()})
+        self.addCleanup(self._release, hud)
         return config, hud
+
+    def _release(self, hud):
+        self._close(hud)
+        APP.processEvents()
+        hud.deleteLater()
+        APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
     def _close(self, hud):
         hud.refresh_controller.stop()
@@ -130,6 +138,8 @@ class TrayUiTests(unittest.TestCase):
                 self.assertTrue(tray.toolTip().startswith('Claude FABLE 7D: 16% left\n'))
             finally:
                 tray.hide()
+                tray.hud_window = None
+                hud.set_tray_icon(None)
                 self._close(hud)
 
 

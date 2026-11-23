@@ -112,6 +112,7 @@ pub const FLASH_MS: u64 = 1800;
 pub const FLASH_STEP_MS: u64 = 60;
 /// The flyout is at most this wide (`setFixedSize(min(260, area.width()), ...)`).
 pub const FLYOUT_WIDTH: i32 = 260;
+const FLYOUT_PADDING: i32 = 8;
 /// Python `SidebarWidget.set_scale` bounds.
 pub const SCALE_MIN: f64 = 0.6;
 pub const SCALE_MAX: f64 = 2.0;
@@ -1577,7 +1578,12 @@ impl SidebarWidget {
         let flyout_root = flyout.root_widget();
         {
             let mut vbox = BoxLayout::new(Direction::TopToBottom);
-            vbox.set_margins(Margins::new(8, 8, 8, 8));
+            vbox.set_margins(Margins::new(
+                FLYOUT_PADDING,
+                FLYOUT_PADDING,
+                FLYOUT_PADDING,
+                FLYOUT_PADDING,
+            ));
             flyout_root.borrow_mut().set_layout(Box::new(vbox));
         }
 
@@ -2363,6 +2369,9 @@ impl SidebarInner {
         self.refresh_tooltip(&data.provider_id);
         if self.state.get() == State::Panel {
             self.relayout();
+        } else if self.active.borrow().as_deref() == Some(data.provider_id.as_str()) {
+            self.fit_flyout(&data.provider_id);
+            self.defer_fit_flyout(&data.provider_id);
         }
     }
 
@@ -2541,6 +2550,50 @@ impl SidebarInner {
             .borrow_mut()
             .set_geometry(Rect::new(x, y, g.width, g.height));
     }
+    /// Recomputes the active flyout's size and position after its card changes.
+    fn fit_flyout(&self, key: &str) {
+        if self.state.get() != State::Strip || self.active.borrow().as_deref() != Some(key) {
+            return;
+        }
+        let Some(tile) = self.button_rect(key) else {
+            return;
+        };
+        let area = self.screen_area();
+        // The root layout under-reports dynamic rows; measure the active card itself.
+        let Some(card) = self.card_widget(key) else {
+            return;
+        };
+        let card_height = card
+            .borrow()
+            .with_box_layout(|l| {
+                l.update_layout();
+                l.size_hint().height
+            })
+            .unwrap_or(0)
+            .max(0);
+        let hint = card_height + 2 * FLYOUT_PADDING;
+        let size = (FLYOUT_WIDTH.min(area.width), hint.min(area.height));
+        let edge = self.dock_edge.borrow().clone();
+        let (x, y) = flyout_position(
+            (tile.x, tile.y, tile.width, tile.height),
+            size,
+            (area.x, area.y, area.width, area.height),
+            edge.as_deref(),
+        );
+        let mut flyout = self.flyout.borrow_mut();
+        flyout.set_fixed_size(size.0, size.1);
+        flyout.set_geometry(Rect::new(x, y, size.0, size.1));
+    }
+    /// Refit after the event loop polishes widgets added or restyled with the new metrics.
+    fn defer_fit_flyout(self: &Rc<Self>, key: &str) {
+        let weak = Rc::downgrade(self);
+        let key = key.to_owned();
+        Timer::single_shot_local(0, move || {
+            if let Some(inner) = weak.upgrade() {
+                inner.fit_flyout(&key);
+            }
+        });
+    }
 
     /// Python `_open_flyout`.
     fn open_flyout(self: &Rc<Self>, key: &str) {
@@ -2555,7 +2608,7 @@ impl SidebarInner {
         self.close_flyout();
         self.pinned.set(pinned);
         *self.pinned_key.borrow_mut() = pinned_key;
-        let (Some(card), Some(tile)) = (self.card(key), self.button_rect(key)) else {
+        let (Some(card), Some(_tile)) = (self.card(key), self.button_rect(key)) else {
             return;
         };
         *self.active.borrow_mut() = Some(key.to_owned());
@@ -2571,30 +2624,9 @@ impl SidebarInner {
             .borrow()
             .set_window_id(Some(self.flyout.borrow().id()));
         ferrokit_widgets::widget::set_widget_visible(&widget, true);
-        let area = self.screen_area();
-        let hint = self
-            .flyout_root
-            .borrow()
-            .with_box_layout(|l| {
-                l.update_layout();
-                l.size_hint().height
-            })
-            .unwrap_or(0);
-        let size = (FLYOUT_WIDTH.min(area.width), hint.min(area.height));
+        self.fit_flyout(key);
         {
             let mut flyout = self.flyout.borrow_mut();
-            flyout.set_fixed_size(size.0, size.1);
-        }
-        let edge = self.dock_edge.borrow().clone();
-        let (x, y) = flyout_position(
-            (tile.x, tile.y, tile.width, tile.height),
-            size,
-            (area.x, area.y, area.width, area.height),
-            edge.as_deref(),
-        );
-        {
-            let mut flyout = self.flyout.borrow_mut();
-            flyout.set_geometry(Rect::new(x, y, size.0, size.1));
             if animations_enabled() {
                 flyout.set_opacity(0.0);
             } else {
@@ -2602,6 +2634,7 @@ impl SidebarInner {
             }
             flyout.show();
         }
+        self.defer_fit_flyout(key);
         if animations_enabled() {
             // Opacity keeps the window inside the screen throughout the animation.
             let mut animation = self.animation.borrow_mut();
@@ -3195,6 +3228,32 @@ mod hover_delay_tests {
     use crate::ui::hud_window::HUDWindow;
     use ferrokit_core::event_loop::EventLoop;
     use std::time::Duration;
+    fn label_width(root: &ferrokit_widgets::WidgetRef, text: &str) -> Option<(i32, i32, i32)> {
+        let (matches, children) = {
+            let widget = root.borrow();
+            let matches = widget
+                .as_any()
+                .downcast_ref::<ferrokit_widgets::Label>()
+                .is_some_and(|label| label.text() == text);
+            (matches, widget.children())
+        };
+        if matches {
+            let widget = root.borrow();
+            let parent_width = widget
+                .parent_widget()
+                .and_then(|parent| parent.upgrade())
+                .map(|parent| parent.borrow().geometry().width)
+                .unwrap_or(-1);
+            return Some((
+                widget.geometry().width,
+                widget.size_hint().width,
+                parent_width,
+            ));
+        }
+        children
+            .into_iter()
+            .find_map(|child| label_width(&child, text))
+    }
 
     fn pump(el: &mut EventLoop, ms: u64) {
         let end = Instant::now() + Duration::from_millis(ms);
@@ -3229,6 +3288,119 @@ mod hover_delay_tests {
         ferrokit_widgets::WidgetCommandQueue::flush();
         pump(&mut el, wait);
         assert_eq!(sidebar.active().as_deref(), Some("claude"));
+    }
+    #[test]
+    fn active_flyout_resizes_when_metrics_arrive() {
+        let _guard = crate::ui::test_support::lock_global_ui_test();
+        let _el = EventLoop::new();
+        let cfg = Arc::new(parking_lot::Mutex::new(Config::default()));
+        let ctrl = Arc::new(parking_lot::Mutex::new(RefreshController::new(60)));
+        let mut hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let sidebar = hud.sidebar.clone();
+        sidebar.set_state(State::Strip);
+        hud.on_data_fetched(&UsageMetrics {
+            provider_id: "agy".to_owned(),
+            ..Default::default()
+        });
+        sidebar.inner().open_flyout("agy");
+        let initial_height = sidebar.inner().flyout.borrow().geometry().height;
+
+        let loaded = UsageMetrics {
+            provider_id: "agy".to_owned(),
+            metric1_title: "C/G 5H".to_owned(),
+            metric1_val: Some(42.0),
+            metric1_text: "42%".to_owned(),
+            metric2_title: "ARGON 7D".to_owned(),
+            metric2_val: Some(58.0),
+            metric2_text: "58%".to_owned(),
+            extra_metrics: vec![
+                crate::providers::base::MetricRow::new("GEMINI 5H", Some(21.0), "21%"),
+                crate::providers::base::MetricRow::new("C/G 7D", Some(34.0), "34%"),
+                crate::providers::base::MetricRow::new("ARGON 7D", Some(58.0), "58%"),
+            ],
+            ..Default::default()
+        };
+        hud.on_data_fetched(&loaded);
+        let loaded_height = sidebar.inner().flyout.borrow().geometry().height;
+        assert!(
+            loaded_height > initial_height,
+            "flyout stayed at {initial_height}px after rows grew to {loaded_height}px"
+        );
+        let _ = ferrokit_core::application::CoreApplication::process_events(false);
+        let settled = sidebar.inner().flyout.borrow().geometry();
+        let card = sidebar
+            .cards()
+            .into_iter()
+            .find(|(key, _)| key == "agy")
+            .unwrap()
+            .1;
+        for title in ["GEMINI 5H", "C/G 7D"] {
+            let (width, hint, parent_width) = label_width(&card.borrow().widget(), title)
+                .unwrap_or_else(|| panic!("missing extra metric title {title}"));
+            assert!(
+                width >= hint,
+                "extra metric title {title:?} is clipped: width {width}, size hint {hint}, parent width {parent_width}"
+            );
+        }
+        let (width, hint, parent_width) =
+            label_width(&card.borrow().widget(), "34%").expect("missing extra metric value 34%");
+        assert!(
+            width >= hint,
+            "extra metric value is clipped: width {width}, size hint {hint}, parent width {parent_width}"
+        );
+        let card_height = card.borrow().widget().borrow().size_hint().height;
+        assert!(
+            settled.height >= card_height + 2 * FLYOUT_PADDING,
+            "settled flyout height {} clips card size hint {} plus 16px margins",
+            settled.height,
+            card_height
+        );
+        let tile = sidebar.inner().button_rect("agy").unwrap();
+        let area = sidebar.inner().screen_area();
+        let edge = sidebar.inner().dock_edge.borrow().clone();
+        assert_eq!(
+            (settled.x, settled.y),
+            flyout_position(
+                (tile.x, tile.y, tile.width, tile.height),
+                (settled.width, settled.height),
+                (area.x, area.y, area.width, area.height),
+                edge.as_deref(),
+            ),
+            "flyout should follow its tile after layout settles"
+        );
+        sidebar.close_flyout();
+    }
+
+    #[test]
+    fn click_pins_flyout_against_leave_and_second_click_unpins() {
+        let mut el = EventLoop::new();
+        let cfg = Arc::new(parking_lot::Mutex::new(Config::default()));
+        let ctrl = Arc::new(parking_lot::Mutex::new(RefreshController::new(60)));
+        let hud =
+            HUDWindow::with_providers(cfg, ctrl, crate::providers::stub::stub_providers()).unwrap();
+        let sidebar = hud.sidebar.clone();
+        sidebar.set_state(State::Strip);
+
+        sidebar.inner().click_provider("claude");
+        assert!(sidebar.inner().pinned.get());
+        assert_eq!(
+            sidebar.inner().pinned_key.borrow().as_deref(),
+            Some("claude")
+        );
+        assert_eq!(sidebar.active().as_deref(), Some("claude"));
+
+        // Leaving while pinned must keep the flyout open past the leave delay.
+        sidebar.inner().schedule_close();
+        pump(&mut el, sidebar.inner().tokens().leave_ms + 80);
+        assert_eq!(sidebar.active().as_deref(), Some("claude"));
+        assert!(sidebar.inner().pinned.get());
+
+        // Clicking the same tile a second time unpins and closes the flyout.
+        sidebar.inner().click_provider("claude");
+        assert!(!sidebar.inner().pinned.get());
+        assert_eq!(sidebar.inner().pinned_key.borrow().as_deref(), None);
+        assert_eq!(sidebar.active().as_deref(), None);
     }
 }
 

@@ -161,6 +161,21 @@ class HUDWindow(QWidget):
         self._snap_timer.setSingleShot(True)
         self._snap_timer.setInterval(180)
         self._snap_timer.timeout.connect(self._finish_sidebar_move)
+        self._click_through_init_timer = QTimer(self)
+        self._click_through_init_timer.setSingleShot(True)
+        self._click_through_init_timer.timeout.connect(self._safe_init_click_through)
+        self._appearance_timer = QTimer(self)
+        self._appearance_timer.setSingleShot(True)
+        self._appearance_timer.timeout.connect(self._refresh_system_appearance)
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.timeout.connect(self._settle_sidebar)
+        self._apply_timer = QTimer(self)
+        self._apply_timer.setSingleShot(True)
+        self._apply_timer.timeout.connect(self._run_apply)
+        self._show_theme_timer = QTimer(self)
+        self._show_theme_timer.setSingleShot(True)
+        self._show_theme_timer.timeout.connect(self._apply_theme)
 
         self._init_window_flags()
         self._init_ui_skeleton()
@@ -170,7 +185,7 @@ class HUDWindow(QWidget):
 
         if self.config.get("click_through", False):
             # Delay startup click-through to verify hotkeys and prevent lockout
-            QTimer.singleShot(300, self._safe_init_click_through)
+            self._click_through_init_timer.start(300)
 
         # Initial fetch for all providers
         self.refresh_controller.start()
@@ -285,7 +300,7 @@ class HUDWindow(QWidget):
 
     def _on_system_appearance_changed(self, *_):
         if self.config.get("appearance", "auto") == "auto":
-            QTimer.singleShot(0, self._refresh_system_appearance)
+            self._appearance_timer.start(0)
 
     def _refresh_system_appearance(self):
         if self.config.get("appearance", "auto") == "auto":
@@ -721,7 +736,12 @@ class HUDWindow(QWidget):
             ratios.append((g.height() + dy) / g.height())
         if "t" in zone:
             ratios.append((g.height() - dy) / g.height())
-        ratio = max(ratios, key=lambda v: abs(v - 1.0))
+        if all(v >= 1.0 for v in ratios):
+            ratio = max(ratios)
+        elif all(v <= 1.0 for v in ratios):
+            ratio = min(ratios)
+        else:
+            ratio = ratios[0] + sum(v - 1.0 for v in ratios[1:])
         scale = max(0.6, min(2.0, round(r["scale"] * ratio, 2)))
         if scale == self.sidebar.scale():
             return
@@ -748,8 +768,9 @@ class HUDWindow(QWidget):
         if self.config.get("ui_mode") != "sidebar":
             return False
         kind = event.type()
-        if kind == QEvent.Type.MouseButtonPress:
-            self._cancel_snap_animation()            # the user takes the bar over: it stays where it is
+        if kind == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            if self._cancel_snap_animation():
+                self._snap_timer.start()            # user clicked to stop glide: re-arm snap if not dragged
         if self._resize is not None:
             if kind == QEvent.Type.MouseMove:
                 self._resize_to(event.globalPosition().toPoint())
@@ -803,14 +824,14 @@ class HUDWindow(QWidget):
             return
         if self.sidebar.state() == "panel":
             self._dock_sidebar()
-            QTimer.singleShot(0, self._settle_sidebar)
+            self._settle_timer.start(0)
 
     def _refit_sidebar(self):
         """Dock the window again after the tile set changed (strip and panel); the panel settles once its rows are polished."""
         if self.config.get("ui_mode", "sidebar") != "sidebar" or self._resize is not None:
             return
         self._dock_sidebar()
-        QTimer.singleShot(0, self._settle_sidebar)
+        self._settle_timer.start(0)
 
     def _settle_sidebar(self):
         if self.config.get("ui_mode", "sidebar") == "sidebar" and self._resize is None \
@@ -953,7 +974,7 @@ class HUDWindow(QWidget):
         """Menu actions only write the config and ask; a burst of clicks is applied once, from the final config."""
         if not self._apply_pending:
             self._apply_pending = True
-            QTimer.singleShot(0, self._run_apply)
+            self._apply_timer.start(0)
 
     def _run_apply(self):
         if self._apply_pending:
@@ -1305,6 +1326,14 @@ class HUDWindow(QWidget):
         self._save_geometry()
 
     def closeEvent(self, event):
+        self._click_through_init_timer.stop()
+        self._appearance_timer.stop()
+        self._settle_timer.stop()
+        self._apply_timer.stop()
+        self._show_theme_timer.stop()
+        self._fade_timer.stop()
+        self._blur_resume_timer.stop()
+        self._snap_timer.stop()
         self._hide_dock_preview()
         self._cancel_snap_animation()
         if self._dock_preview is not None:      # not owned by the HUD (it has to sit below it), so it goes with it
@@ -1315,10 +1344,11 @@ class HUDWindow(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        QTimer.singleShot(0, self._apply_theme)
+        self._show_theme_timer.start(0)
 
     def hideEvent(self, event):
         super().hideEvent(event)
+        self._hide_dock_preview()
         self._cancel_snap_animation(settle=True)     # a hide (hotkey, tray) leaves the bar on its docked place
         QTimer.singleShot(150, trim_memory)
 
@@ -1425,6 +1455,12 @@ class HUDWindow(QWidget):
             cp = self.providers.get("claude")
             if cp and hasattr(cp, "profile_preference"):
                 cp.profile_preference = profile_id
+        main_key = self._main_profile_key()
+        if main_key is not None:
+            clashing = [a.id for a in self._config_accounts() if acct.profile_key(a.profile) == main_key]
+            for cid in clashing:
+                self.remove_account(cid)
+        self.request_apply_accounts()
         self.trigger_async_refresh()
 
     def _toggle_autostart(self):
